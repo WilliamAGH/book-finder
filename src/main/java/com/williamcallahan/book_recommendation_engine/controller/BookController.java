@@ -1,3 +1,7 @@
+/**
+ * REST controller for handling book-related API requests such as search, details, and recommendations.
+ * Optimizes cover image URL resolution for API responses.
+ */
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -5,7 +9,6 @@ import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.stream.Collectors;
@@ -62,16 +66,27 @@ public class BookController {
                 query, startIndex, maxResults, coverSource, resolution);
         
         try {
-            List<Book> books = googleBooksService.searchBooksAsyncReactive(query).block();
-            if (books == null) books = Collections.emptyList();
+            List<Book> allBooks = googleBooksService.searchBooksAsyncReactive(query).block();
+            if (allBooks == null) allBooks = Collections.emptyList();
+
+            int totalResults = allBooks.size();
+            List<Book> paginatedBooks;
+
+            // Apply pagination FIRST
+            if (startIndex >= totalResults) {
+                paginatedBooks = Collections.emptyList();
+            } else {
+                int endIndex = Math.min(startIndex + maxResults, totalResults);
+                paginatedBooks = allBooks.subList(startIndex, endIndex);
+            }
             
-            // Apply cover source and resolution preferences if specified
-            if (books.size() > 0 && (!coverSource.equals("ANY") || !resolution.equals("ANY"))) {
-                CoverImageSource preferredSource;
+            // Now, process covers ONLY for the paginated slice
+            if (!paginatedBooks.isEmpty() && (!coverSource.equals("ANY") || !resolution.equals("ANY"))) {
+                BookImageOrchestrationService.CoverImageSource preferredSource;
                 try {
-                    preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(coverSource.toUpperCase());
                 } catch (IllegalArgumentException e) {
-                    preferredSource = CoverImageSource.ANY;
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
                 }
                 
                 ImageResolutionPreference resolutionPreference;
@@ -81,14 +96,14 @@ public class BookController {
                     resolutionPreference = ImageResolutionPreference.ANY;
                 }
                 
-                // Process each book to apply the cover source and resolution preferences
-                for (Book book : books) {
+                for (Book book : paginatedBooks) { // Iterate over paginatedBooks
                     if (book != null && book.getId() != null) {
                         try {
                             String coverUrl = bookImageOrchestrationService
                                 .getBestCoverUrlAsync(book, preferredSource, resolutionPreference)
                                 .join();
                             book.setCoverImageUrl(coverUrl);
+                            // Note: book.isCoverHighResolution() will be set by getBestCoverUrlAsync if ImageDetails are updated
                         } catch (Exception e) {
                             logger.warn("Error applying cover preferences for book {}: {}", 
                                 book.getId(), e.getMessage());
@@ -97,8 +112,7 @@ public class BookController {
                 }
             }
 
-            // Apply resolution-based filtering or sorting
-            // This assumes BookImageOrchestrationService has populated isCoverHighResolution
+            // Apply resolution-based filtering or sorting to the paginated (and cover-processed) list
             ImageResolutionPreference finalResolutionPreference;
             try {
                 finalResolutionPreference = ImageResolutionPreference.valueOf(resolution.toUpperCase());
@@ -106,33 +120,25 @@ public class BookController {
                 finalResolutionPreference = ImageResolutionPreference.ANY;
             }
 
+            List<Book> finalBooksToReturn = paginatedBooks; // Start with the paginated and cover-processed list
+
             if (finalResolutionPreference == ImageResolutionPreference.HIGH_ONLY) {
-                books = books.stream()
+                finalBooksToReturn = paginatedBooks.stream()
                              .filter(b -> b.getIsCoverHighResolution() != null && b.getIsCoverHighResolution())
                              .collect(Collectors.toList());
-                logger.info("Filtered for HIGH_ONLY, new count: {}", books.size());
+                logger.info("Filtered paginated list for HIGH_ONLY, new count: {}", finalBooksToReturn.size());
             } else if (finalResolutionPreference == ImageResolutionPreference.HIGH_FIRST) {
-                books.sort(Comparator.comparing((Book b) -> b.getIsCoverHighResolution() != null && b.getIsCoverHighResolution(), Comparator.reverseOrder()));
-                logger.info("Sorted for HIGH_FIRST");
-            }
-
-            // Apply pagination after filtering/sorting
-            int totalResults = books.size();
-            if (startIndex > 0 && startIndex >= totalResults) {
-                books = Collections.emptyList();
-            } else {
-                int endIndex = Math.min(startIndex + maxResults, totalResults);
-                if (startIndex > endIndex) {
-                     books = Collections.emptyList();
-                } else {
-                    books = books.subList(startIndex, endIndex);
-                }
+                // Create a mutable list for sorting if paginatedBooks is not already mutable (e.g. from subList)
+                List<Book> sortablePaginatedBooks = new ArrayList<>(paginatedBooks);
+                sortablePaginatedBooks.sort(Comparator.comparing((Book b) -> b.getIsCoverHighResolution() != null && b.getIsCoverHighResolution(), Comparator.reverseOrder()));
+                finalBooksToReturn = sortablePaginatedBooks;
+                logger.info("Sorted paginated list for HIGH_FIRST");
             }
             
             Map<String, Object> response = new HashMap<>();
-            response.put("totalAvailableResults", totalResults);
-            response.put("results", books);
-            response.put("count", books.size());
+            response.put("totalAvailableResults", totalResults); // totalResults is from before pagination
+            response.put("results", finalBooksToReturn);
+            response.put("count", finalBooksToReturn.size());
             response.put("startIndex", startIndex);
             response.put("query", query);
             
@@ -162,11 +168,11 @@ public class BookController {
             
             // Apply cover source and resolution preferences if specified
             if (books.size() > 0 && (!coverSource.equals("ANY") || !resolution.equals("ANY"))) {
-                CoverImageSource preferredSource;
+                BookImageOrchestrationService.CoverImageSource preferredSource;
                 try {
-                    preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(coverSource.toUpperCase());
                 } catch (IllegalArgumentException e) {
-                    preferredSource = CoverImageSource.ANY;
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
                 }
                 
                 ImageResolutionPreference resolutionPreference;
@@ -224,11 +230,11 @@ public class BookController {
             
             // Apply cover source and resolution preferences if specified
             if (books.size() > 0 && (!coverSource.equals("ANY") || !resolution.equals("ANY"))) {
-                CoverImageSource preferredSource;
+                BookImageOrchestrationService.CoverImageSource preferredSource;
                 try {
-                    preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(coverSource.toUpperCase());
                 } catch (IllegalArgumentException e) {
-                    preferredSource = CoverImageSource.ANY;
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
                 }
                 
                 ImageResolutionPreference resolutionPreference;
@@ -286,11 +292,11 @@ public class BookController {
             
             // Apply cover source and resolution preferences if specified
             if (books.size() > 0 && (!coverSource.equals("ANY") || !resolution.equals("ANY"))) {
-                CoverImageSource preferredSource;
+                BookImageOrchestrationService.CoverImageSource preferredSource;
                 try {
-                    preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(coverSource.toUpperCase());
                 } catch (IllegalArgumentException e) {
-                    preferredSource = CoverImageSource.ANY;
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
                 }
                 
                 ImageResolutionPreference resolutionPreference;
@@ -351,11 +357,11 @@ public class BookController {
             
             // Apply cover source and resolution preferences if specified
             if (!coverSource.equals("ANY") || !resolution.equals("ANY")) {
-                CoverImageSource preferredSource;
+                BookImageOrchestrationService.CoverImageSource preferredSource;
                 try {
-                    preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(coverSource.toUpperCase());
                 } catch (IllegalArgumentException e) {
-                    preferredSource = CoverImageSource.ANY;
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
                 }
                 
                 ImageResolutionPreference resolutionPreference;
@@ -430,11 +436,11 @@ public class BookController {
             
             // Apply cover source and resolution preferences if specified
             if ((!coverSource.equals("ANY") || !resolution.equals("ANY")) && !similarBooks.isEmpty()) {
-                CoverImageSource preferredSource;
+                BookImageOrchestrationService.CoverImageSource preferredSource;
                 try {
-                    preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(coverSource.toUpperCase());
                 } catch (IllegalArgumentException e) {
-                    preferredSource = CoverImageSource.ANY;
+                    preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
                 }
                 
                 ImageResolutionPreference resolutionPreference;

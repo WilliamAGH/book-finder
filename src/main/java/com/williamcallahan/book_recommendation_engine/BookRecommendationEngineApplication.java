@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerA
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 
@@ -20,6 +21,7 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptio
     OpenAiAudioTranscriptionAutoConfiguration.class 
 })
 @EnableCaching
+@EnableAsync // Enable asynchronous operations
 public class BookRecommendationEngineApplication {
 
 	public static void main(String[] args) {
