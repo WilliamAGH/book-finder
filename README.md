@@ -113,7 +113,17 @@ Build and run with Docker:
 
 ```bash
 ./mvnw spring-boot:build-image
+# The Docker image now defaults to port 8080 internally.
+# The SERVER_PORT environment variable (e.g., from your .env file) can override this.
+#
+# If your .env file (typically copied from .env.example) sets SERVER_PORT=8081,
+# the application will listen on 8081 inside the container. Use:
 docker run -p 8081:8081 --env-file .env book_recommendation_engine:0.0.1-SNAPSHOT
+#
+# If SERVER_PORT is not set in your .env file, or is set to 8080,
+# the application will listen on the default 8080 inside the container. Use:
+# docker run -p 8080:8080 --env-file .env book_recommendation_engine:0.0.1-SNAPSHOT
+# (You can change the first '8080' in '-p 8080:8080' to any host port you prefer)
 ```
 
 ### Cloud Deployment

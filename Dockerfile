@@ -14,9 +14,11 @@ RUN mvn package -DskipTests
 # Use JRE for smaller runtime image
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
+ENV SERVER_PORT ${SERVER_PORT:-8080}
+EXPOSE ${SERVER_PORT:-8080}
 
 # Copy the built jar from the build stage
 COPY --from=build /app/target/*.jar app.jar
 
 # Run the application
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-jar", "app.jar", "--server.port=${SERVER_PORT}"]
