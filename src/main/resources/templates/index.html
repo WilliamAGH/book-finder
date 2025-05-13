@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{fragments/layout :: head(title='Home')}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home - Book Recommendation Engine</title>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<!-- Main Content -->
+<main class="main-content">
+    <!-- Hero Section with Search Bar -->
+    <section class="hero-section py-5 mb-4 text-center">
+        <div class="container">
+            <div class="row justify-content-center">
+                <div class="col-lg-8">
+                    <h1 class="display-4 mb-4">Find Your Next Great Read</h1>
+                    <p class="lead mb-5">Discover books that match your interests, from classics to new releases.</p>
+                    
+                    <form action="/search" method="get" class="search-form">
+                        <div class="input-group mb-3 shadow">
+                            <input type="text" id="searchInput" name="query" class="form-control form-control-lg py-3" 
+                                   placeholder="Search by title, author, or keyword..." aria-label="Search books" required>
+                            <button class="btn btn-primary px-4" type="submit">
+                                <i class="fas fa-search me-2"></i><span class="search-text">Search</span>
+                            </button>
+                        </div>
+                    </form>
+                    
+                    <div class="mt-4">
+                        <p class="text-muted mb-2">Popular searches:</p>
+                        <div class="d-flex flex-wrap justify-content-center gap-2">
+                            <a href="/search?query=fiction" class="badge bg-light text-decoration-none p-2">Fiction</a>
+                            <a href="/search?query=mystery" class="badge bg-light text-decoration-none p-2">Mystery</a>
+                            <a href="/search?query=sci-fi" class="badge bg-light text-decoration-none p-2">Science Fiction</a>
+                            <a href="/search?query=fantasy" class="badge bg-light text-decoration-none p-2">Fantasy</a>
+                            <a href="/search?query=biography" class="badge bg-light text-decoration-none p-2">Biography</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Popular Books Section -->
+    <section class="popular-books-section py-4">
+        <div class="container">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Popular Books This Week</h2>
+                <a href="/search?query=java+programming" class="btn btn-outline-primary">View All</a>
+            </div>
+            
+            <div class="row g-4">
+                <!-- Check if recentBooks list exists and is not empty -->
+                <div th:if="${recentBooks == null || recentBooks.empty}" class="col-12 text-center py-5">
+                    <div class="alert alert-info" role="alert">
+                        <i class="fas fa-info-circle me-2"></i> No recent books to display. Start exploring to see recommendations!
+                    </div>
+                </div>
+                
+                <!-- Loop through recent books -->
+                <div th:each="book : ${recentBooks}" class="col-sm-6 col-md-4 col-lg-3">
+                    <div class="card h-100">
+                        <div class="position-relative book-cover-container">
+                            <img th:if="${book.coverImageUrl != null}" th:src="${book.coverImageUrl}"
+                                 class="card-img-top book-cover"
+                                 title="Book cover image"
+                                 th:alt="${book.title != null ? book.title + ' cover' : 'Book cover image'}"
+                                 th:title="${book.title != null ? book.title + ' cover' : 'Book cover image'}"
+                                 onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
+                            <img th:if="${book.coverImageUrl == null}" src="/images/placeholder-book-cover.svg"
+                                 class="card-img-top book-cover"
+                                 title="Placeholder book cover image"
+                                 th:alt="${book.title != null ? book.title + ' cover' : 'Placeholder book cover image'}"
+                                 th:title="${book.title != null ? book.title + ' cover' : 'Placeholder book cover image'}">
+                            
+                            <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
+                                <i class="fas fa-star me-1"></i>
+                                <span th:text="${book.averageRating}">4.5</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <h5 class="card-title text-truncate" th:text="${book.title}">Book Title</h5>
+                            <p class="card-text small text-muted text-truncate" th:text="${book.authors != null && !book.authors.empty} ? ${book.authors[0]} : 'Unknown Author'">Author Name</p>
+                        </div>
+                        <div class="card-footer bg-white border-top-0">
+                            <a th:href="@{'/book/' + ${book.id}}" class="btn btn-sm btn-outline-primary d-block">View Details</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</main>
+
+<!-- Footer -->
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+
+<!-- Scripts -->
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+
+<!-- Extra page-specific styles -->
+<style>
+    .hero-section {
+        background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+        color: white;
+        padding: 5rem 0;
+        border-radius: 0 0 20px 20px;
+        margin-bottom: 2rem;
+    }
+    
+    .search-form .form-control {
+        border-radius: 50px 0 0 50px;
+        border: none;
+    }
+    
+    .search-form .btn {
+        border-radius: 0 50px 50px 0;
+        border: none;
+    }
+    
+    .book-cover-container {
+        height: 250px;
+        overflow: hidden;
+        border-radius: 10px 10px 0 0;
+        background-color: #f8f9fa;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    
+    .book-cover {
+        height: auto;
+        max-height: 100%;
+        width: auto;
+        max-width: 100%;
+        object-fit: contain;
+        transition: transform 0.3s ease;
+    }
+    
+    .card:hover .book-cover {
+        transform: scale(1.05);
+    }
+    
+    .badge {
+        border-radius: 30px;
+    }
+    
+    /* Custom breakpoint for book cards */
+    @media (min-width: 576px) and (max-width: 991.98px) {
+        .col-sm-6.col-md-4.col-lg-3 {
+            width: 50%;
+        }
+    }
+</style>
+
+</body>
+</html>
