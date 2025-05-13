@@ -163,6 +163,12 @@ Log output appears in the console by default and can be configured via `applicat
 
 1**MacOS DNS Resolution Error**: For MacOS users, especially on Apple Silicon (M1/M2), the application includes the `netty-resolver-dns-native-macos` dependency to fix DNS resolution issues.
 
+## UML Diagram
+
+A UML class diagram for this project is available in the `src/main/resources/uml` directory. The diagram shows the main classes, their properties, methods, and relationships in the Book Recommendation Engine project.
+
+To generate the UML diagram, you can use PlantUML. See the [UML README](src/main/resources/uml/README.md) for more information.
+
 ## License
 
 MIT License
@@ -170,4 +176,3 @@ MIT License
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a pull request or open an issue here on Github!
- 
