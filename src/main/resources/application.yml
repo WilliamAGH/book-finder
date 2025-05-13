@@ -1,0 +1,81 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  # Conditional datasource configuration
+  # Set SPRING_DATASOURCE_URL to empty string to disable the database
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    # Only initialize if URL is provided
+    initialization-mode: ${SPRING_DATASOURCE_INITIALIZATION_MODE:never}
+    # Prevent application from failing if no database is available
+    hikari:
+      connection-timeout: 2000
+      initialization-fail-timeout: -1
+      maximum-pool-size: 3
+  
+  # JPA configuration - only used when database URL is provided
+  jpa:
+    # Set explicit dialect to prevent auto-detection issues
+    database-platform: ${SPRING_JPA_DATABASE_PLATFORM:org.hibernate.dialect.PostgreSQLDialect}
+    # Generate database schema only if datasource is available
+    # Set to none to disable automatic schema generation
+    hibernate:
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          lob:
+            non_contextual_creation: true
+    # Only validate schema if explicitly enabled
+    generate-ddl: ${SPRING_JPA_GENERATE_DDL:false}  
+    show-sql: false
+    # This property will prevent JPA from initializing before PostgreSQL is available
+    open-in-view: false
+  
+  # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
+  cache:
+    type: ${SPRING_CACHE_TYPE:simple}
+  
+  # Redis configuration - optional, only used if cache type is redis
+  redis:
+    host: ${SPRING_REDIS_HOST:localhost}
+    port: ${SPRING_REDIS_PORT:6379}
+    # Skip Redis if not available
+    connect-timeout: 2000
+    lettuce:
+      shutdown-timeout: 0
+    
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.autoconfigure.vectorstore.pgvector.PgVectorStoreAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
+
+app:
+  cache:
+    enabled: true
+  
+  # External embedding service URL (optional)
+  # If not provided, a simple placeholder embedding will be used
+  embedding:
+    service:
+      url: ${EMBEDDING_SERVICE_URL:}
+      
+# Server configuration
+server:
+  port: 8080
+  compression:
+    enabled: true
+  
+# Logging
+logging:
+  level:
+    com.williamcallahan.book_recommendation_engine: INFO
+    org.springframework.cache: WARN
+    org.hibernate: WARN
