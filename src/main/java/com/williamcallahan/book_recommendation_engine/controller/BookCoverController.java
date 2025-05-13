@@ -66,13 +66,22 @@ public class BookCoverController {
             }
             
             // Get the best cover URL with the preferred source
-            CompletableFuture<String> coverUrlFuture = bookImageOrchestrationService.getBestCoverUrlAsync(book, preferredSource);
-            String coverUrl = coverUrlFuture.get();
+            CompletableFuture<Book> bookFuture = bookImageOrchestrationService.getBestCoverUrlAsync(book, preferredSource);
+            Book updatedBook = bookFuture.get(); // This line will block until the future completes
+            String coverUrl = updatedBook.getCoverImageUrl(); 
             
             Map<String, Object> response = new HashMap<>();
             response.put("bookId", id);
-            response.put("coverUrl", coverUrl);
-            response.put("source", preferredSource.name());
+            response.put("coverUrl", coverUrl); // This is the preferred URL set by the orchestration service
+            if (updatedBook.getCoverImages() != null) {
+                response.put("preferredUrl", updatedBook.getCoverImages().getPreferredUrl());
+                response.put("fallbackUrl", updatedBook.getCoverImages().getFallbackUrl());
+            } else {
+                // Fallback if CoverImages object is somehow null, though service should initialize it
+                response.put("preferredUrl", coverUrl);
+                response.put("fallbackUrl", coverUrl); 
+            }
+            response.put("requestedSourcePreference", preferredSource.name());
             
             return ResponseEntity.ok(response);
         } catch (ResponseStatusException e) {

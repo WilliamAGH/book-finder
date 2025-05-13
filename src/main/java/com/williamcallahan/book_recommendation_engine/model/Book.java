@@ -1,5 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.model;
 
+import com.williamcallahan.book_recommendation_engine.types.CoverImages;
+
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -34,6 +36,8 @@ public class Book {
     private Integer coverImageWidth;
     private Integer coverImageHeight;
     private Boolean isCoverHighResolution;
+
+    private CoverImages coverImages;
 
     private List<EditionInfo> otherEditions;
 
@@ -323,6 +327,14 @@ public class Book {
 
     public void setIsCoverHighResolution(Boolean isCoverHighResolution) {
         this.isCoverHighResolution = isCoverHighResolution;
+    }
+
+    public CoverImages getCoverImages() {
+        return coverImages;
+    }
+
+    public void setCoverImages(CoverImages coverImages) {
+        this.coverImages = coverImages;
     }
 
     @Override

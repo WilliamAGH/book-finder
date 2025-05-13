@@ -98,16 +98,19 @@ public class BookController {
 
                 return Flux.fromIterable(paginatedBooks)
                     .flatMap(book -> {
-                        if (book == null || book.getId() == null) {
-                            return Mono.just(book); // Skip processing if book or ID is null
+                        if (book == null) {
+                            return Mono.just(book);
                         }
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
-                            .map(coverUrl -> {
-                                book.setCoverImageUrl(coverUrl); // Apply cover URL
-                                return book;
-                            })
                             .onErrorResume(e -> {
-                                logger.warn("Error fetching cover for book {}: {}. Using existing/default.", book.getId(), e.getMessage());
+                                logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
+                                if (book.getCoverImages() == null) {
+                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                }
+                                if (book.getCoverImageUrl() == null) {
+                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                }
                                 return Mono.just(book);
                             });
                     })
@@ -188,14 +191,17 @@ public class BookController {
 
                 return Flux.fromIterable(currentBooks)
                     .flatMap(book -> {
-                        if (book == null || book.getId() == null) return Mono.just(book);
+                        if (book == null) return Mono.just(book);
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
-                            .map(coverUrl -> {
-                                book.setCoverImageUrl(coverUrl);
-                                return book;
-                            })
                             .onErrorResume(e -> {
-                                logger.warn("Error applying cover preferences for book {}: {}. Using existing/default.", book.getId(), e.getMessage());
+                                logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
+                                if (book.getCoverImages() == null) {
+                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                }
+                                if (book.getCoverImageUrl() == null) {
+                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                }
                                 return Mono.just(book);
                             });
                     })
@@ -243,14 +249,17 @@ public class BookController {
 
                 return Flux.fromIterable(currentBooks)
                     .flatMap(book -> {
-                        if (book == null || book.getId() == null) return Mono.just(book);
+                        if (book == null) return Mono.just(book);
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
-                            .map(coverUrl -> {
-                                book.setCoverImageUrl(coverUrl);
-                                return book;
-                            })
                             .onErrorResume(e -> {
-                                logger.warn("Error applying cover preferences for book {}: {}. Using existing/default.", book.getId(), e.getMessage());
+                                logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
+                                if (book.getCoverImages() == null) {
+                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                }
+                                if (book.getCoverImageUrl() == null) {
+                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                }
                                 return Mono.just(book);
                             });
                     })
@@ -298,14 +307,17 @@ public class BookController {
 
                 return Flux.fromIterable(currentBooks)
                     .flatMap(book -> {
-                        if (book == null || book.getId() == null) return Mono.just(book);
+                        if (book == null) return Mono.just(book);
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
-                            .map(coverUrl -> {
-                                book.setCoverImageUrl(coverUrl);
-                                return book;
-                            })
                             .onErrorResume(e -> {
-                                logger.warn("Error applying cover preferences for book {}: {}. Using existing/default.", book.getId(), e.getMessage());
+                                logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
+                                if (book.getCoverImages() == null) {
+                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                }
+                                if (book.getCoverImageUrl() == null) {
+                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                }
                                 return Mono.just(book);
                             });
                     })
@@ -342,27 +354,24 @@ public class BookController {
 
         return googleBooksService.getBookById(id)
             .flatMap(book -> {
-                // Apply cover source and resolution preferences if specified
-                Mono<Book> bookWithCoverMono;
-                if (!coverSource.equals("ANY") || !resolution.equals("ANY")) {
-                    bookWithCoverMono = Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
-                        .map(coverUrl -> {
-                            book.setCoverImageUrl(coverUrl);
-                            return book;
-                        })
-                        .onErrorResume(e -> {
-                            logger.warn("Error applying cover preferences for book {}: {}. Using existing/default.", book.getId(), e.getMessage());
-                            return Mono.just(book); // Return book as is if cover processing fails
-                        });
-                } else {
-                    bookWithCoverMono = Mono.just(book);
-                }
-                return bookWithCoverMono.doOnSuccess(b -> {
-                    if (b != null) recentlyViewedService.addToRecentlyViewed(b); // Assuming this is quick
-                });
+                return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                    .onErrorResume(e -> {
+                        logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
+                        if (book.getCoverImages() == null) {
+                            String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
+                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                        }
+                        if (book.getCoverImageUrl() == null) {
+                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        }
+                        return Mono.just(book);
+                    });
+            })
+            .doOnSuccess(b -> {
+                if (b != null) recentlyViewedService.addToRecentlyViewed(b);
             })
             .map(ResponseEntity::ok)
-            .switchIfEmpty(Mono.just(ResponseEntity.notFound().build())) // Handles book not found from googleBooksService.getBookById
+            .switchIfEmpty(Mono.just(ResponseEntity.notFound().build()))
             .onErrorResume(e -> {
                 logger.error("Error getting book by ID '{}': {}", id, e.getMessage(), e);
                 if (e instanceof ResponseStatusException rse) return Mono.error(rse);
@@ -401,11 +410,9 @@ public class BookController {
         final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // First, ensure the source book exists. If not, return 404.
         return googleBooksService.getBookById(id)
             .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Source book not found with ID: " + id)))
             .flatMap(sourceBook -> 
-                // RecommendationService.getSimilarBooks is now reactive
                 recommendationService.getSimilarBooks(id, count)
                     .flatMap(similarBooksList -> {
                         List<Book> currentSimilarBooks = (similarBooksList == null) ? Collections.emptyList() : similarBooksList;
@@ -419,14 +426,17 @@ public class BookController {
 
                         return Flux.fromIterable(currentSimilarBooks)
                             .flatMap(book -> {
-                                if (book == null || book.getId() == null) return Mono.just(book);
+                                if (book == null) return Mono.just(book);
                                 return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
-                                    .map(coverUrl -> {
-                                        book.setCoverImageUrl(coverUrl);
-                                        return book;
-                                    })
                                     .onErrorResume(e -> {
-                                        logger.warn("Error applying cover preferences for similar book {}: {}. Using existing/default.", book.getId(), e.getMessage());
+                                        logger.warn("Error in async cover processing for similar book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
+                                        if (book.getCoverImages() == null) {
+                                            String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
+                                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                        }
+                                        if (book.getCoverImageUrl() == null) {
+                                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                        }
                                         return Mono.just(book);
                                     });
                             })
@@ -442,7 +452,7 @@ public class BookController {
             )
             .onErrorResume(e -> {
                 logger.error("Error getting similar books for book ID '{}': {}", id, e.getMessage(), e);
-                if (e instanceof ResponseStatusException rse) return Mono.error(rse); // Re-throw known status exceptions
+                if (e instanceof ResponseStatusException rse) return Mono.error(rse);
                 return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error occurred while getting similar books", e));
             });
     }
