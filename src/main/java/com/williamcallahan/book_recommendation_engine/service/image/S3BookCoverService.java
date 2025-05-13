@@ -1,6 +1,11 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
+import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.types.ExternalCoverService;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,10 +21,6 @@ import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
@@ -28,15 +29,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import reactor.core.publisher.Mono;
 
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverImageSource; 
-import com.williamcallahan.book_recommendation_engine.types.ExternalCoverService;
-
-/**
- * Service for interacting with S3-compatible storage for book cover images.
- * Handles uploading images to S3, checking for existence, and generating S3 URLs.
- * Implements ExternalCoverService to provide a consistent interface for fetching covers from S3.
- */
 @Service
 public class S3BookCoverService implements ExternalCoverService {
     private static final Logger logger = LoggerFactory.getLogger(S3BookCoverService.class);
@@ -69,11 +61,13 @@ public class S3BookCoverService implements ExternalCoverService {
     
     private S3Client s3Client;
     private final WebClient webClient;
+    private final ImageProcessingService imageProcessingService;
     
     private final Map<String, Boolean> objectExistsCache = new ConcurrentHashMap<>();
 
-    public S3BookCoverService(WebClient.Builder webClientBuilder) {
+    public S3BookCoverService(WebClient.Builder webClientBuilder, ImageProcessingService imageProcessingService) {
         this.webClient = webClientBuilder.build();
+        this.imageProcessingService = imageProcessingService;
     }
     
     @PostConstruct
@@ -199,53 +193,59 @@ public class S3BookCoverService implements ExternalCoverService {
 
         return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
             .timeout(Duration.ofSeconds(10))
-            .flatMap(imageBytes -> {
+            .flatMap(rawImageBytes -> {
                 try {
-                    ImageValidationResult validationResult = validateAndGetImageExtension(imageBytes, bookId);
-                    if (!validationResult.isValid()) {
-                        logger.warn("Image validation failed for book {}: {}. URL: {}", bookId, validationResult.getReason(), imageUrl);
-                        return Mono.just(new ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
+                    logger.debug("Book ID {}: Downloaded {} bytes from {}. Starting image processing.", bookId, rawImageBytes.length, imageUrl);
+                    ProcessedImage processedImage = imageProcessingService.processImageForS3(rawImageBytes, bookId);
+
+                    if (!processedImage.isProcessingSuccessful()) {
+                        logger.warn("Book ID {}: Image processing failed. Reason: {}. Will not upload to S3.", bookId, processedImage.getProcessingError());
+                        return Mono.just(new ImageDetails(imageUrl, source, "processing-failed-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
+                    }
+                    logger.debug("Book ID {}: Image processing successful. New size: {}x{}, Extension: {}, MimeType: {}.", 
+                                 bookId, processedImage.getWidth(), processedImage.getHeight(), processedImage.getNewFileExtension(), processedImage.getNewMimeType());
+
+                    byte[] imageBytesForS3 = processedImage.getProcessedBytes(); 
+                    String fileExtensionForS3 = processedImage.getNewFileExtension();
+                    String mimeTypeForS3 = processedImage.getNewMimeType();
+
+                    if (imageBytesForS3.length > this.maxFileSizeBytes) {
+                        logger.warn("Book ID {}: Processed image too large (size: {} bytes, max: {} bytes). URL: {}. Will not upload to S3.", 
+                                    bookId, imageBytesForS3.length, this.maxFileSizeBytes, imageUrl);
+                        return Mono.just(new ImageDetails(imageUrl, source, "processed-image-too-large-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
                     }
 
-                    String fileExtension = validationResult.getExtension();
-                    String s3Key = generateS3Key(bookId, fileExtension, s3Source);
+                    String s3Key = generateS3Key(bookId, fileExtensionForS3, s3Source);
 
                     try {
                         HeadObjectResponse headResponse = s3Client.headObject(HeadObjectRequest.builder().bucket(s3Bucket).key(s3Key).build());
-                        if (headResponse.contentLength() == imageBytes.length) {
-                            logger.info("Cover for book {} already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Key);
-                            String cdnUrl = getS3CoverUrl(bookId, fileExtension, s3Source);
+                        if (headResponse.contentLength() == imageBytesForS3.length) {
+                            logger.info("Processed cover for book {} already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Key);
+                            String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
                             objectExistsCache.put(s3Key, true);
-                            return Mono.just(new ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL));
+                            return Mono.just(new ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
                         }
                     } catch (NoSuchKeyException e) { /* Proceed to upload */ }
                     catch (Exception e) { logger.warn("Error checking existing S3 object for book {}: {}. Proceeding with upload.", bookId, e.getMessage()); }
 
                     PutObjectRequest putObjectRequest = PutObjectRequest.builder()
-                            .bucket(s3Bucket).key(s3Key).contentType(validationResult.getMimeType()).build();
-                    s3Client.putObject(putObjectRequest, RequestBody.fromBytes(imageBytes));
+                            .bucket(s3Bucket).key(s3Key).contentType(mimeTypeForS3).build();
+                    s3Client.putObject(putObjectRequest, RequestBody.fromBytes(imageBytesForS3));
                     
-                    String cdnUrl = getS3CoverUrl(bookId, fileExtension, s3Source);
+                    String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
                     objectExistsCache.put(s3Key, true);
-                    logger.info("Successfully uploaded cover for book {} to S3. Key: {}", bookId, s3Key);
+                    logger.info("Successfully uploaded processed cover for book {} to S3. Key: {}", bookId, s3Key);
                     
-                    BufferedImage img = ImageIO.read(new ByteArrayInputStream(imageBytes));
-                    if (img != null) {
-                        return Mono.just(new ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, img.getWidth(), img.getHeight()));
-                    } else { 
-                        return Mono.just(new ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL));
-                    }
-                } catch (IOException e) {
-                    logger.error("IOException during S3 upload process for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
-                    return Mono.just(new ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
+                    return Mono.just(new ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
+                
                 } catch (Exception e) {
-                    logger.error("Unexpected exception during S3 upload process for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
-                    return Mono.just(new ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                    logger.error("Unexpected exception during S3 upload (including processing) for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
+                    return Mono.just(new ImageDetails(imageUrl, source, "upload-process-exception-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
                 }
             })
             .onErrorResume(e -> {
                 logger.error("Error downloading image for S3 upload for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
-                return Mono.just(new ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                return Mono.just(new ImageDetails(imageUrl, source, "download-failed-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
             });
     }
  
@@ -297,91 +297,6 @@ public class S3BookCoverService implements ExternalCoverService {
             }
         }
         return extension;
-    }
-
-    private String getFileExtensionFromMagicBytes(byte[] imageBytes) {
-        if (imageBytes.length >=3 && (imageBytes[0] & 0xFF) == 0xFF && (imageBytes[1] & 0xFF) == 0xD8 && (imageBytes[2] & 0xFF) == 0xFF) return ".jpg";
-        if (imageBytes.length >= 8 && (imageBytes[0] & 0xFF) == 0x89 && (imageBytes[1] & 0xFF) == 0x50 && (imageBytes[2] & 0xFF) == 0x4E &&
-            (imageBytes[3] & 0xFF) == 0x47 && (imageBytes[4] & 0xFF) == 0x0D && (imageBytes[5] & 0xFF) == 0x0A &&
-            (imageBytes[6] & 0xFF) == 0x1A && (imageBytes[7] & 0xFF) == 0x0A) return ".png";
-        if (imageBytes.length >= 4 && (imageBytes[0] & 0xFF) == 'G' && (imageBytes[1] & 0xFF) == 'I' && (imageBytes[2] & 0xFF) == 'F' &&
-            (imageBytes[3] & 0xFF) == '8') return ".gif";
-        logger.warn("Could not determine image type from magic bytes, defaulting to .jpg");
-        return ".jpg";
-    }
-
-    private String getContentTypeFromExtension(String extension) {
-        if (extension.startsWith(".")) extension = extension.substring(1);
-        switch (extension.toLowerCase()) {
-            case "jpg": case "jpeg": return "image/jpeg";
-            case "png": return "image/png";
-            case "gif": return "image/gif";
-            case "webp": return "image/webp";
-            case "svg": return "image/svg+xml";
-            default: return "image/jpeg";
-        }
-    }
-
-    private boolean isImageFormatValid(byte[] imageBytes) {
-        if (imageBytes == null || imageBytes.length < 8) {
-            logger.warn("Image format validation: imageBytes is null or too short (length: {})", imageBytes != null ? imageBytes.length : "null");
-            return false; 
-        }
-        if (((imageBytes[0] & 0xFF) == 0xFF && (imageBytes[1] & 0xFF) == 0xD8 && (imageBytes[2] & 0xFF) == 0xFF) || // JPG
-            ((imageBytes[0] & 0xFF) == 0x89 && (imageBytes[1] & 0xFF) == 0x50 && (imageBytes[2] & 0xFF) == 0x4E && (imageBytes[3] & 0xFF) == 0x47)) { // PNG
-            return true;
-        }
-        if (((imageBytes[0] & 0xFF) == 'G' && (imageBytes[1] & 0xFF) == 'I' && (imageBytes[2] & 0xFF) == 'F' && (imageBytes[3] & 0xFF) == '8')) { // GIF
-            return true;
-        }
-        logger.warn("Image format validation: Unknown magic bytes.");
-        return false;
-    }
-
-    private ImageValidationResult validateAndGetImageExtension(byte[] imageBytes, String bookId) {
-        if (imageBytes == null) return new ImageValidationResult(false, null, null, "Null image bytes");
-        try {
-            BufferedImage bufferedImage = ImageIO.read(new ByteArrayInputStream(imageBytes));
-            if (bufferedImage == null) return new ImageValidationResult(false, null, null, "Could not read image dimensions (ImageIO.read returned null)");
-            
-            int width = bufferedImage.getWidth();
-            int height = bufferedImage.getHeight();
-            if (width <= 0 || height <= 0 || width > 5000 || height > 5000) {
-                return new ImageValidationResult(false, null, null, "Invalid image dimensions: " + width + "x" + height);
-            }
-            if (!isImageFormatValid(imageBytes)) {
-                return new ImageValidationResult(false, null, null, "Invalid image format (magic bytes mismatch)");
-            }
-            
-            if (imageBytes.length > this.maxFileSizeBytes) { 
-                return new ImageValidationResult(false, null, null, "Image too large (size: " + imageBytes.length + " bytes, max: " + this.maxFileSizeBytes + " bytes)");
-            }
-            String extension = getFileExtensionFromMagicBytes(imageBytes);
-            String mimeType = getContentTypeFromExtension(extension);
-            return new ImageValidationResult(true, extension, mimeType, null);
-        } catch (IOException e) {
-            logger.error("IOException while validating image for book {}: {}", bookId, e.getMessage());
-            return new ImageValidationResult(false, null, null, "IOException during validation: " + e.getMessage());
-        }
-    }
-
-    private static class ImageValidationResult {
-        private final boolean isValid;
-        private final String extension;
-        private final String mimeType; 
-        private final String reason;
-
-        public ImageValidationResult(boolean isValid, String extension, String mimeType, String reason) {
-            this.isValid = isValid;
-            this.extension = extension;
-            this.mimeType = mimeType;
-            this.reason = reason;
-        }
-
-        public boolean isValid() { return isValid; }
-        public String getExtension() { return extension; }
-        public String getMimeType() { return mimeType; }        
-        public String getReason() { return reason; }
     }
 
     // Helper method to convert CoverImageSource enum to string for S3 keys
