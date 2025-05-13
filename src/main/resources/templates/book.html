@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{fragments/layout :: head(title=${book != null ? book.title : 'Book Details'})}">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Book Details - Book Recommendation Engine</title>
+</head>
+<body>
+
+<!-- Custom styles for this template -->
+<style>
+    .edition-cover-img {
+        max-height: 100px;
+        border-radius: 4px;
+    }
+    
+    /* Ensure all images have proper display properties */
+    img {
+        display: block;
+        max-width: 100%;
+    }
+</style>
+
+<!-- Accessibility fixes for images -->
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Ensure all images have alt and title attributes
+        document.querySelectorAll('img').forEach(function(img) {
+            if (!img.hasAttribute('alt')) {
+                img.setAttribute('alt', 'Book image');
+            }
+            if (!img.hasAttribute('title')) {
+                img.setAttribute('title', img.getAttribute('alt'));
+            }
+        });
+    });
+</script>
+
+<!-- Navbar -->
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<!-- Main Content -->
+<main class="main-content">
+    <div class="container py-4">
+        <!-- Error Alerts -->
+        <!-- Book Not Found Alert -->
+        <div th:if="${book == null && error == null}" class="alert alert-warning text-center" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            Book not found or has been removed.
+            <div class="mt-3">
+                <a href="/" class="btn btn-primary">Return to Homepage</a>
+            </div>
+        </div>
+        
+        <!-- Server Error Alert -->
+        <div th:if="${error != null}" class="alert alert-danger text-center" role="alert">
+            <i class="fas fa-exclamation-circle me-2"></i>
+            <span th:text="${error}">An error occurred while retrieving this book.</span>
+            <div class="mt-3">
+                <a href="/" class="btn btn-primary">Return to Homepage</a>
+                <a href="javascript:location.reload()" class="btn btn-outline-secondary ms-2">Try Again</a>
+            </div>
+        </div>
+        
+        <!-- Book Details -->
+        <div th:if="${book != null}" class="book-details">
+            <!-- Navigation Section -->
+            <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4">
+                <!-- Breadcrumbs -->
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb mb-0 mb-md-0">
+                        <li class="breadcrumb-item"><a href="/"><i class="fas fa-home"></i> Home</a></li>
+                        <li th:if="${searchQuery}" class="breadcrumb-item">
+                            <a th:href="@{/search}"><i class="fas fa-search"></i> Search</a>
+                        </li>
+                        <li th:if="${searchQuery}" class="breadcrumb-item">
+                            <a th:href="@{/search(query=${searchQuery})}"><span th:text="${searchQuery}">Search Query</span></a>
+                        </li>
+                        <li class="breadcrumb-item active" aria-current="page" th:text="${book.title}">Book Title</li>
+                    </ol>
+                </nav>
+                
+                <!-- Back Button -->
+                <div th:if="${searchQuery}" class="mt-2 mt-md-0">
+                    <a th:href="@{/search(query=${searchQuery}, page=${searchPage}, sort=${searchSort}, view=${searchView})}"
+                       class="btn btn-outline-primary btn-sm">
+                        <i class="fas fa-arrow-left me-1"></i> Back to Results
+                    </a>
+                </div>
+            </div>
+            
+            <div class="card shadow border-0 mb-5">
+                <div class="card-body p-0">
+                    <div class="row g-0">
+                        <!-- Book Cover Section -->
+                        <div class="col-md-4 col-lg-3 book-cover-section">
+                            <div class="position-relative book-cover-wrapper">
+                                <img th:if="${book.coverImageUrl != null}" th:src="${book.coverImageUrl}" 
+                                     class="img-fluid rounded-start book-cover" 
+                                     th:alt="${book.title} + ' cover'" 
+                                     th:title="${book.title} + ' cover'"
+                                     title="Book cover image"
+                                     onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
+                                <img th:if="${book.coverImageUrl == null}" src="/images/placeholder-book-cover.svg" 
+                                     class="img-fluid rounded-start book-cover" 
+                                     th:alt="${book.title} + ' cover'" 
+                                     th:title="${book.title} + ' cover'"
+                                     title="Book cover placeholder">
+
+                                <!-- Google Books Rating Badge -->
+                                <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-3 p-2 badge bg-warning text-dark fs-6">
+                                    <i class="fas fa-star me-1"></i>
+                                    <span th:text="${book.averageRating}">4.5</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Book Details Section -->
+                        <div class="col-md-8 col-lg-9">
+                            <div class="card-body p-4 p-lg-5">
+                                <h1 class="card-title mb-2" th:text="${book.title}">Book Title</h1>
+                                
+                                <!-- Authors -->
+                                <h5 class="card-subtitle mb-4 text-muted">
+                                    By 
+                                    <span th:if="${book.authors == null || book.authors.empty}">Unknown Author</span>
+                                    <span th:if="${book.authors != null && !book.authors.empty}">
+                                        <span th:each="author, authorStat : ${book.authors}">
+                                            <a th:href="@{/search(query=${author})}" class="text-decoration-none" th:text="${author}">Author Name</a><span th:if="${!authorStat.last}">, </span>
+                                        </span>
+                                    </span>
+                                </h5>
+                                
+                                <!-- Book Metadata -->
+                                <div class="book-metadata mb-4">
+                                    <div class="row g-3">
+                                        <div class="col-6 col-md-4" th:if="${book.publisher != null}">
+                                            <div class="metadata-item">
+                                                <div class="metadata-label"><i class="fas fa-building me-2"></i>Publisher</div>
+                                                <div class="metadata-value" th:text="${book.publisher}">Publisher Name</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-6 col-md-4" th:if="${book.publishedDate != null}">
+                                            <div class="metadata-item">
+                                                <div class="metadata-label"><i class="fas fa-calendar-alt me-2"></i>Published</div>
+                                                <div class="metadata-value" th:text="${#dates.format(book.publishedDate, 'yyyy-MM-dd')}">2023-01-01</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-6 col-md-4" th:if="${book.pageCount != null && book.pageCount > 0}">
+                                            <div class="metadata-item">
+                                                <div class="metadata-label"><i class="fas fa-file-alt me-2"></i>Pages</div>
+                                                <div class="metadata-value" th:text="${book.pageCount}">300</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-6 col-md-4" th:if="${book.language != null}">
+                                            <div class="metadata-item">
+                                                <div class="metadata-label"><i class="fas fa-globe me-2"></i>Language</div>
+                                                <div class="metadata-value" th:text="${#strings.toUpperCase(book.language)}">EN</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-6 col-md-4" th:if="${book.isbn13 != null}">
+                                            <div class="metadata-item">
+                                                <div class="metadata-label"><i class="fas fa-barcode me-2"></i>ISBN-13</div>
+                                                <div class="metadata-value" th:text="${book.isbn13}">9781234567890</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="col-6 col-md-4" th:if="${book.isbn10 != null}">
+                                            <div class="metadata-item">
+                                                <div class="metadata-label"><i class="fas fa-barcode me-2"></i>ISBN-10</div>
+                                                <div class="metadata-value" th:text="${book.isbn10}">1234567890</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Categories -->
+                                <div class="book-categories mb-4" th:if="${book.categories != null && !book.categories.empty}">
+                                    <h6 class="text-muted mb-2">Categories</h6>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        <a th:each="category : ${book.categories}" 
+                                           th:href="@{/search(query=${category})}" 
+                                           class="badge bg-light text-dark text-decoration-none p-2"
+                                           th:text="${category}">Category</a>
+                                    </div>
+                                </div>
+
+                                <!-- Tab Navigation -->
+                                <ul class="nav nav-tabs" id="bookDetailTabs" role="tablist">
+                                    <li class="nav-item" role="presentation">
+                                        <button class="nav-link active" id="description-tab" data-bs-toggle="tab" data-bs-target="#description" type="button" role="tab" aria-controls="description" aria-selected="true">Description</button>
+                                    </li>
+                                    <li class="nav-item" role="presentation" th:if="${book.otherEditions != null and book.otherEditions.size() > 1}">
+                                        <button class="nav-link" id="editions-tab" data-bs-toggle="tab" data-bs-target="#editions" type="button" role="tab" aria-controls="editions" aria-selected="false">Other Editions</button>
+                                    </li>
+                                </ul>
+                                <div class="tab-content mt-4" id="bookDetailTabContent">
+                                    <div class="tab-pane fade show active" id="description" role="tabpanel" aria-labelledby="description-tab">
+                                        <!-- Description -->
+                                        <div class="book-description mb-4">
+                                            <h5 class="card-text mb-3">Description</h5>
+                                            <div class="card-text description-text" th:utext="${book.description != null ? book.description : 'No description available.'}">
+                                                Book description text goes here.
+                                            </div>
+                                        </div>
+                                        <!-- External Links -->
+                                        <div class="book-links d-flex flex-wrap gap-2">
+                                            <a th:if="${book.previewLink}" th:href="${book.previewLink}" target="_blank" class="btn btn-outline-primary me-2">
+                                                <i class="bi bi-book"></i> Preview
+                                            </a>
+                                            <a th:if="${book.infoLink}" th:href="${book.infoLink}" target="_blank" class="btn btn-outline-secondary me-2">
+                                                <i class="bi bi-info-circle"></i> More Info
+                                            </a>
+                                            <!-- View on Goodreads Button -->
+                                            <a th:with="
+                                                   goodreadsSearchTerm=${book.isbn13 != null ? book.isbn13 : (book.isbn10 != null ? book.isbn10 : book.title + ' ' + (book.authors != null && not #lists.isEmpty(book.authors) ? book.authors[0] : ''))}
+                                               "
+                                               th:href="'https://www.goodreads.com/search?q=' + ${#uris.escapeQueryParam(goodreadsSearchTerm)}" 
+                                               target="_blank" 
+                                               class="btn btn-outline-info">
+                                                <i class="bi bi-book-half"></i> View on Goodreads
+                                            </a>
+                                            <!-- Amazon View Button -->
+                                            <a th:if="${book.isbn13 != null}" th:href="'https://www.amazon.com/s?k=' + ${book.isbn13} + '&ref=nosim&tag=williamagh-20'" target="_blank" class="btn btn-warning me-2">
+                                                <i class="fas fa-shopping-cart"></i> View on Amazon.com
+                                            </a>
+                                            <a th:if="${book.isbn13 == null && book.isbn10 != null}" th:href="'https://www.amazon.com/s?k=' + ${book.isbn10} + '&ref=nosim&tag=williamagh-20'" target="_blank" class="btn btn-warning me-2">
+                                                <i class="fas fa-shopping-cart"></i> View on Amazon.com
+                                            </a>
+                                            <a th:if="${book.isbn13 == null && book.isbn10 == null && book.title != null}" th:with="searchTerms=${book.title + ' ' + (book.authors != null && not #lists.isEmpty(book.authors) ? book.authors[0] : '')}"
+                                               th:href="'https://www.amazon.com/s?k=' + ${#uris.escapeQueryParam(searchTerms)} + '&ref=nosim&tag=williamagh-20'"
+                                               target="_blank"
+                                               class="btn btn-warning me-2">
+                                                <i class="fas fa-shopping-cart"></i> View on Amazon.com
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <div class="tab-pane fade" id="editions" role="tabpanel" aria-labelledby="editions-tab" th:if="${book.otherEditions != null and book.otherEditions.size() > 1}">
+                                        <!-- Other Editions -->
+                                        <div class="other-editions-section mb-5">
+                                            <h3 class="mb-4">Other Editions</h3>
+                                            <div class="list-group shadow-sm">
+                                                <div th:each="edition, iterStat : ${book.otherEditions}" 
+                                                     class="list-group-item list-group-item-action flex-column align-items-start">
+                                                    <div class="d-flex w-100 justify-content-between">
+                                                        <h5 class="mb-1" th:text="${book.title + (iterStat.size > 1 ? ' (Edition ' + (iterStat.index + 1) + ')' : '') + (edition.type != null ? ' [' + edition.type + ']' : '')}">Edition Title</h5>
+                                                        <!-- PublishedDate for edition is not reliably populated -->
+                                                    </div>
+                                                    <p class="mb-1">
+                                                        <span th:if="${edition.type == 'ISBN_13'}"><strong>ISBN-13:</strong> <span th:text="${edition.identifier}">ISBN-13</span><br/></span>
+                                                        <span th:if="${edition.type == 'ISBN_10'}"><strong>ISBN-10:</strong> <span th:text="${edition.identifier}">ISBN-10</span><br/></span>
+                                                        <span th:if="${edition.type != 'ISBN_13' && edition.type != 'ISBN_10' && edition.identifier != null}"><strong th:text="${edition.type}">Type</strong>: <span th:text="${edition.identifier}">Identifier</span><br/></span>
+                                                        <!-- GoogleBooksId for specific edition is not reliably populated for linking or display -->
+                                                    </p>
+                                                    <!-- CoverImageUrl for specific edition is not reliably populated -->
+                                                    <!-- Link to view specific edition is removed as its googleBooksId is not populated -->
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Similar Books Section -->
+            <div class="similar-books-section mb-5">
+                <h3 class="mb-4">You Might Also Like</h3>
+                <div th:if="${similarBooks == null or #lists.isEmpty(similarBooks)}" class="text-center py-5">
+                    <p class="text-muted">
+                        <i class="fas fa-info-circle me-2"></i>
+                        No recommendations available.
+                    </p>
+                </div>
+                <div th:unless="${similarBooks == null or #lists.isEmpty(similarBooks)}" class="row g-4">
+                    <div th:each="rec : ${similarBooks}" class="col-sm-6 col-md-4 col-lg-3">
+                        <div class="card h-100">
+                            <div class="position-relative book-cover-container">
+                                <img th:if="${rec.coverImageUrl != null}" th:src="${rec.coverImageUrl}" title="Book cover image"
+                                     class="card-img-top book-cover"
+                                     th:alt="${rec.title != null ? rec.title + ' cover' : 'Book cover image'}"
+                                     th:title="${rec.title != null ? rec.title + ' cover' : 'Book cover image'}"
+                                     onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';" />
+                                <img th:if="${rec.coverImageUrl == null}" src="/images/placeholder-book-cover.svg" title="Placeholder book cover image"
+                                     class="card-img-top book-cover"
+                                     th:alt="${rec.title != null ? rec.title + ' cover' : 'Placeholder book cover image'}"
+                                     th:title="${rec.title != null ? rec.title + ' cover' : 'Placeholder book cover image'}" />
+                                <div th:if="${rec.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
+                                    <i class="fas fa-star me-1"></i>
+                                    <span th:text="${rec.averageRating}">4.5</span>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <h5 class="card-title text-truncate" th:text="${rec.title}">Book Title</h5>
+                                <p class="card-text small text-muted text-truncate"
+                                   th:text="${rec.authors != null && !rec.authors.empty} ? ${rec.authors[0]} : 'Unknown Author'">Author Name</p>
+                            </div>
+                            <div class="card-footer bg-white border-top-0">
+                                <a th:href="@{'/book/' + ${rec.id}}" class="btn btn-sm btn-outline-primary d-block">
+                                    View Details
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- Footer -->
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+
+<!-- Scripts -->
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+
+<!-- Book Detail Specific Styles -->
+<style>
+    .book-cover-section {
+        background-color: #f8f9fa;
+        border-radius: 0.375rem 0 0 0.375rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        min-height: 400px;
+    }
+    
+    .book-cover-wrapper {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100%;
+        width: 100%;
+    }
+    
+    .book-cover {
+        max-height: 400px;
+        width: auto;
+        max-width: 100%;
+        object-fit: contain;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        border-radius: 5px;
+    }
+    
+    .metadata-item {
+        margin-bottom: 0.5rem;
+    }
+    
+    .metadata-label {
+        font-size: 0.875rem;
+        color: #6c757d;
+        margin-bottom: 0.25rem;
+    }
+    
+    .metadata-value {
+        font-weight: 600;
+    }
+    
+    .description-text {
+        line-height: 1.7;
+        white-space: pre-wrap;
+    }
+    
+    .badge {
+        border-radius: 30px;
+        font-weight: 500;
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 767.98px) {
+        .book-cover-section {
+            border-radius: 0.375rem 0.375rem 0 0;
+            padding: 1.5rem;
+        }
+        
+        .book-cover {
+            max-height: 350px;
+        }
+    }
+    
+    /* Dark mode override for book cover background */
+    [data-theme="dark"] .book-cover-section {
+        background-color: transparent !important;
+    }
+</style>
+
+</body>
+</html>
