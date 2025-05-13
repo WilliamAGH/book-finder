@@ -1,0 +1,690 @@
+:root {
+    --primary-color: #4F46E5;
+    --primary-dark: #4338CA;
+    --secondary-color: #7C3AED;
+    --light-color: #F3F4F6;
+    --dark-color: #1F2937;
+    --accent-color: #EC4899;
+    --grey-100: #F9FAFB;
+    --grey-200: #E5E7EB;
+    --grey-300: #D1D5DB;
+    --grey-400: #9CA3AF;
+    --grey-500: #6B7280;
+    --success-color: #10B981;
+    --warning-color: #FBBF24;
+    --danger-color: #EF4444;
+    --info-color: #3B82F6;
+}
+
+/* Base Styles */
+body {
+    font-family: 'Nunito', sans-serif;
+    background-color: var(--light-color);
+    color: var(--dark-color);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.6;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', serif;
+    margin-bottom: 1rem;
+    font-weight: 700;
+}
+
+a {
+    color: var(--primary-color);
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+
+a:hover {
+    color: var(--secondary-color);
+}
+
+/* Layout */
+.main-content {
+    flex: 1;
+    padding: 2rem 0;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1rem;
+}
+
+section {
+    margin-bottom: 3rem;
+}
+
+/* Navbar */
+.navbar {
+    background-color: white;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.navbar-brand {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    color: var(--primary-color);
+    font-size: 1.5rem;
+}
+
+.nav-link {
+    color: var(--dark-color);
+    font-weight: 600;
+    transition: color 0.3s;
+    padding: 0.5rem 1rem;
+    margin: 0 0.25rem;
+}
+
+.nav-link:hover, .nav-link.active {
+    color: var(--primary-color);
+}
+
+.navbar-toggler {
+    border: none;
+    padding: 0;
+}
+
+.navbar-toggler:focus {
+    box-shadow: none;
+}
+
+/* Footer */
+.footer {
+    background-color: white;
+    padding: 1.5rem 0;
+    margin-top: auto;
+    box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Hero Section */
+.hero-section {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    color: white;
+    padding: 5rem 0;
+    border-radius: 0 0 20px 20px;
+    margin-bottom: 2rem;
+}
+
+/* Search Form */
+.search-form .form-control {
+    border-radius: 50px 0 0 50px;
+    border: none;
+    padding: 1rem 1.5rem;
+}
+
+.search-form .input-group {
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
+
+.search-form .form-control:focus {
+    box-shadow: 0 0 0 0.25rem rgba(79, 70, 229, 0.25);
+}
+
+.search-form .btn {
+    border-radius: 0 50px 50px 0;
+    border: none;
+    padding: 0 1.5rem;
+}
+
+/* Book Cards */
+.card {
+    border-radius: 10px;
+    border: none;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s, box-shadow 0.3s;
+    background-color: white;
+    overflow: hidden;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+.book-cover-container {
+    height: 250px;
+    overflow: hidden;
+    border-radius: 10px 10px 0 0;
+    background-color: #f8f9fa;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.book-cover {
+    height: 100%;
+    width: auto;
+    max-width: 100%;
+    object-fit: contain;
+    transition: transform 0.3s ease;
+    background-color: var(--grey-100);
+}
+
+/* Book Cover Placeholder and Loading Styles */
+.book-cover.loading {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.book-cover.loaded {
+    opacity: 1;
+}
+
+.book-cover-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--grey-100);
+    color: var(--grey-500);
+    font-size: 0.875rem;
+    text-align: center;
+    padding: 1rem;
+}
+
+.book-cover-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(255, 255, 255, 0.7);
+    z-index: 1;
+}
+
+.book-cover-container:hover .book-cover {
+    transform: scale(1.05);
+}
+
+.card-title {
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+.card-footer {
+    background-color: transparent;
+    border-top: 1px solid var(--grey-200);
+    padding: 1rem;
+}
+
+/* Badges */
+.badge {
+    border-radius: 30px;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+}
+
+.badge.bg-light {
+    background-color: var(--grey-100) !important;
+    color: var(--dark-color) !important;
+    border: 1px solid var(--grey-200);
+}
+
+.badge.bg-warning {
+    background-color: var(--warning-color) !important;
+    color: var(--dark-color) !important;
+}
+
+/* Book Details Page */
+.book-cover-section {
+    background-color: #f8f9fa;
+    border-radius: 0.375rem 0 0 0.375rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    height: 100%;
+}
+
+.book-cover-section img.book-cover {
+    max-height: 500px;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+    border-radius: 5px;
+}
+
+.metadata-item {
+    margin-bottom: 0.5rem;
+}
+
+.metadata-label {
+    font-size: 0.875rem;
+    color: var(--grey-500);
+    margin-bottom: 0.25rem;
+}
+
+.metadata-value {
+    font-weight: 600;
+}
+
+.description-text {
+    line-height: 1.7;
+}
+
+/* Buttons */
+.btn {
+    border-radius: 50px;
+    padding: 0.5rem 1.5rem;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.btn-primary:hover, .btn-primary:focus {
+    background-color: var(--primary-dark);
+    border-color: var(--primary-dark);
+}
+
+.btn-success {
+    background-color: var(--success-color);
+    border-color: var(--success-color);
+}
+
+.btn-outline-primary {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn-sm {
+    padding: 0.25rem 1rem;
+    font-size: 0.875rem;
+}
+
+/* Search Results */
+.search-header {
+    background-color: white;
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.list-view .book-cover {
+    max-height: 200px;
+    object-fit: cover;
+}
+
+/* Pagination */
+.pagination .page-item .page-link {
+    color: var(--primary-color);
+    padding: 0.5rem 1rem;
+    border-radius: 50px;
+    margin: 0 0.25rem;
+}
+
+.pagination .page-item.active .page-link {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.pagination .page-item .page-link:focus {
+    box-shadow: 0 0 0 0.25rem rgba(79, 70, 229, 0.25);
+}
+
+/* Utility Classes */
+.text-primary {
+    color: var(--primary-color) !important;
+}
+
+.bg-primary {
+    background-color: var(--primary-color) !important;
+}
+
+/* Loading Indicators */
+.spinner-border.text-primary {
+    color: var(--primary-color) !important;
+}
+
+/* Media Queries */
+@media (max-width: 767.98px) {
+    /* Hide search text on mobile, show only icon */
+    .search-form .btn .search-text {
+        display: none;
+    }
+    
+    /* Adjust padding for search button on mobile */
+    .search-form .btn {
+        padding: 0 1rem;
+    }
+    
+    /* Remove margin after icon when text is hidden */
+    .search-form .btn .fa-search {
+        margin-right: 0 !important;
+    }
+    .book-cover-section {
+        border-radius: 0.375rem 0.375rem 0 0;
+        padding: 1.5rem;
+    }
+    
+    .book-cover {
+        max-height: 350px;
+    }
+    
+    .hero-section {
+        padding: 3rem 0;
+    }
+}
+
+@media (min-width: 576px) and (max-width: 991.98px) {
+    .col-sm-6.col-md-4.col-lg-3 {
+        width: 50%;
+    }
+}
+
+/* New header theme toggle styling */
+.theme-toggle-header {
+    display: inline-flex;
+    align-items: center;
+    color: var(--dark-color);
+    font-size: 1.125rem;
+    transition: color 0.2s ease-in-out, background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.theme-toggle-header:hover {
+    color: var(--primary-color);
+    background-color: rgba(0, 0, 0, 0.05);
+    border-radius: 0.375rem;
+    padding: 0.25rem;
+}
+
+[data-theme="dark"] .theme-toggle-header:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--primary-color);
+}
+
+/* Remove leftover theme-toggle-item styles */
+.theme-toggle-item {
+    display: none;
+}
+
+/* Dark Theme Overrides */
+[data-theme="dark"] {
+    --primary-color: #60A5FA; /* Lighter blue for dark mode */
+    --primary-dark: #3B82F6;
+    --secondary-color: #A78BFA; /* Lighter purple */
+    --light-color: #1F2937; /* Dark background for body */
+    --dark-color: #F3F4F6;  /* Light text for body */
+    --grey-100: #374151; /* Darker grey */
+    --grey-200: #4B5563; /* Darker grey */
+    --grey-300: #6B7280; /* Darker grey */
+    --grey-400: #9CA3AF; /* Mid grey */
+    --grey-500: #D1D5DB; /* Lighter grey */
+}
+
+[data-theme="dark"] body {
+    background-color: var(--light-color);
+    color: var(--dark-color);
+}
+
+[data-theme="dark"] .navbar, [data-theme="dark"] .footer {
+    background-color: var(--grey-100); /* Darker background for navbar/footer */
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3); /* Adjusted shadow for dark */
+}
+
+[data-theme="dark"] .nav-link, [data-theme="dark"] .navbar-brand {
+    color: var(--dark-color); /* Light text */
+}
+
+[data-theme="dark"] .nav-link:hover, [data-theme="dark"] .nav-link.active {
+    color: var(--primary-color); /* Lighter primary for hover/active */
+}
+
+[data-theme="dark"] .card {
+    background-color: var(--grey-200); /* Darker card background */
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+    color: var(--dark-color); /* Ensure text in card is light */
+}
+
+[data-theme="dark"] .card-title {
+    color: var(--dark-color);
+}
+
+[data-theme="dark"] .card-footer {
+    border-top: 1px solid var(--grey-300);
+}
+
+[data-theme="dark"] .search-form .form-control {
+    background-color: var(--primary-color); /* Unified background with button */
+    color: var(--dark-color);          /* Light text */
+    border: none;                       /* Remove any border that might cause edges */
+    /* Make sure no shadow is applied here directly if it was before */
+    box-shadow: none;
+}
+
+[data-theme="dark"] .search-form .form-control::placeholder {
+    /* Use var(--dark-color) with alpha for placeholder */
+    color: rgba(243, 244, 246, 0.7); /* Based on default --dark-color #F3F4F6 */
+}
+
+[data-theme="dark"] .search-form .form-control:focus {
+    box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.15);
+}
+
+[data-theme="dark"] .search-form .btn {
+    background-color: var(--primary-color);
+    color: var(--dark-color);
+}
+
+[data-theme="dark"] .search-form .btn:hover {
+    background-color: var(--primary-dark);
+}
+
+[data-theme="dark"] .badge.bg-light {
+    background-color: var(--grey-300) !important;
+    color: var(--dark-color) !important; /* Light text for light badges */
+    border-color: var(--grey-400);
+}
+
+/* Ensure hero section text is light in dark mode */
+[data-theme="dark"] .hero-section {
+    color: #E0E7FF; /* A light, slightly bluish white for better harmony */
+}
+
+[data-theme="dark"] .hero-section h1, [data-theme="dark"] .hero-section p {
+color: inherit; /* Inherit from .hero-section */
+}
+
+/* Make "Popular Books This Week" and similar titles light in dark mode */
+[data-theme="dark"] h2, [data-theme="dark"] h3 {
+color: var(--dark-color);
+}
+
+/* Dark Mode Styles */
+[data-theme="dark"] {
+    color-scheme: dark;
+    --bg-color: #121212;
+    --text-color: #E5E7EB;
+    --border-color: #374151;
+    --card-bg: #1F2937;
+    --cover-container-bg: #2D3748;
+    --input-bg: #2D3748;
+    --dropdown-bg: #1F2937;
+    --dropdown-hover: #374151;
+}
+
+/* Dark mode styling for book cards and containers */
+[data-theme="dark"] .card {
+    background-color: var(--card-bg);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .book-cover-container {
+    background-color: var(--cover-container-bg);
+}
+
+[data-theme="dark"] .card-body,
+[data-theme="dark"] .card-footer {
+    background-color: var(--card-bg);
+}
+
+[data-theme="dark"] .card-footer.bg-white {
+    background-color: var(--card-bg) !important;
+}
+
+/* Fix white backgrounds in search header and other elements */
+[data-theme="dark"] .bg-white,
+[data-theme="dark"] .search-header {
+    background-color: var(--card-bg) !important;
+}
+
+/* Fix search input fields */
+[data-theme="dark"] .form-control,
+[data-theme="dark"] input.form-control,
+[data-theme="dark"] textarea.form-control,
+[data-theme="dark"] select.form-control {
+    background-color: var(--input-bg);
+    border-color: var(--border-color);
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .form-control:focus {
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.25rem rgba(79, 70, 229, 0.25);
+}
+
+/* Fix dropdown menus */
+[data-theme="dark"] .dropdown-menu {
+    background-color: var(--dropdown-bg);
+    border-color: var(--border-color);
+}
+
+[data-theme="dark"] .dropdown-item {
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .dropdown-item:hover,
+[data-theme="dark"] .dropdown-item:focus {
+    background-color: var(--dropdown-hover);
+    color: white;
+}
+
+/* Fix pagination */
+[data-theme="dark"] .page-link {
+    background-color: var(--card-bg);
+    border-color: var(--border-color);
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .page-link:hover {
+    background-color: var(--dropdown-hover);
+    border-color: var(--border-color);
+}
+
+[data-theme="dark"] .page-item.active .page-link {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+[data-theme="dark"] .page-item.disabled .page-link {
+    background-color: var(--card-bg);
+    border-color: var(--border-color);
+    color: var(--grey-500);
+}
+
+/* Theme toggle button specific styles */
+#theme-toggle {
+    border-radius: 50%;      /* Circular button */
+    width: 38px;             /* Fixed width */
+    height: 38px;            /* Fixed height */
+    padding: 0;              /* Remove default button padding */
+    display: inline-flex;    /* Enable flex for centering icon */
+    align-items: center;     /* Vertically center icon */
+    justify-content: center; /* Horizontally center icon */
+    vertical-align: middle;  /* Align button with text of other nav items */
+    transition: background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+#theme-toggle i {
+    font-size: 1rem; /* Adjust icon size if needed */
+}
+
+/* Light Mode Hover Effect */
+#theme-toggle:hover {
+    background-color: var(--grey-200); /* Light grey background */
+    box-shadow: 0 0 8px rgba(0,0,0,0.15); /* Subtle shadow */
+    color: var(--primary-dark); /* Icon color changes to darker primary */
+}
+
+/* Dark Mode Hover Effect */
+[data-theme="dark"] #theme-toggle:hover {
+    background-color: var(--grey-100); /* Darker grey background */
+    box-shadow: 0 0 10px rgba(var(--primary-rgb, 96, 165, 250), 0.5); /* Glow with primary dark color */
+    color: var(--primary-color); /* Icon color changes to lighter primary (accent in dark) */
+}
+
+[data-theme="dark"] #theme-toggle {
+    color: var(--dark-color); /* Ensure icon is light in dark mode by default */
+    /* background-color: transparent; /* Ensure no unwanted background */
+}
+
+/* Dark mode styling for "Other Editions" section in book details */
+[data-theme="dark"] #bookDetailTabContent #editions .list-group {
+    background-color: transparent; /* Let container show dark background */
+    border: none; /* Remove any light borders */
+}
+
+[data-theme="dark"] #bookDetailTabContent #editions .list-group-item {
+    background-color: var(--grey-100); /* Dark grey for items */
+    color: var(--dark-color);          /* Light text */
+    border-color: var(--grey-300);     /* Border matches dark theme */
+}
+
+[data-theme="dark"] #bookDetailTabContent #editions .list-group-item.active {
+    background-color: var(--primary-color); /* Highlight with primary color */
+    color: #FFF;                              /* White text for contrast */
+    border-color: var(--primary-color);     /* Match primary */
+}
+
+[data-theme="dark"] #bookDetailTabContent #editions .other-editions-section h3 {
+    color: var(--dark-color); /* Heading light text */
+}
+
+[data-theme="dark"] #bookDetailTabContent #editions p,
+[data-theme="dark"] #bookDetailTabContent #editions .metadata-label,
+[data-theme="dark"] #bookDetailTabContent #editions small {
+    color: var(--dark-color); /* Ensure paragraph and small text are light */
+}
+
+/* Navbar container flex layout to align brand, mobile toggle, and hamburger */
+#main-navbar > .container {
+    display: flex;
+    align-items: center;
+}
+
+/* Push mobile toggle to the right, just before hamburger */
+.theme-toggle-header {
+    margin-left: auto;
+    margin-right: 0.25rem; /* spacing from hamburger */
+}
+
+/* Slight spacing for hamburger after toggle */
+.navbar-toggler {
+    margin-right: 0; /* keep flush at right edge */
+}
