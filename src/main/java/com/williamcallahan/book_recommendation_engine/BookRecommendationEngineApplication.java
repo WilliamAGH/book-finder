@@ -7,13 +7,17 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerA
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 
 // Simple application entry point - specialized configurations handle database presence/absence
 @SpringBootApplication(exclude = {
     DataSourceAutoConfiguration.class,
     DataSourceTransactionManagerAutoConfiguration.class,
     HibernateJpaAutoConfiguration.class,
-    JpaRepositoriesAutoConfiguration.class
+    JpaRepositoriesAutoConfiguration.class,
+    OpenAiAudioSpeechAutoConfiguration.class, 
+    OpenAiAudioTranscriptionAutoConfiguration.class 
 })
 @EnableCaching
 public class BookRecommendationEngineApplication {
