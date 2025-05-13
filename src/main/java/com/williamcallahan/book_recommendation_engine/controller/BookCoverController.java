@@ -3,7 +3,6 @@ package com.williamcallahan.book_recommendation_engine.controller;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -52,12 +51,12 @@ public class BookCoverController {
         
         try {
             // Parse the source parameter
-            CoverImageSource preferredSource;
+            BookImageOrchestrationService.CoverImageSource preferredSource;
             try {
-                preferredSource = CoverImageSource.valueOf(source.toUpperCase());
+                preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(source.toUpperCase());
             } catch (IllegalArgumentException e) {
                 logger.warn("Invalid source parameter: {}. Defaulting to ANY.", source);
-                preferredSource = CoverImageSource.ANY;
+                preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
             }
             
             // Get the book

@@ -4,6 +4,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookCoverCacheService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -20,7 +21,9 @@ import java.util.List;
 import java.util.Collections;
 
 /**
- * Controller for handling home page requests.
+ * Controller for handling user-facing web pages such as the homepage, search page, and book detail pages.
+ * It integrates with various services to fetch book data and uses BookCoverCacheService
+ * to provide optimized cover image URLs for display.
  */
 @Controller
 public class HomeController {
@@ -29,6 +32,7 @@ public class HomeController {
     private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
+    private final BookCoverCacheService bookCoverCacheService; // Added field
     // The minimum number of books to display on the homepage
     private static final int MIN_BOOKS_TO_DISPLAY = 5;
     
@@ -38,10 +42,14 @@ public class HomeController {
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
     @Autowired
-    public HomeController(GoogleBooksService googleBooksService, RecentlyViewedService recentlyViewedService, RecommendationService recommendationService) {
+    public HomeController(GoogleBooksService googleBooksService, 
+                          RecentlyViewedService recentlyViewedService, 
+                          RecommendationService recommendationService,
+                          BookCoverCacheService bookCoverCacheService) { // Added to constructor
         this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
+        this.bookCoverCacheService = bookCoverCacheService; // Initialize field
     }
 
     /**
@@ -55,22 +63,37 @@ public class HomeController {
         // Add recently viewed books to the model
         List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks();
         
-        // If we don't have enough books to display, add default Java programming books
         if (recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
-            // Get default books using the new reactive service method, then block
             List<Book> defaultBooks = googleBooksService.searchBooksAsyncReactive("Java programming")
                                                     .blockOptional()
                                                     .orElse(Collections.emptyList());
-            
-            // Add default books that aren't already in recent books
             for (Book defaultBook : defaultBooks) {
-                if (!recentBooks.contains(defaultBook)) {
+                if (!recentBooks.contains(defaultBook) && recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
                     recentBooks.add(defaultBook);
                 }
-                
-                // Stop once we have enough books
-                if (recentBooks.size() >= MIN_BOOKS_TO_DISPLAY) {
-                    break;
+            }
+        }
+
+        // Process cover images for all books to be displayed
+        for (Book book : recentBooks) {
+            if (book != null) {
+                // The BookCoverCacheService now handles identifier selection (ISBN or Google Book ID)
+                // directly from the Book object.
+                try {
+                    String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                    book.setCoverImageUrl(coverUrl);
+                    // Dimensions will be null initially, background process will update cache/S3
+                    book.setCoverImageWidth(null);
+                    book.setCoverImageHeight(null);
+                    book.setIsCoverHighResolution(null);
+                } catch (Exception e) {
+                    String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() : 
+                                             ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
+                    logger.warn("Error getting initial cover URL for book with identifier '{}': {}", identifierForLog, e.getMessage());
+                    // Ensure a placeholder if an error occurs and no cover is set
+                    if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                       book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                    }
                 }
             }
         }
