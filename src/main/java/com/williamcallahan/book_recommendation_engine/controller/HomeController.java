@@ -14,11 +14,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.view.RedirectView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import reactor.core.publisher.Mono;
 import java.util.regex.Pattern;
-
 import java.util.List;
 import java.util.Collections;
+import java.util.ArrayList;
 
 /**
  * Controller for handling user-facing web pages such as the homepage, search page, and book detail pages.
@@ -59,48 +59,54 @@ public class HomeController {
      * @return the name of the template to render
      */
     @GetMapping("/")
-    public String home(Model model) {
+    public Mono<String> home(Model model) {
         // Add recently viewed books to the model
-        List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks();
-        
+        List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
+        model.addAttribute("activeTab", "home"); // Set early
+
+        Mono<List<Book>> recentBooksMono;
+
         if (recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
-            List<Book> defaultBooks = googleBooksService.searchBooksAsyncReactive("Java programming")
-                                                    .blockOptional()
-                                                    .orElse(Collections.emptyList());
-            for (Book defaultBook : defaultBooks) {
-                if (!recentBooks.contains(defaultBook) && recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
-                    recentBooks.add(defaultBook);
-                }
-            }
+            recentBooksMono = googleBooksService.searchBooksAsyncReactive("Java programming")
+                .map(defaultBooks -> {
+                    List<Book> combinedBooks = new ArrayList<>(recentBooks);
+                    List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
+                    for (Book defaultBook : booksToAdd) {
+                        if (combinedBooks.size() >= MIN_BOOKS_TO_DISPLAY) break;
+                        if (!combinedBooks.stream().anyMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
+                            combinedBooks.add(defaultBook);
+                        }
+                    }
+                    return combinedBooks;
+                })
+                .defaultIfEmpty(recentBooks); // If google books call fails or empty, use original recentBooks
+        } else {
+            recentBooksMono = Mono.just(recentBooks);
         }
 
-        // Process cover images for all books to be displayed
-        for (Book book : recentBooks) {
-            if (book != null) {
-                // The BookCoverCacheService now handles identifier selection (ISBN or Google Book ID)
-                // directly from the Book object.
-                try {
-                    String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
-                    book.setCoverImageUrl(coverUrl);
-                    // Dimensions will be null initially, background process will update cache/S3
-                    book.setCoverImageWidth(null);
-                    book.setCoverImageHeight(null);
-                    book.setIsCoverHighResolution(null);
-                } catch (Exception e) {
-                    String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() : 
-                                             ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
-                    logger.warn("Error getting initial cover URL for book with identifier '{}': {}", identifierForLog, e.getMessage());
-                    // Ensure a placeholder if an error occurs and no cover is set
-                    if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                       book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+        return recentBooksMono.map(finalRecentBooks -> {
+            // Process cover images for all books to be displayed
+            for (Book book : finalRecentBooks) {
+                if (book != null) {
+                    try {
+                        String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                        book.setCoverImageUrl(coverUrl);
+                        book.setCoverImageWidth(null);
+                        book.setCoverImageHeight(null);
+                        book.setIsCoverHighResolution(null);
+                    } catch (Exception e) {
+                        String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() :
+                                                 ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
+                        logger.warn("Error getting initial cover URL for book with identifier '{}': {}", identifierForLog, e.getMessage());
+                        if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                           book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        }
                     }
                 }
             }
-        }
-        
-        model.addAttribute("recentBooks", recentBooks);
-        model.addAttribute("activeTab", "home");
-        return "index";
+            model.addAttribute("recentBooks", finalRecentBooks);
+            return "index"; // Return template name
+        });
     }
     
     /**
@@ -125,51 +131,55 @@ public class HomeController {
      * @return the name of the template to render
      */
     @GetMapping("/book/{id}")
-    public String bookDetail(@PathVariable String id,
+    public Mono<String> bookDetail(@PathVariable String id,
                              @RequestParam(required = false) String query,
                              @RequestParam(required = false, defaultValue = "0") int page,
                              @RequestParam(required = false, defaultValue = "relevance") String sort,
                              @RequestParam(required = false, defaultValue = "grid") String view,
                              Model model) {
-        try {
-            logger.info("Looking up book with ID: {}", id);
-            Book book = googleBooksService.getBookById(id).blockOptional().orElse(null);
-            
-            if (book != null) {
-                model.addAttribute("book", book);
-                try {
-                    recentlyViewedService.addToRecentlyViewed(book);
-                } catch (Exception e) {
-                    // Non-critical operation, just log and continue if it fails
-                    logger.warn("Failed to add book to recently viewed: {}", e.getMessage());
+        logger.info("Looking up book with ID: {}", id);
+        model.addAttribute("activeTab", "book"); // Set early, not dependent on async data
+        model.addAttribute("searchQuery", query);
+        model.addAttribute("searchPage", page);
+        model.addAttribute("searchSort", sort);
+        model.addAttribute("searchView", view);
+
+        Mono<Book> bookMono = googleBooksService.getBookById(id)
+            .doOnSuccess(book -> {
+                if (book != null) {
+                    model.addAttribute("book", book);
+                    try {
+                        recentlyViewedService.addToRecentlyViewed(book);
+                    } catch (Exception e) {
+                        logger.warn("Failed to add book to recently viewed: {}", e.getMessage());
+                    }
+                } else {
+                    logger.info("No book found with ID: {}", id);
+                    model.addAttribute("book", null); // Ensure model has book attribute even if null
                 }
-            } else {
-                logger.info("No book found with ID: {}", id);
-            }
-            
-            model.addAttribute("searchQuery", query);
-            model.addAttribute("searchPage", page);
-            model.addAttribute("searchSort", sort);
-            model.addAttribute("searchView", view);
-        model.addAttribute("activeTab", "book");
+            })
+            .doOnError(e -> {
+                 logger.error("Error getting book with ID: {}", id, e);
+                 model.addAttribute("error", "An error occurred while retrieving this book. Please try again later.");
+                 model.addAttribute("book", null);
+            })
+            .onErrorResume(e -> Mono.empty()); // Continue to similar books even if main book fails, page will show error
 
-        // Fetch similar book recommendations
-        List<Book> similarBooks = Collections.emptyList();
-        try {
-            similarBooks = recommendationService.getSimilarBooks(id, 6);
-        } catch (Exception e) {
-            logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());
-        }
-        model.addAttribute("similarBooks", similarBooks);
-
-        return "book";
-        } catch (Exception e) {
-            logger.error("Error getting book with ID: {}", id, e);
-            // Still return the book template - it will handle the null book with a nice message
-            model.addAttribute("activeTab", "book");
-            model.addAttribute("error", "An error occurred while retrieving this book. Please try again later.");
-            return "book";
-        }
+        // Fetch similar books. This needs to be chained after bookMono resolves (or in parallel if appropriate)
+        // For simplicity in model population, let's chain it.
+        return bookMono
+            .flatMap(fetchedBook -> // fetchedBook can be null if getBookById resulted in empty Mono and was caught by doOnError
+                recommendationService.getSimilarBooks(id, 6)
+                    .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
+                    .doOnError(e -> {
+                        logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());
+                        model.addAttribute("similarBooks", Collections.emptyList());
+                    })
+                    .onErrorReturn(Collections.emptyList()) // Return empty list on error to allow page rendering
+                    .thenReturn("book") // Return template name after this step
+            )
+            .defaultIfEmpty("book") // If bookMono was empty (e.g. book not found and error handled), still return template name
+            .onErrorReturn("book"); // Fallback template name on any other unexpected error in the chain
     }
     
     /**
