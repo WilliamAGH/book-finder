@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head th:replace="~{fragments/layout :: head(title='Search Results')}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Results - Book Recommendation Engine</title>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<!-- Main Content -->
+<main class="main-content">
+    <div class="container">
+        <!-- Search Header -->
+        <div class="search-header bg-white p-4 rounded-3 shadow-sm mb-4">
+            <form action="/search" method="get" class="mb-4">
+                <div class="input-group">
+                    <input type="text" id="searchInput" name="query" class="form-control" 
+                           th:value="${query}" placeholder="Search by title, author, or keyword..." required>
+                    <button class="btn btn-primary" type="submit">
+                        <i class="fas fa-search me-2"></i>Search
+                    </button>
+                </div>
+            </form>
+            
+            <!-- Search Filters -->
+            <div class="d-flex flex-wrap align-items-center gap-2" id="searchFilters">
+                <div class="me-auto">
+                    <span th:if="${query}" class="text-muted">
+                        Results for: <span class="fw-bold" th:text="${query}"></span>
+                    </span>
+                </div>
+                
+                <div class="dropdown">
+                    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" 
+                            id="sortDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-sort me-1"></i> Sort By
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="sortDropdown">
+                        <li><a class="dropdown-item sort-option" href="#" data-sort="relevance">Relevance</a></li>
+                        <li><a class="dropdown-item sort-option" href="#" data-sort="title">Title</a></li>
+                        <li><a class="dropdown-item sort-option" href="#" data-sort="author">Author</a></li>
+                        <li><a class="dropdown-item sort-option" href="#" data-sort="newest">Newest First</a></li>
+                        <li><a class="dropdown-item sort-option" href="#" data-sort="rating">Highest Rated</a></li>
+                    </ul>
+                </div>
+                
+                <div class="dropdown">
+                    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" 
+                            id="viewDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-th-large me-1"></i> View
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="viewDropdown">
+                        <li><a class="dropdown-item view-option active" href="#" data-view="grid">Grid View</a></li>
+                        <li><a class="dropdown-item view-option" href="#" data-view="list">List View</a></li>
+                    </ul>
+                </div>
+                
+                <div class="dropdown">
+                    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" 
+                            id="coverSourceDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-image me-1"></i> Cover Source
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="coverSourceDropdown">
+                        <li><a class="dropdown-item cover-source-option active" href="#" data-source="ANY">Any Source</a></li>
+                        <li><a class="dropdown-item cover-source-option" href="#" data-source="GOOGLE_BOOKS">Google Books</a></li>
+                        <li><a class="dropdown-item cover-source-option" href="#" data-source="OPEN_LIBRARY">Open Library</a></li>
+                        <li><a class="dropdown-item cover-source-option" href="#" data-source="LONGITOOD">Longitood</a></li>
+                    </ul>
+                </div>
+                
+                <div class="dropdown">
+                    <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" 
+                            id="resolutionDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-expand me-1"></i> Resolution
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="resolutionDropdown">
+                        <li><a class="dropdown-item resolution-option active" href="#" data-resolution="ANY">Any Resolution</a></li>
+                        <li><a class="dropdown-item resolution-option" href="#" data-resolution="HIGH_ONLY">High Resolution Only</a></li>
+                        <li><a class="dropdown-item resolution-option" href="#" data-resolution="HIGH_FIRST">High Resolution First</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="text-center py-5 d-none">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Searching for books...</p>
+        </div>
+        
+        <!-- Search Results -->
+        <div id="searchResults" class="mb-4">
+            <!-- Results will be loaded here via JavaScript -->
+            <div class="text-center py-5">
+                <i class="fas fa-search fa-3x text-muted mb-3"></i>
+                <h4>Enter a search term to find books</h4>
+                <p class="text-muted">Search by title, author, ISBN, or keywords</p>
+            </div>
+        </div>
+        
+        <!-- Pagination -->
+        <nav aria-label="Search results pages" class="d-flex justify-content-center">
+            <ul class="pagination" id="pagination">
+                <!-- Pagination will be added via JavaScript -->
+            </ul>
+        </nav>
+    </div>
+</main>
+
+<!-- Footer -->
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+
+<!-- Result Item Template for JavaScript -->
+<template id="bookCardTemplate">
+    <div class="col-sm-6 col-md-4 col-lg-3 mb-4">
+        <div class="card h-100">
+            <div class="position-relative book-cover-container">
+                <img src="" class="card-img-top book-cover" alt="Book cover"
+                     onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
+                <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
+                    <i class="fas fa-star me-1"></i>
+                    <span class="rating-value">4.5</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <h5 class="card-title text-truncate book-title">Book Title</h5>
+                <p class="card-text small text-muted text-truncate book-author">Author Name</p>
+            </div>
+            <div class="card-footer bg-white border-top-0">
+                <a href="#" class="btn btn-sm btn-outline-primary d-block book-link">View Details</a>
+            </div>
+        </div>
+    </div>
+</template>
+
+<template id="bookListItemTemplate">
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="row g-0">
+                <div class="col-md-2">
+                    <div class="position-relative book-cover-wrapper h-100">
+                        <img src="" class="img-fluid rounded-start book-cover" alt="Book cover"
+                             onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
+                        <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
+                            <i class="fas fa-star me-1"></i>
+                            <span class="rating-value">4.5</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-10">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h5 class="card-title book-title">Book Title</h5>
+                                <p class="card-text text-muted book-author">Author Name</p>
+                            </div>
+                            <a href="#" class="btn btn-sm btn-outline-primary book-link">View Details</a>
+                        </div>
+                        <p class="card-text book-description">Book description will be displayed here...</p>
+                        <div class="d-flex flex-wrap gap-1 mt-2 book-categories">
+                            <!-- Categories will be added here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</template>
+
+<!-- Scripts -->
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+
+<!-- Cover Source Handler Script -->
+<script src="/js/cover-source-handler.js"></script>
+
+<!-- Search Page Scripts -->
+<script th:inline="javascript">
+    document.addEventListener('DOMContentLoaded', function() {
+        const query = /*[[${query}]]*/ null;
+        const resultsContainer = document.getElementById('searchResults');
+        const paginationContainer = document.getElementById('pagination');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        
+        // Current search state
+        let currentPage = 0;
+        let currentSort = 'relevance';
+        let currentView = 'grid';
+        let currentMaxResults = 12;
+        let currentCoverSource = 'ANY';
+        let currentResolution = 'HIGH_FIRST'; // Default to HIGH_FIRST
+        
+        // Initialize search if query exists
+        if (query) {
+            // Get page from URL if present
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlPage = urlParams.get('page');
+            if (urlPage) {
+                currentPage = parseInt(urlPage);
+            }
+            
+            // Get sort from URL if present
+            const urlSort = urlParams.get('sort');
+            if (urlSort) {
+                currentSort = urlSort;
+                document.getElementById('sortDropdown').innerHTML =
+                    `<i class="fas fa-sort me-1"></i> Sort: ${urlSort.charAt(0).toUpperCase() + urlSort.slice(1)}`;
+            }
+            
+            // Get cover source from URL if present
+            const urlCoverSource = urlParams.get('coverSource');
+            if (urlCoverSource) {
+                currentCoverSource = urlCoverSource;
+                let coverSourceText = urlCoverSource.replace('_', ' ').toLowerCase()
+                    .split(' ')
+                    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                    .join(' ');
+                if (urlCoverSource === 'ANY') coverSourceText = 'Any Source'; // Special case for "ANY"
+                document.getElementById('coverSourceDropdown').innerHTML =
+                    `<i class="fas fa-image me-1"></i> Source: ${coverSourceText}`;
+                
+                // Update active state in dropdown
+                document.querySelectorAll('.cover-source-option').forEach(opt => {
+                    if (opt.getAttribute('data-source') === urlCoverSource) {
+                        opt.classList.add('active');
+                    } else {
+                        opt.classList.remove('active');
+                    }
+                });
+            }
+            
+            // Get resolution preference from URL if present, otherwise use default
+            const urlResolution = urlParams.get('resolution');
+            if (urlResolution) {
+                currentResolution = urlResolution;
+            }
+            // Update dropdown text and active state based on currentResolution (either from URL or default)
+            let displayText = 'Any Resolution'; // Default capitalized
+            if (currentResolution === 'HIGH_ONLY') {
+                displayText = 'High Resolution Only';
+            } else if (currentResolution === 'HIGH_FIRST') {
+                displayText = 'High Resolution First';
+            }
+            document.getElementById('resolutionDropdown').innerHTML =
+                `<i class="fas fa-expand me-1"></i> ${displayText}`;
+            
+            // Update active state in dropdown for resolution
+            document.querySelectorAll('.resolution-option').forEach(opt => {
+                if (opt.getAttribute('data-resolution') === currentResolution) {
+                    opt.classList.add('active');
+                } else {
+                    opt.classList.remove('active');
+                }
+            });
+            
+            performSearch(query, currentPage, currentSort, currentCoverSource, currentResolution);
+        }
+        
+        // View toggle handlers
+        document.querySelectorAll('.view-option').forEach(option => {
+            option.addEventListener('click', function(e) {
+                e.preventDefault();
+                const view = this.getAttribute('data-view');
+                
+                // Update active state
+                document.querySelectorAll('.view-option').forEach(opt => opt.classList.remove('active'));
+                this.classList.add('active');
+                
+                currentView = view;
+                
+                // If we have search results, re-render them
+                if (query) {
+                    displayResults(window.lastSearchResults, currentView);
+                }
+            });
+        });
+        
+        // Sort option handlers
+        document.querySelectorAll('.sort-option').forEach(option => {
+            option.addEventListener('click', function(e) {
+                e.preventDefault();
+                const sortBy = this.getAttribute('data-sort');
+                
+                // Update dropdown button text
+                document.getElementById('sortDropdown').innerHTML =
+                    `<i class="fas fa-sort me-1"></i> Sort: ${sortBy.charAt(0).toUpperCase() + sortBy.slice(1)}`;
+                
+                currentSort = sortBy;
+                
+                // If we have search results, re-sort and re-render them
+                if (query) {
+                    performSearch(query, 0, sortBy, currentCoverSource, currentResolution);
+                }
+            });
+        });
+        
+        // Cover source option handlers
+        document.querySelectorAll('.cover-source-option').forEach(option => {
+            option.addEventListener('click', function(e) {
+                e.preventDefault();
+                const source = this.getAttribute('data-source');
+                currentCoverSource = source;
+                
+                // Update dropdown button text
+                let coverSourceButtonText = source.replace('_', ' ').toLowerCase()
+                    .split(' ')
+                    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                    .join(' ');
+                if (source === 'ANY') coverSourceButtonText = 'Any Source';
+                document.getElementById('coverSourceDropdown').innerHTML =
+                    `<i class="fas fa-image me-1"></i> Source: ${coverSourceButtonText}`;
+                
+                // Update URL without reloading
+                const url = new URL(window.location.href);
+                url.searchParams.set('coverSource', source);
+                window.history.pushState({}, '', url);
+                
+                // Mark as active
+                document.querySelectorAll('.cover-source-option').forEach(opt => {
+                    opt.classList.remove('active');
+                });
+                this.classList.add('active');
+                
+                // Reload search results
+                currentPage = 0;
+                performSearch(query, 0, currentSort, currentCoverSource, currentResolution);
+            });
+        });
+        
+        // Handle resolution preference selection
+        document.querySelectorAll('.resolution-option').forEach(option => {
+            option.addEventListener('click', function(e) {
+                e.preventDefault();
+                const resolution = this.getAttribute('data-resolution');
+                currentResolution = resolution;
+                
+                // Update dropdown button text
+                let displayText = 'Any Resolution'; // Default capitalized
+                if (resolution === 'HIGH_ONLY') {
+                    displayText = 'High Resolution Only';
+                } else if (resolution === 'HIGH_FIRST') {
+                    displayText = 'High Resolution First';
+                }
+                
+                document.getElementById('resolutionDropdown').innerHTML =
+                    `<i class="fas fa-expand me-1"></i> ${displayText}`;
+                
+                // Update URL without reloading
+                const url = new URL(window.location.href);
+                url.searchParams.set('resolution', resolution);
+                window.history.pushState({}, '', url);
+                
+                // Mark as active
+                document.querySelectorAll('.resolution-option').forEach(opt => {
+                    opt.classList.remove('active');
+                });
+                this.classList.add('active');
+                
+                // Reload search results
+                currentPage = 0;
+                performSearch(query, 0, currentSort, currentCoverSource, currentResolution);
+            });
+        });
+        
+        function performSearch(query, startIndex, sortBy, coverSource, resolution) {
+            if (!query) return;
+            
+            // Show loading indicator
+            resultsContainer.innerHTML = '';
+            loadingIndicator.classList.remove('d-none');
+            
+            // Build the URL
+            let apiUrl = `/api/books/search?query=${encodeURIComponent(query)}&startIndex=${startIndex}&maxResults=${currentMaxResults}`;
+            
+            // Add sort parameter if not default
+            if (sortBy && sortBy !== 'relevance') {
+                apiUrl += `&orderBy=${sortBy}`;
+            }
+            
+            // Add resolution parameter if not default
+            if (resolution && resolution !== 'ANY') {
+                apiUrl += `&resolution=${resolution}`;
+            }
+            
+            // Add cover source parameter if not default
+            if (coverSource && coverSource !== 'ANY') {
+                apiUrl += `&coverSource=${coverSource}`;
+            }
+            
+            fetch(apiUrl)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Search request failed');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    loadingIndicator.classList.add('d-none');
+                    window.lastSearchResults = data;
+                    
+                    if (sortBy && sortBy !== 'relevance') {
+                        sortResults(data.results, sortBy);
+                    }
+                    
+                    displayResults(data, currentView);
+                    
+                    // Setup pagination using totalAvailableResults from the backend
+                    if (data.totalAvailableResults && data.totalAvailableResults > 0) {
+                        setupPagination(currentPage, data.totalAvailableResults, currentMaxResults);
+                    } else {
+                        paginationContainer.innerHTML = '';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching search results:', error);
+                    resultsContainer.innerHTML = `<div class="alert alert-danger">Error fetching search results. Please try again later.</div>`;
+                    loadingIndicator.classList.add('d-none');
+                    console.error('Search error:', error);
+                });
+        }
+        
+        function displayResults(data, viewType) {
+            const results = data.results;
+            
+            if (!results || results.length === 0) {
+                resultsContainer.innerHTML = `
+                    <div class="text-center py-5">
+                        <i class="fas fa-book-open fa-3x text-muted mb-3"></i>
+                        <h4>No books found</h4>
+                        <p class="text-muted">Try different keywords or check your spelling</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Create container based on view type
+            const container = document.createElement('div');
+            container.className = viewType === 'grid' ? 'row' : 'row list-view';
+            
+            results.forEach(book => {
+                if (viewType === 'grid') {
+                    container.appendChild(createBookCard(book));
+                } else {
+                    container.appendChild(createBookListItem(book));
+                }
+            });
+            
+            resultsContainer.innerHTML = '';
+            resultsContainer.appendChild(container);
+        }
+        
+        function createBookCard(book) {
+            const template = document.getElementById('bookCardTemplate');
+            const card = template.content.cloneNode(true);
+            
+            // Create the book URL
+            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage}&sort=${currentSort}&view=${currentView}`;
+            
+            // Set book data
+            const img = card.querySelector('.book-cover');
+            img.src = book.coverImageUrl || '/images/placeholder-book-cover.svg';
+            img.alt = `${book.title} cover`;
+            
+            // Make the image clickable
+            const imgContainer = card.querySelector('.book-cover-container');
+            if (imgContainer) {
+                const imgLink = document.createElement('a');
+                imgLink.href = bookUrl;
+                imgLink.appendChild(img.cloneNode(true));
+                
+                // Create a new container to hold both the image link and rating badge
+                const newContainer = document.createElement('div');
+                newContainer.className = 'position-relative book-cover-container';
+                newContainer.appendChild(imgLink);
+                
+                // Create a new rating badge instead of reusing the existing one
+                const newRatingBadge = document.createElement('div');
+                newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
+                
+                const starIcon = document.createElement('i');
+                starIcon.className = 'fas fa-star me-1';
+                
+                const ratingSpan = document.createElement('span');
+                ratingSpan.className = 'rating-value';
+                ratingSpan.textContent = book.averageRating || '';
+                
+                newRatingBadge.appendChild(starIcon);
+                newRatingBadge.appendChild(ratingSpan);
+                
+                // Only add the rating badge if there's a rating
+                if (book.averageRating) {
+                    newContainer.appendChild(newRatingBadge);
+                }
+                
+                // Replace the original container with our new one
+                imgContainer.parentNode.replaceChild(newContainer, imgContainer);
+            }
+            
+            // Make the title clickable
+            const titleElement = card.querySelector('.book-title');
+            if (titleElement) {
+                const titleLink = document.createElement('a');
+                titleLink.href = bookUrl;
+                titleLink.className = 'text-decoration-none text-dark';
+                titleLink.textContent = book.title;
+                titleElement.innerHTML = '';
+                titleElement.appendChild(titleLink);
+            }
+            
+            const authorText = book.authors && book.authors.length > 0 
+                ? book.authors.join(', ') 
+                : 'Unknown Author';
+            const authorElement = card.querySelector('.book-author');
+            if (authorElement) {
+                authorElement.textContent = authorText;
+            }
+            
+            // Set the view details button link
+            const link = card.querySelector('.book-link');
+            if (link) {
+                link.href = bookUrl;
+            }
+            
+            // Rating is now handled during image container creation
+            
+            return card.querySelector('.col-sm-6');
+        }
+        
+        function createBookListItem(book) {
+            const template = document.getElementById('bookListItemTemplate');
+            const listItem = template.content.cloneNode(true);
+            
+            // Create the book URL
+            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage}&sort=${currentSort}&view=${currentView}`;
+            
+            // Set book data
+            const img = listItem.querySelector('.book-cover');
+            img.src = book.coverImageUrl || '/images/placeholder-book-cover.svg';
+            img.alt = `${book.title} cover`;
+            
+            // Make the image clickable
+            const imgWrapper = listItem.querySelector('.book-cover-wrapper');
+            if (imgWrapper) {
+                const imgLink = document.createElement('a');
+                imgLink.href = bookUrl;
+                imgLink.appendChild(img.cloneNode(true));
+                
+                const newWrapper = document.createElement('div');
+                newWrapper.className = 'position-relative book-cover-wrapper h-100';
+                newWrapper.appendChild(imgLink);
+                
+                const newRatingBadge = document.createElement('div');
+                newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
+                
+                const starIcon = document.createElement('i');
+                starIcon.className = 'fas fa-star me-1';
+                
+                const ratingSpan = document.createElement('span');
+                ratingSpan.className = 'rating-value';
+                ratingSpan.textContent = book.averageRating || '';
+                
+                newRatingBadge.appendChild(starIcon);
+                newRatingBadge.appendChild(ratingSpan);
+                
+                // Only add the rating badge if there's a rating
+                if (book.averageRating) {
+                    newWrapper.appendChild(newRatingBadge);
+                }
+                
+                imgWrapper.parentNode.replaceChild(newWrapper, imgWrapper);
+            }
+            
+            const titleElement = listItem.querySelector('.book-title');
+            if (titleElement) {
+                const titleLink = document.createElement('a');
+                titleLink.href = bookUrl;
+                titleLink.className = 'text-decoration-none text-dark';
+                titleLink.textContent = book.title;
+                titleElement.innerHTML = '';
+                titleElement.appendChild(titleLink);
+            }
+            
+            const authorText = book.authors && book.authors.length > 0 
+                ? book.authors.join(', ') 
+                : 'Unknown Author';
+            const authorElement = listItem.querySelector('.book-author');
+            if (authorElement) {
+                authorElement.textContent = authorText;
+            }
+            
+            const description = book.description || 'No description available';
+            const descriptionElement = listItem.querySelector('.book-description');
+            if (descriptionElement) {
+                descriptionElement.textContent = 
+                    description.length > 200 ? description.substring(0, 200) + '...' : description;
+            }
+            
+            // Set the view details button link
+            const link = listItem.querySelector('.book-link');
+            if (link) {
+                link.href = bookUrl;
+            }
+            
+            // Rating is now handled during image wrapper creation
+            
+            // Add categories if available
+            const categoriesContainer = listItem.querySelector('.book-categories');
+            if (book.categories && book.categories.length > 0) {
+                book.categories.forEach(category => {
+                    const badge = document.createElement('span');
+                    badge.className = 'badge bg-light text-dark';
+                    badge.textContent = category;
+                    categoriesContainer.appendChild(badge);
+                });
+            } else {
+                categoriesContainer.style.display = 'none';
+            }
+            
+            return listItem.querySelector('.col-12');
+        }
+        
+        function sortResults(results, sortBy) {
+            switch(sortBy) {
+                case 'title':
+                    results.sort((a, b) => a.title.localeCompare(b.title));
+                    break;
+                case 'author':
+                    results.sort((a, b) => {
+                        const authorA = a.authors && a.authors.length > 0 ? a.authors[0] : '';
+                        const authorB = b.authors && b.authors.length > 0 ? b.authors[0] : '';
+                        return authorA.localeCompare(authorB);
+                    });
+                    break;
+                case 'newest':
+                    results.sort((a, b) => {
+                        const dateA = a.publishedDate ? new Date(a.publishedDate) : new Date(0);
+                        const dateB = b.publishedDate ? new Date(b.publishedDate) : new Date(0);
+                        return dateB - dateA;
+                    });
+                    break;
+                case 'rating':
+                    results.sort((a, b) => {
+                        const ratingA = a.averageRating || 0;
+                        const ratingB = b.averageRating || 0;
+                        return ratingB - ratingA;
+                    });
+                    break;
+            }
+        }
+        
+        function setupPagination(currentPage, totalItems, itemsPerPage) {
+            paginationContainer.innerHTML = ''; // Clear existing pagination
+            if (!totalItems || totalItems <= itemsPerPage) {
+                return; // No pagination needed if total items fit on one page or no items
+            }
+
+            const totalPages = Math.ceil(totalItems / itemsPerPage);
+            const ul = document.createElement('ul');
+            ul.className = 'pagination';
+
+            // Previous button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${currentPage === 0 ? 'disabled' : ''}`;
+            const prevLink = document.createElement('a');
+            prevLink.className = 'page-link';
+            prevLink.href = '#'; // Will be handled by click listener
+            prevLink.setAttribute('aria-label', 'Previous');
+            prevLink.innerHTML = '<span aria-hidden="true">&laquo;</span>';
+            if (currentPage > 0) {
+                prevLink.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    // currentPage is 0-indexed, API expects 0-indexed startIndex
+                    performSearch(query, (currentPage - 1) * itemsPerPage, currentSort, currentCoverSource, currentResolution);
+                });
+            }
+            prevLi.appendChild(prevLink);
+            ul.appendChild(prevLi);
+
+            // Page numbers (simplified: show current and a few around it)
+            // For a more robust pagination, you'd implement logic for "..." and first/last page links
+            let startPage = Math.max(0, currentPage - 2);
+            let endPage = Math.min(totalPages - 1, currentPage + 2);
+
+            if (currentPage < 2 && totalPages > 4) endPage = 4; // Ensure enough pages show at start
+            if (currentPage > totalPages - 3 && totalPages > 4) startPage = totalPages - 5; // Ensure enough pages show at end
+
+
+            for (let i = startPage; i <= endPage; i++) {
+                const pageLi = document.createElement('li');
+                pageLi.className = `page-item ${i === currentPage ? 'active' : ''}`;
+                const pageLink = document.createElement('a');
+                pageLink.className = 'page-link';
+                pageLink.href = '#'; // Will be handled by click listener
+                pageLink.textContent = i + 1;
+                pageLink.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    performSearch(query, i * itemsPerPage, currentSort, currentCoverSource, currentResolution);
+                });
+                pageLi.appendChild(pageLink);
+                ul.appendChild(pageLi);
+            }
+
+            // Next button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${currentPage === totalPages - 1 ? 'disabled' : ''}`;
+            const nextLink = document.createElement('a');
+            nextLink.className = 'page-link';
+            nextLink.href = '#'; // handled by click listener
+            nextLink.setAttribute('aria-label', 'Next');
+            nextLink.innerHTML = '<span aria-hidden="true">&raquo;</span>';
+            if (currentPage < totalPages - 1) {
+                nextLink.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    performSearch(query, (currentPage + 1) * itemsPerPage, currentSort, currentCoverSource, currentResolution);
+                });
+            }
+            nextLi.appendChild(nextLink);
+            ul.appendChild(nextLi);
+
+            paginationContainer.appendChild(ul);
+        }
+    });
+</script>
+
+<style>
+    .search-header {
+        border-bottom: 1px solid #dee2e6;
+    }
+
+    /* Enhancements for book cover display */
+    .book-cover-container, .book-cover-wrapper {
+        position: relative; /* Needed for absolute positioning of rating badge */
+        background-color: #f8f9fa; /* Light background for the image area */
+        display: flex; /* Enable flex for centering */
+        align-items: center; /* Vertical centering */
+        justify-content: center; /* Horizontal centering */
+        overflow: hidden; /* Ensure image doesn't spill out */
+    }
+
+    /* Grid View Specific Container Styling */
+    .book-cover-container {
+        width: 100%;
+        aspect-ratio: 2 / 3; /* Common book cover aspect ratio, adjust as needed */
+        /* Alternatively, set a fixed height, e.g., height: 200px; */
+    }
+
+    /* List View Specific Container Styling */
+    .book-cover-wrapper {
+        width: 100%;
+        height: 100%; /* Ensure it fills the md-2 column height */
+        /* min-height: 150px; */ /* Or a min-height if preferred */
+    }
+
+    .book-cover {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto; /* Let it scale based on height */
+        height: auto; /* Let it scale based on width */
+        object-fit: contain; /* Scales down, doesn't scale up, maintains aspect ratio */
+        display: block; /* Remove extra space below image */
+    }
+
+    .rating-badge {
+        font-size: 0.75rem;
+    }
+
+    .badge {
+        border-radius: 30px;
+    }
+    
+    .dropdown-menu {
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+        border: none;
+    }
+    
+    .dropdown-item.active, .dropdown-item:active {
+        background-color: var(--primary-color);
+    }
+    
+    /* Custom breakpoint for book cards */
+    @media (min-width: 576px) and (max-width: 991.98px) {
+        .col-sm-6.col-md-4.col-lg-3 {
+            width: 50%;
+        }
+    }
+</style>
+
+</body>
+</html>
