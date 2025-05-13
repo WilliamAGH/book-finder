@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Error Diagnostics</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    pre { background-color: #f5f5f5; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Error Diagnostics</h1>
+  <p><strong>Status:</strong> <span th:text="${status}"></span></p>
+  <p><strong>Error:</strong> <span th:text="${error}"></span></p>
+  <p><strong>Message:</strong> <span th:text="${message}"></span></p>
+  <p><strong>Timestamp:</strong> <span th:text="${timestamp}"></span></p>
+  <h3>Trace:</h3>
+  <pre th:text="${trace}">No trace information available</pre>
+</body>
+</html>
