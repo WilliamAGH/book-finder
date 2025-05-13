@@ -24,6 +24,7 @@ target/
 *.webp
 *.svg
 !**/src/main/resources/static/images/image-not-available.png
+!**/src/main/resources/static/images/placeholder-book-cover.svg
 
 ### NetBeans ###
 /nbproject/private/
