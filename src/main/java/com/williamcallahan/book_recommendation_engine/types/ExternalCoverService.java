@@ -1,29 +1,15 @@
 package com.williamcallahan.book_recommendation_engine.types;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverCandidate;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import com.williamcallahan.book_recommendation_engine.service.image.ImageDetails;
+import reactor.core.publisher.Mono;
 
 public interface ExternalCoverService {
     /**
-     * Fetches covers for a book from any available source
-     * 
-     * @param book The book to fetch covers for
-     * @return A CompletableFuture that resolves to a list of cover candidates
+     * Fetches a cover for a book from the specific external service.
+     *
+     * @param book The book to fetch a cover for
+     * @return A Mono emitting ImageDetails if a cover is found, or an empty Mono otherwise.
      */
-    CompletableFuture<List<CoverCandidate>> fetchCovers(Book book);
-    
-    /**
-     * Fetches covers for a book from a specific source if available
-     * 
-     * @param book The book to fetch covers for
-     * @param preferredSource The preferred source to fetch covers from
-     * @return A CompletableFuture that resolves to a list of cover candidates
-     */
-    default CompletableFuture<List<CoverCandidate>> fetchCovers(Book book, CoverImageSource preferredSource) {
-        // Default implementation just calls the regular fetchCovers method
-        return fetchCovers(book);
-    }
+    Mono<ImageDetails> fetchCover(Book book);
 }
