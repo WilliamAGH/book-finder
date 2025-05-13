@@ -120,8 +120,7 @@
     <div class="col-sm-6 col-md-4 col-lg-3 mb-4">
         <div class="card h-100">
             <div class="position-relative book-cover-container">
-                <img src="" class="card-img-top book-cover" alt="Book cover"
-                     onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
+                <img src="" class="card-img-top book-cover" alt="Book cover">
                 <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
                     <i class="fas fa-star me-1"></i>
                     <span class="rating-value">4.5</span>
@@ -144,8 +143,7 @@
             <div class="row g-0">
                 <div class="col-md-2">
                     <div class="position-relative book-cover-wrapper h-100">
-                        <img src="" class="img-fluid rounded-start book-cover" alt="Book cover"
-                             onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
+                        <img src="" class="img-fluid rounded-start book-cover" alt="Book cover">
                         <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
                             <i class="fas fa-star me-1"></i>
                             <span class="rating-value">4.5</span>
@@ -457,47 +455,64 @@
             const template = document.getElementById('bookCardTemplate');
             const card = template.content.cloneNode(true);
             
-            // Create the book URL
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage}&sort=${currentSort}&view=${currentView}`;
             
-            // Set book data
-            const img = card.querySelector('.book-cover');
-            img.src = book.coverImageUrl || '/images/placeholder-book-cover.svg';
-            img.alt = `${book.title} cover`;
+            const imgElementForCard = card.querySelector('.book-cover');
+            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl :
+                                 (book.coverImageUrl || '/images/placeholder-book-cover.svg');
+            const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const ultimateFallback = '/images/placeholder-book-cover.svg';
+
+            imgElementForCard.src = preferredUrl;
+            imgElementForCard.alt = `${book.title} cover`;
+
+            imgElementForCard.onerror = function() {
+                if (this.src !== fallbackUrl && fallbackUrl !== ultimateFallback) {
+                    console.warn(`Preferred cover failed for '${book.title}', trying fallback: ${fallbackUrl}`);
+                    this.src = fallbackUrl;
+                    this.onerror = function() {
+                        console.warn(`Fallback cover also failed for '${book.title}', using ultimate placeholder.`);
+                        this.src = ultimateFallback;
+                        this.onerror = null;
+                    };
+                } else if (this.src !== ultimateFallback) {
+                    console.warn(`Cover failed for '${book.title}', using ultimate placeholder.`);
+                    this.src = ultimateFallback;
+                    this.onerror = null;
+                }
+            };
             
-            // Make the image clickable
             const imgContainer = card.querySelector('.book-cover-container');
             if (imgContainer) {
                 const imgLink = document.createElement('a');
                 imgLink.href = bookUrl;
-                imgLink.appendChild(img.cloneNode(true));
                 
-                // Create a new container to hold both the image link and rating badge
-                const newContainer = document.createElement('div');
-                newContainer.className = 'position-relative book-cover-container';
-                newContainer.appendChild(imgLink);
+                // Remove the original img from container, then append the (now configured) imgElementForCard to the link
+                imgElementForCard.parentNode.removeChild(imgElementForCard);
+                imgLink.appendChild(imgElementForCard);
+
+                // Clear the original imgContainer (which might have an old rating badge from template)
+                // and add our new imgLink
+                imgContainer.innerHTML = ''; 
+                imgContainer.appendChild(imgLink);
                 
-                // Create a new rating badge instead of reusing the existing one
-                const newRatingBadge = document.createElement('div');
-                newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
-                
-                const starIcon = document.createElement('i');
-                starIcon.className = 'fas fa-star me-1';
-                
-                const ratingSpan = document.createElement('span');
-                ratingSpan.className = 'rating-value';
-                ratingSpan.textContent = book.averageRating || '';
-                
-                newRatingBadge.appendChild(starIcon);
-                newRatingBadge.appendChild(ratingSpan);
-                
-                // Only add the rating badge if there's a rating
+                // Add new rating badge if rating exists
                 if (book.averageRating) {
-                    newContainer.appendChild(newRatingBadge);
+                    const newRatingBadge = document.createElement('div');
+                    newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
+                    const starIcon = document.createElement('i');
+                    starIcon.className = 'fas fa-star me-1';
+                    const ratingSpan = document.createElement('span');
+                    ratingSpan.className = 'rating-value';
+                    ratingSpan.textContent = book.averageRating;
+                    newRatingBadge.appendChild(starIcon);
+                    newRatingBadge.appendChild(ratingSpan);
+                    imgContainer.appendChild(newRatingBadge); // Append to the original container
+                } else {
+                    // If no rating, ensure any template rating badge is gone
+                    const existingBadge = imgContainer.querySelector('.rating-badge');
+                    if (existingBadge) existingBadge.remove();
                 }
-                
-                // Replace the original container with our new one
-                imgContainer.parentNode.replaceChild(newContainer, imgContainer);
             }
             
             // Make the title clickable
@@ -534,44 +549,59 @@
             const template = document.getElementById('bookListItemTemplate');
             const listItem = template.content.cloneNode(true);
             
-            // Create the book URL
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage}&sort=${currentSort}&view=${currentView}`;
             
-            // Set book data
-            const img = listItem.querySelector('.book-cover');
-            img.src = book.coverImageUrl || '/images/placeholder-book-cover.svg';
-            img.alt = `${book.title} cover`;
+            const imgElementForListItem = listItem.querySelector('.book-cover');
+            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl :
+                                 (book.coverImageUrl || '/images/placeholder-book-cover.svg');
+            const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const ultimateFallback = '/images/placeholder-book-cover.svg';
+
+            imgElementForListItem.src = preferredUrl;
+            imgElementForListItem.alt = `${book.title} cover`;
+
+            imgElementForListItem.onerror = function() {
+                if (this.src !== fallbackUrl && fallbackUrl !== ultimateFallback) {
+                    console.warn(`Preferred cover failed for '${book.title}', trying fallback: ${fallbackUrl}`);
+                    this.src = fallbackUrl;
+                    this.onerror = function() {
+                        console.warn(`Fallback cover also failed for '${book.title}', using ultimate placeholder.`);
+                        this.src = ultimateFallback;
+                        this.onerror = null;
+                    };
+                } else if (this.src !== ultimateFallback) {
+                    console.warn(`Cover failed for '${book.title}', using ultimate placeholder.`);
+                    this.src = ultimateFallback;
+                    this.onerror = null;
+                }
+            };
             
-            // Make the image clickable
             const imgWrapper = listItem.querySelector('.book-cover-wrapper');
             if (imgWrapper) {
                 const imgLink = document.createElement('a');
                 imgLink.href = bookUrl;
-                imgLink.appendChild(img.cloneNode(true));
-                
-                const newWrapper = document.createElement('div');
-                newWrapper.className = 'position-relative book-cover-wrapper h-100';
-                newWrapper.appendChild(imgLink);
-                
-                const newRatingBadge = document.createElement('div');
-                newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
-                
-                const starIcon = document.createElement('i');
-                starIcon.className = 'fas fa-star me-1';
-                
-                const ratingSpan = document.createElement('span');
-                ratingSpan.className = 'rating-value';
-                ratingSpan.textContent = book.averageRating || '';
-                
-                newRatingBadge.appendChild(starIcon);
-                newRatingBadge.appendChild(ratingSpan);
-                
-                // Only add the rating badge if there's a rating
+
+                imgElementForListItem.parentNode.removeChild(imgElementForListItem);
+                imgLink.appendChild(imgElementForListItem);
+
+                imgWrapper.innerHTML = '';
+                imgWrapper.appendChild(imgLink);
+
                 if (book.averageRating) {
-                    newWrapper.appendChild(newRatingBadge);
+                    const newRatingBadge = document.createElement('div');
+                    newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
+                    const starIcon = document.createElement('i');
+                    starIcon.className = 'fas fa-star me-1';
+                    const ratingSpan = document.createElement('span');
+                    ratingSpan.className = 'rating-value';
+                    ratingSpan.textContent = book.averageRating;
+                    newRatingBadge.appendChild(starIcon);
+                    newRatingBadge.appendChild(ratingSpan);
+                    imgWrapper.appendChild(newRatingBadge);
+                } else {
+                    const existingBadge = imgWrapper.querySelector('.rating-badge');
+                    if (existingBadge) existingBadge.remove();
                 }
-                
-                imgWrapper.parentNode.replaceChild(newWrapper, imgWrapper);
             }
             
             const titleElement = listItem.querySelector('.book-title');

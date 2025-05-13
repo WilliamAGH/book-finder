@@ -65,18 +65,14 @@
                 <div th:each="book : ${recentBooks}" class="col-sm-6 col-md-4 col-lg-3">
                     <div class="card h-100">
                         <div class="position-relative book-cover-container">
-                            <img th:if="${book.coverImageUrl != null}" th:src="${book.coverImageUrl}"
-                                 class="card-img-top book-cover"
-                                 title="Book cover image"
-                                 th:alt="${book.title != null ? book.title + ' cover' : 'Book cover image'}"
-                                 th:title="${book.title != null ? book.title + ' cover' : 'Book cover image'}"
-                                 onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
-                            <img th:if="${book.coverImageUrl == null}" src="/images/placeholder-book-cover.svg"
-                                 class="card-img-top book-cover"
-                                 title="Placeholder book cover image"
-                                 th:alt="${book.title != null ? book.title + ' cover' : 'Placeholder book cover image'}"
-                                 th:title="${book.title != null ? book.title + ' cover' : 'Placeholder book cover image'}">
-                            
+                            <a th:href="@{'/book/' + ${book.id}}" class="d-block h-100">
+                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}"
+                                     class="card-img-top book-cover"
+                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                                     th:attr="data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'"
+                                     onerror="this.src = this.dataset.fallbackUrl; this.onerror = function() { this.src = this.dataset.ultimateFallback; this.onerror = null; };">
+                            </a>
                             <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
                                 <i class="fas fa-star me-1"></i>
                                 <span th:text="${book.averageRating}">4.5</span>
