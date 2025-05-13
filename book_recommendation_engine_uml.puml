@@ -1,0 +1,243 @@
+@startuml Book Recommendation Engine
+
+' Style settings
+skinparam classAttributeIconSize 0
+skinparam monochrome true
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam packageStyle rectangle
+
+' Title
+title Book Recommendation Engine - UML Class Diagram
+
+' Package for model classes
+package "com.williamcallahan.book_recommendation_engine.model" {
+  class Book {
+    - id: String
+    - title: String
+    - authors: List<String>
+    - description: String
+    - coverImageUrl: String
+    - imageUrl: String
+    - isbn10: String
+    - isbn13: String
+    - publishedDate: Date
+    - categories: List<String>
+    - averageRating: Double
+    - ratingsCount: Integer
+    - pageCount: Integer
+    - language: String
+    - publisher: String
+    - infoLink: String
+    - previewLink: String
+    - purchaseLink: String
+    - listPrice: Double
+    - currencyCode: String
+    - webReaderLink: String
+    - coverImageWidth: Integer
+    - coverImageHeight: Integer
+    - isCoverHighResolution: Boolean
+    - otherEditions: List<EditionInfo>
+    + Book()
+    + Book(id, title, authors, description, coverImageUrl, imageUrl)
+    + getters/setters
+  }
+
+  class "Book.EditionInfo" as EditionInfo {
+    - googleBooksId: String
+    - type: String
+    - identifier: String
+    - publishedDate: Date
+    - coverImageUrl: String
+    + EditionInfo()
+    + EditionInfo(googleBooksId, type, identifier, publishedDate, coverImageUrl)
+    + getters/setters
+  }
+
+  class CachedBook {
+    - id: String
+    - googleBooksId: String
+    - title: String
+    - authors: List<String>
+    - description: String
+    - coverImageUrl: String
+    - isbn10: String
+    - isbn13: String
+    - publishedDate: LocalDateTime
+    - categories: List<String>
+    - averageRating: BigDecimal
+    - ratingsCount: Integer
+    - pageCount: Integer
+    - language: String
+    - publisher: String
+    - infoLink: String
+    - previewLink: String
+    - purchaseLink: String
+    - embedding: float[]
+    - rawData: JsonNode
+    - createdAt: LocalDateTime
+    - lastAccessed: LocalDateTime
+    - accessCount: Integer
+    + static fromBook(book, rawData, embedding): CachedBook
+    + toBook(): Book
+  }
+}
+
+' Package for repositories
+package "com.williamcallahan.book_recommendation_engine.repository" {
+  interface CachedBookRepository {
+    + findByGoogleBooksId(googleBooksId): Optional<CachedBook>
+    + findByIsbn10(isbn10): Optional<CachedBook>
+    + findByIsbn13(isbn13): Optional<CachedBook>
+    + findSimilarBooksById(bookId, limit): List<CachedBook>
+    + save(entity): <S extends CachedBook> S
+    + saveAll(entities): <S extends CachedBook> Iterable<S>
+    + findById(id): Optional<CachedBook>
+    + existsById(id): boolean
+    + findAll(): Iterable<CachedBook>
+    + findAllById(ids): Iterable<CachedBook>
+    + count(): long
+    + deleteById(id): void
+    + delete(entity): void
+    + deleteAllById(ids): void
+    + deleteAll(entities): void
+    + deleteAll(): void
+  }
+
+  class JpaCachedBookRepository {
+    + findSimilarBooksById(bookId, limit): List<CachedBook>
+  }
+
+  class NoOpCachedBookRepository {
+    + findSimilarBooksById(bookId, limit): List<CachedBook>
+  }
+}
+
+' Package for services
+package "com.williamcallahan.book_recommendation_engine.service" {
+  class GoogleBooksService {
+    - webClient: WebClient
+    - googleBooksApiUrl: String
+    - googleBooksApiKey: String
+    + searchBooks(query, startIndex, orderBy): Mono<JsonNode>
+    + searchBooksAsyncReactive(query): Mono<List<Book>>
+    + searchBooksByTitle(title): Mono<List<Book>>
+    + searchBooksByAuthor(author): Mono<List<Book>>
+    + searchBooksByISBN(isbn): Mono<List<Book>>
+    + getBookById(bookId): Mono<Book>
+    - convertGroupToBook(item): Book
+    - convertSingleItemToBook(item): Book
+  }
+
+  class RecommendationService {
+    - googleBooksService: GoogleBooksService
+    + getSimilarBooks(bookId, count): List<Book>
+    - findBooksByAuthors(sourceBook, recommendationMap): void
+    - findBooksByCategories(sourceBook, recommendationMap): void
+    - findBooksByText(sourceBook, recommendationMap): void
+    - calculateCategoryOverlapScore(sourceBook, candidateBook): double
+    - normalizeCategories(categories): Set<String>
+    - addOrUpdateRecommendation(recommendationMap, book, score): void
+  }
+
+  class BookCacheService {
+    - cachedBookRepository: CachedBookRepository
+    - googleBooksService: GoogleBooksService
+    + getBookById(bookId): Mono<Book>
+    + getBookByIsbn(isbn): Mono<Book>
+    + cacheBook(book, rawData): Mono<CachedBook>
+    + findSimilarBooks(bookId, limit): List<Book>
+  }
+
+  class RecentlyViewedService {
+    - maxRecentBooks: int
+    - recentlyViewedBooks: Map<String, Deque<Book>>
+    + addRecentlyViewedBook(sessionId, book): void
+    + getRecentlyViewedBooks(sessionId): List<Book>
+    + clearRecentlyViewedBooks(sessionId): void
+  }
+
+  package "com.williamcallahan.book_recommendation_engine.service.image" {
+    class BookImageOrchestrationService {
+      - bookCoverProviders: List<BookCoverProvider>
+      + getOptimizedBookCover(book, preferredSource, preferredResolution): Mono<String>
+    }
+  }
+}
+
+' Package for controllers
+package "com.williamcallahan.book_recommendation_engine.controller" {
+  class BookController {
+    - googleBooksService: GoogleBooksService
+    - recentlyViewedService: RecentlyViewedService
+    - recommendationService: RecommendationService
+    - bookImageOrchestrationService: BookImageOrchestrationService
+    + searchBooks(query, startIndex, maxResults, coverSource, resolution): Mono<ResponseEntity<Map<String, Object>>>
+    + getBookById(id, sessionId, coverSource, resolution): Mono<ResponseEntity<Book>>
+    + getBookByIsbn(isbn, sessionId, coverSource, resolution): Mono<ResponseEntity<Book>>
+    + getSimilarBooks(id, count, coverSource, resolution): Mono<ResponseEntity<List<Book>>>
+    + getRecentlyViewedBooks(sessionId, coverSource, resolution): ResponseEntity<List<Book>>
+  }
+
+  class BookCoverController {
+    - bookImageOrchestrationService: BookImageOrchestrationService
+    + getBookCover(bookId, source, resolution): Mono<ResponseEntity<String>>
+  }
+
+  class HomeController {
+    - googleBooksService: GoogleBooksService
+    - recentlyViewedService: RecentlyViewedService
+    - recommendationService: RecommendationService
+    + home(model, sessionId): String
+    + search(query, model, sessionId): String
+    + bookDetails(id, model, sessionId): String
+  }
+}
+
+' Package for types/enums
+package "com.williamcallahan.book_recommendation_engine.types" {
+  enum CoverImageSource {
+    ANY
+    GOOGLE_BOOKS
+    OPEN_LIBRARY
+    LONGITOOD
+  }
+
+  enum ImageResolutionPreference {
+    ANY
+    LOW
+    MEDIUM
+    HIGH
+  }
+
+  interface ExternalCoverService {
+  }
+}
+
+' Relationships
+Book *-- "0..*" EditionInfo : contains
+
+CachedBook ..> Book : converts to/from
+
+CachedBookRepository <|.. JpaCachedBookRepository : implements
+CachedBookRepository <|.. NoOpCachedBookRepository : implements
+
+BookController --> GoogleBooksService : uses
+BookController --> RecentlyViewedService : uses
+BookController --> RecommendationService : uses
+BookController --> BookImageOrchestrationService : uses
+
+BookCoverController --> BookImageOrchestrationService : uses
+
+HomeController --> GoogleBooksService : uses
+HomeController --> RecentlyViewedService : uses
+HomeController --> RecommendationService : uses
+
+RecommendationService --> GoogleBooksService : uses
+
+BookCacheService --> CachedBookRepository : uses
+BookCacheService --> GoogleBooksService : uses
+
+BookImageOrchestrationService --> "0..*" ExternalCoverService : uses
+
+@enduml
