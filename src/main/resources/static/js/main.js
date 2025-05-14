@@ -143,6 +143,23 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     initializeBookCovers();
 
+    // Subscribe to real-time cover updates for all book covers
+    (function() {
+        var socket = new SockJS('/ws');
+        var stompClient = Stomp.over(socket);
+        stompClient.connect({}, function() {
+            document.querySelectorAll('img.book-cover[data-book-id]').forEach(function(img) {
+                var id = img.getAttribute('data-book-id');
+                stompClient.subscribe('/topic/book/' + id + '/coverUpdate', function(message) {
+                    var payload = JSON.parse(message.body);
+                    if (payload.newCoverUrl) {
+                        img.src = payload.newCoverUrl;
+                    }
+                });
+            });
+        });
+    })();
+
     // Theme toggler implementation
     const themeToggleBtns = document.querySelectorAll('.theme-toggle');
     const themeIcons = document.querySelectorAll('.theme-icon');

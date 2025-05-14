@@ -96,11 +96,10 @@
                         <div class="col-md-4 col-lg-3 book-cover-section">
                             <div class="position-relative book-cover-container book-cover-wrapper">
                                 <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}"
-                                    data-book-id="${book.id}"
                                     class="img-fluid rounded-start book-cover"
                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
-                                    th:attr="data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'">
+                                    th:attr="data-book-id=${book.id}, data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'">
 
                                 <!-- Google Books Rating Badge -->
                                 <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-3 p-2 badge bg-warning text-dark fs-6">
@@ -279,11 +278,10 @@
                             <div class="position-relative book-cover-container">
                                 <a th:href="@{'/book/' + ${rec.id}}" class="d-block h-100">
                                     <img th:src="${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.coverImageUrl != null ? rec.coverImageUrl : '/images/placeholder-book-cover.svg')}" 
-                                         data-book-id="${rec.id}"
                                          class="card-img-top book-cover"
                                          th:alt="${rec.title != null ? rec.title + ' cover' : 'Book cover'}"
                                          th:title="${rec.title != null ? rec.title + ' cover' : 'Book cover'}"
-                                         th:attr="data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'">
+                                         th:attr="data-book-id=${rec.id}, data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'">
                                 </a>
                                 <div th:if="${rec.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
                                     <i class="fas fa-star me-1"></i>

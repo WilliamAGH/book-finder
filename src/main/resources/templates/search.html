@@ -120,7 +120,7 @@
     <div class="col-sm-6 col-md-4 col-lg-3 mb-4">
         <div class="card h-100">
             <div class="position-relative book-cover-container">
-                <img src="" class="card-img-top book-cover" alt="Book cover">
+                <img src="" class="card-img-top book-cover" data-book-id="" alt="Book cover">
                 <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
                     <i class="fas fa-star me-1"></i>
                     <span class="rating-value">4.5</span>
@@ -143,7 +143,7 @@
             <div class="row g-0">
                 <div class="col-md-2">
                     <div class="position-relative book-cover-wrapper h-100">
-                        <img src="" class="img-fluid rounded-start book-cover" alt="Book cover">
+                        <img src="" class="img-fluid rounded-start book-cover" data-book-id="" alt="Book cover">
                         <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
                             <i class="fas fa-star me-1"></i>
                             <span class="rating-value">4.5</span>
@@ -465,6 +465,7 @@
 
             imgElementForCard.src = preferredUrl;
             imgElementForCard.alt = `${book.title} cover`;
+            imgElementForCard.setAttribute('data-book-id', book.id);
 
             imgElementForCard.onerror = function() {
                 if (this.src !== fallbackUrl && fallbackUrl !== ultimateFallback) {
@@ -559,6 +560,7 @@
 
             imgElementForListItem.src = preferredUrl;
             imgElementForListItem.alt = `${book.title} cover`;
+            imgElementForListItem.setAttribute('data-book-id', book.id);
 
             imgElementForListItem.onerror = function() {
                 if (this.src !== fallbackUrl && fallbackUrl !== ultimateFallback) {
