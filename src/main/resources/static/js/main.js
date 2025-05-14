@@ -332,6 +332,11 @@ function initializeBookCovers() {
         
         // Handle load error
         cover.addEventListener('error', handleImageFailure);
+        
+        // If image already loaded before listener was attached, manually trigger load
+        if (cover.complete) {
+            cover.dispatchEvent(new Event('load'));
+        }
     });
 }
 
