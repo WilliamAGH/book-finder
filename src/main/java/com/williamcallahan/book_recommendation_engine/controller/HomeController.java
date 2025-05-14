@@ -1,7 +1,8 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheService; 
+// import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService; // Removed
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverCacheService;
@@ -29,10 +30,10 @@ import java.util.ArrayList;
 public class HomeController {
 
     private static final Logger logger = LoggerFactory.getLogger(HomeController.class);
-    private final GoogleBooksService googleBooksService;
+    private final BookCacheService bookCacheService; 
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
-    private final BookCoverCacheService bookCoverCacheService; // Added field
+    private final BookCoverCacheService bookCoverCacheService; 
     // The minimum number of books to display on the homepage
     private static final int MIN_BOOKS_TO_DISPLAY = 5;
     
@@ -42,14 +43,14 @@ public class HomeController {
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
     @Autowired
-    public HomeController(GoogleBooksService googleBooksService, 
+    public HomeController(BookCacheService bookCacheService, 
                           RecentlyViewedService recentlyViewedService, 
                           RecommendationService recommendationService,
-                          BookCoverCacheService bookCoverCacheService) { // Added to constructor
-        this.googleBooksService = googleBooksService;
+                          BookCoverCacheService bookCoverCacheService) { 
+        this.bookCacheService = bookCacheService; 
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
-        this.bookCoverCacheService = bookCoverCacheService; // Initialize field
+        this.bookCoverCacheService = bookCoverCacheService; 
     }
 
     /**
@@ -67,7 +68,8 @@ public class HomeController {
         Mono<List<Book>> recentBooksMono;
 
         if (recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
-            recentBooksMono = googleBooksService.searchBooksAsyncReactive("Java programming")
+            // Use BookCacheService for searching default books
+            recentBooksMono = bookCacheService.searchBooksReactive("Java programming", 0, MIN_BOOKS_TO_DISPLAY) 
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(recentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
@@ -144,42 +146,62 @@ public class HomeController {
         model.addAttribute("searchSort", sort);
         model.addAttribute("searchView", view);
 
-        Mono<Book> bookMono = googleBooksService.getBookById(id)
+        // Use BookCacheService to get the main book
+        Mono<Book> bookMono = bookCacheService.getBookByIdReactive(id)
             .doOnSuccess(book -> {
                 if (book != null) {
+                    // Update cover URL using BookCoverCacheService before adding to model
+                    String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                    book.setCoverImageUrl(coverUrl);
                     model.addAttribute("book", book);
                     try {
                         recentlyViewedService.addToRecentlyViewed(book);
                     } catch (Exception e) {
-                        logger.warn("Failed to add book to recently viewed: {}", e.getMessage());
+                        logger.warn("Failed to add book to recently viewed for book ID {}: {}", book.getId(), e.getMessage());
                     }
                 } else {
-                    logger.info("No book found with ID: {}", id);
-                    model.addAttribute("book", null); // Ensure model has book attribute even if null
+                    logger.info("No book found with ID: {} via BookCacheService", id);
+                    model.addAttribute("book", null); 
                 }
             })
             .doOnError(e -> {
-                 logger.error("Error getting book with ID: {}", id, e);
+                 logger.error("Error getting book with ID: {} via BookCacheService", id, e);
                  model.addAttribute("error", "An error occurred while retrieving this book. Please try again later.");
                  model.addAttribute("book", null);
             })
-            .onErrorResume(e -> Mono.empty()); // Continue to similar books even if main book fails, page will show error
+            .onErrorResume(e -> Mono.empty());
 
-        // Fetch similar books. This needs to be chained after bookMono resolves (or in parallel if appropriate)
-        // For simplicity in model population, let's chain it.
         return bookMono
-            .flatMap(fetchedBook -> // fetchedBook can be null if getBookById resulted in empty Mono and was caught by doOnError
-                recommendationService.getSimilarBooks(id, 6)
+            .flatMap(fetchedBook -> { // fetchedBook can be null
+                // Fetch similar books using RecommendationService (which now also uses BookCacheService for its source book)
+                Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 6)
+                    .map(similarBooksList -> {
+                        for (Book similarBook : similarBooksList) {
+                            if (similarBook != null) {
+                                String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook);
+                                similarBook.setCoverImageUrl(coverUrl);
+                            }
+                        }
+                        return similarBooksList;
+                    })
                     .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
                     .doOnError(e -> {
                         logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());
                         model.addAttribute("similarBooks", Collections.emptyList());
                     })
-                    .onErrorReturn(Collections.emptyList()) // Return empty list on error to allow page rendering
-                    .thenReturn("book") // Return template name after this step
-            )
-            .defaultIfEmpty("book") // If bookMono was empty (e.g. book not found and error handled), still return template name
-            .onErrorReturn("book"); // Fallback template name on any other unexpected error in the chain
+                    .onErrorReturn(Collections.emptyList());
+                
+                // If the main book was found, add its model attributes and then proceed with similar books
+                if (fetchedBook != null) {
+                    return similarBooksMono.thenReturn("book");
+                } else {
+                    // If main book was not found, we might still want to show an empty page or an error
+                    // The model.addAttribute("book", null) and error attribute would have been set by bookMono's doOnSuccess/doOnError
+                    return similarBooksMono.thenReturn("book"); // Or a specific error page if book is mandatory
+                }
+            })
+            .defaultIfEmpty("book") 
+            .onErrorReturn("book"); 
     }
     
     /**
@@ -202,8 +224,8 @@ public class HomeController {
         
         try {
             logger.info("Looking up book by ISBN: {}", sanitizedIsbn);
-            // Call reactive method and block to get the list, then take the first.
-            List<Book> books = googleBooksService.searchBooksByISBN(sanitizedIsbn).blockOptional().orElse(Collections.emptyList());
+            // Use BookCacheService for ISBN lookup
+            List<Book> books = bookCacheService.getBooksByIsbnReactive(sanitizedIsbn).blockOptional().orElse(Collections.emptyList());
             Book book = books.stream().findFirst().orElse(null);
             
             if (book != null && book.getId() != null) {

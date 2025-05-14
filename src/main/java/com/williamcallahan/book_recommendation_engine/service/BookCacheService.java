@@ -5,12 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -33,6 +36,7 @@ public class BookCacheService {
     private final ObjectMapper objectMapper;
     private final WebClient embeddingClient;
     private final ConcurrentHashMap<String, Book> bookDetailCache = new ConcurrentHashMap<>(); // In-memory cache for Book objects by ID
+    private final CacheManager cacheManager;
     
     @Value("${app.cache.enabled:true}")
     private boolean cacheEnabled; // This refers to the database/persistent cache primarily
@@ -45,6 +49,7 @@ public class BookCacheService {
             GoogleBooksService googleBooksService,
             ObjectMapper objectMapper,
             WebClient.Builder webClientBuilder,
+            CacheManager cacheManager,
             @Autowired(required = false) CachedBookRepository cachedBookRepository) {
         this.googleBooksService = googleBooksService;
         this.cachedBookRepository = cachedBookRepository;
@@ -52,6 +57,7 @@ public class BookCacheService {
         this.embeddingClient = webClientBuilder.baseUrl(
                 embeddingServiceUrl != null ? embeddingServiceUrl : "http://localhost:8080/api/embedding"
         ).build();
+        this.cacheManager = cacheManager; // Initialize CacheManager
         
         // Disable cache if repository is not available
         if (this.cachedBookRepository == null) {
@@ -525,5 +531,54 @@ public class BookCacheService {
             logger.error("Error during reactive caching for book {}: {}", book.getId(), e.getMessage());
             return Mono.empty(); // Suppress error from preventing other operations
         }).then(); // Ensure Mono<Void>
+    }
+
+    @EventListener
+    public void handleBookCoverUpdate(BookCoverUpdatedEvent event) {
+        logger.info("Received BookCoverUpdatedEvent for googleBookId: {}, new URL: {}", event.getGoogleBookId(), event.getNewCoverUrl());
+        if (event.getGoogleBookId() == null || event.getNewCoverUrl() == null) {
+            logger.warn("Invalid BookCoverUpdatedEvent received: googleBookId or newCoverUrl is null.");
+            return;
+        }
+
+        String googleBookId = event.getGoogleBookId();
+        String newCoverUrl = event.getNewCoverUrl();
+
+        // 1. Update/Invalidate In-memory bookDetailCache (used by reactive flows)
+        Book inMemoryCachedBook = bookDetailCache.get(googleBookId);
+        if (inMemoryCachedBook != null) {
+            if (!newCoverUrl.equals(inMemoryCachedBook.getCoverImageUrl())) {
+                inMemoryCachedBook.setCoverImageUrl(newCoverUrl); 
+                logger.info("Updated in-memory bookDetailCache for googleBookId: {}", googleBookId);
+            }
+        }
+
+        // 2. Update Persistent Database Cache (CachedBookRepository)
+        if (cacheEnabled && cachedBookRepository != null) {
+            try {
+                Optional<CachedBook> cachedBookOptional = cachedBookRepository.findByGoogleBooksId(googleBookId);
+                if (cachedBookOptional.isPresent()) {
+                    CachedBook dbCachedBook = cachedBookOptional.get();
+                    if (!newCoverUrl.equals(dbCachedBook.getCoverImageUrl())) {
+                        dbCachedBook.setCoverImageUrl(newCoverUrl);
+                        cachedBookRepository.save(dbCachedBook);
+                        logger.info("Updated cover URL in database cache (CachedBook) for googleBookId: {}", googleBookId);
+                    } else {
+                        logger.info("Cover URL for database cached book (CachedBook) with googleBookId: {} is already up-to-date.", googleBookId);
+                    }
+                } else {
+                    logger.warn("Book with googleBookId: {} not found in CachedBookRepository for cover update.", googleBookId);
+                }
+            } catch (Exception e) {
+                logger.error("Error updating CachedBookRepository for googleBookId {}: {}", googleBookId, e.getMessage(), e);
+            }
+        }
+
+        // 3. Invalidate Spring Cache ("books") for the specific book ID
+        org.springframework.cache.Cache springCache = cacheManager.getCache("books");
+        if (springCache != null) {
+            springCache.evictIfPresent(googleBookId);
+            logger.info("Evicted Spring Cache entry for 'books' with key (googleBookId): {}", googleBookId);
+        }
     }
 }

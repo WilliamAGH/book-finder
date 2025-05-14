@@ -22,11 +22,13 @@ public class RecommendationService {
             "which", "its", "into", "then", "also"
     ));
 
-    private final GoogleBooksService googleBooksService;
+    private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheService
+    private final BookCacheService bookCacheService;
 
     @Autowired
-    public RecommendationService(GoogleBooksService googleBooksService) {
+    public RecommendationService(GoogleBooksService googleBooksService, BookCacheService bookCacheService) {
         this.googleBooksService = googleBooksService;
+        this.bookCacheService = bookCacheService;
     }
 
     /**
@@ -40,10 +42,11 @@ public class RecommendationService {
     public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
         final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
 
-        return googleBooksService.getBookById(bookId)
+        // Use BookCacheService to get the source book
+        return bookCacheService.getBookByIdReactive(bookId) 
             .flatMap(sourceBook -> {
                 if (sourceBook == null) {
-                    logger.warn("Cannot get recommendations - source book with ID {} not found", bookId);
+                    logger.warn("Cannot get recommendations - source book with ID {} not found via BookCacheService", bookId);
                     return Mono.just(Collections.<Book>emptyList());
                 }
 
