@@ -57,6 +57,9 @@ spring:
       - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
       - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
 
+  codec: # Correctly nested under spring
+    max-in-memory-size: 10MB # Configure global max buffer size for WebClient
+
 app:
   cache:
     enabled: true
@@ -79,6 +82,3 @@ logging:
     com.williamcallahan.book_recommendation_engine: INFO
     org.springframework.cache: WARN
     org.hibernate: WARN
-
-codec:
-  max-in-memory-size: 10MB # Configure global max buffer size for WebClient
