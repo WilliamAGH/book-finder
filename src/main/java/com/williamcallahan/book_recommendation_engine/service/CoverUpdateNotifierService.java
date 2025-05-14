@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.context.annotation.Lazy;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -18,7 +19,7 @@ public class CoverUpdateNotifierService {
     private final SimpMessagingTemplate messagingTemplate;
 
     @Autowired
-    public CoverUpdateNotifierService(SimpMessagingTemplate messagingTemplate) {
+    public CoverUpdateNotifierService(@Lazy SimpMessagingTemplate messagingTemplate) {
         this.messagingTemplate = messagingTemplate;
     }
 
