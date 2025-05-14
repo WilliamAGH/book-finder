@@ -79,3 +79,6 @@ logging:
     com.williamcallahan.book_recommendation_engine: INFO
     org.springframework.cache: WARN
     org.hibernate: WARN
+
+codec:
+  max-in-memory-size: 10MB # Configure global max buffer size for WebClient

@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -33,7 +32,6 @@ import java.util.concurrent.TimeUnit;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent; // Added import
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 
@@ -77,13 +75,13 @@ public class BookCoverCacheService {
     private final GoogleBooksService googleBooksService;
     private final S3BookCoverService s3BookCoverService;
     private final ImageProcessingService imageProcessingService;
-    private final ApplicationEventPublisher eventPublisher;
 
     private final ConcurrentHashMap<String, String> urlToPathCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> identifierToProvisionalUrlCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> identifierToFinalLocalPathCache = new ConcurrentHashMap<>();
     private final Set<String> knownBadImageUrls = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
+    // private static final String OPEN_LIBRARY_PLACEHOLDER_PATH = "https://openlibrary.org/images/icons/avatar_book-sm.png"; // Unused
     private byte[] openLibraryPlaceholderHash;
     private static final String GOOGLE_PLACEHOLDER_PATH = "/images/image-not-available.png"; 
     private byte[] googlePlaceholderHash;
@@ -113,15 +111,14 @@ public class BookCoverCacheService {
                                  LongitoodServiceImpl longitoodService,
                                  GoogleBooksService googleBooksService,
                                  S3BookCoverService s3BookCoverService,
-                                 ImageProcessingService imageProcessingService,
-                                 ApplicationEventPublisher eventPublisher) {
-        this.webClient = webClientBuilder.build();
+                                 ImageProcessingService imageProcessingService) {
+        this.webClient = webClientBuilder
+            .build();
         this.openLibraryService = openLibraryService;
         this.longitoodService = longitoodService;
         this.googleBooksService = googleBooksService;
         this.s3BookCoverService = s3BookCoverService;
         this.imageProcessingService = imageProcessingService;
-        this.eventPublisher = eventPublisher;
     }
 
     @PostConstruct
@@ -367,42 +364,33 @@ public class BookCoverCacheService {
         try {
             getCoverImageUrlAsync(book, provisionalUrlHint)
                 .thenAcceptAsync(initialImageDetails -> {
-                    if (initialImageDetails == null || initialImageDetails.getUrlOrPath() == null) {
-                        logger.warn("Background: Initial processing for {} (BookID {}) yielded null image details. Final cache not updated.", identifierKey, bookIdForLog);
-                        identifierToFinalLocalPathCache.remove(identifierKey); // Keep removal if details are truly null
+                    if (initialImageDetails == null || initialImageDetails.getUrlOrPath() == null || initialImageDetails.getUrlOrPath().equals(LOCAL_PLACEHOLDER_PATH)) {
+                        logger.warn("Background: Initial processing for {} (BookID {}) yielded null/placeholder. Final cache not updated.", identifierKey, bookIdForLog);
+                        identifierToFinalLocalPathCache.remove(identifierKey);
                         identifierToProvisionalUrlCache.remove(identifierKey);
-                        return;
+                        return; 
                     }
-
-                    // Always update the final cache with the determined path (could be placeholder)
-                    String newPathToCache = initialImageDetails.getUrlOrPath();
-                    boolean isPlaceholder = newPathToCache.equals(LOCAL_PLACEHOLDER_PATH);
 
                     boolean updateCache = true;
                     String currentFinalPath = identifierToFinalLocalPathCache.get(identifierKey);
-                    if (currentFinalPath != null && currentFinalPath.equals(newPathToCache)) {
-                        updateCache = false; // No change needed if it's already cached to the same path
+                    if (currentFinalPath != null && currentFinalPath.equals(initialImageDetails.getUrlOrPath())) {
+                        updateCache = false;
                     }
-
                     if (updateCache) {
                         if (identifierToFinalLocalPathCache.size() >= MAX_MEMORY_CACHE_SIZE) identifierToFinalLocalPathCache.clear();
-                        identifierToFinalLocalPathCache.put(identifierKey, newPathToCache);
-                        if (isPlaceholder) {
+                        identifierToFinalLocalPathCache.put(identifierKey, initialImageDetails.getUrlOrPath());
+                        if (initialImageDetails.getUrlOrPath().equals(LOCAL_PLACEHOLDER_PATH)) {
                             logger.info("Background: Initial processing for {} (BookID {}) yielded placeholder. Final cache updated to placeholder.", identifierKey, bookIdForLog);
                         } else {
                             logger.info("Background: Initial best image for {} (BookID {}) is {}. Source: {}. Final cache updated.",
-                                identifierKey, bookIdForLog, newPathToCache, initialImageDetails.getCoverImageSource());
-                        }
-                        // Publish event for local cache update, unless it's a placeholder we don't want to broadcast yet
-                        if (!isPlaceholder) {
-                             eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, newPathToCache, book.getId()));
-                             logger.info("Background: Published BookCoverUpdatedEvent for local update of {} (BookID {}) with URL: {}", identifierKey, bookIdForLog, newPathToCache);
+                                identifierKey, bookIdForLog, initialImageDetails.getUrlOrPath(), initialImageDetails.getCoverImageSource());
+                            // Event publishing removed
                         }
                     }
                     identifierToProvisionalUrlCache.remove(identifierKey); // Provisional can always be removed after final decision
 
                     // S3 upload logic: only if it's NOT a placeholder AND it's a new local cache item from an external source
-                    if (!isPlaceholder) {
+                    if (!initialImageDetails.getUrlOrPath().equals(LOCAL_PLACEHOLDER_PATH)) {
                         boolean needsNewS3Upload = initialImageDetails.getCoverImageSource() == CoverImageSource.LOCAL_CACHE &&
                                                    initialImageDetails.getUrlOrPath().startsWith("/" + cacheDirName) && // Is a local file in our cache dir
                                                    !"S3_CACHE".equalsIgnoreCase(initialImageDetails.getSourceName()) && // Not already from S3
@@ -413,13 +401,11 @@ public class BookCoverCacheService {
                         if (needsNewS3Upload) {
                             logger.info("Background: {} (BookID {}) is locally cached from external source ({}). Triggering S3 upload sequence.",
                                 identifierKey, bookIdForLog, initialImageDetails.getSourceName());
-                            uploadLocallyCachedFileToS3(initialImageDetails, bookIdForLog, identifierKey, book.getId()); // Pass googleBookId
+                            uploadLocallyCachedFileToS3(initialImageDetails, bookIdForLog, identifierKey, book.getId()); // Pass book.getId() as googleBookId
                         } else {
-                            logger.debug("Background: No new S3 upload needed for {} (BookID {}). Source: {}, Path: {}. Placeholder: {}, NeedsUpload: {}",
-                                identifierKey, bookIdForLog, initialImageDetails.getCoverImageSource(), initialImageDetails.getUrlOrPath(), isPlaceholder, needsNewS3Upload);
+                            logger.debug("Background: No new S3 upload needed for {} (BookID {}). Source: {}, Path: {}", 
+                                identifierKey, bookIdForLog, initialImageDetails.getCoverImageSource(), initialImageDetails.getUrlOrPath());
                         }
-                    } else {
-                         logger.debug("Background: Image for {} (BookID {}) is a placeholder. S3 upload skipped.", identifierKey, bookIdForLog);
                     }
 
                 }, java.util.concurrent.ForkJoinPool.commonPool()) // Ensure execution on a managed pool
@@ -686,7 +672,7 @@ public class BookCoverCacheService {
 
     // Removed unused inner static classes: GoogleBooksApiResponse, GoogleBookItem, VolumeInfo, ImageLinks
 
-    private void uploadLocallyCachedFileToS3(ImageDetails localImageDetails, String bookIdForLog, String identifierKey, String googleBookId) { // Added googleBookId
+    private void uploadLocallyCachedFileToS3(ImageDetails localImageDetails, String bookIdForLog, String identifierKey, String googleBookId) {
         // Construct the full path to the local cached file
         Path localImagePath = Paths.get(cacheDirString, localImageDetails.getUrlOrPath().substring(("/" + cacheDirName + "/").length()));
         String originalSourceName = localImageDetails.getSourceName() != null ? localImageDetails.getSourceName() : "unknown";
@@ -723,17 +709,23 @@ public class BookCoverCacheService {
         }, java.util.concurrent.ForkJoinPool.commonPool())
         .thenAcceptAsync(s3ImageDetails -> {
             if (s3ImageDetails != null && s3ImageDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                logger.info("BackgroundS3: Successfully uploaded to S3 for BookID {}. S3 URL is: {}",
+                logger.info("BackgroundS3: Successfully uploaded to S3 for BookID {}. S3 URL is: {}", 
                     bookIdForLog, s3ImageDetails.getUrlOrPath());
-                // Update the final local path cache to point to the S3 URL
-                identifierToFinalLocalPathCache.put(identifierKey, s3ImageDetails.getUrlOrPath());
-                logger.info("BackgroundS3: Updated identifierToFinalLocalPathCache for {} to S3 URL: {}", identifierKey, s3ImageDetails.getUrlOrPath());
-
-                // Publish an event with the new S3 URL
-                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, s3ImageDetails.getUrlOrPath(), googleBookId));
-                logger.info("BackgroundS3: Published BookCoverUpdatedEvent for {} (BookID {}) with S3 URL: {}", identifierKey, bookIdForLog, s3ImageDetails.getUrlOrPath());
+                
+                // Update the final local path cache to point to the S3 URL if it truly changed or is different.
+                // This prevents overwriting a local cache path if S3 somehow failed but returned odd details.
+                String currentFinalPath = identifierToFinalLocalPathCache.get(identifierKey);
+                if (currentFinalPath == null || !currentFinalPath.equals(s3ImageDetails.getUrlOrPath())) {
+                    if (identifierToFinalLocalPathCache.size() >= MAX_MEMORY_CACHE_SIZE) identifierToFinalLocalPathCache.clear();
+                    identifierToFinalLocalPathCache.put(identifierKey, s3ImageDetails.getUrlOrPath());
+                    logger.info("BackgroundS3: Updated identifierToFinalLocalPathCache for {} to S3 URL: {}", identifierKey, s3ImageDetails.getUrlOrPath());
+                } else {
+                    logger.info("BackgroundS3: identifierToFinalLocalPathCache for {} already matches S3 URL: {}. No update to final cache needed.", identifierKey, s3ImageDetails.getUrlOrPath());
+                }
+ 
+                // Event publishing removed
             } else {
-                logger.warn("BackgroundS3: S3 upload for BookID {} (orig source {}) did not result in S3_CACHE details or failed. S3 returned: {}. Final local cache path remains unchanged.",
+                logger.warn("BackgroundS3: S3 upload for BookID {} (orig source {}) did not result in S3_CACHE details or failed. S3 returned: {}. Final local cache path remains unchanged.", 
                     bookIdForLog, originalSourceName, s3ImageDetails);
             }
         }, java.util.concurrent.ForkJoinPool.commonPool())
