@@ -81,8 +81,6 @@ public class BookCoverCacheService {
     private final ConcurrentHashMap<String, String> identifierToFinalLocalPathCache = new ConcurrentHashMap<>();
     private final Set<String> knownBadImageUrls = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    // private static final String OPEN_LIBRARY_PLACEHOLDER_PATH = "https://openlibrary.org/images/icons/avatar_book-sm.png"; // Unused
-    private byte[] openLibraryPlaceholderHash;
     private static final String GOOGLE_PLACEHOLDER_PATH = "/images/image-not-available.png"; 
     private byte[] googlePlaceholderHash;
 
@@ -224,17 +222,6 @@ public class BookCoverCacheService {
                             logger.warn("Downloaded image from {} matches Google placeholder hash (BookID: {}). Adding to known bad URLs.", imageUrl, bookIdForLog);
                             knownBadImageUrls.add(imageUrl);
                             return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "googlematch"));
-                        }
-                    } catch (NoSuchAlgorithmException e) {
-                        logger.warn("Could not compute hash for downloaded image from {}: {}", imageUrl, e.getMessage());
-                    }
-                }
-                if (openLibraryPlaceholderHash != null) {
-                     try {
-                        if (isHashSimilar(openLibraryPlaceholderHash, computeImageHash(imageBytes))) {
-                            logger.warn("Downloaded image from {} matches OpenLibrary placeholder hash (BookID: {}). Adding to known bad URLs.", imageUrl, bookIdForLog);
-                            knownBadImageUrls.add(imageUrl);
-                            return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "olmatch"));
                         }
                     } catch (NoSuchAlgorithmException e) {
                         logger.warn("Could not compute hash for downloaded image from {}: {}", imageUrl, e.getMessage());

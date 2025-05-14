@@ -315,4 +315,56 @@ public class S3BookCoverService implements ExternalCoverService {
             default: return "unknown";
         }
     }
+
+    public Mono<ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key) {
+        if (!s3Enabled || processedImageBytes == null || processedImageBytes.length == 0 || bookId == null || bookId.isEmpty()) {
+            logger.debug("S3 upload of processed bytes skipped: S3 disabled, or processedImageBytes null/empty, or bookId is null/empty. BookId: {}", bookId);
+            // Return an ImageDetails object indicating no S3 upload occurred or using a convention for this case.
+            // For now, returning a generic placeholder type detail. This might need refinement based on how failures are handled upstream.
+            return Mono.just(new ImageDetails("local_processed_no_s3_upload", originalSourceForS3Key, "processed-no-s3-" + bookId, CoverImageSource.LOCAL_CACHE, ImageResolutionPreference.ORIGINAL, width, height)); 
+        }
+        
+        if (processedImageBytes.length > this.maxFileSizeBytes) {
+            logger.warn("Book ID {}: Processed image bytes for S3 are too large (size: {} bytes, max: {} bytes). Original source: {}. Will not upload to S3.", 
+                        bookId, processedImageBytes.length, this.maxFileSizeBytes, originalSourceForS3Key);
+            return Mono.just(new ImageDetails("local_processed_too_large_for_s3", originalSourceForS3Key, "processed-too-large-" + bookId, CoverImageSource.LOCAL_CACHE, ImageResolutionPreference.ORIGINAL, width, height));
+        }
+
+        final String s3Key = generateS3Key(bookId, fileExtension, originalSourceForS3Key);
+
+        return Mono.fromCallable(() -> {
+            try {
+                // Optional: Check if object already exists with same key and content length
+                try {
+                    HeadObjectResponse headResponse = s3Client.headObject(HeadObjectRequest.builder().bucket(s3Bucket).key(s3Key).build());
+                    if (headResponse.contentLength() == processedImageBytes.length) {
+                        logger.info("Processed cover for book {} (from source {}) already exists in S3 with same size, skipping upload. Key: {}", bookId, originalSourceForS3Key, s3Key);
+                        String cdnUrl = getS3CoverUrl(bookId, fileExtension, originalSourceForS3Key);
+                        objectExistsCache.put(s3Key, true);
+                        return new ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, width, height);
+                    }
+                } catch (NoSuchKeyException e) { /* Proceed to upload */ }
+                  catch (Exception e) { logger.warn("Error checking existing S3 object for book {} (source {}): {}. Proceeding with upload.", bookId, originalSourceForS3Key, e.getMessage()); }
+
+                PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                        .bucket(s3Bucket)
+                        .key(s3Key)
+                        .contentType(mimeType)
+                        .build();
+                s3Client.putObject(putObjectRequest, RequestBody.fromBytes(processedImageBytes));
+                
+                String cdnUrl = getS3CoverUrl(bookId, fileExtension, originalSourceForS3Key);
+                objectExistsCache.put(s3Key, true);
+                logger.info("Successfully uploaded processed cover for book {} (from source {}) to S3. Key: {}", bookId, originalSourceForS3Key, s3Key);
+                
+                return new ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, width, height);
+            
+            } catch (Exception e) {
+                logger.error("Unexpected exception during S3 upload of processed bytes for book {} (source {}): {}.", bookId, originalSourceForS3Key, e.getMessage(), e);
+                // Fallback: This indicates failure to upload to S3.
+                // The caller (BookCoverCacheService) will have the local cache details.
+                return new ImageDetails("s3_upload_failed_for_processed_bytes", originalSourceForS3Key, "s3-upload-fail-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL, width, height);
+            }
+        }).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()); // Ensure S3 operations are on a suitable thread pool
+    }
 }
