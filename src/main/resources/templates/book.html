@@ -316,6 +316,26 @@
 <!-- Scripts -->
 <th:block th:replace="~{fragments/layout :: scripts}"></th:block>
 
+<!-- Real-time cover update subscription -->
+<script th:if="${book != null}" th:inline="javascript">
+/*<![CDATA[*/
+document.addEventListener('DOMContentLoaded', function() {
+  var bookId = /*[[${book.id}]]*/ 'unknown';
+  var socket = new SockJS('/ws');
+  var stompClient = Stomp.over(socket);
+  stompClient.connect({}, function() {
+    stompClient.subscribe('/topic/book/' + bookId + '/coverUpdate', function(message) {
+      var payload = JSON.parse(message.body);
+      var img = document.querySelector('.book-cover-section .book-cover');
+      if (img) {
+        img.src = payload.newCoverUrl;
+      }
+    });
+  });
+});
+/*]]>*/
+</script>
+
 <!-- Book Detail Specific Styles -->
 <style>
     .book-cover-section {
