@@ -135,6 +135,12 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // Handle book cover image loading
+    // Remove any CORS attribute on DO Spaces images to prevent NS_BINDING_ABORTED errors until CORS propagates
+    document.querySelectorAll('img.book-cover').forEach(img => {
+        if (img.src.includes('digitaloceanspaces.com')) {
+            img.removeAttribute('crossorigin');
+        }
+    });
     initializeBookCovers();
 
     // Theme toggler implementation

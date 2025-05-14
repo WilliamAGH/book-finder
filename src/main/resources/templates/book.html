@@ -95,12 +95,12 @@
                         <!-- Book Cover Section -->
                         <div class="col-md-4 col-lg-3 book-cover-section">
                             <div class="position-relative book-cover-container book-cover-wrapper">
-                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}" 
-                                     class="img-fluid rounded-start book-cover" 
-                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}" 
-                                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
-                                     th:attr="data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'"
-                                     onerror="this.src = this.dataset.fallbackUrl; this.onerror = function() { this.src = this.dataset.ultimateFallback; this.onerror = null; };">
+                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}"
+                                    data-book-id="${book.id}"
+                                    class="img-fluid rounded-start book-cover"
+                                    th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                                    th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                                    th:attr="data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'">
 
                                 <!-- Google Books Rating Badge -->
                                 <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-3 p-2 badge bg-warning text-dark fs-6">
@@ -279,11 +279,11 @@
                             <div class="position-relative book-cover-container">
                                 <a th:href="@{'/book/' + ${rec.id}}" class="d-block h-100">
                                     <img th:src="${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.coverImageUrl != null ? rec.coverImageUrl : '/images/placeholder-book-cover.svg')}" 
+                                         data-book-id="${rec.id}"
                                          class="card-img-top book-cover"
                                          th:alt="${rec.title != null ? rec.title + ' cover' : 'Book cover'}"
                                          th:title="${rec.title != null ? rec.title + ' cover' : 'Book cover'}"
-                                         th:attr="data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'"
-                                         onerror="this.src = this.dataset.fallbackUrl; this.onerror = function() { this.src = this.dataset.ultimateFallback; this.onerror = null; };">
+                                         th:attr="data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, data-ultimate-fallback='/images/placeholder-book-cover.svg'">
                                 </a>
                                 <div th:if="${rec.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
                                     <i class="fas fa-star me-1"></i>
@@ -320,16 +320,18 @@
 <script th:if="${book != null}" th:inline="javascript">
 /*<![CDATA[*/
 document.addEventListener('DOMContentLoaded', function() {
-  var bookId = /*[[${book.id}]]*/ 'unknown';
   var socket = new SockJS('/ws');
   var stompClient = Stomp.over(socket);
   stompClient.connect({}, function() {
-    stompClient.subscribe('/topic/book/' + bookId + '/coverUpdate', function(message) {
-      var payload = JSON.parse(message.body);
-      var img = document.querySelector('.book-cover-section .book-cover');
-      if (img) {
-        img.src = payload.newCoverUrl;
-      }
+    // Subscribe to coverUpdate for each image on the page
+    document.querySelectorAll('img.book-cover[data-book-id]').forEach(function(img) {
+      var id = img.getAttribute('data-book-id');
+      stompClient.subscribe('/topic/book/' + id + '/coverUpdate', function(message) {
+        var payload = JSON.parse(message.body);
+        if (payload.newCoverUrl) {
+          img.src = payload.newCoverUrl;
+        }
+      });
     });
   });
 });
