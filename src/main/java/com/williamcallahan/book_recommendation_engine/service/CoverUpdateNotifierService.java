@@ -4,23 +4,27 @@ import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpd
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.event.EventListener;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.stereotype.Service;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.event.EventListener;
+import org.springframework.messaging.core.MessageSendingOperations;
+import org.springframework.stereotype.Service;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
 import java.util.HashMap;
 import java.util.Map;
 
 @Service
+@Lazy
 public class CoverUpdateNotifierService {
 
     private static final Logger logger = LoggerFactory.getLogger(CoverUpdateNotifierService.class);
-    private final SimpMessagingTemplate messagingTemplate;
+    private final MessageSendingOperations<String> messagingTemplate;
 
     @Autowired
-    public CoverUpdateNotifierService(@Lazy SimpMessagingTemplate messagingTemplate) {
+    public CoverUpdateNotifierService(@Lazy MessageSendingOperations<String> messagingTemplate,
+                                      WebSocketMessageBrokerConfigurer webSocketConfig) {
         this.messagingTemplate = messagingTemplate;
+        logger.info("CoverUpdateNotifierService initialized, WebSocketConfig should be ready.");
     }
 
     @EventListener
@@ -33,14 +37,12 @@ public class CoverUpdateNotifierService {
 
         String destination = "/topic/book/" + event.getGoogleBookId() + "/coverUpdate";
         
-        // You can send more structured data if needed, e.g., a map or a custom object
         Map<String, String> payload = new HashMap<>();
         payload.put("googleBookId", event.getGoogleBookId());
         payload.put("newCoverUrl", event.getNewCoverUrl());
-        // identifierKey might also be useful for some frontend logic, though googleBookId is usually primary for UI elements
         payload.put("identifierKey", event.getIdentifierKey()); 
 
         logger.info("Sending cover update to {}: URL = {}", destination, event.getNewCoverUrl());
-        messagingTemplate.convertAndSend(destination, payload);
+        this.messagingTemplate.convertAndSend(destination, payload);
     }
 } 
