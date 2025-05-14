@@ -65,13 +65,24 @@ public class RecommendationService {
                         HashMap::new // Supplier for the map
                     ))
                     .map(recommendationMap -> {
+                        String sourceLang = sourceBook.getLanguage(); // Get language of the source book
+                        boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
+
                         List<Book> recommendations = recommendationMap.values().stream()
                             .sorted(Comparator.comparing(ScoredBook::getScore).reversed())
                             .map(ScoredBook::getBook)
                             .filter(book -> !book.getId().equals(sourceBook.getId())) // Exclude the source book
+                            .filter(recommendedBook -> { // Add language filter
+                                if (!filterByLanguage) {
+                                    return true; // Don't filter if source language is unknown
+                                }
+                                String recommendedLang = recommendedBook.getLanguage();
+                                // Use Objects.equals for null-safe comparison
+                                return Objects.equals(sourceLang, recommendedLang);
+                            })
                             .limit(effectiveCount)
                             .collect(Collectors.toList());
-                        logger.info("Generated {} recommendations for book ID: {}", recommendations.size(), bookId);
+                        logger.info("Generated {} recommendations for book ID: {} (Language filter active: {})", recommendations.size(), sourceBook.getId(), filterByLanguage);
                         return recommendations;
                     });
             })
@@ -88,9 +99,10 @@ public class RecommendationService {
         if (sourceBook.getAuthors() == null || sourceBook.getAuthors().isEmpty()) {
             return Flux.empty();
         }
+        String langCode = sourceBook.getLanguage(); // Get language from source book
         
         return Flux.fromIterable(sourceBook.getAuthors())
-            .flatMap(author -> googleBooksService.searchBooksByAuthor(author)
+            .flatMap(author -> googleBooksService.searchBooksByAuthor(author, langCode) // Pass langCode
                 .flatMapMany(Flux::fromIterable)
                 .map(book -> new ScoredBook(book, 4.0)) // Same author is a strong indicator
                 .onErrorResume(e -> {
@@ -119,8 +131,9 @@ public class RecommendationService {
         }
 
         String categoryQueryString = "subject:" + String.join(" OR subject:", mainCategories);
+        String langCode = sourceBook.getLanguage(); // Get language from source book
         
-        return googleBooksService.searchBooksAsyncReactive(categoryQueryString)
+        return googleBooksService.searchBooksAsyncReactive(categoryQueryString, langCode) // Pass langCode
             .flatMapMany(Flux::fromIterable)
             .take(MAX_SEARCH_RESULTS) // Limit results after fetching the list from Mono<List<Book>>
             .map(book -> {
@@ -195,8 +208,9 @@ public class RecommendationService {
         }
 
         String query = String.join(" ", keywords);
+        String langCode = sourceBook.getLanguage(); // Get language from source book
 
-        return googleBooksService.searchBooksAsyncReactive(query)
+        return googleBooksService.searchBooksAsyncReactive(query, langCode) // Pass langCode
             .flatMapMany(Flux::fromIterable)
             .take(MAX_SEARCH_RESULTS)
             .flatMap(book -> {
