@@ -32,11 +32,15 @@ public class GoogleBooksService {
         this.webClient = webClientBuilder.build();
     }
 
-    public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy) {
+    public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
         String url = String.format("%s/volumes?q=%s&startIndex=%d&maxResults=40&key=%s",
                 googleBooksApiUrl, query, startIndex, googleBooksApiKey);
         if (orderBy != null && !orderBy.isEmpty()) {
             url += "&orderBy=" + orderBy;
+        }
+        if (langCode != null && !langCode.isEmpty()) {
+            url += "&langRestrict=" + langCode;
+            logger.debug("Google Books API call with langRestrict: {}", langCode);
         }
         return webClient.get()
                 .uri(url)
@@ -48,14 +52,14 @@ public class GoogleBooksService {
                 });
     }
 
-    public Mono<List<Book>> searchBooksAsyncReactive(String query) {
+    public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
         final int maxResultsPerPage = 40;
         final int maxTotalResults = 200;
 
         return Flux.range(0, (maxTotalResults + maxResultsPerPage - 1) / maxResultsPerPage)
             .map(page -> page * maxResultsPerPage)
             .concatMap(startIndex -> 
-                searchBooks(query, startIndex, "newest")
+                searchBooks(query, startIndex, "newest", langCode)
                     .flatMapMany(response -> {
                         if (response != null && response.has("items") && response.get("items").isArray()) {
                             List<JsonNode> items = new ArrayList<>();
@@ -77,16 +81,32 @@ public class GoogleBooksService {
             });
     }
 
+    public Mono<List<Book>> searchBooksAsyncReactive(String query) {
+        return searchBooksAsyncReactive(query, null);
+    }
+
+    public Mono<List<Book>> searchBooksByTitle(String title, String langCode) {
+        return searchBooksAsyncReactive("intitle:" + title, langCode);
+    }
+
     public Mono<List<Book>> searchBooksByTitle(String title) {
-        return searchBooksAsyncReactive("intitle:" + title);
+        return searchBooksByTitle(title, null);
+    }
+
+    public Mono<List<Book>> searchBooksByAuthor(String author, String langCode) {
+        return searchBooksAsyncReactive("inauthor:" + author, langCode);
     }
 
     public Mono<List<Book>> searchBooksByAuthor(String author) {
-        return searchBooksAsyncReactive("inauthor:" + author);
+        return searchBooksByAuthor(author, null);
+    }
+
+    public Mono<List<Book>> searchBooksByISBN(String isbn, String langCode) {
+        return searchBooksAsyncReactive("isbn:" + isbn, langCode);
     }
 
     public Mono<List<Book>> searchBooksByISBN(String isbn) {
-        return searchBooksAsyncReactive("isbn:" + isbn);
+        return searchBooksByISBN(isbn, null);
     }
 
     public Mono<Book> getBookById(String bookId) {
