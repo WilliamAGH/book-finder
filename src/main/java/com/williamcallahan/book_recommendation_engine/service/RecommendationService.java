@@ -199,7 +199,7 @@ public class RecommendationService {
         return googleBooksService.searchBooksAsyncReactive(query)
             .flatMapMany(Flux::fromIterable)
             .take(MAX_SEARCH_RESULTS)
-            .map(book -> {
+            .flatMap(book -> {
                 String candidateText = ((book.getTitle() != null ? book.getTitle() : "") + " " +
                                       (book.getDescription() != null ? book.getDescription() : "")).toLowerCase();
                 int matchCount = 0;
@@ -210,11 +210,10 @@ public class RecommendationService {
                 }
                 if (matchCount > 0) {
                     double score = 2.0 * matchCount;
-                    return new ScoredBook(book, score);
+                    return Mono.just(new ScoredBook(book, score));
                 }
-                return null; // Will be filtered out by filter(Objects::nonNull)
+                return Mono.empty();
             })
-            .filter(Objects::nonNull) // Ensure no null ScoredBook objects proceed
             .onErrorResume(e -> {
                 logger.warn("Error finding books by text keywords '{}': {}", query, e.getMessage());
                 return Flux.empty();
