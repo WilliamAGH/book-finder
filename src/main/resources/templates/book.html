@@ -291,7 +291,9 @@
                                 </div>
                             </div>
                             <div class="card-body">
-                                <h5 class="card-title text-truncate" th:text="${rec.title}">Book Title</h5>
+                                <h5 class="card-title text-truncate">
+                                    <a th:href="@{'/book/' + ${rec.id}}" th:text="${rec.title}" class="text-decoration-none text-dark">Book Title</a>
+                                </h5>
                                 <p class="card-text small text-muted text-truncate"
                                    th:text="${rec.authors != null && !rec.authors.empty} ? ${rec.authors[0]} : 'Unknown Author'">Author Name</p>
                             </div>

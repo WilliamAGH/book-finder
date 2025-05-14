@@ -79,7 +79,9 @@
                             </div>
                         </div>
                         <div class="card-body">
-                            <h5 class="card-title text-truncate" th:text="${book.title}">Book Title</h5>
+                            <h5 class="card-title text-truncate">
+                                <a th:href="@{'/book/' + ${book.id}}" th:text="${book.title}" class="text-decoration-none text-dark">Book Title</a>
+                            </h5>
                             <p class="card-text small text-muted text-truncate" th:text="${book.authors != null && !book.authors.empty} ? ${book.authors[0]} : 'Unknown Author'">Author Name</p>
                         </div>
                         <div class="card-footer bg-white border-top-0">
