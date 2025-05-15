@@ -688,3 +688,24 @@ color: var(--dark-color);
 .navbar-toggler {
     margin-right: 0; /* keep flush at right edge */
 }
+
+/* Development Mode Image Source Indicator Colors */
+.dev-source-indicator {
+    /* width and height are set inline in HTML (e.g., 20px) */
+    /* display, align-items, justify-content are set inline in HTML for centering */
+    opacity: 0.9;
+    /* z-index is set inline in HTML */
+    border-radius: 50%; /* Makes it round */
+    color: white; /* Default icon color, overridden by specific classes if needed */
+    /* text-shadow: 1px 1px 1px rgba(0,0,0,0.3); /* Optional: subtle shadow for the icon */
+    line-height: 0; /* Helps with vertical alignment of icon if it's an inline-block/flex item */
+}
+
+.dev-source-GOOGLE_BOOKS { background-color: var(--danger-color); }
+.dev-source-OPEN_LIBRARY { background-color: var(--info-color); }
+.dev-source-LONGITOOD { background-color: var(--secondary-color); }
+.dev-source-S3_CACHE { background-color: var(--success-color); }
+.dev-source-LOCAL_CACHE { background-color: var(--warning-color); color: var(--dark-color); text-shadow: none;} /* Dark text for yellow */
+.dev-source-UNDEFINED { background-color: var(--grey-500); }
+.dev-source-ANY { background-color: var(--grey-400); }
+.dev-source-NONE { background-color: var(--grey-300); color: var(--dark-color); text-shadow: none;} /* Dark text for light grey */

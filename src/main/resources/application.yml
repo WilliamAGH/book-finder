@@ -1,6 +1,8 @@
 spring:
   main:
     allow-bean-definition-overriding: true
+  profiles:
+    default: prod # Default to prod if no other profile is active
   # Conditional datasource configuration
   # Set SPRING_DATASOURCE_URL to empty string to disable the database
   datasource:
@@ -13,8 +15,8 @@ spring:
     # Prevent application from failing if no database is available
     hikari:
       connection-timeout: 2000
-      initialization-fail-timeout: -1
-      maximum-pool-size: 3
+      initialization-fail-timeout: -1 # Negative value means fail fast if DB is not available
+      maximum-pool-size: 3 # Default for common, can be overridden by profiles
   
   # JPA configuration - only used when database URL is provided
   jpa:
@@ -70,15 +72,61 @@ app:
     service:
       url: ${EMBEDDING_SERVICE_URL:}
       
-# Server configuration
+# Server configuration (common, can be overridden by application.properties or profiles)
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080} # Default from YML, application.properties will override if SERVER_PORT is set
   compression:
     enabled: true
   
-# Logging
+# Common Logging (can be overridden by profiles)
 logging:
   level:
+    root: INFO # Default root level
     com.williamcallahan.book_recommendation_engine: INFO
     org.springframework.cache: WARN
     org.hibernate: WARN
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  # Dev-specific properties
+  jpa:
+    show-sql: true # Show SQL in dev
+    hibernate:
+      ddl-auto: update # More lenient ddl-auto for dev
+  datasource:
+    hikari:
+      maximum-pool-size: 5 # Slightly larger pool for dev if needed
+logging:
+  level:
+    com.williamcallahan.book_recommendation_engine: DEBUG # More verbose logging for dev
+    org.springframework.web: DEBUG
+app:
+  environment:
+    mode: development # Custom property for dev mode
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  # Prod-specific properties
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate # Validate schema in prod, or 'none' if managed externally
+  datasource:
+    hikari:
+      maximum-pool-size: 20 # Example: larger pool for prod
+      # Consider more robust production settings for HikariCP
+      # connection-timeout: 30000
+      # idle-timeout: 600000
+      # max-lifetime: 1800000
+logging:
+  level:
+    com.williamcallahan.book_recommendation_engine: INFO # Standard INFO level for prod
+app:
+  environment:
+    mode: production # Custom property for prod mode

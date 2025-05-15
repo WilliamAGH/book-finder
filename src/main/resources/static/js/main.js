@@ -136,11 +136,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Handle book cover image loading
     // Remove any CORS attribute on DO Spaces images to prevent NS_BINDING_ABORTED errors until CORS propagates
-    document.querySelectorAll('img.book-cover').forEach(img => {
-        if (img.src.includes('digitaloceanspaces.com')) {
-            img.removeAttribute('crossorigin');
-        }
-    });
+    // document.querySelectorAll('img.book-cover').forEach(img => {
+    //     if (img.src.includes('digitaloceanspaces.com')) {
+    //         img.removeAttribute('crossorigin');
+    //     }
+    // });
     initializeBookCovers();
 
     // Subscribe to real-time cover updates for all book covers
@@ -238,129 +238,166 @@ document.addEventListener('DOMContentLoaded', function() {
  * Includes advanced error handling, retry mechanism, and preload validation
  */
 function initializeBookCovers() {
-    // Get all book cover images
-    const bookCovers = document.querySelectorAll('.book-cover');
+    const covers = document.querySelectorAll('img.book-cover');
+    if (covers.length === 0) {
+        console.log("No book covers found to initialize.");
+        return;
+    }
+    console.log(`Initializing ${covers.length} book covers.`);
+
     const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
-    const MAX_RETRIES = 1; // Maximum number of retry attempts
+    const MAX_RETRIES = 1;
     
-    bookCovers.forEach(cover => {
-        // Set a data attribute to track if this is the original source
-        if (!cover.hasAttribute('data-original-src')) {
-            cover.setAttribute('data-original-src', cover.src);
+    covers.forEach((cover, index) => {
+        if (cover.getAttribute('data-cover-initialized') === 'true') {
+            return;
         }
-        
-        // Initialize retry count
-        cover.setAttribute('data-retry-count', '0');
-        cover.setAttribute('data-load-state', 'initializing');
-        
-        // Add loading class
+
+        const preferredUrl = cover.dataset.preferredUrl;
+        const fallbackUrl = cover.dataset.fallbackUrl;
+        const ultimateFallback = cover.dataset.ultimateFallback || LOCAL_PLACEHOLDER;
+
+        // Clean up old listeners if any (though data-cover-initialized should prevent this)
+        cover.removeEventListener('load', handleImageSuccess);
+        cover.removeEventListener('error', handleImageFailure);
+
+        cover.onload = handleImageSuccess;
+        cover.onerror = handleImageFailure;
+
+        // Store these on the element for the handlers to access
+        cover.setAttribute('data-preferred-url-internal', preferredUrl || '');
+        cover.setAttribute('data-fallback-url-internal', fallbackUrl || '');
+        cover.setAttribute('data-ultimate-fallback-internal', ultimateFallback);
+
+        // Add loading indicators and placeholder div
+        const parent = cover.parentNode;
+        let placeholderDiv = parent.querySelector('.cover-placeholder-overlay');
+        if (!placeholderDiv) {
+            placeholderDiv = document.createElement('div');
+            placeholderDiv.className = 'cover-placeholder-overlay';
+            placeholderDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>';
+            
+            // Insert placeholder before the image if it's a direct child of book-cover-container/wrapper
+            if (parent.classList.contains('book-cover-container') || parent.classList.contains('book-cover-wrapper')) {
+                 parent.insertBefore(placeholderDiv, cover);
+            } else if (parent.tagName === 'A' && (parent.parentNode.classList.contains('book-cover-container') || parent.parentNode.classList.contains('book-cover-wrapper'))){
+                // if image is wrapped in <a>, insert placeholder before the <a>
+                parent.parentNode.insertBefore(placeholderDiv, parent);
+            }
+        }
+        placeholderDiv.style.display = 'flex';
         cover.classList.add('loading');
-        
-        // Create placeholder container if not already present
-        const container = cover.closest('.book-cover-container');
-        if (container && !container.querySelector('.book-cover-placeholder')) {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'book-cover-placeholder';
-            placeholder.textContent = 'Loading...';
-            container.appendChild(placeholder);
+        cover.style.opacity = '0.5';
+
+
+        if (preferredUrl && preferredUrl !== "null" && preferredUrl.trim() !== "") {
+            console.log(`[Cover ${index}] Attempting preferred URL: ${preferredUrl}`);
+            cover.src = preferredUrl;
+        } else if (fallbackUrl && fallbackUrl !== "null" && fallbackUrl.trim() !== "") {
+            console.log(`[Cover ${index}] No preferred URL, attempting fallback URL: ${fallbackUrl}`);
+            cover.src = fallbackUrl;
+        } else {
+            console.log(`[Cover ${index}] No preferred or fallback URL, using ultimate fallback: ${ultimateFallback}`);
+            cover.src = ultimateFallback;
+            // If it's already the placeholder, the load event might not fire consistently if src doesn't change
+            // Manually trigger if it's already the placeholder and not loading
+            if (cover.complete && ultimateFallback.includes(LOCAL_PLACEHOLDER)) {
+                 setTimeout(() => handleImageSuccess.call(cover), 0);
+            }
         }
-        
-        // Function to show placeholder with custom message
-        const showPlaceholder = (message = 'Cover not available') => {
-            const placeholder = cover.closest('.book-cover-container')?.querySelector('.book-cover-placeholder');
-            if (placeholder) {
-                placeholder.textContent = message;
-                placeholder.style.display = 'flex';
-            }
-            // Make sure the image is hidden
-            cover.style.opacity = '0';
-        };
-        
-        // Function to hide placeholder and show image
-        const showImage = () => {
-            cover.style.opacity = '1';
-            const placeholder = cover.closest('.book-cover-container')?.querySelector('.book-cover-placeholder');
-            if (placeholder) {
-                placeholder.style.display = 'none';
-            }
-        };
-        
-        // Function to handle image load failure
-        const handleImageFailure = () => {
-            const retryCount = parseInt(cover.getAttribute('data-retry-count') || '0');
-            const originalSrc = cover.getAttribute('data-original-src');
-            
-            cover.setAttribute('data-load-state', 'failed');
-            
-            // Log the failure for debugging
-            console.log(`Image failed to load: ${cover.alt || 'Unknown book'}`, {
-                src: cover.src,
-                originalSrc: originalSrc,
-                retryCount: retryCount
-            });
-            
-            if (retryCount < MAX_RETRIES && originalSrc && !originalSrc.includes(LOCAL_PLACEHOLDER)) {
-                // Increment retry count
-                cover.setAttribute('data-retry-count', (retryCount + 1).toString());
-                cover.setAttribute('data-load-state', 'retrying');
-                
-                // Show placeholder during retry
-                showPlaceholder('Retrying...');
-                
-                // Try again with the original source after a short delay
-                setTimeout(() => {
-                    console.log(`Retrying image (${retryCount + 1}/${MAX_RETRIES}): ${cover.alt || 'Unknown book'}`);
-                    cover.src = originalSrc;
-                }, 1000);
-            } else {
-                // We've exhausted retries or this is already the placeholder
-                cover.setAttribute('data-load-state', 'using-placeholder');
-                
-                // Only switch to placeholder if not already using it
-                if (!cover.src.includes(LOCAL_PLACEHOLDER)) {
-                    console.log(`Using placeholder for: ${cover.alt || 'Unknown book'}`);
-                    cover.src = LOCAL_PLACEHOLDER;
-                    cover.onerror = null; // Prevent infinite loop
-                    showPlaceholder();
-                } else {
-                    // Even the placeholder failed, completely hide the image
-                    cover.style.display = 'none';
-                    showPlaceholder('Cover unavailable');
-                }
-            }
-        };
-        
-        // Handle successful load
-        cover.addEventListener('load', function() {
-            // Check if the image has valid dimensions (to detect 1x1 placeholders)
-            if (this.naturalWidth < 20 || this.naturalHeight < 20) {
-                console.log(`Detected tiny image (likely placeholder): ${this.naturalWidth}x${this.naturalHeight} for ${cover.alt || 'Unknown book'}`);
-                handleImageFailure();
-                return;
-            }
-            
-            // Image loaded successfully
-            cover.classList.remove('loading');
-            cover.classList.add('loaded');
-            cover.setAttribute('data-load-state', 'loaded');
-            
-            showImage();
-            
-            // Log success for debugging
-            console.log(`Image loaded successfully: ${cover.alt || 'Unknown book'}`, {
-                src: cover.src,
-                dimensions: `${this.naturalWidth}x${this.naturalHeight}`
-            });
-        });
-        
-        // Handle load error
-        cover.addEventListener('error', handleImageFailure);
-        
-        // If image already loaded before listener was attached, manually trigger load
-        if (cover.complete) {
-            cover.dispatchEvent(new Event('load'));
-        }
+        cover.setAttribute('data-cover-initialized', 'true');
     });
+}
+
+function handleImageSuccess() {
+    // 'this' is the image element
+    const cover = this;
+    console.log(`[Cover Success] Loaded: ${cover.src}`);
+    
+    const placeholderDiv = (cover.parentNode.classList.contains('book-cover-container') || cover.parentNode.classList.contains('book-cover-wrapper')) 
+        ? cover.parentNode.querySelector('.cover-placeholder-overlay')
+        : cover.parentNode.parentNode.querySelector('.cover-placeholder-overlay');
+
+    if (placeholderDiv) {
+        placeholderDiv.style.display = 'none';
+    }
+    cover.classList.remove('loading');
+    cover.classList.add('loaded');
+    cover.style.opacity = '1';
+
+    if (cover.naturalWidth < 20 && cover.naturalHeight < 20 && !cover.src.includes(LOCAL_PLACEHOLDER)) {
+        console.warn(`[Cover Warning] Loaded image is tiny (${cover.naturalWidth}x${cover.naturalHeight}), treating as failure for: ${cover.src}`);
+        handleImageFailure.call(cover); // Treat as error
+    } else {
+        // Successfully loaded a real image or the intended local placeholder
+        cover.onerror = null; // Prevent future errors on this now successfully loaded image (e.g. if removed from DOM then re-added by mistake)
+    }
+}
+
+function handleImageFailure() {
+    // 'this' is the image element
+    const cover = this;
+    const currentSrc = cover.src;
+    console.warn(`[Cover Failure] Failed to load: ${currentSrc}`);
+
+    const preferred = cover.getAttribute('data-preferred-url-internal');
+    const fallback = cover.getAttribute('data-fallback-url-internal');
+    const ultimate = cover.getAttribute('data-ultimate-fallback-internal');
+
+    let nextSrc = null;
+
+    // Check if currentSrc matches preferred (even if currentSrc has cache-busting params)
+    if (currentSrc.startsWith(preferred) && preferred !== "") { 
+        if (fallback && fallback !== "" && fallback !== currentSrc) {
+            console.log(`[Cover Retry] Preferred failed, trying fallback: ${fallback}`);
+            nextSrc = fallback;
+        } else if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
+            console.log(`[Cover Retry] Preferred failed, no fallback or fallback is same, trying ultimate: ${ultimate}`);
+            nextSrc = ultimate;
+        }
+    } 
+    // Check if currentSrc matches fallback
+    else if (currentSrc.startsWith(fallback) && fallback !== "") {
+        if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
+            console.log(`[Cover Retry] Fallback failed, trying ultimate: ${ultimate}`);
+            nextSrc = ultimate;
+        }
+    }
+    // If it was some other URL (or already the ultimate fallback and it somehow errored)
+    else if (ultimate && ultimate !== "" && currentSrc !== ultimate) {
+        console.log(`[Cover Retry] Current URL is not recognized or ultimate fallback itself failed previously, ensuring ultimate: ${ultimate}`);
+        nextSrc = ultimate;
+    }
+
+
+    if (nextSrc) {
+        cover.src = nextSrc;
+        if (nextSrc === ultimate) {
+            // If we're falling back to the ultimate (local) placeholder,
+            // it should ideally not error. If it does, stop trying.
+            cover.onerror = function() {
+                console.error(`[Cover Final Failure] Ultimate fallback itself failed: ${this.src}`);
+                const placeholderDiv = (this.parentNode.classList.contains('book-cover-container') || this.parentNode.classList.contains('book-cover-wrapper')) 
+                    ? this.parentNode.querySelector('.cover-placeholder-overlay')
+                    : this.parentNode.parentNode.querySelector('.cover-placeholder-overlay');
+                if (placeholderDiv) placeholderDiv.style.display = 'none';
+                this.style.opacity = '1';
+                this.classList.remove('loading');
+                this.classList.add('failed');
+            };
+        }
+    } else {
+        console.error(`[Cover Final Failure] All fallbacks exhausted for initial src: ${cover.getAttribute('data-preferred-url-internal')}`);
+        const placeholderDiv = (cover.parentNode.classList.contains('book-cover-container') || cover.parentNode.classList.contains('book-cover-wrapper')) 
+            ? cover.parentNode.querySelector('.cover-placeholder-overlay')
+            : cover.parentNode.parentNode.querySelector('.cover-placeholder-overlay');
+        if (placeholderDiv) placeholderDiv.style.display = 'none';
+        cover.style.opacity = '1';
+        cover.src = ultimate;
+        cover.onerror = null;
+        cover.classList.remove('loading');
+        cover.classList.add('failed');
+    }
 }
 
 /**
@@ -429,3 +466,6 @@ const BookFormatter = {
         }
     }
 };
+
+// Make initializeBookCovers globally accessible if search.js needs to call it
+window.initializeBookCovers = initializeBookCovers;
