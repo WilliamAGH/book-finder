@@ -178,7 +178,13 @@ public class GoogleBooksService {
         book.setId(item.has("id") ? item.get("id").asText() : null);
         book.setTitle(volumeInfo.has("title") ? volumeInfo.get("title").asText() : null);
         book.setAuthors(getAuthorsFromVolumeInfo(volumeInfo));
-        book.setPublisher(volumeInfo.has("publisher") ? volumeInfo.get("publisher").asText() : null);
+        // Sanitize publisher: strip surrounding quotes if present
+        String rawPublisher = volumeInfo.has("publisher") ? volumeInfo.get("publisher").asText() : null;
+        if (rawPublisher != null) {
+            // Remove any leading/trailing double quotes
+            rawPublisher = rawPublisher.replaceAll("^\"|\"$", "");
+        }
+        book.setPublisher(rawPublisher);
         book.setPublishedDate(parsePublishedDate(volumeInfo));
         book.setDescription(volumeInfo.has("description") ? volumeInfo.get("description").asText() : null);
         book.setCoverImageUrl(getGoogleCoverImageFromVolumeInfo(volumeInfo));
