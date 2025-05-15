@@ -23,7 +23,7 @@ public class S3StorageService {
 
     @Autowired
     public S3StorageService(S3Client s3Client, 
-                            @Value("${s3.bucket}") String bucketName,
+                            @Value("${s3.bucket-name}") String bucketName,
                             @Value("${s3.public-cdn-url:#{null}}") String publicCdnUrl) {
         this.s3Client = s3Client;
         this.bucketName = bucketName;
@@ -31,13 +31,13 @@ public class S3StorageService {
     }
 
     /**
-     * Asynchronously uploads a file to the S3 bucket.
+     * Asynchronously uploads a file to the S3 bucket
      *
-     * @param keyName The key (path/filename) under which to store the file in the bucket.
-     * @param inputStream The InputStream of the file to upload.
-     * @param contentLength The length of the content to be uploaded.
-     * @param contentType The MIME type of the file.
-     * @return A CompletableFuture<String> with the public URL of the uploaded file, or null if upload failed.
+     * @param keyName The key (path/filename) under which to store the file in the bucket
+     * @param inputStream The InputStream of the file to upload
+     * @param contentLength The length of the content to be uploaded
+     * @param contentType The MIME type of the file
+     * @return A CompletableFuture<String> with the public URL of the uploaded file, or null if upload failed
      */
     public CompletableFuture<String> uploadFileAsync(String keyName, InputStream inputStream, long contentLength, String contentType) {
         return CompletableFuture.supplyAsync(() -> {
@@ -55,7 +55,7 @@ public class S3StorageService {
                 
                 logger.info("Successfully uploaded {} to S3 bucket {}", keyName, bucketName);
 
-                // Construct the public URL. Ensure no double slashes.
+                // Construct the public URL - and ensure no double slashes
                 if (publicCdnUrl == null || publicCdnUrl.isEmpty()) {
                     // Fall back to bucket URL if no CDN URL is provided
                     return String.format("https://%s.s3.amazonaws.com/%s", bucketName, 

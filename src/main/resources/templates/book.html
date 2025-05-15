@@ -94,23 +94,29 @@
                     <div class="row g-0">
                         <!-- Book Cover Section -->
                         <div class="col-md-4 col-lg-3 book-cover-section">
-                            <div class="position-relative book-cover-wrapper">
-                                <img th:if="${book.coverImageUrl != null}" th:src="${book.coverImageUrl}" 
-                                     class="img-fluid rounded-start book-cover" 
-                                     th:alt="${book.title} + ' cover'" 
-                                     th:title="${book.title} + ' cover'"
-                                     title="Book cover image"
-                                     onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';">
-                                <img th:if="${book.coverImageUrl == null}" src="/images/placeholder-book-cover.svg" 
-                                     class="img-fluid rounded-start book-cover" 
-                                     th:alt="${book.title} + ' cover'" 
-                                     th:title="${book.title} + ' cover'"
-                                     title="Book cover placeholder">
+                            <div class="position-relative book-cover-container book-cover-wrapper">
+                                <img th:src="@{/images/placeholder-book-cover.svg}"
+                                     th:attr="data-book-id=${book.id}, 
+                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : null)}, 
+                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                              data-ultimate-fallback='/images/placeholder-book-cover.svg'"
+                                     class="img-fluid rounded-start book-cover"
+                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}">
 
                                 <!-- Google Books Rating Badge -->
                                 <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-3 p-2 badge bg-warning text-dark fs-6">
                                     <i class="fas fa-star me-1"></i>
                                     <span th:text="${book.averageRating}">4.5</span>
+                                </div>
+
+                                <!-- Development Mode Image Source Indicator -->
+                                <div th:if="${isDevelopmentMode and book.coverImages != null and book.coverImages.source != null}"
+                                     class="position-absolute bottom-0 start-0 m-2 dev-source-indicator"
+                                     th:classappend="'dev-source-' + ${book.coverImages.source.name()}"
+                                     th:title="${'Source: ' + book.coverImages.source.displayName + (book.coverImages.preferredUrl != null ? ' | URL: ' + #strings.abbreviate(book.coverImages.preferredUrl, 70) : '')}"
+                                     style="z-index: 10; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
+                                    <i class="fas fa-check" style="font-size: 0.8em;"></i>
                                 </div>
                             </div>
                         </div>
@@ -282,22 +288,25 @@
                     <div th:each="rec : ${similarBooks}" class="col-sm-6 col-md-4 col-lg-3">
                         <div class="card h-100">
                             <div class="position-relative book-cover-container">
-                                <img th:if="${rec.coverImageUrl != null}" th:src="${rec.coverImageUrl}" title="Book cover image"
-                                     class="card-img-top book-cover"
-                                     th:alt="${rec.title != null ? rec.title + ' cover' : 'Book cover image'}"
-                                     th:title="${rec.title != null ? rec.title + ' cover' : 'Book cover image'}"
-                                     onerror="this.src='/images/placeholder-book-cover.svg';this.onerror='';" />
-                                <img th:if="${rec.coverImageUrl == null}" src="/images/placeholder-book-cover.svg" title="Placeholder book cover image"
-                                     class="card-img-top book-cover"
-                                     th:alt="${rec.title != null ? rec.title + ' cover' : 'Placeholder book cover image'}"
-                                     th:title="${rec.title != null ? rec.title + ' cover' : 'Placeholder book cover image'}" />
+                                <a th:href="@{'/book/' + ${rec.id}}" class="d-block h-100">
+                                    <img th:src="@{/images/placeholder-book-cover.svg}"
+                                         th:attr="data-book-id=${rec.id}, 
+                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.coverImageUrl != null ? rec.coverImageUrl : null)}, 
+                                                  data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                                  data-ultimate-fallback='/images/placeholder-book-cover.svg'"
+                                         class="card-img-top book-cover"
+                                         th:alt="${rec.title != null ? rec.title + ' cover' : 'Book cover'}"
+                                         th:title="${rec.title != null ? rec.title + ' cover' : 'Book cover'}">
+                                </a>
                                 <div th:if="${rec.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
                                     <i class="fas fa-star me-1"></i>
                                     <span th:text="${rec.averageRating}">4.5</span>
                                 </div>
                             </div>
                             <div class="card-body">
-                                <h5 class="card-title text-truncate" th:text="${rec.title}">Book Title</h5>
+                                <h5 class="card-title text-truncate">
+                                    <a th:href="@{'/book/' + ${rec.id}}" th:text="${rec.title}" class="text-decoration-none text-dark">Book Title</a>
+                                </h5>
                                 <p class="card-text small text-muted text-truncate"
                                    th:text="${rec.authors != null && !rec.authors.empty} ? ${rec.authors[0]} : 'Unknown Author'">Author Name</p>
                             </div>
@@ -319,6 +328,43 @@
 
 <!-- Scripts -->
 <th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+
+<!-- Real-time cover update subscription -->
+<script th:if="${book != null}" th:inline="javascript">
+/*<![CDATA[*/
+document.addEventListener('DOMContentLoaded', function() {
+  var socket = new SockJS('/ws');
+  var stompClient = Stomp.over(socket);
+  stompClient.connect({}, function() {
+    // Subscribe to coverUpdate for each image on the page
+    document.querySelectorAll('img.book-cover[data-book-id]').forEach(function(img) {
+      var id = img.getAttribute('data-book-id');
+      stompClient.subscribe('/topic/book/' + id + '/coverUpdate', function(message) {
+        var payload = JSON.parse(message.body);
+        if (payload.newCoverUrl) {
+          img.src = payload.newCoverUrl;
+          
+          // Update dev indicator if present
+          var devIndicator = img.parentNode.querySelector('.dev-source-indicator');
+          if (devIndicator && payload.sourceName && payload.sourceDisplayName) {
+            // Remove existing dev-source-* classes
+            devIndicator.className = devIndicator.className.replace(/\bdev-source-\S+/g, '');
+            // Add new class
+            devIndicator.classList.add('dev-source-' + payload.sourceName);
+            // Update title
+            var newTitle = 'Source: ' + payload.sourceDisplayName;
+            if (payload.newCoverUrl) {
+              newTitle += ' | URL: ' + payload.newCoverUrl.substring(0, 70) + (payload.newCoverUrl.length > 70 ? '...' : '');
+            }
+            devIndicator.setAttribute('title', newTitle);
+          }
+        }
+      });
+    });
+  });
+});
+/*]]>*/
+</script>
 
 <!-- Book Detail Specific Styles -->
 <style>

@@ -7,7 +7,11 @@ public enum CoverImageSource {
     ANY("Any source"),
     GOOGLE_BOOKS("Google Books"),
     OPEN_LIBRARY("Open Library"),
-    LONGITOOD("Longitood");
+    LONGITOOD("Longitood"),
+    S3_CACHE("S3 Cache"),
+    LOCAL_CACHE("Local Cache"),
+    NONE("No Source"),
+    UNDEFINED("Undefined Source");
 
     private final String displayName;
 

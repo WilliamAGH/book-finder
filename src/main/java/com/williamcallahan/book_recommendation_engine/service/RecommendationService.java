@@ -8,6 +8,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @Service
 public class RecommendationService {
@@ -20,11 +22,13 @@ public class RecommendationService {
             "which", "its", "into", "then", "also"
     ));
 
-    private final GoogleBooksService googleBooksService;
+    private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheService
+    private final BookCacheService bookCacheService;
 
     @Autowired
-    public RecommendationService(GoogleBooksService googleBooksService) {
+    public RecommendationService(GoogleBooksService googleBooksService, BookCacheService bookCacheService) {
         this.googleBooksService = googleBooksService;
+        this.bookCacheService = bookCacheService;
     }
 
     /**
@@ -35,99 +39,111 @@ public class RecommendationService {
      * @param count The number of recommendations to return (default 6)
      * @return List of recommended books
      */
-    public List<Book> getSimilarBooks(String bookId, int count) {
-        if (count <= 0) {
-            count = DEFAULT_RECOMMENDATION_COUNT;
-        }
-        
-        Book sourceBook = googleBooksService.getBookById(bookId).blockOptional().orElse(null);
-        if (sourceBook == null) {
-            logger.warn("Cannot get recommendations - source book with ID {} not found", bookId);
-            return Collections.emptyList();
-        }
-        
-        // Store results with similarity scores
-        Map<String, ScoredBook> recommendationMap = new HashMap<>();
-        
-        // Step 1: Find books by the same author(s)
-        findBooksByAuthors(sourceBook, recommendationMap);
-        
-        // Step 2: Find books in the same categories
-        findBooksByCategories(sourceBook, recommendationMap);
+    public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
+        final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
 
-        // Step 3: Find books by title/description keyword similarity
-        findBooksByText(sourceBook, recommendationMap);
-        
-        // Step 3: Combine and sort by similarity score
-        List<Book> recommendations = recommendationMap.values().stream()
-                .sorted(Comparator.comparing(ScoredBook::getScore).reversed())
-                .map(ScoredBook::getBook)
-                .filter(book -> !book.getId().equals(bookId)) // Exclude the source book
-                .limit(count)
-                .collect(Collectors.toList());
-        
-        logger.info("Generated {} recommendations for book ID: {}", recommendations.size(), bookId);
-        
-        return recommendations;
-    }
-    
-    /**
-     * Find books by the same authors as the source book
-     */
-    private void findBooksByAuthors(Book sourceBook, Map<String, ScoredBook> recommendationMap) {
-        if (sourceBook.getAuthors() == null || sourceBook.getAuthors().isEmpty()) {
-            return;
-        }
-        
-        for (String author : sourceBook.getAuthors()) {
-            try {
-                List<Book> authorBooks = googleBooksService.searchBooksByAuthor(author).blockOptional().orElse(Collections.emptyList());
-                for (Book book : authorBooks) {
-                    // Same author is a strong indicator of similarity
-                    addOrUpdateRecommendation(recommendationMap, book, 4.0);
+        // Use BookCacheService to get the source book
+        return bookCacheService.getBookByIdReactive(bookId) 
+            .flatMap(sourceBook -> {
+                if (sourceBook == null) {
+                    logger.warn("Cannot get recommendations - source book with ID {} not found via BookCacheService", bookId);
+                    return Mono.just(Collections.<Book>emptyList());
                 }
-            } catch (Exception e) {
-                logger.warn("Error finding books by author {}: {}", author, e.getMessage());
-            }
-        }
+
+                Flux<ScoredBook> authorsFlux = findBooksByAuthorsReactive(sourceBook);
+                Flux<ScoredBook> categoriesFlux = findBooksByCategoriesReactive(sourceBook);
+                Flux<ScoredBook> textFlux = findBooksByTextReactive(sourceBook);
+
+                return Flux.merge(authorsFlux, categoriesFlux, textFlux)
+                    .collect(Collectors.toMap(
+                        scoredBook -> scoredBook.getBook().getId(), // Key: book ID
+                        scoredBook -> scoredBook,                  // Value: ScoredBook itself
+                        (sb1, sb2) -> {                             // Merge function for duplicates
+                            sb1.setScore(sb1.getScore() + sb2.getScore()); // Accumulate scores
+                            return sb1;
+                        },
+                        HashMap::new // Supplier for the map
+                    ))
+                    .map(recommendationMap -> {
+                        String sourceLang = sourceBook.getLanguage(); // Get language of the source book
+                        boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
+
+                        List<Book> recommendations = recommendationMap.values().stream()
+                            .sorted(Comparator.comparing(ScoredBook::getScore).reversed())
+                            .map(ScoredBook::getBook)
+                            .filter(book -> !book.getId().equals(sourceBook.getId())) // Exclude the source book
+                            .filter(recommendedBook -> { // Add language filter
+                                if (!filterByLanguage) {
+                                    return true; // Don't filter if source language is unknown
+                                }
+                                String recommendedLang = recommendedBook.getLanguage();
+                                // Use Objects.equals for null-safe comparison
+                                return Objects.equals(sourceLang, recommendedLang);
+                            })
+                            .limit(effectiveCount)
+                            .collect(Collectors.toList());
+                        logger.info("Generated {} recommendations for book ID: {} (Language filter active: {})", recommendations.size(), sourceBook.getId(), filterByLanguage);
+                        return recommendations;
+                    });
+            })
+            .switchIfEmpty(Mono.defer(() -> {
+                logger.warn("Source book with ID {} not found, returning empty recommendations.", bookId);
+                return Mono.just(Collections.emptyList());
+            }));
     }
     
     /**
-     * Find books with the same categories as the source book
+     * Find books by the same authors as the source book - Reactive
      */
-    private void findBooksByCategories(Book sourceBook, Map<String, ScoredBook> recommendationMap) {
+    private Flux<ScoredBook> findBooksByAuthorsReactive(Book sourceBook) {
+        if (sourceBook.getAuthors() == null || sourceBook.getAuthors().isEmpty()) {
+            return Flux.empty();
+        }
+        String langCode = sourceBook.getLanguage(); // Get language from source book
+        
+        return Flux.fromIterable(sourceBook.getAuthors())
+            .flatMap(author -> googleBooksService.searchBooksByAuthor(author, langCode) // Pass langCode
+                .flatMapMany(Flux::fromIterable)
+                .map(book -> new ScoredBook(book, 4.0)) // Same author is a strong indicator
+                .onErrorResume(e -> {
+                    logger.warn("Error finding books by author {}: {}", author, e.getMessage());
+                    return Flux.empty();
+                })
+            );
+    }
+    
+    /**
+     * Find books with the same categories as the source book - Reactive
+     */
+    private Flux<ScoredBook> findBooksByCategoriesReactive(Book sourceBook) {
         if (sourceBook.getCategories() == null || sourceBook.getCategories().isEmpty()) {
-            return;
+            return Flux.empty();
         }
-        
-        // Join categories with OR for broader results, but limited to primary categories
+
         List<String> mainCategories = sourceBook.getCategories().stream()
-                .map(category -> category.split("\\s*/\\s*")[0]) // Get primary category before any '/'
-                .distinct()
-                .limit(3) // Limit to top 3 categories to avoid too broad searches
-                .collect(Collectors.toList());
-        
+            .map(category -> category.split("\\s*/\\s*")[0])
+            .distinct()
+            .limit(3)
+            .collect(Collectors.toList());
+
         if (mainCategories.isEmpty()) {
-            return;
+            return Flux.empty();
         }
+
+        String categoryQueryString = "subject:" + String.join(" OR subject:", mainCategories);
+        String langCode = sourceBook.getLanguage(); // Get language from source book
         
-        try {
-            String categoryQueryString = "subject:" + String.join(" OR subject:", mainCategories);
-            List<Book> categoryBooks = googleBooksService.searchBooksAsyncReactive(categoryQueryString)
-                                                            .blockOptional()
-                                                            .orElse(Collections.emptyList())
-                                                            .stream()
-                                                            .limit(MAX_SEARCH_RESULTS)
-                                                            .collect(Collectors.toList());
-            
-            for (Book book : categoryBooks) {
-                // Calculate category overlap score
+        return googleBooksService.searchBooksAsyncReactive(categoryQueryString, langCode) // Pass langCode
+            .flatMapMany(Flux::fromIterable)
+            .take(MAX_SEARCH_RESULTS) // Limit results after fetching the list from Mono<List<Book>>
+            .map(book -> {
                 double categoryScore = calculateCategoryOverlapScore(sourceBook, book);
-                addOrUpdateRecommendation(recommendationMap, book, categoryScore);
-            }
-        } catch (Exception e) {
-            logger.warn("Error finding books by categories: {}", e.getMessage());
-        }
+                return new ScoredBook(book, categoryScore);
+            })
+            .onErrorResume(e -> {
+                logger.warn("Error finding books by categories '{}': {}", categoryQueryString, e.getMessage());
+                return Flux.empty();
+            });
     }
     
     /**
@@ -169,52 +185,37 @@ public class RecommendationService {
     }
     
     /**
-     * Add or update a book in the recommendation map
+     * Find books by title/description keyword similarity - Reactive
      */
-    private void addOrUpdateRecommendation(Map<String, ScoredBook> recommendationMap, Book book, double score) {
-        ScoredBook existing = recommendationMap.get(book.getId());
-        if (existing != null) {
-            // We've seen this book before, increase its score
-            existing.setScore(existing.getScore() + score);
-        } else {
-            // New recommendation
-            recommendationMap.put(book.getId(), new ScoredBook(book, score));
+    private Flux<ScoredBook> findBooksByTextReactive(Book sourceBook) {
+        if ((sourceBook.getTitle() == null || sourceBook.getTitle().isEmpty()) &&
+            (sourceBook.getDescription() == null || sourceBook.getDescription().isEmpty())) {
+            return Flux.empty();
         }
-    }
-    
-    /**
-     * Find books by title/description keyword similarity
-     */
-    private void findBooksByText(Book sourceBook, Map<String, ScoredBook> recommendationMap) {
-        if ((sourceBook.getTitle() == null || sourceBook.getTitle().isEmpty())
-                && (sourceBook.getDescription() == null || sourceBook.getDescription().isEmpty())) {
-            return;
-        }
+
         String combinedText = (sourceBook.getTitle() + " " + sourceBook.getDescription()).toLowerCase();
         String[] tokens = combinedText.split("[^a-z0-9]+");
         Set<String> keywords = new LinkedHashSet<>();
         for (String token : tokens) {
             if (token.length() > 2 && !STOP_WORDS.contains(token)) {
                 keywords.add(token);
-                if (keywords.size() >= 10) {
-                    break;
-                }
+                if (keywords.size() >= 10) break;
             }
         }
+
         if (keywords.isEmpty()) {
-            return;
+            return Flux.empty();
         }
+
         String query = String.join(" ", keywords);
-        try {
-            List<Book> textBooks = googleBooksService.searchBooksAsyncReactive(query)
-                                                        .blockOptional()
-                                                        .orElse(Collections.emptyList())
-                                                        .stream()
-                                                        .limit(MAX_SEARCH_RESULTS)
-                                                        .collect(Collectors.toList());
-            for (Book book : textBooks) {
-                String candidateText = ((book.getTitle() != null ? book.getTitle() : "") + " "
-                        + (book.getDescription() != null ? book.getDescription() : "")).toLowerCase();
+        String langCode = sourceBook.getLanguage(); // Get language from source book
+
+        return googleBooksService.searchBooksAsyncReactive(query, langCode) // Pass langCode
+            .flatMapMany(Flux::fromIterable)
+            .take(MAX_SEARCH_RESULTS)
+            .flatMap(book -> {
+                String candidateText = ((book.getTitle() != null ? book.getTitle() : "") + " " +
+                                      (book.getDescription() != null ? book.getDescription() : "")).toLowerCase();
                 int matchCount = 0;
                 for (String kw : keywords) {
                     if (candidateText.contains(kw)) {
@@ -223,12 +224,14 @@ public class RecommendationService {
                 }
                 if (matchCount > 0) {
                     double score = 2.0 * matchCount;
-                    addOrUpdateRecommendation(recommendationMap, book, score);
+                    return Mono.just(new ScoredBook(book, score));
                 }
-            }
-        } catch (Exception e) {
-            logger.warn("Error finding books by text keywords: {}", e.getMessage());
-        }
+                return Mono.empty();
+            })
+            .onErrorResume(e -> {
+                logger.warn("Error finding books by text keywords '{}': {}", query, e.getMessage());
+                return Flux.empty();
+            });
     }
 
     /**

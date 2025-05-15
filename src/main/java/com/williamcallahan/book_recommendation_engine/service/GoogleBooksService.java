@@ -7,8 +7,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+import java.time.Duration;
+import java.io.IOException;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -32,30 +36,42 @@ public class GoogleBooksService {
         this.webClient = webClientBuilder.build();
     }
 
-    public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy) {
+    public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
         String url = String.format("%s/volumes?q=%s&startIndex=%d&maxResults=40&key=%s",
                 googleBooksApiUrl, query, startIndex, googleBooksApiKey);
         if (orderBy != null && !orderBy.isEmpty()) {
             url += "&orderBy=" + orderBy;
         }
+        if (langCode != null && !langCode.isEmpty()) {
+            url += "&langRestrict=" + langCode;
+            logger.debug("Google Books API call with langRestrict: {}", langCode);
+        }
         return webClient.get()
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
+                .retryWhen(Retry.backoff(3, Duration.ofSeconds(1))
+                    .filter(throwable -> throwable instanceof IOException || throwable instanceof WebClientRequestException)
+                    .doBeforeRetry(retrySignal -> logger.warn("Retrying API call for query '{}', startIndex {}. Attempt #{}. Error: {}", query, startIndex, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage()))
+                    .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+                        logger.error("All retries failed for query '{}', startIndex {}. Final error: {}", query, startIndex, retrySignal.failure().getMessage());
+                        return retrySignal.failure();
+                    }))
                 .onErrorResume(e -> {
-                    logger.warn("Error fetching page for query '{}' at startIndex {}: {}", query, startIndex, e.getMessage());
+                    // This now catches errors after retries are exhausted or if the error wasn't retryable
+                    logger.error("Error fetching page for query '{}' at startIndex {} after retries or due to non-retryable error: {}", query, startIndex, e.getMessage());
                     return Mono.empty();
                 });
     }
 
-    public Mono<List<Book>> searchBooksAsyncReactive(String query) {
+    public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
         final int maxResultsPerPage = 40;
         final int maxTotalResults = 200;
 
         return Flux.range(0, (maxTotalResults + maxResultsPerPage - 1) / maxResultsPerPage)
             .map(page -> page * maxResultsPerPage)
             .concatMap(startIndex -> 
-                searchBooks(query, startIndex, "newest")
+                searchBooks(query, startIndex, "newest", langCode)
                     .flatMapMany(response -> {
                         if (response != null && response.has("items") && response.get("items").isArray()) {
                             List<JsonNode> items = new ArrayList<>();
@@ -77,16 +93,32 @@ public class GoogleBooksService {
             });
     }
 
+    public Mono<List<Book>> searchBooksAsyncReactive(String query) {
+        return searchBooksAsyncReactive(query, null);
+    }
+
+    public Mono<List<Book>> searchBooksByTitle(String title, String langCode) {
+        return searchBooksAsyncReactive("intitle:" + title, langCode);
+    }
+
     public Mono<List<Book>> searchBooksByTitle(String title) {
-        return searchBooksAsyncReactive("intitle:" + title);
+        return searchBooksByTitle(title, null);
+    }
+
+    public Mono<List<Book>> searchBooksByAuthor(String author, String langCode) {
+        return searchBooksAsyncReactive("inauthor:" + author, langCode);
     }
 
     public Mono<List<Book>> searchBooksByAuthor(String author) {
-        return searchBooksAsyncReactive("inauthor:" + author);
+        return searchBooksByAuthor(author, null);
+    }
+
+    public Mono<List<Book>> searchBooksByISBN(String isbn, String langCode) {
+        return searchBooksAsyncReactive("isbn:" + isbn, langCode);
     }
 
     public Mono<List<Book>> searchBooksByISBN(String isbn) {
-        return searchBooksAsyncReactive("isbn:" + isbn);
+        return searchBooksByISBN(isbn, null);
     }
 
     public Mono<Book> getBookById(String bookId) {
@@ -95,14 +127,21 @@ public class GoogleBooksService {
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
+                .retryWhen(Retry.backoff(3, Duration.ofSeconds(1))
+                    .filter(throwable -> throwable instanceof IOException || throwable instanceof WebClientRequestException)
+                    .doBeforeRetry(retrySignal -> logger.warn("Retrying API call for book ID {}. Attempt #{}. Error: {}", bookId, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage()))
+                    .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+                        logger.error("All retries failed for book ID {}. Final error: {}", bookId, retrySignal.failure().getMessage());
+                        return retrySignal.failure();
+                    }))
                 .map(item -> {
                     if (item != null) {
                         return convertSingleItemToBook(item);
                     }
-                    return null; // Or handle error/empty case differently, e.g., Mono.empty()
+                    return null;
                 })
                 .onErrorResume(e -> {
-                    logger.error("Error fetching book by ID {}: {}", bookId, e.getMessage());
+                    logger.error("Error fetching book by ID {} after retries or due to non-retryable error: {}", bookId, e.getMessage());
                     return Mono.empty(); // Return an empty Mono on error
                 });
     }
@@ -119,6 +158,9 @@ public class GoogleBooksService {
 
     private Book convertSingleItemToBook(JsonNode item) {
         Book book = new Book();
+        if (item != null) {
+            book.setRawJsonResponse(item.toString());
+        }
         extractBookBaseInfo(item, book);
         setAdditionalFields(item, book);
         setLinks(item, book);
@@ -210,25 +252,77 @@ public class GoogleBooksService {
         // Enhance based on requested quality
         switch (quality) {
             case "high":
-                if (enhancedUrl.contains("zoom=1")) {
-                    enhancedUrl = enhancedUrl.replace("zoom=1", "zoom=5");
+                // Prefer less aggressive upscaling. Try to get the best available quality
+                // by removing common resizing parameters or setting them to fetch original/larger sizes
+                // For "high" quality:
+                // 1. Remove 'fife' parameter to avoid forced width
+                if (enhancedUrl.contains("&fife=")) {
+                    enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+", "");
+                } else if (enhancedUrl.contains("?fife=")) {
+                    enhancedUrl = enhancedUrl.replaceAll("\\?fife=w\\d+", "?");
+                    // Clean up if '?' is now trailing
+                    if (enhancedUrl.endsWith("?")) {
+                        enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+                    }
                 }
-                if (!enhancedUrl.contains("fife=")) {
-                    enhancedUrl = enhancedUrl + (enhancedUrl.contains("?") ? "&" : "?") + "fife=w800";
+                // Remove trailing '&' if fife was the last parameter and removed
+                if (enhancedUrl.endsWith("&")) {
+                    enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+                }
+
+                // 2. Adjust 'zoom' parameter conservatively
+                //    If zoom is high (e.g., > 2), reduce it to 2, otherwise, keep existing zoom (0, 1, or 2)
+                //    If no zoom, don't add one
+                if (enhancedUrl.contains("zoom=")) {
+                    try {
+                        String zoomValueStr = enhancedUrl.substring(enhancedUrl.indexOf("zoom=") + 5);
+                        if (zoomValueStr.contains("&")) {
+                            zoomValueStr = zoomValueStr.substring(0, zoomValueStr.indexOf("&"));
+                        }
+                        int currentZoom = Integer.parseInt(zoomValueStr);
+                        if (currentZoom > 2) {
+                            enhancedUrl = enhancedUrl.replaceAll("zoom=\\d+", "zoom=2");
+                            logger.debug("Adjusted high zoom to zoom=2 for URL: {}", enhancedUrl);
+                        }
+                        // Keep zoom if it's 0, 1, or 2
+                    } catch (NumberFormatException e) {
+                        logger.warn("Could not parse zoom value in URL: {}. Leaving zoom as is.", enhancedUrl);
+                    }
                 }
                 break;
                 
             case "medium":
-                if (enhancedUrl.contains("zoom=1")) {
-                    enhancedUrl = enhancedUrl.replace("zoom=1", "zoom=3");
+                if (enhancedUrl.contains("&fife=")) {
+                    enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+", "");
+                } else if (enhancedUrl.contains("?fife=")) {
+                     enhancedUrl = enhancedUrl.replaceAll("\\?fife=w\\d+", "?");
+                     if (enhancedUrl.endsWith("?")) {
+                        enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() -1);
+                     }
                 }
-                if (!enhancedUrl.contains("fife=")) {
-                    enhancedUrl = enhancedUrl + (enhancedUrl.contains("?") ? "&" : "?") + "fife=w400";
+                if (enhancedUrl.endsWith("&")) {
+                    enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+                }
+                if (enhancedUrl.contains("zoom=")) {
+                    enhancedUrl = enhancedUrl.replaceAll("zoom=\\d+", "zoom=1"); // Use zoom=1 for medium
                 }
                 break;
                 
             case "low":
-                // Use zoom=1 for low resolution (default)
+                if (enhancedUrl.contains("&fife=")) {
+                    enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+", "");
+                } else if (enhancedUrl.contains("?fife=")) {
+                     enhancedUrl = enhancedUrl.replaceAll("\\?fife=w\\d+", "?");
+                     if (enhancedUrl.endsWith("?")) {
+                        enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() -1);
+                     }
+                }
+                if (enhancedUrl.endsWith("&")) {
+                    enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+                }
+                if (enhancedUrl.contains("zoom=")) {
+                    enhancedUrl = enhancedUrl.replaceAll("zoom=\\d+", "zoom=1"); // zoom=1 for low (thumbnail)
+                }
                 break;
         }
         

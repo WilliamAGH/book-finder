@@ -39,27 +39,38 @@ The application will automatically load these variables at startup using the spr
 
 ## Running the Application
 
+The application uses Spring Profiles to manage configurations for different environments.
+- **`prod` (Production Profile):** This is the **default profile**. If no profile is specified, the application runs with production settings.
+- **`dev` (Development Profile):** This profile is used for local development and enables features like more verbose logging and development-specific UI indicators.
+
 ### Development Mode
 
+To run in development mode (activating the `dev` profile):
 ```bash
-./mvnw spring-boot:run
+./mvnw spring-boot:run -Dspring.profiles.active=dev
 ```
+This enables development-specific configurations, such as more detailed logging and UI indicators for debugging.
 
-The server will be available at https://localhost:8081 using the environment variables set in the `.env` example file.
+The server will typically be available at https://localhost:8081 (or as configured by `SERVER_PORT` in your `.env` file).
 
-For hot-reload during development:
-
+For hot-reload during development (with the `dev` profile):
 ```bash
-./mvnw spring-boot:run -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
+./mvnw spring-boot:run -Dspring.profiles.active=dev -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
 ```
 
 ### Production Mode
 
-For production, set environment variables directly or use a production-specific .env file:
-
+To run in production mode explicitly (or by default if no profile is specified):
 ```bash
 ./mvnw spring-boot:run -Dspring.profiles.active=prod
 ```
+Alternatively, when running the packaged JAR, it will also default to the `prod` profile unless overridden:
+```bash
+java -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar 
+# To explicitly set prod profile for JAR:
+# java -Dspring.profiles.active=prod -jar target/your-app.jar
+```
+For production deployments, ensure environment variables are set directly in your hosting environment or through a production-specific `.env` file if your deployment mechanism supports it.
 
 ## Managing Server Ports
 
@@ -163,6 +174,12 @@ Log output appears in the console by default and can be configured via `applicat
 
 1**MacOS DNS Resolution Error**: For MacOS users, especially on Apple Silicon (M1/M2), the application includes the `netty-resolver-dns-native-macos` dependency to fix DNS resolution issues.
 
+## UML Diagram
+
+A UML class diagram for this project is available in the `src/main/resources/uml` directory. The diagram shows the main classes, their properties, methods, and relationships in the Book Recommendation Engine project.
+
+To generate the UML diagram, you can use PlantUML. See the [UML README](src/main/resources/uml/README.md) for more information.
+
 ## License
 
 MIT License
@@ -170,4 +187,3 @@ MIT License
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a pull request or open an issue here on Github!
- 

@@ -1,5 +1,15 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
+import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.types.ExternalCoverService;
+import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,38 +24,27 @@ import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import reactor.core.publisher.Mono;
 
-/**
- * Service to handle storing and retrieving book cover images in S3 compatible storage.
- * This service provides high-resolution persistent storage for book covers.
- */
 @Service
-public class S3BookCoverService {
+public class S3BookCoverService implements ExternalCoverService {
     private static final Logger logger = LoggerFactory.getLogger(S3BookCoverService.class);
     private static final String BOOKS_DIRECTORY = "books/";
     private static final String LARGE_SUFFIX = "-lg";
-    private static final int MIN_DIMENSION_FOR_LG_SUFFIX = 150;
     
-    @Value("${s3.bucket:book-finder}")
-    private String s3Bucket;
+    @Value("${s3.bucket-name}")
+    private String s3BucketName;
     
-    @Value("${s3.cdn-url:${S3_CDN_URL:https://book-finder.sfo3.digitaloceanspaces.com}}")
+    @Value("${s3.cdn-url}")
     private String s3CdnUrl;
     
     @Value("${s3.public-cdn-url:${S3_PUBLIC_CDN_URL:}}")
@@ -62,18 +61,25 @@ public class S3BookCoverService {
     
     @Value("${s3.enabled:true}")
     private boolean s3Enabled;
+
+    @Value("${app.cover-cache.max-file-size-bytes:5242880}") 
+    private long maxFileSizeBytes; 
     
     private S3Client s3Client;
     private final WebClient webClient;
+    private final ImageProcessingService imageProcessingService;
+    private final EnvironmentService environmentService;
+    private final ObjectMapper objectMapper;
     
-    // Cache to avoid repeated S3 HEAD requests for objects we know exist
     private final Map<String, Boolean> objectExistsCache = new ConcurrentHashMap<>();
 
-    // Using the shared ImageDetails class now
-    // private static class ImageValidationDetails { ... } // Removed
-
-    public S3BookCoverService(WebClient.Builder webClientBuilder) {
+    public S3BookCoverService(WebClient.Builder webClientBuilder, 
+                              ImageProcessingService imageProcessingService,
+                              EnvironmentService environmentService) {
         this.webClient = webClientBuilder.build();
+        this.imageProcessingService = imageProcessingService;
+        this.environmentService = environmentService;
+        this.objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
     }
     
     @PostConstruct
@@ -82,23 +88,19 @@ public class S3BookCoverService {
             logger.info("S3 book cover storage is disabled");
             return;
         }
-        
         if (s3AccessKeyId.isEmpty() || s3SecretAccessKey.isEmpty()) {
             logger.warn("S3 credentials not provided. S3 book cover storage will be disabled.");
             s3Enabled = false;
             return;
         }
-        
         try {
             AwsBasicCredentials credentials = AwsBasicCredentials.create(s3AccessKeyId, s3SecretAccessKey);
-            
             s3Client = S3Client.builder()
-                    .region(Region.US_WEST_2) // This is ignored for custom endpoints
+                    .region(Region.US_WEST_2) 
                     .endpointOverride(URI.create(s3ServerUrl))
                     .credentialsProvider(StaticCredentialsProvider.create(credentials))
                     .build();
-            
-            logger.info("S3 book cover storage initialized with bucket: {}, CDN URL: {}", s3Bucket, s3CdnUrl);
+            logger.info("S3 book cover storage initialized with bucket: {}, CDN URL: {}", s3BucketName, s3CdnUrl);
         } catch (Exception e) {
             logger.error("Failed to initialize S3 client", e);
             s3Enabled = false;
@@ -113,13 +115,6 @@ public class S3BookCoverService {
         }
     }
     
-    /**
-     * Generate a consistent S3 key for a book cover based on book ID and source
-     * @param bookId The Google Books ID
-     * @param fileExtension The file extension (e.g., jpg, png)
-     * @param source The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD)
-     * @return The S3 key (path) for the book cover
-     */
     public String generateS3Key(String bookId, String fileExtension, String source) {
         if (bookId == null || bookId.isEmpty()) {
             throw new IllegalArgumentException("Book ID cannot be null or empty");
@@ -127,51 +122,57 @@ public class S3BookCoverService {
         if (!bookId.matches("[a-zA-Z0-9_-]+")) {
             throw new IllegalArgumentException("Book ID contains invalid characters. Only alphanumeric characters, hyphens, and underscores are allowed.");
         }
-        // Ensure the file extension starts with a dot
-        if (!fileExtension.startsWith(".")) {
-            fileExtension = "." + fileExtension;
+        if (fileExtension == null || fileExtension.isEmpty() || !fileExtension.startsWith(".")) {
+             fileExtension = ".jpg"; 
         }
-        
-        // Normalize source to a valid filename component
         String normalizedSource = source != null ? source.toLowerCase().replaceAll("[^a-z0-9_-]", "-") : "unknown";
-        
         return BOOKS_DIRECTORY + bookId + LARGE_SUFFIX + "-" + normalizedSource + fileExtension;
     }
-    
-    /**
-     * Generate a consistent S3 key for a book cover based on book ID (backward compatibility)
-     * @param bookId The Google Books ID
-     * @param fileExtension The file extension (e.g., jpg, png)
-     * @return The S3 key (path) for the book cover
-     */
-    public String generateS3Key(String bookId, String fileExtension) {
-        return generateS3Key(bookId, fileExtension, "google-books");
+
+    @Override
+    public Mono<ImageDetails> fetchCover(Book book) {
+        if (!s3Enabled || book == null) {
+            return Mono.empty();
+        }
+        String bookKey = book.getId();
+        if (bookKey == null || bookKey.trim().isEmpty()) bookKey = book.getIsbn13();
+        if (bookKey == null || bookKey.trim().isEmpty()) bookKey = book.getIsbn10();
+        
+        if (bookKey == null || bookKey.trim().isEmpty()) {
+            logger.warn("Cannot fetch S3 cover for book without a valid ID or ISBN. Title: {}", book.getTitle());
+            return Mono.empty();
+        }
+
+        final String finalBookKey = bookKey;
+        String fileExtension = ".jpg"; // Default, could be improved if book object has reliable extension info
+        
+        // Using CoverImageSource enum to generate source strings for S3 keys
+        String[] s3SourceStrings = {
+            getSourceString(CoverImageSource.GOOGLE_BOOKS),
+            getSourceString(CoverImageSource.OPEN_LIBRARY),
+            getSourceString(CoverImageSource.LONGITOOD),
+            getSourceString(CoverImageSource.LOCAL_CACHE),
+            "unknown" // Fallback for generic/unknown source
+        };
+
+        for (String sourceForS3Key : s3SourceStrings) {
+            if (coverExistsInS3(finalBookKey, fileExtension, sourceForS3Key)) {
+                String s3Key = generateS3Key(finalBookKey, fileExtension, sourceForS3Key);
+                String cdnUrl = getS3CoverUrl(finalBookKey, fileExtension, sourceForS3Key);
+                logger.debug("Found existing S3 cover for book {} from source key '{}': {}", finalBookKey, sourceForS3Key, cdnUrl);
+                return Mono.just(new ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL));
+            }
+        }
+        logger.debug("No S3 cover found for book {} after checking common source keys.", finalBookKey);
+        return Mono.empty(); 
     }
-    /**
-     * Check if a book cover already exists in S3
-     * @param bookId The Google Books ID
-     * @param fileExtension The file extension (e.g., jpg, png)
-     * @param source The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD)
-     * @return true if the cover exists in S3, false otherwise
-     */
+
     public boolean coverExistsInS3(String bookId, String fileExtension, String source) {
-        if (!s3Enabled) {
-            return false;
-        }
-        
+        if (!s3Enabled) return false;
         String s3Key = generateS3Key(bookId, fileExtension, source);
-        
-        // Check cache first
-        if (objectExistsCache.containsKey(s3Key)) {
-            return objectExistsCache.get(s3Key);
-        }
-        
+        if (objectExistsCache.containsKey(s3Key)) return objectExistsCache.get(s3Key);
         try {
-            HeadObjectResponse response = s3Client.headObject(HeadObjectRequest.builder()
-                    .bucket(s3Bucket)
-                    .key(s3Key)
-                    .build());
-            
+            HeadObjectResponse response = s3Client.headObject(HeadObjectRequest.builder().bucket(s3BucketName).key(s3Key).build());
             boolean exists = response != null;
             objectExistsCache.put(s3Key, exists);
             return exists;
@@ -179,20 +180,14 @@ public class S3BookCoverService {
             objectExistsCache.put(s3Key, false);
             return false;
         } catch (Exception e) {
-            logger.warn("Error checking if cover exists in S3 for book {}: {}", bookId, e.getMessage());
+            logger.error("Error checking S3 object existence for key {}: {}", s3Key, e.getMessage());
+            objectExistsCache.put(s3Key, false); 
             return false;
         }
     }
-    
-    /**
-     * Check if a book cover already exists in S3 with any source
-     * @param bookId The Google Books ID
-     * @param fileExtension The file extension (e.g., jpg, png)
-     * @return true if the cover exists in S3 with any source, false otherwise
-     */
+
     public boolean coverExistsInS3(String bookId, String fileExtension) {
-        // Check for common sources, including "unknown" for images processed from local cache without a specific original source.
-        String[] sourcesToTry = {"google-books", "open-library", "longitood", "unknown"};
+        String[] sourcesToTry = {"google-books", "open-library", "longitood", "local-cache", "unknown"};
         for (String source : sourcesToTry) {
             if (coverExistsInS3(bookId, fileExtension, source)) {
                 return true;
@@ -201,349 +196,136 @@ public class S3BookCoverService {
         return false;
     }
     
-    /**
-     * Get the CDN URL for a book cover in S3
-     * @param bookId The Google Books ID
-     * @param fileExtension The file extension (e.g., jpg, png)
-     * @param source The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD)
-     * @return The CDN URL for the book cover
-     */
-    public String getS3CoverUrl(String bookId, String fileExtension, String source) {
-        if (!s3Enabled) {
-            return null;
+    // Existing method, can be kept for calls not needing provenance or refactored
+    public Mono<ImageDetails> uploadCoverToS3Async(String imageUrl, String bookId, String source) {
+        // For now, let's assume calls to this specific signature don't have detailed provenance
+        // Or, we can decide to construct a minimal ImageProvenanceData here if needed.
+        // For this iteration, it will not log provenance unless called by a method that supplies it.
+        return uploadCoverToS3Async(imageUrl, bookId, source, null);
+    }
+
+    public Mono<ImageDetails> uploadCoverToS3Async(String imageUrl, String bookId, String source, ImageProvenanceData provenanceData) {
+        if (!s3Enabled || imageUrl == null || imageUrl.isEmpty() || bookId == null || bookId.isEmpty()) {
+            logger.debug("S3 upload skipped: S3 disabled, or imageUrl/bookId is null/empty. ImageUrl: {}, BookId: {}", imageUrl, bookId);
+            return Mono.just(new ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
         }
-        
-        String s3Key = generateS3Key(bookId, fileExtension, source);
-        
-        // Use public CDN URL if available, otherwise fall back to direct S3 CDN URL
-        if (s3PublicCdnUrl != null && !s3PublicCdnUrl.isEmpty()) {
-            return s3PublicCdnUrl + "/" + s3Key;
+        final String s3Source = (source != null && !source.isEmpty()) ? source : "unknown";
+
+        return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
+            .timeout(Duration.ofSeconds(10))
+            .flatMap(rawImageBytes -> {
+                try {
+                    logger.debug("Book ID {}: Downloaded {} bytes from {}. Starting image processing.", bookId, rawImageBytes.length, imageUrl);
+                    ProcessedImage processedImage = imageProcessingService.processImageForS3(rawImageBytes, bookId);
+
+                    if (!processedImage.isProcessingSuccessful()) {
+                        logger.warn("Book ID {}: Image processing failed. Reason: {}. Will not upload to S3.", bookId, processedImage.getProcessingError());
+                        return Mono.just(new ImageDetails(imageUrl, source, "processing-failed-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
+                    }
+                    logger.debug("Book ID {}: Image processing successful. New size: {}x{}, Extension: {}, MimeType: {}.", 
+                                 bookId, processedImage.getWidth(), processedImage.getHeight(), processedImage.getNewFileExtension(), processedImage.getNewMimeType());
+
+                    byte[] imageBytesForS3 = processedImage.getProcessedBytes(); 
+                    String fileExtensionForS3 = processedImage.getNewFileExtension();
+                    String mimeTypeForS3 = processedImage.getNewMimeType();
+
+                    if (imageBytesForS3.length > this.maxFileSizeBytes) {
+                        logger.warn("Book ID {}: Processed image too large (size: {} bytes, max: {} bytes). URL: {}. Will not upload to S3.", 
+                                    bookId, imageBytesForS3.length, this.maxFileSizeBytes, imageUrl);
+                        return Mono.just(new ImageDetails(imageUrl, source, "processed-image-too-large-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                    }
+
+                    String s3Key = generateS3Key(bookId, fileExtensionForS3, s3Source);
+
+                    try {
+                        HeadObjectResponse headResponse = s3Client.headObject(HeadObjectRequest.builder().bucket(s3BucketName).key(s3Key).build());
+                        if (headResponse.contentLength() == imageBytesForS3.length) {
+                            logger.info("Processed cover for book {} already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Key);
+                            String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
+                            objectExistsCache.put(s3Key, true);
+                            return Mono.just(new ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
+                        }
+                    } catch (NoSuchKeyException e) { /* Proceed to upload */ }
+                    catch (Exception e) { logger.warn("Error checking existing S3 object for book {}: {}. Proceeding with upload.", bookId, e.getMessage()); }
+
+                    PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                            .bucket(s3BucketName)
+                            .key(s3Key)
+                            .contentType(mimeTypeForS3)
+                            .acl(ObjectCannedACL.PUBLIC_READ)
+                            .build();
+                    s3Client.putObject(putObjectRequest, RequestBody.fromBytes(imageBytesForS3));
+                    
+                    String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
+                    objectExistsCache.put(s3Key, true);
+                    logger.info("Successfully uploaded processed cover for book {} to S3. Key: {}", bookId, s3Key);
+
+                    // Log provenance data if debug mode is enabled and data is provided
+                    if (provenanceData != null && environmentService.isBookCoverDebugMode()) {
+                        // Update selected image info in provenance data
+                        ImageProvenanceData.SelectedImageInfo selectedInfo = provenanceData.getSelectedImageInfo();
+                        if (selectedInfo == null) selectedInfo = new ImageProvenanceData.SelectedImageInfo();
+                        selectedInfo.setS3Key(s3Key);
+                        selectedInfo.setStorageLocation("S3");
+                        selectedInfo.setFinalUrl(cdnUrl);
+                        // Assuming source and resolution are set earlier in orchestration service
+                        provenanceData.setSelectedImageInfo(selectedInfo);
+                        
+                        uploadProvenanceData(s3Key, provenanceData);
+                    }
+                    
+                    return Mono.just(new ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
+                
+                } catch (Exception e) {
+                    logger.error("Unexpected exception during S3 upload (including processing) for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
+                    return Mono.just(new ImageDetails(imageUrl, source, "upload-process-exception-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                }
+            })
+            .onErrorResume(e -> {
+                logger.error("Error downloading image for S3 upload for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
+                return Mono.just(new ImageDetails(imageUrl, source, "download-failed-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+            });
+    }
+ 
+    public ImageDetails uploadCoverToS3(String imageUrl, String bookId, String source) {
+        try {
+            return uploadCoverToS3Async(imageUrl, bookId, source).block(Duration.ofSeconds(15));
+        } catch (Exception e) {
+            logger.error("Error or timeout uploading cover to S3 for book {} from URL {}: {}", bookId, imageUrl, e.getMessage());
+            return new ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL);
         }
-        
-        return s3CdnUrl + "/" + s3Key;
     }
     
-    /**
-     * Get the CDN URL for a book cover in S3 with the best available source
-     * @param bookId The Google Books ID
-     * @param fileExtension The file extension (e.g., jpg, png)
-     * @return The CDN URL for the book cover from the best available source
-     */
+    public ImageDetails uploadCoverToS3(String imageUrl, String bookId) {
+        String source = "google-books"; 
+        if (imageUrl != null) {
+            if (imageUrl.contains("openlibrary.org")) source = "open-library";
+            else if (imageUrl.contains("longitood.com")) source = "longitood";
+        }
+        return uploadCoverToS3(imageUrl, bookId, source);
+    }
+
+    public String getS3CoverUrl(String bookId, String fileExtension, String source) {
+        String s3Key = generateS3Key(bookId, fileExtension, source);
+        return (s3PublicCdnUrl != null && !s3PublicCdnUrl.isEmpty() ? s3PublicCdnUrl : s3CdnUrl) + "/" + s3Key;
+    }
+
     public String getS3CoverUrl(String bookId, String fileExtension) {
-        // Try to find the cover in the preferred order based on image quality:
-        // 1. Google Books (highest quality with zoom=5 and fife=w800)
-        // 2. Open Library (good quality with -L size parameter)
-        // 3. Longitood (variable quality)
-        // 4. Unknown (covers processed from local cache without a specific original source)
-        String[] sourcesToTry = {"google-books", "open-library", "longitood", "unknown"};
-        
+        String[] sourcesToTry = {"google-books", "open-library", "longitood", "local-cache", "unknown"};
         for (String source : sourcesToTry) {
             if (coverExistsInS3(bookId, fileExtension, source)) {
-                logger.debug("Found S3 cover for book {} from source {}", bookId, source);
                 return getS3CoverUrl(bookId, fileExtension, source);
             }
         }
-        
-        // If no specific source is found, this implies it doesn't exist under common/expected keys.
-        // Returning a URL for a non-existent "google-books" default might lead to 404s if it truly isn't there.
-        // However, the current behavior is to return this default.
-        // For consistency, we'll keep it, but ideally, this might return null if no version is found.
-        logger.warn("No S3 cover found for book {} under any checked sources. Falling back to 'google-books' default URL construction, which may not exist.", bookId);
-        return getS3CoverUrl(bookId, fileExtension, "google-books");
-    }
-    
-    /**
-     * Upload a book cover to S3 from a remote URL asynchronously
-     * @param bookId The Google Books ID
-     * @param remoteUrl The remote URL of the book cover
-     * @param source The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD)
-     * @return CompletableFuture with ImageDetails containing CDN URL and dimensions, or ImageDetails with null/original URL if upload failed
-     */
-    public CompletableFuture<ImageDetails> uploadCoverFromUrlAsync(String bookId, String remoteUrl, String source) {
-        // Perform initial synchronous checks first
-        if (!s3Enabled) {
-            logger.debug("S3 storage is disabled, skipping upload for book {}", bookId);
-            return CompletableFuture.completedFuture(new ImageDetails(remoteUrl)); // Return original URL, no S3 attempt
-        }
-        
-        if (remoteUrl == null || remoteUrl.isEmpty()) {
-            logger.debug("Remote URL is empty, skipping upload for book {}", bookId);
-            return CompletableFuture.completedFuture(new ImageDetails(null));
-        }
-        
-        // If it's already an S3 URL from this service, try to get its dimensions if we don't have them
-        // This scenario is less likely here as BookImageOrchestrationService usually handles S3 pre-checks
-        if (isS3Url(remoteUrl)) {
-            logger.debug("URL is already from our S3 bucket for book {}: {}. Attempting to ensure dimensions are known.", bookId, remoteUrl);
-            // Potentially, I could add a method to fetch dimensions for an existing S3 object if needed,
-            // but for now, assume if it's an S3 URL, its dimensions were set when it was first uploaded.
-            // If this method is called with an S3 URL, it implies a direct request to "process" it.
-            // it'll return it with unknown dimensions, assuming a higher layer might know them or it's a re-check.
-            return CompletableFuture.completedFuture(new ImageDetails(remoteUrl)); 
-        }
-        
-        if (remoteUrl.startsWith("/") && !remoteUrl.startsWith("//")) {
-            logger.debug("URL is local, skipping S3 upload for book {}. This method is for remote URLs.", bookId);
-            return CompletableFuture.completedFuture(new ImageDetails(remoteUrl)); 
-        }
-        
-        if (remoteUrl.contains("image-not-available.png") || remoteUrl.contains("placeholder")) {
-            logger.debug("URL contains placeholder indicators, skipping upload for book {}", bookId);
-            return CompletableFuture.completedFuture(new ImageDetails(remoteUrl));
-        }
-
-        // If initial checks pass, proceed with potential S3 interaction and download
-        String fileExtension = getFileExtensionFromUrl(remoteUrl);
-        if (coverExistsInS3(bookId, fileExtension, source)) {
-            logger.debug("Cover already exists in S3 for book {} from source {}, skipping upload", bookId, source);
-            String existingS3Url = getS3CoverUrl(bookId, fileExtension, source);
-            // We don't know dimensions from just a HEAD request
-            // A more advanced cache for S3 objects could store dimensions
-            // For now, return existing URL with unknown dimensions
-            return CompletableFuture.completedFuture(new ImageDetails(existingS3Url));
-        }
-
-        // Now start the asynchronous download and upload process
-        logger.debug("Downloading image from {} for book {}", remoteUrl, bookId);
-        logger.debug("Downloading image from {} for book {}", remoteUrl, bookId);
-        return webClient.get()
-                .uri(remoteUrl)
-                .retrieve()
-                .bodyToMono(byte[].class)
-                .timeout(Duration.ofSeconds(10))
-                .toFuture()
-                .thenCompose(imageBytes -> {
-                    if (imageBytes == null) {
-                        logger.warn("Null image data received from URL {} for book {}", remoteUrl, bookId);
-                        return CompletableFuture.completedFuture(new ImageDetails(remoteUrl));
-                    }
-                    if (imageBytes.length < 2048) { // Minimum 2KB
-                        logger.warn("Image too small ({}B) from URL {} for book {}, likely a placeholder",
-                                   imageBytes.length, remoteUrl, bookId);
-                        return CompletableFuture.completedFuture(new ImageDetails(remoteUrl));
-                    }
-
-                    String s3Key = generateS3Key(bookId, fileExtension, source);
-                    ImageDetails imageDetails = getImageDetailsIfValid(imageBytes);
-
-                    if (!imageDetails.areDimensionsKnown() || !isImageFormatValid(imageBytes)) {
-                         logger.warn("Invalid image format or unreadable image from URL {} for book {}", remoteUrl, bookId);
-                         return CompletableFuture.completedFuture(new ImageDetails(remoteUrl));
-                    }
-
-                    if (imageDetails.getWidth() < MIN_DIMENSION_FOR_LG_SUFFIX || imageDetails.getHeight() < MIN_DIMENSION_FOR_LG_SUFFIX) {
-                        logger.warn("Image for book {} from {} is too small ({}x{}) to be stored with '-lg' suffix. "+
-                                    "Skipping S3 upload for this version, as it may be low quality.",
-                                    bookId, remoteUrl, imageDetails.getWidth(), imageDetails.getHeight());
-                        return CompletableFuture.completedFuture(new ImageDetails(remoteUrl, imageDetails.getWidth(), imageDetails.getHeight(), true)); // Valid, but too small for S3 -lg
-                    }
-
-                    try {
-                        byte[] imageBytesToUpload = Arrays.copyOf(imageBytes, imageBytes.length);
-                        s3Client.putObject(PutObjectRequest.builder()
-                                .bucket(s3Bucket)
-                                .key(s3Key)
-                                .contentType(getContentTypeFromExtension(fileExtension))
-                                .build(), RequestBody.fromBytes(imageBytesToUpload));
-                        
-                        String s3Url = getS3CoverUrl(bookId, fileExtension, source);
-                        logger.info("Successfully uploaded cover to S3 for book {}: {}", bookId, s3Url);
-                        objectExistsCache.put(s3Key, true);
-                        return CompletableFuture.completedFuture(new ImageDetails(s3Url, imageDetails.getWidth(), imageDetails.getHeight(), true));
-                    } catch (Exception e) {
-                        logger.error("S3 putObject failed for book {} from URL {}: {}", bookId, remoteUrl, e.getMessage());
-                        return CompletableFuture.completedFuture(new ImageDetails(remoteUrl, imageDetails.getWidth(), imageDetails.getHeight(), true)); // Upload failed, return original with known dims
-                    }
-                })
-                .exceptionally(ex -> {
-                    logger.error("Error downloading or processing image for book {} from URL {}: {}",
-                                 bookId, remoteUrl, ex.getMessage());
-                    return new ImageDetails(remoteUrl);
-                });
+        logger.warn("getS3CoverUrl(bookId, fileExtension) called for book {} with extension {}, but no cover found from any known source.", bookId, fileExtension);
+        return null; 
     }
 
-    /**
-     * Upload a book cover to S3 from a byte array asynchronously
-     * This method is useful for uploading locally cached files
-     * @param bookId The Book ID
-     * @param imageBytes The image data as a byte array
-     * @param fileExtension The file extension for the S3 key (e.g., ".jpg")
-     * @param source The source of the image (e.g., "google-books")
-     * @return CompletableFuture with ImageDetails containing S3 URL and dimensions, or ImageDetails with null URL if upload failed/skipped.
-     */
-    public CompletableFuture<ImageDetails> uploadCoverFromBytesAsync(String bookId, byte[] imageBytes, String fileExtension, String source) {
-        if (!s3Enabled) {
-            logger.debug("S3 storage is disabled, skipping upload from bytes for book {}", bookId);
-            // Cannot return original URL as we only have bytes. Return null ImageDetails or with placeholder.
-            return CompletableFuture.completedFuture(new ImageDetails(null, 0,0, false));
-        }
-
-        if (imageBytes == null || imageBytes.length == 0) {
-            logger.warn("Empty image data provided for book {}, skipping upload from bytes.", bookId);
-            return CompletableFuture.completedFuture(new ImageDetails(null, 0,0, false));
-        }
-
-        // Validate image and get dimensions
-        ImageDetails imageDetails = getImageDetailsIfValid(imageBytes);
-        if (!imageDetails.areDimensionsKnown() || !isImageFormatValid(imageBytes)) {
-            logger.warn("Invalid image format or unreadable image from bytes for book {}", bookId);
-            return CompletableFuture.completedFuture(new ImageDetails(null, imageDetails.getWidth(), imageDetails.getHeight(), false)); // Dimensions might be partially known
-        }
-
-        if (imageDetails.getWidth() < MIN_DIMENSION_FOR_LG_SUFFIX || imageDetails.getHeight() < MIN_DIMENSION_FOR_LG_SUFFIX) {
-            logger.warn("Image for book {} from bytes is too small ({}x{}) to be stored with '-lg' suffix. Skipping S3 upload.",
-                        bookId, imageDetails.getWidth(), imageDetails.getHeight());
-            // Return details of the image, but indicate it wasn't uploaded to S3 by not providing an S3 URL
-            // The caller (BookImageOrchestrationService) will then use the local cache path
-            return CompletableFuture.completedFuture(new ImageDetails(null, imageDetails.getWidth(), imageDetails.getHeight(), true));
-        }
-
-        String s3Key = generateS3Key(bookId, fileExtension, source);
-
-        // Check if it already exists (though less likely if we are uploading from a fresh local cache miss)
-        if (coverExistsInS3(bookId, fileExtension, source)) {
-            logger.debug("Cover from bytes already exists in S3 for book {} from source {}, skipping upload", bookId, source);
-            String existingS3Url = getS3CoverUrl(bookId, fileExtension, source);
-            return CompletableFuture.completedFuture(new ImageDetails(existingS3Url, imageDetails.getWidth(), imageDetails.getHeight(), true));
-        }
-        
-        try {
-            // As S3Client.putObject is synchronous, we wrap it in a CompletableFuture if needed,
-            // or ensure this method is called from an async context.
-            // For simplicity here, assuming it's okay to be blocking within this thenCompose/thenApply chain.
-            s3Client.putObject(PutObjectRequest.builder()
-                    .bucket(s3Bucket)
-                    .key(s3Key)
-                    .contentType(getContentTypeFromExtension(fileExtension))
-                    .build(), RequestBody.fromBytes(imageBytes));
-            
-            String s3Url = getS3CoverUrl(bookId, fileExtension, source);
-            logger.info("Successfully uploaded cover from bytes to S3 for book {}: {}", bookId, s3Url);
-            objectExistsCache.put(s3Key, true);
-            return CompletableFuture.completedFuture(new ImageDetails(s3Url, imageDetails.getWidth(), imageDetails.getHeight(), true));
-        } catch (Exception e) {
-            logger.error("S3 putObject failed for book {} from bytes: {}", bookId, e.getMessage(), e);
-            // Return details with original dimensions but no S3 URL, indicating failure
-            return CompletableFuture.completedFuture(new ImageDetails(null, imageDetails.getWidth(), imageDetails.getHeight(), true));
-        }
-    }
-
-    // Renamed and modified to use ImageDetails
-    private ImageDetails getImageDetailsIfValid(byte[] imageBytes) {
-        if (imageBytes == null) return new ImageDetails(null, 0, 0, false);
-
-        // Basic format validation (magic bytes) can remain here or be part of a more robust validation
-        if (!isImageFormatValid(imageBytes)) {
-             logger.warn("Image magic bytes do not match JPEG, PNG, or GIF.");
-            return new ImageDetails(null, 0, 0, false);
-        }
-
-        try {
-            BufferedImage bufferedImage = ImageIO.read(new ByteArrayInputStream(imageBytes));
-            if (bufferedImage == null) {
-                logger.warn("Could not read image dimensions - ImageIO.read returned null despite magic bytes match.");
-                return new ImageDetails(null, 0, 0, false);
-            }
-            int width = bufferedImage.getWidth();
-            int height = bufferedImage.getHeight();
-            if (width <= 0 || height <= 0 || width > 5000 || height > 5000) {
-                logger.warn("Image dimensions invalid ({}x{}) after ImageIO.read, likely not a valid image or too large.", width, height);
-                return new ImageDetails(null, width, height, false);
-            }
-            return new ImageDetails(null, width, height, true);
-        } catch (IOException e) {
-            logger.warn("Error reading image dimensions with ImageIO: {}", e.getMessage());
-            return new ImageDetails(null, 0, 0, false);
-        }
-    }
-
-    // Helper for basic magic byte checking
-    private boolean isImageFormatValid(byte[] imageBytes) {
-        if (imageBytes == null || imageBytes.length < 8) return false; // Min length for common headers
-
-        // Check for JPEG magic bytes (FF D8 FF)
-        if ((imageBytes[0] & 0xFF) == 0xFF && (imageBytes[1] & 0xFF) == 0xD8 && (imageBytes[2] & 0xFF) == 0xFF) {
-            return true; // JPEG
-        }
-        // Check for PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)
-        if ((imageBytes[0] & 0xFF) == 0x89 && (imageBytes[1] & 0xFF) == 0x50 && (imageBytes[2] & 0xFF) == 0x4E &&
-            (imageBytes[3] & 0xFF) == 0x47 && (imageBytes[4] & 0xFF) == 0x0D && (imageBytes[5] & 0xFF) == 0x0A &&
-            (imageBytes[6] & 0xFF) == 0x1A && (imageBytes[7] & 0xFF) == 0x0A) {
-            return true; // PNG
-        }
-        // Check for GIF magic bytes (GIF8)
-        if ((imageBytes[0] & 0xFF) == 'G' && (imageBytes[1] & 0xFF) == 'I' && (imageBytes[2] & 0xFF) == 'F' &&
-            (imageBytes[3] & 0xFF) == '8') {
-            return true; // GIF
-        }
-        return false;
-    }
-
-    /**
-     * Upload a book cover to S3 from a remote URL asynchronously (backward compatibility)
-     * @param bookId The Google Books ID
-     * @param remoteUrl The remote URL of the book cover
-     * @return CompletableFuture with ImageDetails containing CDN URL and dimensions, or ImageDetails with original URL if upload failed
-     */
-    public CompletableFuture<ImageDetails> uploadCoverFromUrlAsync(String bookId, String remoteUrl) {
-        String source = "google-books"; // Default source
-        if (remoteUrl != null) {
-            if (remoteUrl.contains("openlibrary.org")) {
-                source = "open-library";
-            } else if (remoteUrl.contains("longitood.com")) {
-                source = "longitood";
-            }
-        }
-        return uploadCoverFromUrlAsync(bookId, remoteUrl, source);
-    }
-    
-    /**
-     * Upload a book cover to S3 from a remote URL (synchronous version)
-     * @param bookId The Google Books ID
-     * @param remoteUrl The remote URL of the book cover
-     * @param source The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD)
-     * @return ImageDetails containing CDN URL and dimensions, or ImageDetails with original URL if upload failed
-     */
-    public ImageDetails uploadCoverFromUrl(String bookId, String remoteUrl, String source) {
-        try {
-            // Ensure the CompletableFuture completes and return its result.
-            return uploadCoverFromUrlAsync(bookId, remoteUrl, source).get(15, TimeUnit.SECONDS);
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            logger.error("Error or timeout uploading cover to S3 for book {} from URL {}: {}", bookId, remoteUrl, e.getMessage());
-            return new ImageDetails(remoteUrl); // Fallback to original URL, dimensions unknown
-        }
-    }
-    
-    /**
-     * Upload a book cover to S3 from a remote URL (synchronous version, backward compatibility)
-     * @param bookId The Google Books ID
-     * @param remoteUrl The remote URL of the book cover
-     * @return ImageDetails containing CDN URL and dimensions, or ImageDetails with original URL if upload failed
-     */
-    public ImageDetails uploadCoverFromUrl(String bookId, String remoteUrl) {
-        String source = "google-books"; // Default source
-        if (remoteUrl != null) {
-            if (remoteUrl.contains("openlibrary.org")) {
-                source = "open-library";
-            } else if (remoteUrl.contains("longitood.com")) {
-                source = "longitood";
-            }
-        }
-        return uploadCoverFromUrl(bookId, remoteUrl, source);
-    }
-    
-    /**
-     * Extract file extension from URL
-     * @param url The URL
-     * @return The file extension (with dot)
-     */
     public String getFileExtensionFromUrl(String url) {
-        String extension = ".jpg"; // Default extension
-        
+        String extension = ".jpg"; 
         if (url != null && url.contains(".")) {
             int queryParamIndex = url.indexOf("?");
             String urlWithoutParams = queryParamIndex > 0 ? url.substring(0, queryParamIndex) : url;
-            
             int lastDotIndex = urlWithoutParams.lastIndexOf(".");
             if (lastDotIndex > 0 && lastDotIndex < urlWithoutParams.length() - 1) {
                 String ext = urlWithoutParams.substring(lastDotIndex).toLowerCase();
@@ -552,56 +334,122 @@ public class S3BookCoverService {
                 }
             }
         }
-        
         return extension;
     }
-    
-    /**
-     * Get content type from file extension
-     * @param extension The file extension (with or without dot)
-     * @return The content type
-     */
-    private String getContentTypeFromExtension(String extension) {
-        if (extension.startsWith(".")) {
-            extension = extension.substring(1);
+
+    // Helper method to convert CoverImageSource enum to string for S3 keys
+    private String getSourceString(CoverImageSource source) {
+        if (source == null) {
+            return "unknown";
         }
-        
-        switch (extension.toLowerCase()) {
-            case "jpg":
-            case "jpeg":
-                return "image/jpeg";
-            case "png":
-                return "image/png";
-            case "gif":
-                return "image/gif";
-            case "webp":
-                return "image/webp";
-            case "svg":
-                return "image/svg+xml";
-            default:
-                return "image/jpeg";
+        switch (source) {
+            case GOOGLE_BOOKS: return "google-books";
+            case OPEN_LIBRARY: return "open-library";
+            case LONGITOOD: return "longitood";
+            case LOCAL_CACHE: return "local-cache";
+            case S3_CACHE: return "s3-cache";
+            // ANY, NONE, UNDEFINED will fall through to default
+            default: return "unknown";
         }
-    }
-    
-    /**
-     * Check if S3 client is configured and available
-     * @return true if S3 client is available, false otherwise
-     */
-    public boolean isS3Enabled() {
-        return this.s3Client != null;
     }
 
-    /**
-     * Checks if the given URL is an S3 URL managed by this service
-     * @param url The URL to check.
-     * @return true if the URL is an S3 URL, false otherwise
-     */
-    public boolean isS3Url(String url) {
-        if (url == null || url.isEmpty()) {
-            return false;
+    
+    // Existing method, can be kept for calls not needing provenance or refactored
+    public Mono<ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key) {
+        return uploadProcessedCoverToS3Async(processedImageBytes, fileExtension, mimeType, width, height, bookId, originalSourceForS3Key, null);
+    }
+
+    public Mono<ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key, ImageProvenanceData provenanceData) {
+        if (!s3Enabled || processedImageBytes == null || processedImageBytes.length == 0 || bookId == null || bookId.isEmpty()) {
+            logger.debug("S3 upload of processed cover skipped: S3 disabled, or image bytes/bookId is null/empty. BookId: {}", bookId);
+            return Mono.just(new ImageDetails(null, originalSourceForS3Key, "processed-upload-skipped-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL, width, height));
         }
-        boolean isMainCdn = s3CdnUrl != null && !s3CdnUrl.isEmpty() && url.startsWith(s3CdnUrl);
-        boolean isPublicCdn = s3PublicCdnUrl != null && !s3PublicCdnUrl.isEmpty() && url.startsWith(s3PublicCdnUrl);
-        return isMainCdn || isPublicCdn;
+        final String s3Source = (originalSourceForS3Key != null && !originalSourceForS3Key.isEmpty()) ? originalSourceForS3Key : "unknown";
+
+        try {
+            if (processedImageBytes.length > this.maxFileSizeBytes) {
+                logger.warn("Book ID {}: Processed image too large for S3 (size: {} bytes, max: {} bytes). Will not upload.", 
+                            bookId, processedImageBytes.length, this.maxFileSizeBytes);
+                return Mono.just(new ImageDetails(null, originalSourceForS3Key, "processed-image-too-large-for-s3-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL, width, height));
+            }
+
+            String s3Key = generateS3Key(bookId, fileExtension, s3Source);
+
+            try {
+                HeadObjectResponse headResponse = s3Client.headObject(HeadObjectRequest.builder().bucket(s3BucketName).key(s3Key).build());
+                if (headResponse.contentLength() == processedImageBytes.length) {
+                    logger.info("Processed cover for book {} (from source {}) already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Source, s3Key);
+                    String cdnUrl = getS3CoverUrl(bookId, fileExtension, s3Source);
+                    objectExistsCache.put(s3Key, true);
+                    return Mono.just(new ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, width, height));
+                }
+            } catch (NoSuchKeyException e) { /* Proceed to upload */ }
+            catch (Exception e) { logger.warn("Error checking existing S3 object for book {}: {}. Proceeding with upload.", bookId, e.getMessage()); }
+            
+            PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                    .bucket(s3BucketName)
+                    .key(s3Key)
+                    .contentType(mimeType)
+                    .acl(ObjectCannedACL.PUBLIC_READ)
+                    .build();
+            s3Client.putObject(putObjectRequest, RequestBody.fromBytes(processedImageBytes));
+            
+            String cdnUrl = getS3CoverUrl(bookId, fileExtension, s3Source);
+            objectExistsCache.put(s3Key, true);
+            logger.info("Successfully uploaded processed cover for book {} (from source {}) to S3. Key: {}", bookId, s3Source, s3Key);
+
+            // Log provenance data if debug mode is enabled and data is provided
+            if (provenanceData != null && environmentService.isBookCoverDebugMode()) {
+                 // Update selected image info in provenance data
+                ImageProvenanceData.SelectedImageInfo selectedInfo = provenanceData.getSelectedImageInfo();
+                if (selectedInfo == null) selectedInfo = new ImageProvenanceData.SelectedImageInfo();
+                selectedInfo.setS3Key(s3Key);
+                selectedInfo.setStorageLocation("S3");
+                selectedInfo.setFinalUrl(cdnUrl);
+                // Assuming source and resolution are set earlier in orchestration service
+                provenanceData.setSelectedImageInfo(selectedInfo);
+
+                uploadProvenanceData(s3Key, provenanceData);
+            }
+            
+            return Mono.just(new ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, width, height));
+        
+        } catch (Exception e) {
+            logger.error("Unexpected exception during S3 upload of processed cover for book {}: {}.", bookId, e.getMessage(), e);
+            return Mono.just(new ImageDetails(null, originalSourceForS3Key, "processed-upload-exception-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL, width, height));
+        }
+    }
+
+    private void uploadProvenanceData(String imageS3Key, ImageProvenanceData provenanceData) {
+        if (s3Client == null || !s3Enabled) {
+            logger.warn("S3 client not available or S3 disabled. Skipping provenance data upload for image key: {}", imageS3Key);
+            return;
+        }
+        if (provenanceData == null) {
+            logger.debug("Provenance data is null. Skipping upload for image key: {}", imageS3Key);
+            return;
+        }
+
+        String provenanceS3Key = imageS3Key.replaceAll("\\.(jpg|jpeg|png|gif|webp|svg)$", ".txt");
+        if (provenanceS3Key.equals(imageS3Key)) { // Should not happen if imageS3Key has a valid extension
+            provenanceS3Key = imageS3Key + ".txt";
+            logger.warn("Image S3 key {} did not have a recognized image extension. Appending .txt for provenance: {}", imageS3Key, provenanceS3Key);
+        }
+        
+        try {
+            String jsonProvenance = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(provenanceData);
+            byte[] jsonDataBytes = jsonProvenance.getBytes(StandardCharsets.UTF_8);
+
+            PutObjectRequest putProvenanceRequest = PutObjectRequest.builder()
+                    .bucket(s3BucketName)
+                    .key(provenanceS3Key)
+                    .contentType("application/json; charset=utf-8")
+                    .acl(ObjectCannedACL.PUBLIC_READ) // Or private, depending on requirements
+                    .build();
+            s3Client.putObject(putProvenanceRequest, RequestBody.fromBytes(jsonDataBytes));
+            logger.info("Successfully uploaded provenance data for image {} to S3. Key: {}", imageS3Key, provenanceS3Key);
+        } catch (Exception e) {
+            logger.error("Failed to upload provenance data for image {} to S3 key {}: {}", imageS3Key, provenanceS3Key, e.getMessage(), e);
+        }
     }
 }

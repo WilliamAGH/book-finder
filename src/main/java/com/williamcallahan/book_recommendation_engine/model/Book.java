@@ -1,5 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.model;
 
+import com.williamcallahan.book_recommendation_engine.types.CoverImages;
+
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -35,7 +37,12 @@ public class Book {
     private Integer coverImageHeight;
     private Boolean isCoverHighResolution;
 
+    private CoverImages coverImages;
+
     private List<EditionInfo> otherEditions;
+
+    // Transient field to store the raw JSON response from Google Books API for provenance logging
+    private transient String rawJsonResponse;
 
     public static class EditionInfo {
         private String googleBooksId;
@@ -323,6 +330,22 @@ public class Book {
 
     public void setIsCoverHighResolution(Boolean isCoverHighResolution) {
         this.isCoverHighResolution = isCoverHighResolution;
+    }
+
+    public CoverImages getCoverImages() {
+        return coverImages;
+    }
+
+    public void setCoverImages(CoverImages coverImages) {
+        this.coverImages = coverImages;
+    }
+
+    public String getRawJsonResponse() {
+        return rawJsonResponse;
+    }
+
+    public void setRawJsonResponse(String rawJsonResponse) {
+        this.rawJsonResponse = rawJsonResponse;
     }
 
     @Override

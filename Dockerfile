@@ -15,7 +15,7 @@ RUN mvn package -DskipTests
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 ENV SERVER_PORT ${SERVER_PORT:-8080}
-EXPOSE ${SERVER_PORT:-8080}
+EXPOSE ${SERVER_PORT}
 
 # Copy the built jar from the build stage
 COPY --from=build /app/target/*.jar app.jar
