@@ -41,6 +41,9 @@ public class Book {
 
     private List<EditionInfo> otherEditions;
 
+    // Transient field to store the raw JSON response from Google Books API for provenance logging
+    private transient String rawJsonResponse;
+
     public static class EditionInfo {
         private String googleBooksId;
         private String type;
@@ -335,6 +338,14 @@ public class Book {
 
     public void setCoverImages(CoverImages coverImages) {
         this.coverImages = coverImages;
+    }
+
+    public String getRawJsonResponse() {
+        return rawJsonResponse;
+    }
+
+    public void setRawJsonResponse(String rawJsonResponse) {
+        this.rawJsonResponse = rawJsonResponse;
     }
 
     @Override
