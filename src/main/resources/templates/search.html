@@ -120,7 +120,13 @@
     <div class="col-sm-6 col-md-4 col-lg-3 mb-4">
         <div class="card h-100">
             <div class="position-relative book-cover-container">
-                <img src="" class="card-img-top book-cover" data-book-id="" alt="Book cover">
+                <img src="/images/placeholder-book-cover.svg" 
+                     class="card-img-top book-cover" 
+                     data-book-id="" 
+                     data-preferred-url="" 
+                     data-fallback-url="/images/placeholder-book-cover.svg" 
+                     data-ultimate-fallback="/images/placeholder-book-cover.svg" 
+                     alt="Book cover">
                 <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
                     <i class="fas fa-star me-1"></i>
                     <span class="rating-value">4.5</span>
@@ -142,8 +148,14 @@
         <div class="card">
             <div class="row g-0">
                 <div class="col-md-2">
-                    <div class="position-relative book-cover-wrapper h-100">
-                        <img src="" class="img-fluid rounded-start book-cover" data-book-id="" alt="Book cover">
+                    <div class="position-relative book-cover-container book-cover-wrapper h-100">
+                        <img src="/images/placeholder-book-cover.svg" 
+                             class="img-fluid rounded-start book-cover" 
+                             data-book-id="" 
+                             data-preferred-url="" 
+                             data-fallback-url="/images/placeholder-book-cover.svg" 
+                             data-ultimate-fallback="/images/placeholder-book-cover.svg" 
+                             alt="Book cover">
                         <div class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge">
                             <i class="fas fa-star me-1"></i>
                             <span class="rating-value">4.5</span>
@@ -180,6 +192,7 @@
 <script th:inline="javascript">
     document.addEventListener('DOMContentLoaded', function() {
         const query = /*[[${query}]]*/ null;
+        const isDevelopmentMode = /*[[${isDevelopmentMode}]]*/ false; // Make dev mode status available to JS
         const resultsContainer = document.getElementById('searchResults');
         const paginationContainer = document.getElementById('pagination');
         const loadingIndicator = document.getElementById('loadingIndicator');
@@ -449,6 +462,11 @@
             
             resultsContainer.innerHTML = '';
             resultsContainer.appendChild(container);
+
+            // Initialize covers for the newly added elements
+            if (window.initializeBookCovers) {
+                window.initializeBookCovers();
+            }
         }
         
         function createBookCard(book) {
@@ -458,46 +476,27 @@
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage}&sort=${currentSort}&view=${currentView}`;
             
             const imgElementForCard = card.querySelector('.book-cover');
-            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl :
-                                 (book.coverImageUrl || '/images/placeholder-book-cover.svg');
+            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
             const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
-            const ultimateFallback = '/images/placeholder-book-cover.svg';
 
-            imgElementForCard.src = preferredUrl;
+            imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
             imgElementForCard.alt = `${book.title} cover`;
             imgElementForCard.setAttribute('data-book-id', book.id);
-
-            imgElementForCard.onerror = function() {
-                if (this.src !== fallbackUrl && fallbackUrl !== ultimateFallback) {
-                    console.warn(`Preferred cover failed for '${book.title}', trying fallback: ${fallbackUrl}`);
-                    this.src = fallbackUrl;
-                    this.onerror = function() {
-                        console.warn(`Fallback cover also failed for '${book.title}', using ultimate placeholder.`);
-                        this.src = ultimateFallback;
-                        this.onerror = null;
-                    };
-                } else if (this.src !== ultimateFallback) {
-                    console.warn(`Cover failed for '${book.title}', using ultimate placeholder.`);
-                    this.src = ultimateFallback;
-                    this.onerror = null;
-                }
-            };
+            imgElementForCard.setAttribute('data-preferred-url', preferredUrl || '');
+            imgElementForCard.setAttribute('data-fallback-url', fallbackUrl);
+            imgElementForCard.setAttribute('data-ultimate-fallback', '/images/placeholder-book-cover.svg');
             
             const imgContainer = card.querySelector('.book-cover-container');
             if (imgContainer) {
                 const imgLink = document.createElement('a');
                 imgLink.href = bookUrl;
                 
-                // Remove the original img from container, then append the (now configured) imgElementForCard to the link
                 imgElementForCard.parentNode.removeChild(imgElementForCard);
                 imgLink.appendChild(imgElementForCard);
 
-                // Clear the original imgContainer (which might have an old rating badge from template)
-                // and add our new imgLink
                 imgContainer.innerHTML = ''; 
                 imgContainer.appendChild(imgLink);
                 
-                // Add new rating badge if rating exists
                 if (book.averageRating) {
                     const newRatingBadge = document.createElement('div');
                     newRatingBadge.className = 'position-absolute top-0 end-0 m-2 badge bg-warning text-dark rating-badge';
@@ -508,11 +507,35 @@
                     ratingSpan.textContent = book.averageRating;
                     newRatingBadge.appendChild(starIcon);
                     newRatingBadge.appendChild(ratingSpan);
-                    imgContainer.appendChild(newRatingBadge); // Append to the original container
+                    imgContainer.appendChild(newRatingBadge); 
                 } else {
-                    // If no rating, ensure any template rating badge is gone
                     const existingBadge = imgContainer.querySelector('.rating-badge');
                     if (existingBadge) existingBadge.remove();
+                }
+
+                // Add dev source indicator if in development mode
+                if (isDevelopmentMode && book.coverImages && book.coverImages.source && book.coverImages.source.name) {
+                    const devIndicator = document.createElement('div');
+                    devIndicator.className = 'position-absolute bottom-0 start-0 m-2 dev-source-indicator dev-source-' + book.coverImages.source.name;
+                    devIndicator.style.zIndex = '10';
+                    devIndicator.style.width = '20px';
+                    devIndicator.style.height = '20px';
+                    devIndicator.style.display = 'flex';
+                    devIndicator.style.alignItems = 'center';
+                    devIndicator.style.justifyContent = 'center';
+                    
+                    let titleText = 'Source: ' + (book.coverImages.source.displayName || 'Unknown');
+                    if (book.coverImages.preferredUrl) {
+                        let preferredUrlAbbreviated = book.coverImages.preferredUrl.length > 70 ? book.coverImages.preferredUrl.substring(0, 70) + '...' : book.coverImages.preferredUrl;
+                        titleText += ' | URL: ' + preferredUrlAbbreviated;
+                    }
+                    devIndicator.setAttribute('title', titleText);
+                    
+                    const checkIcon = document.createElement('i');
+                    checkIcon.className = 'fas fa-check';
+                    checkIcon.style.fontSize = '0.8em';
+                    devIndicator.appendChild(checkIcon);
+                    imgContainer.appendChild(devIndicator); // Append to the image container
                 }
             }
             
@@ -553,30 +576,15 @@
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage}&sort=${currentSort}&view=${currentView}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
-            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl :
-                                 (book.coverImageUrl || '/images/placeholder-book-cover.svg');
+            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
             const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
-            const ultimateFallback = '/images/placeholder-book-cover.svg';
 
-            imgElementForListItem.src = preferredUrl;
+            imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src
             imgElementForListItem.alt = `${book.title} cover`;
             imgElementForListItem.setAttribute('data-book-id', book.id);
-
-            imgElementForListItem.onerror = function() {
-                if (this.src !== fallbackUrl && fallbackUrl !== ultimateFallback) {
-                    console.warn(`Preferred cover failed for '${book.title}', trying fallback: ${fallbackUrl}`);
-                    this.src = fallbackUrl;
-                    this.onerror = function() {
-                        console.warn(`Fallback cover also failed for '${book.title}', using ultimate placeholder.`);
-                        this.src = ultimateFallback;
-                        this.onerror = null;
-                    };
-                } else if (this.src !== ultimateFallback) {
-                    console.warn(`Cover failed for '${book.title}', using ultimate placeholder.`);
-                    this.src = ultimateFallback;
-                    this.onerror = null;
-                }
-            };
+            imgElementForListItem.setAttribute('data-preferred-url', preferredUrl || '');
+            imgElementForListItem.setAttribute('data-fallback-url', fallbackUrl);
+            imgElementForListItem.setAttribute('data-ultimate-fallback', '/images/placeholder-book-cover.svg');
             
             const imgWrapper = listItem.querySelector('.book-cover-wrapper');
             if (imgWrapper) {
@@ -603,6 +611,31 @@
                 } else {
                     const existingBadge = imgWrapper.querySelector('.rating-badge');
                     if (existingBadge) existingBadge.remove();
+                }
+
+                // Add dev source indicator if in development mode (for list view)
+                if (isDevelopmentMode && book.coverImages && book.coverImages.source && book.coverImages.source.name) {
+                    const devIndicator = document.createElement('div');
+                    devIndicator.className = 'position-absolute bottom-0 start-0 m-1 dev-source-indicator dev-source-' + book.coverImages.source.name; // m-1 for smaller margin in list
+                    devIndicator.style.zIndex = '10';
+                    devIndicator.style.width = '18px'; // Slightly smaller for list view
+                    devIndicator.style.height = '18px';
+                    devIndicator.style.display = 'flex';
+                    devIndicator.style.alignItems = 'center';
+                    devIndicator.style.justifyContent = 'center';
+
+                    let titleText = 'Source: ' + (book.coverImages.source.displayName || 'Unknown');
+                    if (book.coverImages.preferredUrl) {
+                         let preferredUrlAbbreviated = book.coverImages.preferredUrl.length > 70 ? book.coverImages.preferredUrl.substring(0, 70) + '...' : book.coverImages.preferredUrl;
+                        titleText += ' | URL: ' + preferredUrlAbbreviated;
+                    }
+                    devIndicator.setAttribute('title', titleText);
+
+                    const checkIcon = document.createElement('i');
+                    checkIcon.className = 'fas fa-check';
+                    checkIcon.style.fontSize = '0.7em'; // Slightly smaller icon
+                    devIndicator.appendChild(checkIcon);
+                    imgWrapper.appendChild(devIndicator); // Append to the image wrapper
                 }
             }
             
