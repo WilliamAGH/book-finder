@@ -16,6 +16,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Iterator;
 
+/**
+ * Service for processing and optimizing book cover images.
+ * Provides functionality to resize and compress images for storage in S3 or other systems.
+ */
 @Service
 public class ImageProcessingService {
 
@@ -25,17 +29,25 @@ public class ImageProcessingService {
     private static final int MIN_ACCEPTABLE_DIMENSION = 50; // Reject if smaller than this
     private static final int NO_UPSCALE_THRESHOLD_WIDTH = 300; // Don't upscale if original is smaller than this
 
+    /**
+     * Processes an image for S3 storage, optimizing size and quality.
+     * Resizes large images while maintaining aspect ratio and compresses to JPEG format.
+     * 
+     * @param rawImageBytes The raw image bytes to process
+     * @param bookIdForLog Book identifier for logging purposes
+     * @return ProcessedImage containing the processed bytes or failure details
+     */
     public ProcessedImage processImageForS3(byte[] rawImageBytes, String bookIdForLog) {
         if (rawImageBytes == null || rawImageBytes.length == 0) {
             logger.warn("Book ID {}: Raw image bytes are null or empty. Cannot process.", bookIdForLog);
-            return new ProcessedImage("Raw image bytes are null or empty.");
+            return ProcessedImage.failure("Raw image bytes null or empty");
         }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
             BufferedImage originalImage = ImageIO.read(bais);
             if (originalImage == null) {
                 logger.warn("Book ID {}: Could not read raw bytes into a BufferedImage. Image format might be unsupported or corrupt.", bookIdForLog);
-                return new ProcessedImage("Unsupported or corrupt image format.");
+                return ProcessedImage.failure("Unsupported or corrupt image format");
             }
 
             int originalWidth = originalImage.getWidth();
@@ -83,24 +95,44 @@ public class ImageProcessingService {
 
         } catch (IOException e) {
             logger.error("Book ID {}: IOException during image processing: {}", bookIdForLog, e.getMessage(), e);
-            return new ProcessedImage("IOException during image processing: " + e.getMessage());
+            return ProcessedImage.failure("IOException during image processing: " + e.getMessage());
         } catch (Exception e) {
             logger.error("Book ID {}: Unexpected exception during image processing: {}", bookIdForLog, e.getMessage(), e);
-            return new ProcessedImage("Unexpected error during image processing: " + e.getMessage());
+            return ProcessedImage.failure("Unexpected error during image processing: " + e.getMessage());
         }
     }
 
+    /**
+     * Compresses an image without resizing when dimensions are below thresholds.
+     *
+     * @param imageToCompress The image to compress
+     * @param bookIdForLog Book identifier for logging purposes
+     * @param width Original width of the image
+     * @param height Original height of the image
+     * @return ProcessedImage containing the compressed image data
+     * @throws IOException If compression fails
+     */
     private ProcessedImage compressOriginal(BufferedImage imageToCompress, String bookIdForLog, int width, int height) throws IOException {
         logger.debug("Book ID {}: Compressing original small image ({}x{}) as JPEG.", bookIdForLog, width, height);
         return compressImageToJpeg(imageToCompress, bookIdForLog, width, height);
     }
 
+    /**
+     * Compresses a BufferedImage to JPEG format with the configured quality settings.
+     *
+     * @param imageToCompress The image to compress to JPEG
+     * @param bookIdForLog Book identifier for logging purposes
+     * @param finalWidth Final width of the image
+     * @param finalHeight Final height of the image
+     * @return ProcessedImage containing the compressed JPEG data
+     * @throws IOException If compression fails
+     */
     private ProcessedImage compressImageToJpeg(BufferedImage imageToCompress, String bookIdForLog, int finalWidth, int finalHeight) throws IOException {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
             if (!writers.hasNext()) {
                 logger.error("Book ID {}: No JPEG ImageWriters found. Cannot compress image.", bookIdForLog);
-                return new ProcessedImage("No JPEG ImageWriters available.");
+                return ProcessedImage.failure("No JPEG ImageWriters available.");
             }
             ImageWriter writer = writers.next();
             ImageWriteParam jpegParams = writer.getDefaultWriteParam();
@@ -116,7 +148,7 @@ public class ImageProcessingService {
             byte[] processedBytes = baos.toByteArray();
             logger.info("Book ID {}: Successfully processed image to JPEG. Original size (approx if read): N/A, Processed size: {} bytes, Dimensions: {}x{}", 
                 bookIdForLog, processedBytes.length, finalWidth, finalHeight);
-            return new ProcessedImage(processedBytes, ".jpg", "image/jpeg", finalWidth, finalHeight);
+            return ProcessedImage.success(processedBytes, ".jpg", "image/jpeg", finalWidth, finalHeight);
         }
     }
 } 
