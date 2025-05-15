@@ -6,11 +6,11 @@ package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
-// import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,29 +68,29 @@ public class BookController {
         logger.info("Searching books with query: {}, startIndex: {}, maxResults: {}, coverSource: {}, resolution: {}", 
                 query, startIndex, maxResults, coverSource, resolution);
         
-        final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = 
+        final CoverImageSource effectivelyFinalPreferredSource = 
             getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = 
             getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheService for searching books.
-        // Note: BookCacheService.searchBooksReactive currently handles pagination internally based on startIndex and maxResults.
-        // It fetches a larger set from GoogleBooksService and then paginates.
+        // Use BookCacheService for searching books
+        // Note: BookCacheService.searchBooksReactive currently handles pagination internally based on startIndex and maxResults
+        // It fetches a larger set from GoogleBooksService and then paginates
         // For accurate totalAvailableResults, BookCacheService.searchBooksReactive would need to be modified
-        // to return a structure containing both the paginated list and the total count from the initial Google fetch.
-        // For now, totalAvailableResults will reflect the count of the paginated list from BookCacheService.
+        // to return a structure containing both the paginated list and the total count from the initial Google fetch
+        // For now, totalAvailableResults will reflect the count of the paginated list from BookCacheService
         return bookCacheService.searchBooksReactive(query, startIndex, maxResults)
             .flatMap(paginatedBooks -> {
                 List<Book> currentPaginatedBooks = (paginatedBooks == null) ? Collections.emptyList() : paginatedBooks;
                 // This totalResults is the count of books returned by BookCacheService for the current page,
-                // not the grand total available for the query. This is a known simplification for now.
+                // not the grand total available for the query. This is a known simplification for now
                 int totalResultsInPage = currentPaginatedBooks.size(); 
 
                 if (currentPaginatedBooks.isEmpty()) {
                     Map<String, Object> response = new HashMap<>();
-                    // Since BookCacheService already paginates, if it's empty, it means no results for this page.
-                    // We cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService.
-                    response.put("totalAvailableResults", 0); // Or reflect what BookCacheService can provide
+                    // Since BookCacheService already paginates, if it's empty, it means no results for this page
+                    // We cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
+                    response.put("totalAvailableResults", 0);
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
                     response.put("startIndex", startIndex);
@@ -101,7 +101,7 @@ public class BookController {
                 return Flux.fromIterable(currentPaginatedBooks)
                     .flatMap(book -> {
                         if (book == null) {
-                            return Mono.just(book); // Should ideally not happen if list is filtered
+                            return Mono.just(book);
                         }
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
                             .onErrorResume(e -> {
@@ -132,7 +132,6 @@ public class BookController {
                         }
 
                         Map<String, Object> response = new HashMap<>();
-                        // Again, totalAvailableResults is not the grand total here.
                         response.put("totalAvailableResults", totalResultsInPage); 
                         response.put("results", finalBooksToReturn);
                         response.put("count", finalBooksToReturn.size());
@@ -150,11 +149,11 @@ public class BookController {
             });
     }
     
-    private BookImageOrchestrationService.CoverImageSource getCoverImageSourceFromString(String source) {
+    private CoverImageSource getCoverImageSourceFromString(String source) {
         try {
-            return BookImageOrchestrationService.CoverImageSource.valueOf(source.toUpperCase());
+            return CoverImageSource.valueOf(source.toUpperCase());
         } catch (IllegalArgumentException e) {
-            return BookImageOrchestrationService.CoverImageSource.ANY;
+            return CoverImageSource.ANY;
         }
     }
 
@@ -178,7 +177,7 @@ public class BookController {
             @RequestParam(required = false, defaultValue = "ANY") String resolution) {
         logger.info("Searching books by title: {}, coverSource: {}, resolution: {}", title, coverSource, resolution);
 
-        final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
+        final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookCacheService for searching books by title
@@ -237,7 +236,7 @@ public class BookController {
             @RequestParam(required = false, defaultValue = "ANY") String resolution) {
         logger.info("Searching books by author: {}, coverSource: {}, resolution: {}", author, coverSource, resolution);
 
-        final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
+        final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookCacheService for searching books by author
@@ -296,11 +295,11 @@ public class BookController {
             @RequestParam(required = false, defaultValue = "ANY") String resolution) {
         logger.info("Searching books by ISBN: {}, coverSource: {}, resolution: {}", isbn, coverSource, resolution);
 
-        final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
+        final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookCacheService for searching books by ISBN
-        return bookCacheService.getBooksByIsbnReactive(isbn) // This returns Mono<List<Book>>
+        return bookCacheService.getBooksByIsbnReactive(isbn)
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -355,7 +354,7 @@ public class BookController {
             @RequestParam(required = false, defaultValue = "ANY") String resolution) {
         logger.info("Getting book by ID: {}, coverSource: {}, resolution: {}", id, coverSource, resolution);
 
-        final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
+        final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookCacheService to get book by ID
@@ -417,12 +416,12 @@ public class BookController {
         
         logger.info("Getting similar books for book ID: {}, count: {}, coverSource: {}, resolution: {}", id, count, coverSource, resolution);
 
-        final BookImageOrchestrationService.CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
+        final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // RecommendationService already uses BookCacheService for the source book, so this part is fine.
+        // RecommendationService already uses BookCacheService for the source book, so this part is fine
         // We just need to ensure the sourceBook for the recommendationService.getSimilarBooks call is fetched via BookCacheService if it were done here,
-        // but since RecommendationService handles that internally, we only need to process the results.
+        // but since RecommendationService handles that internally, we only need to process the results
         return recommendationService.getSimilarBooks(id, count) 
             .flatMap(similarBooksList -> {
                 List<Book> currentSimilarBooks = (similarBooksList == null) ? Collections.emptyList() : similarBooksList;

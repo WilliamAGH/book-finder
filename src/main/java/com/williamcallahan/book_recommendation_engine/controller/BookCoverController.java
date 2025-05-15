@@ -1,8 +1,8 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
-import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,7 +14,8 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletionException;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 
 /**
  * Controller for book cover related operations
@@ -43,58 +44,47 @@ public class BookCoverController {
      * @return The best cover URL for the book
      */
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getBookCover(
+    public CompletableFuture<ResponseEntity<Map<String, Object>>> getBookCover(
             @PathVariable String id,
             @RequestParam(required = false, defaultValue = "ANY") String source) {
-        
         logger.info("Getting book cover for book ID: {} with source preference: {}", id, source);
-        
-        try {
-            // Parse the source parameter
-            BookImageOrchestrationService.CoverImageSource preferredSource;
-            try {
-                preferredSource = BookImageOrchestrationService.CoverImageSource.valueOf(source.toUpperCase());
-            } catch (IllegalArgumentException e) {
-                logger.warn("Invalid source parameter: {}. Defaulting to ANY.", source);
-                preferredSource = BookImageOrchestrationService.CoverImageSource.ANY;
-            }
-            
-            // Get the book
-            Book book = googleBooksService.getBookById(id).blockOptional().orElse(null);
-            if (book == null) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID: " + id);
-            }
-            
-            // Get the best cover URL with the preferred source
-            CompletableFuture<Book> bookFuture = bookImageOrchestrationService.getBestCoverUrlAsync(book, preferredSource);
-            Book updatedBook = bookFuture.get(); // This line will block until the future completes
-            String coverUrl = updatedBook.getCoverImageUrl(); 
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("bookId", id);
-            response.put("coverUrl", coverUrl); // This is the preferred URL set by the orchestration service
-            if (updatedBook.getCoverImages() != null) {
-                response.put("preferredUrl", updatedBook.getCoverImages().getPreferredUrl());
-                response.put("fallbackUrl", updatedBook.getCoverImages().getFallbackUrl());
-            } else {
-                // Fallback if CoverImages object is somehow null, though service should initialize it
-                response.put("preferredUrl", coverUrl);
-                response.put("fallbackUrl", coverUrl); 
-            }
-            response.put("requestedSourcePreference", preferredSource.name());
-            
-            return ResponseEntity.ok(response);
-        } catch (ResponseStatusException e) {
-            throw e;
-        } catch (InterruptedException | ExecutionException e) {
-            logger.error("Error getting book cover: {}", e.getMessage(), e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
-                    "Error occurred while getting book cover", e);
-        } catch (Exception e) {
-            logger.error("Unexpected error getting book cover: {}", e.getMessage(), e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
-                    "Unexpected error occurred while getting book cover", e);
-        }
+        final CoverImageSource preferredSource = parsePreferredSource(source);
+        return googleBooksService.getBookById(id)
+            .toFuture()
+            .thenCompose(book -> {
+                if (book == null) {
+                    CompletableFuture<ResponseEntity<Map<String, Object>>> notFound = new CompletableFuture<>();
+                    notFound.completeExceptionally(new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Book not found with ID: " + id));
+                    return notFound;
+                }
+                return bookImageOrchestrationService
+                    .getBestCoverUrlAsync(book, preferredSource)
+                    .thenApply(updatedBook -> {
+                        Map<String, Object> response = new HashMap<>();
+                        response.put("bookId", id);
+                        response.put("coverUrl", updatedBook.getCoverImageUrl());
+                        if (updatedBook.getCoverImages() != null) {
+                            response.put("preferredUrl", updatedBook.getCoverImages().getPreferredUrl());
+                            response.put("fallbackUrl", updatedBook.getCoverImages().getFallbackUrl());
+                        } else {
+                            response.put("preferredUrl", updatedBook.getCoverImageUrl());
+                            response.put("fallbackUrl", updatedBook.getCoverImageUrl());
+                        }
+                        response.put("requestedSourcePreference", preferredSource.name());
+                        return ResponseEntity.ok(response);
+                    });
+            })
+            .exceptionally(ex -> {
+                Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
+                    ? ex.getCause() : ex;
+                if (cause instanceof ResponseStatusException rse) {
+                    throw rse;
+                }
+                logger.error("Error getting book cover: {}", cause.getMessage(), cause);
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Error occurred while getting book cover", cause);
+            });
     }
     
     /**
@@ -109,5 +99,26 @@ public class BookCoverController {
         Map<String, String> errors = new HashMap<>();
         errors.put("error", ex.getMessage());
         return ResponseEntity.badRequest().body(errors);
+    }
+
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public ResponseEntity<Map<String, String>> handleAsyncTimeout(AsyncRequestTimeoutException ex) {
+        Map<String, String> error = new HashMap<>();
+        error.put("error", "Request timeout");
+        error.put("message", "The request took too long to process. Please try again later.");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error);
+    }
+
+    /**
+     * Safely parse the preferred cover image source, defaulting to ANY on invalid input.
+     */
+    private CoverImageSource parsePreferredSource(String sourceParam) {
+        try {
+            return CoverImageSource.valueOf(sourceParam.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid source parameter: {}. Defaulting to ANY.", sourceParam);
+            return CoverImageSource.ANY;
+        }
     }
 }

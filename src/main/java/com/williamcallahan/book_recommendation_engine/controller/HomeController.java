@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverCacheService;
+import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -33,7 +34,8 @@ public class HomeController {
     private final BookCacheService bookCacheService; 
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
-    private final BookCoverCacheService bookCoverCacheService; 
+    private final BookCoverCacheService bookCoverCacheService;
+    private final EnvironmentService environmentService;
     // The minimum number of books to display on the homepage
     private static final int MIN_BOOKS_TO_DISPLAY = 5;
     
@@ -43,24 +45,28 @@ public class HomeController {
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
     @Autowired
-    public HomeController(BookCacheService bookCacheService, 
-                          RecentlyViewedService recentlyViewedService, 
+    public HomeController(BookCacheService bookCacheService,
+                          RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
-                          BookCoverCacheService bookCoverCacheService) { 
-        this.bookCacheService = bookCacheService; 
+                          BookCoverCacheService bookCoverCacheService,
+                          EnvironmentService environmentService) {
+        this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
-        this.bookCoverCacheService = bookCoverCacheService; 
+        this.bookCoverCacheService = bookCoverCacheService;
+        this.environmentService = environmentService;
     }
 
     /**
-     * Handles requests to the home page.
+     * Handles requests to the home page
      *
      * @param model the model for the view
      * @return the name of the template to render
      */
     @GetMapping("/")
     public Mono<String> home(Model model) {
+        model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
+        model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
         // Add recently viewed books to the model
         List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
         model.addAttribute("activeTab", "home"); // Set early
@@ -91,8 +97,17 @@ public class HomeController {
             for (Book book : finalRecentBooks) {
                 if (book != null) {
                     try {
-                        String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
-                        book.setCoverImageUrl(coverUrl);
+                        com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                        book.setCoverImages(coverImagesResult); // Set the CoverImages object
+
+                        // Set the direct coverImageUrl as a fallback or primary display if needed
+                        if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
+                            book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
+                        } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                            // If no preferred URL from service and no existing Google URL, use placeholder
+                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        }
+                        // Clear other potentially stale direct image properties if CoverImages is now the authority
                         book.setCoverImageWidth(null);
                         book.setCoverImageHeight(null);
                         book.setIsCoverHighResolution(null);
@@ -112,7 +127,7 @@ public class HomeController {
     }
     
     /**
-     * Handles requests to the search results page.
+     * Handles requests to the search results page
      *
      * @param query the search query
      * @param model the model for the view
@@ -120,13 +135,15 @@ public class HomeController {
      */
     @GetMapping("/search")
     public String search(String query, Model model) {
+        model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
+        model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
         model.addAttribute("query", query);
         model.addAttribute("activeTab", "search");
         return "search";
     }
     
     /**
-     * Handles requests to the book detail page.
+     * Handles requests to the book detail page
      *
      * @param id the book id
      * @param model the model for the view
@@ -138,8 +155,10 @@ public class HomeController {
                              @RequestParam(required = false, defaultValue = "0") int page,
                              @RequestParam(required = false, defaultValue = "relevance") String sort,
                              @RequestParam(required = false, defaultValue = "grid") String view,
-                             Model model) {
+                              Model model) {
         logger.info("Looking up book with ID: {}", id);
+        model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
+        model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
         model.addAttribute("activeTab", "book"); // Set early, not dependent on async data
         model.addAttribute("searchQuery", query);
         model.addAttribute("searchPage", page);
@@ -151,8 +170,13 @@ public class HomeController {
             .doOnSuccess(book -> {
                 if (book != null) {
                     // Update cover URL using BookCoverCacheService before adding to model
-                    String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
-                    book.setCoverImageUrl(coverUrl);
+                    com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                    book.setCoverImages(coverImagesResult);
+                    if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
+                        book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
+                    } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                        book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                    }
                     model.addAttribute("book", book);
                     try {
                         recentlyViewedService.addToRecentlyViewed(book);
@@ -178,8 +202,13 @@ public class HomeController {
                     .map(similarBooksList -> {
                         for (Book similarBook : similarBooksList) {
                             if (similarBook != null) {
-                                String coverUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook);
-                                similarBook.setCoverImageUrl(coverUrl);
+                                com.williamcallahan.book_recommendation_engine.types.CoverImages similarCoverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook);
+                                similarBook.setCoverImages(similarCoverImagesResult);
+                                if (similarCoverImagesResult != null && similarCoverImagesResult.getPreferredUrl() != null) {
+                                    similarBook.setCoverImageUrl(similarCoverImagesResult.getPreferredUrl());
+                                } else if (similarBook.getCoverImageUrl() == null || similarBook.getCoverImageUrl().isEmpty()) {
+                                    similarBook.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                }
                             }
                         }
                         return similarBooksList;
@@ -197,7 +226,7 @@ public class HomeController {
                 } else {
                     // If main book was not found, we might still want to show an empty page or an error
                     // The model.addAttribute("book", null) and error attribute would have been set by bookMono's doOnSuccess/doOnError
-                    return similarBooksMono.thenReturn("book"); // Or a specific error page if book is mandatory
+                    return similarBooksMono.thenReturn("book");
                 }
             })
             .defaultIfEmpty("book") 
@@ -206,7 +235,7 @@ public class HomeController {
     
     /**
      * Handle book lookup by ISBN (works with both ISBN-10 and ISBN-13 formats),
-     * then redirect to the canonical URL with Google Book ID.
+     * then redirect to the canonical URL with Google Book ID
      * 
      * @param isbn the book's ISBN (either ISBN-10 or ISBN-13)
      * @return redirect to canonical book URL or homepage if not found
@@ -270,7 +299,7 @@ public class HomeController {
     
     /**
      * Handle book lookup by ISBN-13, then redirect to the canonical URL with Google Book ID.
-     * Kept for compatibility and explicit format specification.
+     * Kept for compatibility and explicit format specification
      * 
      * @param isbn13 the book's ISBN-13
      * @return redirect to canonical book URL or homepage if not found
@@ -292,7 +321,7 @@ public class HomeController {
     
     /**
      * Handle book lookup by ISBN-10, then redirect to the canonical URL with Google Book ID.
-     * Kept for compatibility and explicit format specification.
+     * Kept for compatibility and explicit format specification
      * 
      * @param isbn10 the book's ISBN-10
      * @return redirect to canonical book URL or homepage if not found
