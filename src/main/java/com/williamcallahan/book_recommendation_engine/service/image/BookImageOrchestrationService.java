@@ -1,7 +1,16 @@
 /**
- * Orchestrates the retrieval of book cover image URLs.
- * Prioritizes fetching from S3 cache, then delegates to BookCoverCacheService
- * to provide a fast initial URL and trigger background processing for optimal image quality.
+ * Orchestrates the retrieval and management of book cover image URLs.
+ * 
+ * This service coordinates the process of retrieving book cover images from various sources,
+ * prioritizing cached images when available before fetching from external services. It works
+ * with BookCoverCacheService to provide fast initial image URLs while triggering
+ * background processing for optimal image quality.
+ * 
+ * Key responsibilities:
+ * - Providing immediate cover URLs for fast page rendering
+ * - Managing fallback URLs when primary sources are unavailable
+ * - Coordinating with caching services for improved performance
+ * - Supporting different image resolution preferences
  */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
@@ -21,50 +30,66 @@ import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 @Service
 public class BookImageOrchestrationService {
 
+    /** Logger for this class */
     private static final Logger logger = LoggerFactory.getLogger(BookImageOrchestrationService.class);
+    
+    /** Default placeholder image path to use when no cover is available */
     private static final String DEFAULT_PLACEHOLDER_IMAGE = "/images/placeholder-book-cover.svg";
 
-    // Removed S3BookCoverService field as it's no longer directly used here
-    // private final S3BookCoverService s3BookCoverService;
+    /** Service for handling cover image caching and background processing */
     private final BookCoverCacheService bookCoverCacheService;
 
-    // s3Enabled, preferS3, cacheDirName, maxFileSizeBytes are related to S3/cache behavior configuration that might still be relevant
-    // for logging or decisions, or simply passed down. If BookCoverCacheService now fully owns S3 logic,
-    // these might only be relevant there. For now, keeping them unless further refactoring is done.
+    /** Flag indicating whether S3 storage is enabled */
     @Value("${s3.enabled:true}")
     private boolean s3Enabled;
 
+    /** Flag indicating whether to prefer S3 cached images over other sources */
     @Value("${app.cover-sources.prefer-s3:true}")
     private boolean preferS3;
 
+    /** Directory name for storing cached cover images */
     @Value("${app.cover-cache.dir:covers}")
     private String cacheDirName;
 
-    @Value("${app.cover-cache.max-file-size-bytes:5242880}") // 5MB default
-    private long maxFileSizeBytes; // Potentially used by BookCoverCacheService or S3 service
+    /** Maximum allowed file size for cover images in bytes (5MB default) */
+    @Value("${app.cover-cache.max-file-size-bytes:5242880}")
+    private long maxFileSizeBytes;
 
+    /**
+     * Constructs a new BookImageOrchestrationService with the required dependencies.
+     *
+     * @param bookCoverCacheService The service for cache management and background processing
+     */
     @Autowired
-    public BookImageOrchestrationService(BookCoverCacheService bookCoverCacheService) { // Removed S3BookCoverService from constructor
-        // this.s3BookCoverService = s3BookCoverService;
+    public BookImageOrchestrationService(BookCoverCacheService bookCoverCacheService) {
         this.bookCoverCacheService = bookCoverCacheService;
     }
 
     /**
-     * Asynchronously retrieves the best cover URL for a given book
+     * Asynchronously retrieves the best cover URL for a given book using default preferences.
+     * 
+     * This method uses CoverImageSource.ANY and ImageResolutionPreference.ANY as the default 
+     * preferences, allowing the service to select the optimal source based on availability 
+     * and cached data.
      *
      * @param book The book to fetch the cover for
      * @return A CompletableFuture that resolves to the updated book with cover image details
+     * @see #getBestCoverUrlAsync(Book, CoverImageSource, ImageResolutionPreference)
      */
     public CompletableFuture<Book> getBestCoverUrlAsync(Book book) {
         return getBestCoverUrlAsync(book, CoverImageSource.ANY, ImageResolutionPreference.ANY);
     }
     
     /**
-     * Asynchronously retrieves the best cover URL for a given book from a specified source
+     * Asynchronously retrieves the best cover URL for a given book from a specified source.
+     * 
+     * This method allows specifying a preferred source while using the default
+     * ImageResolutionPreference.ANY for resolution selection.
      *
      * @param book The book to fetch the cover for
      * @param preferredSource The preferred source to fetch the cover from
      * @return A CompletableFuture that resolves to the updated book with cover image details
+     * @see #getBestCoverUrlAsync(Book, CoverImageSource, ImageResolutionPreference)
      */
     public CompletableFuture<Book> getBestCoverUrlAsync(Book book, CoverImageSource preferredSource) {
         // Pass through resolution preference, though it's less critical for this initial setup
@@ -72,19 +97,28 @@ public class BookImageOrchestrationService {
     }
     
     /**
-     * Asynchronously populates the book object with preferred and fallback cover image URLs
-     * The main book.coverImageUrl will be set to the preferred URL
-     * Background processing for optimal image caching is triggered by BookCoverCacheService
+     * Asynchronously populates the book object with preferred and fallback cover image URLs.
+     * 
+     * This is the primary implementation method that handles all the logic for fetching
+     * and managing book cover images. It performs the following operations:
+     * 
+     * - Sets the main book.coverImageUrl to the preferred URL
+     * - Populates the CoverImages object with both preferred and fallback URLs
+     * - Triggers background processing via BookCoverCacheService for optimal image quality
+     * 
+     * The method prioritizes fast initial response while ensuring high-quality images 
+     * are eventually provided through background processing.
      *
      * @param book The book to fetch the cover for
-     * @param preferredSource The preferred source to fetch the cover from (currently less emphasized in this new logic for initial URL)
-     * @param resolutionPreference The preferred resolution quality (currently less emphasized for initial URL)
-     * @return A CompletableFuture that resolves to the updated Book object
+     * @param preferredSource The preferred image source (may be overridden based on availability)
+     * @param resolutionPreference The preferred image resolution quality
+     * @return A CompletableFuture that resolves to the updated Book object with image details
+     * @throws NullPointerException if the BookCoverCacheService returns null results
      */
     public CompletableFuture<Book> getBestCoverUrlAsync(Book book, CoverImageSource preferredSource, ImageResolutionPreference resolutionPreference) {
         if (book == null) {
             logger.warn("Book object is null. Creating a placeholder book structure for cover images.");
-            Book placeholderBook = new Book(); // Basic placeholder
+            Book placeholderBook = new Book();
             placeholderBook.setId("null-book");
             placeholderBook.setTitle("Unknown Book");
             placeholderBook.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
@@ -119,8 +153,6 @@ public class BookImageOrchestrationService {
             originalSourceUrl = DEFAULT_PLACEHOLDER_IMAGE; 
         }
         final String finalFallbackUrl = originalSourceUrl;
-
-        // REMOVED S3 Pre-check block. S3 interaction is handled by BookCoverCacheService in background
 
         logger.debug("Fetching initial cover for book {} (ID: {}), preferred source: {}, resolution: {}. Fallback will be: {}", 
             book.getTitle(), book.getId(), preferredSource, resolutionPreference, finalFallbackUrl);
