@@ -4,6 +4,31 @@
  */
 
 /**
+ * Applies consistent dimensions to book cover images
+ * This ensures consistent sizing regardless of the original image dimensions
+ * @param {HTMLImageElement} imgElement - The image element to normalize
+ * @param {number} naturalWidth - Natural width of the image
+ * @param {number} naturalHeight - Natural height of the image
+ */
+function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
+    // Store original dimensions for debugging
+    imgElement.setAttribute('data-natural-width', naturalWidth);
+    imgElement.setAttribute('data-natural-height', naturalHeight);
+    
+    // Calculate aspect ratio
+    const aspectRatio = naturalWidth / naturalHeight;
+    
+    // Just add the normalized-cover class and let CSS handle sizing
+    // This ensures consistent sizing across all images
+    imgElement.classList.add('normalized-cover');
+    
+    // Add high-res class for very large images
+    if (naturalWidth > 400 || naturalHeight > 600) {
+        imgElement.classList.add('high-res-cover');
+    }
+}
+
+/**
  * Updates the server-side theme preference via API
  * @param {string|null} theme - The theme preference ('light', 'dark', or null for system)
  * @param {boolean} useSystem - Whether to use system preference
@@ -210,7 +235,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 stompClient.subscribe('/topic/book/' + id + '/coverUpdate', function(message) {
                     var payload = JSON.parse(message.body);
                     if (payload.newCoverUrl) {
-                        img.src = payload.newCoverUrl;
+                        // Preload image to get dimensions
+                        var tempImg = new Image();
+                        tempImg.onload = function() {
+                            // Apply normalized dimensions through the shared function
+                            applyConsistentDimensions(img, tempImg.naturalWidth, tempImg.naturalHeight);
+                            
+                            // Set the source last, after all dimension adjustments are applied
+                            img.src = payload.newCoverUrl;
+                            console.log(`WebSocket updated cover for book ${id} with normalized dimensions (${tempImg.naturalWidth}x${tempImg.naturalHeight})`);
+                        };
+                        tempImg.onerror = function() {
+                            console.warn(`Failed to preload WebSocket updated cover for book ${id}`);
+                            // Still update the src on error, but without dimension normalization
+                            img.src = payload.newCoverUrl;
+                        };
+                        tempImg.src = payload.newCoverUrl;
                     }
                 });
             });
@@ -512,6 +552,10 @@ function handleImageSuccess() {
         console.warn(`[Cover Warning] Loaded image is tiny (${cover.naturalWidth}x${cover.naturalHeight}), treating as failure for: ${cover.src}`);
         handleImageFailure.call(cover); // Treat as error
     } else {
+        // Apply consistent dimensions to normalize the appearance
+        applyConsistentDimensions(cover, cover.naturalWidth, cover.naturalHeight);
+        console.log(`[Cover Success] Applied normalized dimensions to: ${cover.src} (${cover.naturalWidth}x${cover.naturalHeight})`);
+        
         // Successfully loaded a real image or the intended local placeholder
         cover.onerror = null; // Prevent future errors on this now successfully loaded image (e.g. if removed from DOM then re-added by mistake)
     }
