@@ -59,6 +59,20 @@ spring:
       - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
       - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
 
+  web:
+    resources:
+      chain:
+        strategy:
+          content:
+            enabled: true
+            paths: "/**"
+      cache:
+        cachecontrol:
+          max-age: 365d # Cache versioned resources for 1 year
+        # For unversioned resources, we can also set a shorter cache period if desired
+        # period: 7d 
+        # use-cache-control-header: true # Ensure Cache-Control header is used
+
   codec: # Correctly nested under spring
     max-in-memory-size: 10MB # Configure global max buffer size for WebClient
 
