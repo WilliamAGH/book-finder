@@ -57,20 +57,19 @@ public class BookCoverCacheServiceSmokeTest {
         }
 
 
-        // --- Define your test books here ---
         // Replace with actual ISBNs/Google IDs from your system or for testing.
 
         // Example Book 1: A popular book you expect to have a cover
         book1_knownGood = new Book();
         book1_knownGood.setId("knownGoodGoogleId1"); // Google Books Volume ID
-        book1_knownGood.setIsbn13("9780553293357"); // Example: A Game of Thrones
+        book1_knownGood.setIsbn13("9780553293357"); // Game of Thrones
         book1_knownGood.setTitle("Known Good Book (e.g., Game of Thrones)");
-        book1_knownGood.setCoverImageUrl(null); // Start fresh
+        book1_knownGood.setCoverImageUrl(null);
 
-        // Example Book 2: An obscure book or one you know might not have a cover
+        // Example Book 2: An obscure book
         book2_likelyPlaceholder = new Book();
         book2_likelyPlaceholder.setId("obscureGoogleId1");
-        book2_likelyPlaceholder.setIsbn13("9780000000001"); // Fictitious ISBN
+        book2_likelyPlaceholder.setIsbn13("9780000000001"); // fake ISBN
         book2_likelyPlaceholder.setTitle("Obscure Book Likely Placeholder");
         book2_likelyPlaceholder.setCoverImageUrl(null);
 
@@ -105,17 +104,16 @@ public class BookCoverCacheServiceSmokeTest {
         logger.info("Testing cover for: {} - ISBN13: {}, GoogleID: {}", bookLabel, book.getIsbn13(), book.getId());
 
         // Initial call
-        String initialUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        String initialUrl = (initialCoverImages != null && initialCoverImages.getPreferredUrl() != null) ? initialCoverImages.getPreferredUrl() : "/images/placeholder-book-cover.svg";
         logger.info("[{}] Initial URL: {}", bookLabel, initialUrl);
 
-        // Wait for background processing (adjust time as needed, e.g., 5-30 seconds)
-        // This is a simple way to allow async operations to proceed in a test.
-        // For more robust tests, consider using Awaitility or similar libraries.
         logger.info("[{}] Waiting 20 seconds for background processing...", bookLabel);
-        Thread.sleep(20000); // 20 seconds
+        Thread.sleep(20000);
 
         // Call again to see if the URL has been updated by background processing (e.g., to S3 or a final placeholder)
-        String finalUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        String finalUrl = (finalCoverImages != null && finalCoverImages.getPreferredUrl() != null) ? finalCoverImages.getPreferredUrl() : "/images/placeholder-book-cover.svg";
         logger.info("[{}] URL after background processing: {}", bookLabel, finalUrl);
 
         if (initialUrl.equals(finalUrl)) {
