@@ -136,6 +136,29 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         return `Attempted to reload ${covers.length} book covers`;
     };
+    
+    // Add a global function to test and debug theme switching
+    window.testThemeDetection = function() {
+        const results = {
+            documentTheme: document.documentElement.getAttribute('data-theme'),
+            localStorageTheme: localStorage.getItem('theme'),
+            browserPrefersDark: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches,
+            systemPreferenceActive: !localStorage.getItem('theme'),
+            navbarClasses: document.getElementById('main-navbar')?.className || 'navbar not found',
+            iconClasses: Array.from(document.querySelectorAll('.theme-icon')).map(icon => icon.className).join(', ')
+        };
+        
+        console.table(results);
+        
+        // Return a formatted string with the results
+        return `Theme Detection Status:
+- Current theme: ${results.documentTheme}
+- User preference in localStorage: ${results.localStorageTheme || 'Not set (using system)'}
+- System prefers dark mode: ${results.browserPrefersDark}
+- Using system preference: ${results.systemPreferenceActive}
+- Navbar classes: ${results.navbarClasses}
+- Theme icons: ${results.iconClasses}`;
+    };
 
     // Dynamic text truncation for long descriptions
     document.querySelectorAll('.description-text').forEach(desc => {
@@ -214,7 +237,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // Handle the server-side theme preference
     if (initialHtmlTheme === '_auto_') {
         // No server-side preference, try localStorage or fall back to system preference
-        currentTheme = localStorage.getItem('theme') || getSystemThemePreference();
+        const storedTheme = localStorage.getItem('theme');
+        if (storedTheme) {
+            // User has explicitly set a preference
+            currentTheme = storedTheme;
+        } else {
+            // Use system preference without storing in localStorage to allow auto-switching
+            currentTheme = getSystemThemePreference();
+        }
     } else if (initialHtmlTheme === 'light' || initialHtmlTheme === 'dark') {
         // Use server-side preference
         currentTheme = initialHtmlTheme;
@@ -231,7 +261,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Listen for system theme changes
     if (window.matchMedia) {
         const colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-        colorSchemeQuery.addEventListener('change', (e) => {
+        
+        // Define the handler function
+        const handleColorSchemeChange = (e) => {
             // Only update if user hasn't set a preference
             if (!localStorage.getItem('theme')) {
                 currentTheme = e.matches ? 'dark' : 'light';
@@ -241,7 +273,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 // If we're using system preference, update server
                 updateServerThemePreference(null, true);
             }
-        });
+        };
+        
+        // Modern event listener
+        try {
+            colorSchemeQuery.addEventListener('change', handleColorSchemeChange);
+        } catch (error) {
+            // Fallback for older browsers
+            try {
+                // Safari 13.1 and older support
+                colorSchemeQuery.addListener(handleColorSchemeChange);
+                console.log('Using legacy matchMedia.addListener for system theme detection');
+            } catch (fallbackError) {
+                console.error('Browser does not support system theme change detection:', fallbackError);
+            }
+        }
+        
+        // Ensure the handler is called once on page load for system preference
+        if (!localStorage.getItem('theme')) {
+            handleColorSchemeChange(colorSchemeQuery);
+        }
     }
 
     function setThemeDisplay(themeToDisplay, isHover = false) {
@@ -264,11 +315,28 @@ document.addEventListener('DOMContentLoaded', function() {
             if (isSystemPreference) {
                 // Using system preference, show half-filled circle
                 icon.classList.add('fa-circle-half-stroke');
+                // Add title attribute for clarity
+                const closestLink = icon.closest('a');
+                if (closestLink) {
+                    closestLink.setAttribute('title', 'Using system preference (Click to toggle, right-click to reset)');
+                }
             } else {
                 // User-selected theme
                 icon.classList.add(themeToDisplay === 'light' ? 'fa-sun' : 'fa-moon');
             }
         });
+        
+        // Update the navbar classes to ensure proper theming
+        const navbar = document.getElementById('main-navbar');
+        if (navbar) {
+            if (themeToDisplay === 'dark') {
+                navbar.classList.remove('navbar-light');
+                navbar.classList.add('navbar-dark');
+            } else {
+                navbar.classList.remove('navbar-dark');
+                navbar.classList.add('navbar-light');
+            }
+        }
     }
 
     function updateAndReinitializeTooltip() {
