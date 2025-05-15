@@ -27,6 +27,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Service for caching book data from Google Books API to improve performance.
+ * Provides both in-memory and database caching with reactive support.
+ */
 @Service
 public class BookCacheService {
     private static final Logger logger = LoggerFactory.getLogger(BookCacheService.class);
@@ -486,51 +490,41 @@ public class BookCacheService {
             return Mono.empty();
         }
 
-        // This is the intended correct logic for cacheBookReactive.
-        // Any stray characters (like a single ']') from previous manual edits should be removed from this section.
-        return Mono.defer(() -> { // Defer to ensure check runs at subscription time
-            // This synchronous check can be made reactive if CachedBookRepository supports it
-            // For now, keeping it synchronous as it was in the previous correct state.
-            Optional<CachedBook> existingCachedBook = Optional.empty();
-            if (cacheEnabled && cachedBookRepository != null) { // Ensure repository is usable before calling
-                try {
-                    existingCachedBook = cachedBookRepository.findByGoogleBooksId(book.getId());
-                } catch (Exception e) {
-                    logger.warn("Error checking DB cache for book ID {} before reactive save: {}", book.getId(), e.getMessage());
-                    // Proceed as if not cached if check fails, to attempt saving
-                }
-            }
-
-            if (existingCachedBook.isPresent()) { 
-                logger.debug("Book already cached (sync check in reactive method): {}", book.getId());
-                return Mono.empty();
-            }
-            
-            // If not present in DB (or check failed), generate embedding and save
-            return generateEmbeddingReactive(book)
-                .flatMap(embedding -> { // 'embedding' is correctly in scope here
-                    try {
-                        JsonNode rawData = objectMapper.valueToTree(book);
-                        CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, embedding);
-                        // Wrap the blocking save operation
-                        return Mono.fromRunnable(() -> {
-                                if (cachedBookRepository != null) { // Final check before save
-                                    cachedBookRepository.save(cachedBookToSave);
-                                }
-                            })
-                            .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                            .doOnSuccess(v -> logger.info("Successfully cached book reactively: {}", book.getId()))
-                            .then();
-                    } catch (Exception e) {
-                        logger.error("Error preparing book for reactive caching {}: {}", book.getId(), e.getMessage(), e);
-                        return Mono.error(e); // Propagate error
+        return Mono.defer(() ->
+            Mono.fromCallable(() -> cachedBookRepository.findByGoogleBooksId(book.getId()))
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                .flatMap(existingCachedBookOptional -> {
+                    if (existingCachedBookOptional.isPresent()) {
+                        logger.debug("Book already cached (checked reactively): {}", book.getId());
+                        return Mono.empty(); // Completes the Mono<Void> chain, meaning no further action
                     }
-                });
-        })
-        .onErrorResume(e -> {
-            logger.error("Error during reactive caching for book {}: {}", book.getId(), e.getMessage());
-            return Mono.empty(); // Suppress error from preventing other operations
-        }).then(); // Ensure Mono<Void>
+                    // Not in cache, proceed with embedding and saving
+                    return generateEmbeddingReactive(book)
+                        .flatMap(embedding -> {
+                            try {
+                                JsonNode rawData = objectMapper.valueToTree(book);
+                                CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, embedding);
+                                // Wrap the blocking save operation
+                                return Mono.fromRunnable(() -> {
+                                        if (cachedBookRepository != null) { // Final check before save
+                                            cachedBookRepository.save(cachedBookToSave);
+                                        }
+                                    })
+                                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                                    .doOnSuccess(v -> logger.info("Successfully cached book reactively: {}", book.getId()))
+                                    .then(); // ensure this flatMap returns Mono<Void>
+                            } catch (Exception e) {
+                                logger.error("Error preparing book for reactive caching {}: {}", book.getId(), e.getMessage(), e);
+                                return Mono.error(e); // Propagate error to be caught by outer onErrorResume
+                            }
+                        });
+                })
+                .onErrorResume(e -> {
+                    // This handles errors from findByGoogleBooksId or the subsequent embedding/saving chain
+                    logger.warn("Error during DB cache check or subsequent processing for book ID {} in reactive save: {}. Cache attempt aborted.", book.getId(), e.getMessage());
+                    return Mono.empty(); // Abort caching on error, completes the Mono<Void> chain
+                })
+        ).then(); // Ensure the overall method returns Mono<Void> and subscribes to the defer's Mono
     }
 
     @EventListener

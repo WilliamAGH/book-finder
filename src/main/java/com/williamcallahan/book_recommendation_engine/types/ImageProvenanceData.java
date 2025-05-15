@@ -4,6 +4,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Data class for tracking the provenance (origin and processing history) of book cover images.
+ * Used to record which image sources were attempted, their results, and which image was ultimately selected.
+ * This data helps with debugging, auditing, and improving image quality over time.
+ */
 public class ImageProvenanceData {
 
     private String bookId; // e.g., Google Books ID
@@ -57,26 +62,29 @@ public class ImageProvenanceData {
         this.timestamp = timestamp;
     }
 
-    // Inner class for AttemptedSourceInfo
+    /**
+     * Inner class representing an attempt to fetch an image from a specific source.
+     * Tracks the source name, URL attempted, status of the attempt, and any additional details.
+     */
     public static class AttemptedSourceInfo {
-        private String sourceName; // e.g., "Google Books API", "OpenLibrary", "LocalCache"
-        private String urlAttempted;
-        private String status; // e.g., "SUCCESS", "FAILURE_404", "FAILURE_TIMEOUT", "SKIPPED"
-        private String failureReason; // Optional: details if status is a failure type
-        private Map<String, String> metadata; // Optional: e.g. resolution tried
+        private ImageSourceName sourceName;        // The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY)
+        private String urlAttempted;               // The URL that was attempted to fetch
+        private ImageAttemptStatus status;         // The outcome of the attempt (success, failure, etc.)
+        private String failureReason;              // Optional: details if status is a failure type
+        private Map<String, String> metadata;      // Optional: e.g. resolution tried
 
-        public AttemptedSourceInfo(String sourceName, String urlAttempted, String status) {
+        public AttemptedSourceInfo(ImageSourceName sourceName, String urlAttempted, ImageAttemptStatus status) {
             this.sourceName = sourceName;
             this.urlAttempted = urlAttempted;
             this.status = status;
         }
 
         // Getters and Setters
-        public String getSourceName() {
+        public ImageSourceName getSourceName() {
             return sourceName;
         }
 
-        public void setSourceName(String sourceName) {
+        public void setSourceName(ImageSourceName sourceName) {
             this.sourceName = sourceName;
         }
 
@@ -88,11 +96,11 @@ public class ImageProvenanceData {
             this.urlAttempted = urlAttempted;
         }
 
-        public String getStatus() {
+        public ImageAttemptStatus getStatus() {
             return status;
         }
 
-        public void setStatus(String status) {
+        public void setStatus(ImageAttemptStatus status) {
             this.status = status;
         }
 
@@ -113,20 +121,23 @@ public class ImageProvenanceData {
         }
     }
 
-    // Inner class for SelectedImageInfo
+    /**
+     * Inner class representing the final selected image and its details.
+     * Records which source provided the image, its URL, resolution, storage location, and any S3-specific data.
+     */
     public static class SelectedImageInfo {
-        private String sourceName;
-        private String finalUrl;
-        private String resolution; // e.g., "large", "medium", "thumbnail"
-        private String storageLocation; // e.g., "S3", "LocalCache"
-        private String s3Key; // if stored in S3
+        private ImageSourceName sourceName;      // The source that provided the final selected image
+        private String finalUrl;                 // The URL of the selected image
+        private String resolution;               // e.g., "large", "medium", "thumbnail", "ORIGINAL"
+        private String storageLocation;          // e.g., "S3", "LocalCache" 
+        private String s3Key;                    // If stored in S3, the S3 key
 
         // Getters and Setters
-        public String getSourceName() {
+        public ImageSourceName getSourceName() {
             return sourceName;
         }
 
-        public void setSourceName(String sourceName) {
+        public void setSourceName(ImageSourceName sourceName) {
             this.sourceName = sourceName;
         }
 

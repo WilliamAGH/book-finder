@@ -90,7 +90,7 @@ public class BookController {
                     Map<String, Object> response = new HashMap<>();
                     // Since BookCacheService already paginates, if it's empty, it means no results for this page
                     // We cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
-                    response.put("totalAvailableResults", 0);
+                    response.put("resultsInPage", 0);
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
                     response.put("startIndex", startIndex);
@@ -104,6 +104,7 @@ public class BookController {
                             return Mono.just(book);
                         }
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                            .map(processedBookFromService -> processedBookFromService)
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
@@ -132,7 +133,7 @@ public class BookController {
                         }
 
                         Map<String, Object> response = new HashMap<>();
-                        response.put("totalAvailableResults", totalResultsInPage); 
+                        response.put("resultsInPage", totalResultsInPage); 
                         response.put("results", finalBooksToReturn);
                         response.put("count", finalBooksToReturn.size());
                         response.put("startIndex", startIndex);
@@ -196,6 +197,7 @@ public class BookController {
                     .flatMap(book -> {
                         if (book == null) return Mono.just(book);
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                            .map(processedBookFromService -> processedBookFromService)
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
@@ -255,6 +257,7 @@ public class BookController {
                     .flatMap(book -> {
                         if (book == null) return Mono.just(book);
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                            .map(processedBookFromService -> processedBookFromService)
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
@@ -314,6 +317,7 @@ public class BookController {
                     .flatMap(book -> {
                         if (book == null) return Mono.just(book);
                         return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                            .map(processedBookFromService -> processedBookFromService)
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
@@ -364,6 +368,7 @@ public class BookController {
                     return Mono.empty(); // This will trigger switchIfEmpty later
                 }
                 return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                    .map(processedBookFromService -> processedBookFromService)
                     .onErrorResume(e -> {
                         logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                         if (book.getCoverImages() == null) {
@@ -437,6 +442,7 @@ public class BookController {
                             .flatMap(book -> {
                                 if (book == null) return Mono.just(book);
                                 return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
+                                    .map(processedBookFromService -> processedBookFromService)
                                     .onErrorResume(e -> {
                                         logger.warn("Error in async cover processing for similar book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                         if (book.getCoverImages() == null) {

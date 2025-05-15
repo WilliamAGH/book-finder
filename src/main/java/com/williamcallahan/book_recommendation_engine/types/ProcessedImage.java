@@ -1,34 +1,59 @@
 package com.williamcallahan.book_recommendation_engine.types;
 
-public class ProcessedImage {
-    public final byte[] processedBytes;
-    public final String newFileExtension;
-    public final String newMimeType;
-    public final int width;
-    public final int height;
-    public final boolean processingSuccessful;
-    public final String processingError; // Null if successful
+import java.util.Arrays; // For Arrays.copyOf
 
-    // Constructor for a successfully processed image
-    public ProcessedImage(byte[] processedBytes, String newFileExtension, String newMimeType, int width, int height) {
-        this.processedBytes = processedBytes;
-        this.newFileExtension = newFileExtension;
-        this.newMimeType = newMimeType;
-        this.width = width;
-        this.height = height;
-        this.processingSuccessful = true;
-        this.processingError = null;
+/**
+ * Record representing a processed image with its metadata.
+ * Used to pass processed image data between services along with important properties
+ * like dimensions, file type, and processing status.
+ * 
+ * @param processedBytes The processed image data as a byte array
+ * @param newFileExtension The file extension for the processed image (e.g., ".jpg")
+ * @param newMimeType The MIME type of the processed image (e.g., "image/jpeg")
+ * @param width The width of the processed image in pixels
+ * @param height The height of the processed image in pixels
+ * @param processingSuccessful Whether the image processing was successful
+ * @param processingError Error message if processing failed
+ */
+public record ProcessedImage(
+        byte[] processedBytes,
+        String newFileExtension,
+        String newMimeType,
+        int width,
+        int height,
+        boolean processingSuccessful,
+        String processingError) {
+
+    // Compact canonical constructor for defensive copy
+    public ProcessedImage {
+        // Defensive copy for mutable byte array
+        if (processedBytes != null) {
+            processedBytes = Arrays.copyOf(processedBytes, processedBytes.length);
+        }
     }
 
-    // Constructor for a failed processing attempt
-    public ProcessedImage(String processingError) {
-        this.processedBytes = null;
-        this.newFileExtension = null;
-        this.newMimeType = null;
-        this.width = 0;
-        this.height = 0;
-        this.processingSuccessful = false;
-        this.processingError = processingError;
+    /**
+     * Static factory method for creating a successfully processed image.
+     *
+     * @param processedBytes The processed image data
+     * @param newFileExtension The file extension for the processed image
+     * @param newMimeType The MIME type of the processed image
+     * @param width The width of the processed image in pixels
+     * @param height The height of the processed image in pixels
+     * @return A new ProcessedImage instance representing a successful operation
+     */
+    public static ProcessedImage success(byte[] processedBytes, String newFileExtension, String newMimeType, int width, int height) {
+        return new ProcessedImage(processedBytes, newFileExtension, newMimeType, width, height, true, null);
+    }
+
+    /**
+     * Static factory method for creating a failed processing result.
+     *
+     * @param processingError The error message describing why processing failed
+     * @return A new ProcessedImage instance representing a failed operation
+     */
+    public static ProcessedImage failure(String processingError) {
+        return new ProcessedImage(null, null, null, 0, 0, false, processingError);
     }
 
     // Getters might be useful for other services, though direct field access is fine for now in a simple DTO.

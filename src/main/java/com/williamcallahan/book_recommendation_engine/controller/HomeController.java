@@ -241,34 +241,33 @@ public class HomeController {
      * @return redirect to canonical book URL or homepage if not found
      */
     @GetMapping("/book/isbn/{isbn}")
-    public RedirectView bookDetailByIsbn(@PathVariable String isbn) {
+    public Mono<RedirectView> bookDetailByIsbn(@PathVariable String isbn) {
         // Sanitize input by removing hyphens and spaces
         String sanitizedIsbn = sanitizeIsbn(isbn);
         
         // Validate ISBN format
         if (!isValidIsbn(sanitizedIsbn)) {
             logger.warn("Invalid ISBN format: {}", isbn);
-            return new RedirectView("/?invalidIsbn=true");
+            return Mono.just(new RedirectView("/?error=invalidIsbn&originalIsbn=" + isbn));
         }
         
-        try {
-            logger.info("Looking up book by ISBN: {}", sanitizedIsbn);
-            // Use BookCacheService for ISBN lookup
-            List<Book> books = bookCacheService.getBooksByIsbnReactive(sanitizedIsbn).blockOptional().orElse(Collections.emptyList());
-            Book book = books.stream().findFirst().orElse(null);
-            
-            if (book != null && book.getId() != null) {
-                logger.info("Found book with ID: {} for ISBN: {}", book.getId(), sanitizedIsbn);
-                return new RedirectView("/book/" + book.getId());
-            } else {
-                logger.info("No book found for ISBN: {}", sanitizedIsbn);
-                return new RedirectView("/?bookNotFound=true");
-            }
-        } catch (Exception e) {
-            logger.error("Error looking up book by ISBN: {}", sanitizedIsbn, e);
-            // In case of any error, redirect to home page with an error parameter
-            return new RedirectView("/?lookupError=true");
-        }
+        return bookCacheService.getBooksByIsbnReactive(sanitizedIsbn)
+            .map(books -> {
+                if (!books.isEmpty()) {
+                    Book firstBook = books.get(0); // Take the first match
+                    if (firstBook != null && firstBook.getId() != null) {
+                        logger.info("Redirecting ISBN {} to book ID: {}", sanitizedIsbn, firstBook.getId());
+                        return new RedirectView("/book/" + firstBook.getId());
+                    }
+                }
+                logger.warn("No book found for ISBN: {} (sanitized: {}), redirecting to homepage with notification.", isbn, sanitizedIsbn);
+                return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
+            })
+            .defaultIfEmpty(new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn)) // If reactive stream is empty
+            .onErrorResume(e -> {
+                logger.error("Error during ISBN lookup for {}: {}", isbn, e.getMessage(), e);
+                return Mono.just(new RedirectView("/?error=lookupError&isbn=" + sanitizedIsbn));
+            });
     }
     
     /**
@@ -305,14 +304,14 @@ public class HomeController {
      * @return redirect to canonical book URL or homepage if not found
      */
     @GetMapping("/book/isbn13/{isbn13}")
-    public RedirectView bookDetailByIsbn13(@PathVariable String isbn13) {
+    public Mono<RedirectView> bookDetailByIsbn13(@PathVariable String isbn13) {
         // Sanitize input
         String sanitizedIsbn = sanitizeIsbn(isbn13);
         
         // Validate ISBN-13 format specifically
         if (!ISBN13_PATTERN.matcher(sanitizedIsbn).matches()) {
             logger.warn("Invalid ISBN-13 format: {}", isbn13);
-            return new RedirectView("/?invalidIsbn13=true");
+            return Mono.just(new RedirectView("/?error=invalidIsbn13&originalIsbn=" + isbn13));
         }
         
         // Forward to the common ISBN handler
@@ -327,14 +326,14 @@ public class HomeController {
      * @return redirect to canonical book URL or homepage if not found
      */
     @GetMapping("/book/isbn10/{isbn10}")
-    public RedirectView bookDetailByIsbn10(@PathVariable String isbn10) {
+    public Mono<RedirectView> bookDetailByIsbn10(@PathVariable String isbn10) {
         // Sanitize input
         String sanitizedIsbn = sanitizeIsbn(isbn10);
         
         // Validate ISBN-10 format specifically
         if (!ISBN10_PATTERN.matcher(sanitizedIsbn).matches()) {
             logger.warn("Invalid ISBN-10 format: {}", isbn10);
-            return new RedirectView("/?invalidIsbn10=true");
+            return Mono.just(new RedirectView("/?error=invalidIsbn10&originalIsbn=" + isbn10));
         }
         
         // Forward to the common ISBN handler

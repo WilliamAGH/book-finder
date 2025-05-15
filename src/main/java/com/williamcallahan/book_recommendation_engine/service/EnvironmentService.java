@@ -5,6 +5,10 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 
+/**
+ * Service to manage environment-specific configurations and feature flags.
+ * Provides methods to check active profiles and retrieve environment settings.
+ */
 @Service("environmentService")
 public class EnvironmentService {
 
@@ -29,8 +33,8 @@ public class EnvironmentService {
      * @return true if 'prod' profile is active or if no specific dev/test profile is active
      */
     public boolean isProductionMode() {
-        // Explicitly check for 'prod' or assume prod if 'dev' (and other non-prod profiles) are not active.
-        return environment.acceptsProfiles(Profiles.of("prod")) || !isDevelopmentMode();
+        // Only return true if 'prod' profile is explicitly active
+        return environment.acceptsProfiles(Profiles.of("prod"));
     }
 
     /**
