@@ -37,12 +37,19 @@ public class CoverUpdateNotifierService {
 
         String destination = "/topic/book/" + event.getGoogleBookId() + "/coverUpdate";
         
-        Map<String, String> payload = new HashMap<>();
+        Map<String, Object> payload = new HashMap<>(); // Changed to Map<String, Object> to accommodate enum/string
         payload.put("googleBookId", event.getGoogleBookId());
         payload.put("newCoverUrl", event.getNewCoverUrl());
-        payload.put("identifierKey", event.getIdentifierKey()); 
+        payload.put("identifierKey", event.getIdentifierKey());
+        if (event.getSource() != null) {
+            payload.put("sourceName", event.getSource().name()); // e.g., GOOGLE_BOOKS
+            payload.put("sourceDisplayName", event.getSource().getDisplayName()); // e.g., "Google Books"
+        } else {
+            payload.put("sourceName", com.williamcallahan.book_recommendation_engine.types.CoverImageSource.UNDEFINED.name());
+            payload.put("sourceDisplayName", com.williamcallahan.book_recommendation_engine.types.CoverImageSource.UNDEFINED.getDisplayName());
+        }
 
-        logger.info("Sending cover update to {}: URL = {}", destination, event.getNewCoverUrl());
+        logger.info("Sending cover update to {}: URL = {}, Source = {}", destination, event.getNewCoverUrl(), event.getSource() != null ? event.getSource().name() : "UNDEFINED");
         this.messagingTemplate.convertAndSend(destination, payload);
     }
-} 
+}

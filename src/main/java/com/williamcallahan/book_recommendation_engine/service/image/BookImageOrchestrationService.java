@@ -16,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.types.CoverImages;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
 @Service
 public class BookImageOrchestrationService {
@@ -31,13 +32,13 @@ public class BookImageOrchestrationService {
     // for logging or decisions, or simply passed down. If BookCoverCacheService now fully owns S3 logic,
     // these might only be relevant there. For now, keeping them unless further refactoring is done.
     @Value("${s3.enabled:true}")
-    private boolean s3Enabled; // This might be checked by BookCoverCacheService now
+    private boolean s3Enabled;
 
     @Value("${app.cover-sources.prefer-s3:true}")
-    private boolean preferS3; // This might be checked by BookCoverCacheService now
+    private boolean preferS3;
 
     @Value("${app.cover-cache.dir:covers}")
-    private String cacheDirName; // Potentially used by BookCoverCacheService
+    private String cacheDirName;
 
     @Value("${app.cover-cache.max-file-size-bytes:5242880}") // 5MB default
     private long maxFileSizeBytes; // Potentially used by BookCoverCacheService or S3 service
@@ -71,9 +72,9 @@ public class BookImageOrchestrationService {
     }
     
     /**
-     * Asynchronously populates the book object with preferred and fallback cover image URLs.
-     * The main book.coverImageUrl will be set to the preferred URL.
-     * Background processing for optimal image caching is triggered by BookCoverCacheService.
+     * Asynchronously populates the book object with preferred and fallback cover image URLs
+     * The main book.coverImageUrl will be set to the preferred URL
+     * Background processing for optimal image caching is triggered by BookCoverCacheService
      *
      * @param book The book to fetch the cover for
      * @param preferredSource The preferred source to fetch the cover from (currently less emphasized in this new logic for initial URL)
@@ -105,57 +106,48 @@ public class BookImageOrchestrationService {
             return CompletableFuture.completedFuture(book);
         }
 
-        // Capture the original cover URL from the book (e.g., from Google Books API) to use as a fallback.
-        // This should be the URL as initially fetched before any caching logic modifies it.
+        // Capture the original cover URL from the book (e.g., from Google Books API) to use as a fallback
+        // This should be the URL as initially fetched before any caching logic modifies it
         String originalSourceUrl = book.getCoverImageUrl(); // Assumes this is populated by GoogleBooksService
         if (originalSourceUrl == null || originalSourceUrl.isEmpty()) {
             originalSourceUrl = book.getImageUrl(); // Check imageUrl as another possible field for original
         }
         if (originalSourceUrl == null || originalSourceUrl.isEmpty() || originalSourceUrl.equals(DEFAULT_PLACEHOLDER_IMAGE)) {
-            // If no meaningful original URL, use a default placeholder for the fallback as well.
-            // However, BookCoverCacheService might itself return a placeholder, which is fine.
-            // The goal is that fallbackUrl is _truly_ the original, or a placeholder if none existed.
+            // If no meaningful original URL, use a default placeholder for the fallback as well
+            // However, BookCoverCacheService might itself return a placeholder, which is fine
+            // The goal is that fallbackUrl is _truly_ the original, or a placeholder if none existed
             originalSourceUrl = DEFAULT_PLACEHOLDER_IMAGE; 
         }
         final String finalFallbackUrl = originalSourceUrl;
 
-        // REMOVED S3 Pre-check block. S3 interaction is handled by BookCoverCacheService in background.
+        // REMOVED S3 Pre-check block. S3 interaction is handled by BookCoverCacheService in background
 
         logger.debug("Fetching initial cover for book {} (ID: {}), preferred source: {}, resolution: {}. Fallback will be: {}", 
             book.getTitle(), book.getId(), preferredSource, resolutionPreference, finalFallbackUrl);
 
-        // BookCoverCacheService will provide an initial URL (cached or original) and trigger background processing.
-        // It also sets book.setCoverImageUrl() to this initial URL.
-        String initialPreferredUrl = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        // BookCoverCacheService will provide an initial URL (cached or original) and trigger background processing
+        CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        String initialPreferredUrl = (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) ? coverImagesResult.getPreferredUrl() : DEFAULT_PLACEHOLDER_IMAGE;
 
-        // Now, populate our new CoverImages structure.
-        // The 'initialPreferredUrl' is what BookCoverCacheService decided is best for now.
-        // 'finalFallbackUrl' is what we captured as the original.
-        book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl));
+        // Now, populate our new CoverImages structure
+        // The 'initialPreferredUrl' is what BookCoverCacheService decided is best for now
+        // 'finalFallbackUrl' is what we captured as the original
+        // Use the source from the coverImagesResult obtained from BookCoverCacheService
+        CoverImageSource sourceFromResult = (coverImagesResult != null && coverImagesResult.getSource() != null) ? coverImagesResult.getSource() : CoverImageSource.UNDEFINED;
+        book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl, sourceFromResult));
         
-        // book.setCoverImageUrl() is already updated by bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate().
-        // So, the top-level coverImageUrl will reflect the preferred URL.
+        // book.setCoverImageUrl() is already updated by bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate()
+        // So, the top-level coverImageUrl will reflect the preferred URL
 
         // Explicitly set resolution details to null. These will be updated by background processing
-        // once the actual image is fetched and analyzed by BookCoverCacheService or S3BookCoverService.
+        // once the actual image is fetched and analyzed by BookCoverCacheService or S3BookCoverService
         book.setCoverImageWidth(null);
         book.setCoverImageHeight(null);
-        book.setIsCoverHighResolution(null); // This will be determined later
+        book.setIsCoverHighResolution(null);
 
         logger.debug("Book ID {}: CoverImages set - Preferred URL: '{}', Fallback URL: '{}'. Background processing initiated by cache service.",
                      book.getId(), initialPreferredUrl, finalFallbackUrl);
         
         return CompletableFuture.completedFuture(book);
-    }
-
-    // Enum for preferred source (if any)
-    public enum CoverImageSource {
-        GOOGLE_BOOKS_API,       // For images sourced directly from Google Books API
-        OPEN_LIBRARY_API,       // For images sourced directly from OpenLibrary API
-        LONGITOOD_API,          // For images sourced directly from Longitood API
-        LOCAL_CACHE,            // For images served from the local disk cache
-        S3_CACHE,               // For images served from S3 cache
-        SYSTEM_PLACEHOLDER,     // For system-provided placeholder images
-        ANY                     // Used for requests indicating any source is acceptable
     }
 }

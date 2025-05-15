@@ -1,13 +1,13 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
 import java.util.Objects;
 
 /**
- * Represents details about an image, particularly book cover images.
- * Contains information about the image's URL or path, source, dimensions, and other metadata.
+ * Represents details about an image, particularly book cover images
+ * Contains information about the image's URL or path, source, dimensions, and other metadata
  */
 public class ImageDetails {
     private final String urlOrPath;
@@ -20,7 +20,7 @@ public class ImageDetails {
     private final boolean dimensionsKnown;
 
     /**
-     * Creates a new ImageDetails instance with unknown dimensions.
+     * Creates a new ImageDetails instance with unknown dimensions
      *
      * @param urlOrPath The URL or file path to the image
      * @param sourceName The name of the source (e.g., "Google Books", "OpenLibrary")
@@ -35,13 +35,13 @@ public class ImageDetails {
         this.sourceSystemId = sourceSystemId;
         this.coverImageSource = coverImageSource;
         this.resolutionPreference = resolutionPreference;
-        this.width = 0; // Default, to be updated after download/processing
-        this.height = 0; // Default, to be updated after download/processing
-        this.dimensionsKnown = false; // Default
+        this.width = 0;
+        this.height = 0;
+        this.dimensionsKnown = false;
     }
 
     /**
-     * Creates a new ImageDetails instance with known dimensions.
+     * Creates a new ImageDetails instance with known dimensions
      *
      * @param urlOrPath The URL or file path to the image
      * @param sourceName The name of the source (e.g., "Google Books", "OpenLibrary")
@@ -65,7 +65,7 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the URL or file path to the image.
+     * Gets the URL or file path to the image
      *
      * @return The URL or file path to the image
      */
@@ -74,7 +74,7 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the name of the source (e.g., "Google Books", "OpenLibrary").
+     * Gets the name of the source (e.g., "Google Books", "OpenLibrary")
      *
      * @return The name of the source
      */
@@ -83,7 +83,7 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the source-specific identifier for the image.
+     * Gets the source-specific identifier for the image
      *
      * @return The source-specific identifier
      */
@@ -92,7 +92,7 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the enum representing the cover source.
+     * Gets the enum representing the cover source
      *
      * @return The cover image source enum
      */
@@ -101,7 +101,7 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the preferred resolution for the image.
+     * Gets the preferred resolution for the image
      *
      * @return The image resolution preference enum
      */
@@ -110,8 +110,8 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the width of the image in pixels.
-     * Returns 0 if the dimensions are not known.
+     * Gets the width of the image in pixels
+     * Returns 0 if the dimensions are not known
      *
      * @return The width of the image in pixels
      */
@@ -120,8 +120,8 @@ public class ImageDetails {
     }
 
     /**
-     * Gets the height of the image in pixels.
-     * Returns 0 if the dimensions are not known.
+     * Gets the height of the image in pixels
+     * Returns 0 if the dimensions are not known
      *
      * @return The height of the image in pixels
      */
@@ -130,7 +130,7 @@ public class ImageDetails {
     }
 
     /**
-     * Checks if the dimensions of the image are known.
+     * Checks if the dimensions of the image are known
      *
      * @return true if the dimensions are known, false otherwise
      */
@@ -153,9 +153,9 @@ public class ImageDetails {
     }
 
     /**
-     * Compares this ImageDetails with another object for equality.
+     * Compares this ImageDetails with another object for equality
      * Two ImageDetails are considered equal if they have the same URL/path, source name,
-     * source system ID, cover image source, resolution preference, width, height, and dimensions known status.
+     * source system ID, cover image source, resolution preference, width, height, and dimensions known status
      *
      * @param o the object to compare with
      * @return true if the objects are equal, false otherwise
@@ -178,7 +178,7 @@ public class ImageDetails {
     }
 
     /**
-     * Returns a hash code value for this ImageDetails.
+     * Returns a hash code value for this ImageDetails
      *
      * @return a hash code value for this object
      */
@@ -189,7 +189,7 @@ public class ImageDetails {
     }
 
     /**
-     * Returns a string representation of this ImageDetails.
+     * Returns a string representation of this ImageDetails
      *
      * @return a string representation of this object
      */

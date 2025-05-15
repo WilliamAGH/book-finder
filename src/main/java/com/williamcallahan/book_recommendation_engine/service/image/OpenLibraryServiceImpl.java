@@ -3,7 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.types.OpenLibraryService; 
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,7 +33,7 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
             largeUrl,
             OPEN_LIBRARY_SOURCE_NAME,
             sourceSystemId,
-            CoverImageSource.OPEN_LIBRARY_API,
+            CoverImageSource.OPEN_LIBRARY,
             ImageResolutionPreference.LARGE
         );
 
@@ -41,16 +41,16 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
     }
 
     /**
-     * Fetches cover image details from OpenLibrary for a specific ISBN and size.
+     * Fetches cover image details from OpenLibrary for a specific ISBN and size
      *
-     * @param isbn The ISBN of the book.
-     * @param sizeSuffix The size suffix for the cover (e.g., "L", "M", "S").
-     * @return A Mono emitting ImageDetails for the specified OpenLibrary cover, or Mono.empty() if ISBN is invalid.
+     * @param isbn The ISBN of the book
+     * @param sizeSuffix The size suffix for the cover (e.g., "L", "M", "S")
+     * @return A Mono emitting ImageDetails for the specified OpenLibrary cover, or Mono.empty() if ISBN is invalid
      */
     public Mono<ImageDetails> fetchOpenLibraryCoverDetails(String isbn, String sizeSuffix) {
         if (isbn == null || isbn.trim().isEmpty()) {
             logger.warn("No ISBN provided, cannot fetch cover details from OpenLibrary for size suffix: {}", sizeSuffix);
-            return Mono.empty(); // Or throw an IllegalArgumentException, depending on desired contract
+            return Mono.empty();
         }
         // Ensure sizeSuffix is valid before proceeding to switch
         if (sizeSuffix == null || (!sizeSuffix.equals("L") && !sizeSuffix.equals("M") && !sizeSuffix.equals("S"))) {
@@ -74,8 +74,8 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
                 break;
             default:
                 // This case should ideally be handled by the check above, 
-                // but as a fallback or if other suffixes become valid.
-                resolutionPreference = ImageResolutionPreference.ORIGINAL; // Or .NONE if more appropriate
+                // but as a fallback or if other suffixes become valid
+                resolutionPreference = ImageResolutionPreference.ORIGINAL;
                 logger.debug("Unknown size suffix '{}' for OpenLibrary, using ORIGINAL preference for ISBN {}.", sizeSuffix, isbn);
                 break;
         }
@@ -84,7 +84,7 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
             url,
             OPEN_LIBRARY_SOURCE_NAME,
             sourceSystemId,
-            CoverImageSource.OPEN_LIBRARY_API,
+            CoverImageSource.OPEN_LIBRARY,
             resolutionPreference
         );
         return Mono.just(details);

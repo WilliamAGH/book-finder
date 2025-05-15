@@ -3,7 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.types.LongitoodService; 
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,7 +53,7 @@ public class LongitoodServiceImpl implements LongitoodService {
                             coverUrl,
                             LONGITOOD_SOURCE_NAME,
                             sourceSystemId,
-                            CoverImageSource.LONGITOOD_API,
+                            CoverImageSource.LONGITOOD,
                             ImageResolutionPreference.ORIGINAL 
                         );
                         return Mono.just(imageDetails);
