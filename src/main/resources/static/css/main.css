@@ -330,20 +330,49 @@ section {
 }
 
 /* Pagination */
+.pagination {
+    display: inline-flex;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.5rem;
+    border-radius: 2rem;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
 .pagination .page-item .page-link {
-    color: var(--primary-color);
-    padding: 0.5rem 1rem;
-    border-radius: 50px;
+    color: var(--dark-color);
+    background-color: transparent;
+    border: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    border-radius: 50%;
     margin: 0 0.25rem;
+    padding: 0;
+    transition: all 0.2s ease;
+}
+
+.pagination .page-item .page-link:hover {
+    background-color: rgba(79, 70, 229, 0.1);
 }
 
 .pagination .page-item.active .page-link {
     background-color: var(--primary-color);
-    border-color: var(--primary-color);
+    color: white;
+    border: none;
+    box-shadow: 0 4px 6px rgba(79, 70, 229, 0.25);
 }
 
 .pagination .page-item .page-link:focus {
-    box-shadow: 0 0 0 0.25rem rgba(79, 70, 229, 0.25);
+    box-shadow: none;
+    outline: none;
+}
+
+.pagination .page-item.disabled .page-link {
+    color: var(--grey-400);
+    pointer-events: none;
 }
 
 /* Utility Classes */
@@ -546,6 +575,12 @@ color: var(--dark-color);
     background-color: var(--card-bg) !important;
 }
 
+/* Fix dark mode text in book cards */
+[data-theme="dark"] .text-decoration-none.text-dark,
+[data-theme="dark"] .card-title a {
+    color: var(--dark-color) !important;
+}
+
 /* Fix white backgrounds in search header and other elements */
 [data-theme="dark"] .bg-white,
 [data-theme="dark"] .search-header {
@@ -586,26 +621,30 @@ color: var(--dark-color);
 }
 
 /* Fix pagination */
+[data-theme="dark"] .pagination {
+    background: rgba(0, 0, 0, 0.2);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
 [data-theme="dark"] .page-link {
-    background-color: var(--card-bg);
-    border-color: var(--border-color);
-    color: var(--text-color);
+    color: var(--dark-color);
+    background-color: transparent;
+    border: none;
 }
 
 [data-theme="dark"] .page-link:hover {
-    background-color: var(--dropdown-hover);
-    border-color: var(--border-color);
+    background-color: rgba(96, 165, 250, 0.2); /* Primary color with transparency */
 }
 
 [data-theme="dark"] .page-item.active .page-link {
     background-color: var(--primary-color);
-    border-color: var(--primary-color);
+    color: white;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.25);
 }
 
 [data-theme="dark"] .page-item.disabled .page-link {
-    background-color: var(--card-bg);
-    border-color: var(--border-color);
     color: var(--grey-500);
+    background-color: transparent;
 }
 
 /* Theme toggle button specific styles */
@@ -709,3 +748,33 @@ color: var(--dark-color);
 .dev-source-UNDEFINED { background-color: var(--grey-500); }
 .dev-source-ANY { background-color: var(--grey-400); }
 .dev-source-NONE { background-color: var(--grey-300); color: var(--dark-color); text-shadow: none;} /* Dark text for light grey */
+
+/* Normalized book covers for consistent sizing */
+.normalized-cover {
+    height: auto !important;
+    width: auto !important;
+    max-height: 85% !important;
+    max-width: 85% !important;
+    object-fit: contain !important;
+    transform: none !important; /* Remove scaling transformation */
+    margin: auto !important; /* Center the image */
+    padding: 5px !important; /* Reduced padding */
+}
+
+/* Specific grid view settings */
+.book-cover-container .normalized-cover {
+    max-height: 80% !important;
+    max-width: 80% !important;
+}
+
+/* Specific list view settings */
+.book-cover-wrapper .normalized-cover {
+    max-height: 180px !important;
+    object-fit: contain !important;
+}
+
+/* Special handling for high-resolution images */
+.high-res-cover {
+    transform: scale(0.88) !important; /* Slight reduction for high-res images */
+    max-height: 85% !important;
+}

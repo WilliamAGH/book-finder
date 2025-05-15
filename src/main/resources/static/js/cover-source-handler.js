@@ -76,7 +76,17 @@ document.addEventListener('DOMContentLoaded', function() {
                             newImg.onload = function() {
                                 // Only update if the source preference hasn't changed
                                 if (img.getAttribute('data-loading-source') === currentCoverSource) {
+                                    // Apply consistent dimensions using global function if available
+                                    if (typeof applyConsistentDimensions === 'function') {
+                                        applyConsistentDimensions(img, newImg.naturalWidth, newImg.naturalHeight);
+                                    } else {
+                                        // Add normalized-cover class directly if the function isn't available
+                                        img.classList.add('normalized-cover');
+                                    }
+                                    
+                                    // Apply source after dimensions are normalized
                                     img.src = data.coverUrl;
+                                    console.log(`Cover source updated for book ${bookId}`);
                                 }
                             };
                             newImg.onerror = function() {
