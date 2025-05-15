@@ -3,6 +3,40 @@
  * Contains common functionality used across the application
  */
 
+/**
+ * Updates the server-side theme preference via API
+ * @param {string|null} theme - The theme preference ('light', 'dark', or null for system)
+ * @param {boolean} useSystem - Whether to use system preference
+ */
+function updateServerThemePreference(theme, useSystem) {
+    // Create request data
+    const data = {
+        theme: theme,
+        useSystem: useSystem
+    };
+    
+    // Send POST request to theme API endpoint
+    fetch('/api/theme', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => {
+        if (!response.ok) {
+            console.error('Theme preference update failed:', response.statusText);
+        }
+        return response.json();
+    })
+    .then(data => {
+        console.log('Theme preference updated successfully:', data);
+    })
+    .catch(error => {
+        console.error('Error updating theme preference:', error);
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize tooltips if Bootstrap is available
     if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
@@ -163,27 +197,78 @@ document.addEventListener('DOMContentLoaded', function() {
     // Theme toggler implementation
     const themeToggleBtns = document.querySelectorAll('.theme-toggle');
     const themeIcons = document.querySelectorAll('.theme-icon');
-    let currentTheme = localStorage.getItem('theme') || 'light';
+    
+    // Check for OS/browser theme preference
+    function getSystemThemePreference() {
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            return 'dark';
+        } else {
+            return 'light';
+        }
+    }
+    
+    // Check for server-side/HTML data-theme attribute first
+    let initialHtmlTheme = document.documentElement.getAttribute('data-theme');
+    let currentTheme;
+    
+    // Handle the server-side theme preference
+    if (initialHtmlTheme === '_auto_') {
+        // No server-side preference, try localStorage or fall back to system preference
+        currentTheme = localStorage.getItem('theme') || getSystemThemePreference();
+    } else if (initialHtmlTheme === 'light' || initialHtmlTheme === 'dark') {
+        // Use server-side preference
+        currentTheme = initialHtmlTheme;
+        // Save to localStorage to maintain consistency
+        localStorage.setItem('theme', currentTheme);
+    } else {
+        // Fallback if something unexpected
+        currentTheme = getSystemThemePreference();
+    }
+    
+    // Set the theme attribute on the HTML element
     document.documentElement.setAttribute('data-theme', currentTheme);
+    
+    // Listen for system theme changes
+    if (window.matchMedia) {
+        const colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+        colorSchemeQuery.addEventListener('change', (e) => {
+            // Only update if user hasn't set a preference
+            if (!localStorage.getItem('theme')) {
+                currentTheme = e.matches ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', currentTheme);
+                updateAndReinitializeTooltip();
+                
+                // If we're using system preference, update server
+                updateServerThemePreference(null, true);
+            }
+        });
+    }
 
     function setThemeDisplay(themeToDisplay, isHover = false) {
         if (!themeIcons.length || !themeToggleBtns.length) return;
+        
         // Update all icons
         themeIcons.forEach(icon => {
-            if (themeToDisplay === 'light') {
-                icon.classList.remove('fa-moon');
-                icon.classList.add('fa-sun');
+            // First, remove any existing theme-related classes
+            icon.classList.remove('fa-moon', 'fa-sun', 'fa-circle-half-stroke');
+            
+            // For hover state, just show the opposite icon
+            if (isHover) {
+                icon.classList.add(themeToDisplay === 'light' ? 'fa-sun' : 'fa-moon');
+                return;
+            }
+            
+            // For non-hover state, we can indicate system theme with a special icon
+            const isSystemPreference = !localStorage.getItem('theme');
+            
+            if (isSystemPreference) {
+                // Using system preference, show half-filled circle
+                icon.classList.add('fa-circle-half-stroke');
             } else {
-                icon.classList.remove('fa-sun');
-                icon.classList.add('fa-moon');
+                // User-selected theme
+                icon.classList.add(themeToDisplay === 'light' ? 'fa-sun' : 'fa-moon');
             }
         });
-        // Update titles on toggle buttons when not hovering
-        if (!isHover) {
-            themeToggleBtns.forEach(btn => {
-                btn.setAttribute('title', themeToDisplay === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode');
-            });
-        }
     }
 
     function updateAndReinitializeTooltip() {
@@ -195,6 +280,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (btn.tooltipInstance) {
                     btn.tooltipInstance.dispose();
                 }
+                
+                // Set title to include right-click info
+                const isSystemDefault = !localStorage.getItem('theme');
+                const themeText = currentTheme === 'light' ? 'Dark' : 'Light';
+                let tooltipText = `Switch to ${themeText} Mode`;
+                
+                if (isSystemDefault) {
+                    tooltipText += ' (Using system preference)';
+                } else {
+                    tooltipText += ' (Right-click to use system preference)';
+                }
+                
+                btn.setAttribute('title', tooltipText);
                 btn.tooltipInstance = new bootstrap.Tooltip(btn);
             });
         }
@@ -216,11 +314,29 @@ document.addEventListener('DOMContentLoaded', function() {
     if (themeToggleBtns.length) {
         updateAndReinitializeTooltip();
         themeToggleBtns.forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                // Normal click toggles between light/dark
                 currentTheme = (currentTheme === 'light') ? 'dark' : 'light';
                 document.documentElement.setAttribute('data-theme', currentTheme);
                 localStorage.setItem('theme', currentTheme);
                 updateAndReinitializeTooltip();
+                
+                // Send theme preference to server
+                updateServerThemePreference(currentTheme, false);
+            });
+            // Add right-click handler to reset to system preference
+            btn.addEventListener('contextmenu', (e) => {
+                // Reset to system preference on right-click
+                localStorage.removeItem('theme');
+                currentTheme = getSystemThemePreference();
+                document.documentElement.setAttribute('data-theme', currentTheme);
+                updateAndReinitializeTooltip();
+                
+                // Send system preference to server
+                updateServerThemePreference(null, true);
+                
+                e.preventDefault();
+                return false;
             });
             btn.addEventListener('mouseenter', () => {
                 const hoverTheme = (currentTheme === 'light') ? 'dark' : 'light';
@@ -314,9 +430,8 @@ function handleImageSuccess() {
     const cover = this;
     console.log(`[Cover Success] Loaded: ${cover.src}`);
     
-    const placeholderDiv = (cover.parentNode.classList.contains('book-cover-container') || cover.parentNode.classList.contains('book-cover-wrapper')) 
-        ? cover.parentNode.querySelector('.cover-placeholder-overlay')
-        : cover.parentNode.parentNode.querySelector('.cover-placeholder-overlay');
+    const container = cover.closest('.book-cover-container, .book-cover-wrapper');
+    const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
 
     if (placeholderDiv) {
         placeholderDiv.style.display = 'none';
@@ -377,9 +492,8 @@ function handleImageFailure() {
             // it should ideally not error. If it does, stop trying.
             cover.onerror = function() {
                 console.error(`[Cover Final Failure] Ultimate fallback itself failed: ${this.src}`);
-                const placeholderDiv = (this.parentNode.classList.contains('book-cover-container') || this.parentNode.classList.contains('book-cover-wrapper')) 
-                    ? this.parentNode.querySelector('.cover-placeholder-overlay')
-                    : this.parentNode.parentNode.querySelector('.cover-placeholder-overlay');
+                const container = this.closest('.book-cover-container, .book-cover-wrapper');
+                const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
                 if (placeholderDiv) placeholderDiv.style.display = 'none';
                 this.style.opacity = '1';
                 this.classList.remove('loading');
@@ -388,9 +502,8 @@ function handleImageFailure() {
         }
     } else {
         console.error(`[Cover Final Failure] All fallbacks exhausted for initial src: ${cover.getAttribute('data-preferred-url-internal')}`);
-        const placeholderDiv = (cover.parentNode.classList.contains('book-cover-container') || cover.parentNode.classList.contains('book-cover-wrapper')) 
-            ? cover.parentNode.querySelector('.cover-placeholder-overlay')
-            : cover.parentNode.parentNode.querySelector('.cover-placeholder-overlay');
+        const container = cover.closest('.book-cover-container, .book-cover-wrapper');
+        const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
         if (placeholderDiv) placeholderDiv.style.display = 'none';
         cover.style.opacity = '1';
         cover.src = ultimate;
