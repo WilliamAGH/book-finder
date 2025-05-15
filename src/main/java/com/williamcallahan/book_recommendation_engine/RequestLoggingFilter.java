@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.Set;
 
 @Component
 public class RequestLoggingFilter implements Filter {
@@ -20,12 +21,26 @@ public class RequestLoggingFilter implements Filter {
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
-        long startTime = System.currentTimeMillis();
         HttpServletRequest req = (HttpServletRequest) request;
-        logger.info("Incoming request: {} {} from {}", req.getMethod(), req.getRequestURI(), req.getRemoteAddr());
+        String uri = req.getRequestURI();
+        // Determine extension
+        String ext = "";
+        int dotIdx = uri.lastIndexOf('.');
+        if (dotIdx > 0 && dotIdx < uri.length() - 1) {
+            ext = uri.substring(dotIdx + 1).toLowerCase();
+        }
+        boolean isApi = uri.startsWith("/api");
+        Set<String> logExts = Set.of("png","jpg","jpeg","svg","css","js","ico","html");
+        // Skip logging for non-API with non-whitelisted extensions
+        if (!isApi && !ext.isEmpty() && !logExts.contains(ext)) {
+            chain.doFilter(request, response);
+            return;
+        }
+        long startTime = System.currentTimeMillis();
+        logger.info("Incoming request: {} {} from {}", req.getMethod(), uri, req.getRemoteAddr());
         chain.doFilter(request, response);
         long duration = System.currentTimeMillis() - startTime;
         int status = response instanceof HttpServletResponse ? ((HttpServletResponse) response).getStatus() : 0;
-        logger.info("Completed request: {} {} with status {} in {} ms", req.getMethod(), req.getRequestURI(), status, duration);
+        logger.info("Completed request: {} {} with status {} in {} ms", req.getMethod(), uri, status, duration);
     }
 }
