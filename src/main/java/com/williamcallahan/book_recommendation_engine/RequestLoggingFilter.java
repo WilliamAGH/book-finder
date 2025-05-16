@@ -1,3 +1,16 @@
+/**
+ * Request logging and timing filter for HTTP requests
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Logs incoming HTTP requests with method, URI, and source IP
+ * - Measures and logs request processing duration
+ * - Records HTTP response status codes
+ * - Selectively filters static resource requests to reduce log noise
+ * - Special handling for API endpoints for comprehensive API logging
+ * - Smart extension-based filtering to focus on important requests
+ */
 package com.williamcallahan.book_recommendation_engine;
 
 import jakarta.servlet.Filter;
@@ -18,6 +31,19 @@ import java.util.Set;
 public class RequestLoggingFilter implements Filter {
     private static final Logger logger = LoggerFactory.getLogger(RequestLoggingFilter.class);
 
+    /**
+     * Processes HTTP request through the filter chain with logging
+     * - Logs request details before processing
+     * - Tracks request processing time
+     * - Logs completion status and duration
+     * - Skips logging for common static resource extensions
+     * 
+     * @param request The incoming servlet request
+     * @param response The servlet response
+     * @param chain The filter processing chain
+     * @throws IOException If an I/O error occurs during request processing
+     * @throws ServletException If a servlet error occurs during processing
+     */
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {

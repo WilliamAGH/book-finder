@@ -1,3 +1,15 @@
+/**
+ * Configuration for Amazon S3 client used for book cover storage
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Creates S3Client bean conditionally based on enabled flag
+ * - Supports custom endpoint URL for MinIO or local S3 compatible services
+ * - Handles graceful degradation when configuration is incomplete
+ * - Prevents application startup with misconfigured credentials
+ * - Logs configuration status and errors for diagnostics
+ */
 package com.williamcallahan.book_recommendation_engine.config;
 
 import org.slf4j.Logger;
@@ -31,6 +43,15 @@ public class S3Config {
     @Value("${s3.enabled:false}") // Add s3.enabled check
     private boolean s3Enabled;
 
+    /**
+     * Creates and configures S3Client bean for AWS S3 interactions
+     * - Returns null when s3.enabled=false to disable S3 functionality
+     * - Validates required configuration parameters before creating client
+     * - Overrides endpoint for compatibility with MinIO or local S3 services
+     * - Uses static credentials provider for authentication
+     *
+     * @return Configured S3Client instance or null if disabled/misconfigured
+     */
     @Bean
     public S3Client s3Client() {
         if (!s3Enabled) {

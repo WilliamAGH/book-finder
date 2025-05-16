@@ -8,10 +8,21 @@ import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfigurat
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 
-// Simple application entry point - specialized configurations handle database presence/absence
+/**
+ * Main application class for the Book Recommendation Engine
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Excludes default database auto-configurations to allow conditional DB setup
+ * - Enables caching for improved performance
+ * - Supports asynchronous operations for non-blocking API calls
+ * - Entry point for Spring Boot application
+ */
 @SpringBootApplication(exclude = {
     DataSourceAutoConfiguration.class,
     DataSourceTransactionManagerAutoConfiguration.class,
@@ -21,12 +32,16 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptio
     OpenAiAudioTranscriptionAutoConfiguration.class 
 })
 @EnableCaching
-@EnableAsync // Enable asynchronous operations
+@EnableAsync
+@EnableScheduling
 public class BookRecommendationEngineApplication {
 
+    /**
+     * Main method that starts the Spring Boot application
+     *
+     * @param args Command line arguments passed to the application
+     */
 	public static void main(String[] args) {
 		SpringApplication.run(BookRecommendationEngineApplication.class, args);
 	}
-
-    // Removed conditional DB classes to prevent manual DataSource imports and auto-config conflicts
 }
