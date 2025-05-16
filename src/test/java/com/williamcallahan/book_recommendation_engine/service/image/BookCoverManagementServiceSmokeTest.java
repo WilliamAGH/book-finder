@@ -15,6 +15,7 @@ import java.nio.file.Paths;
 import org.springframework.beans.factory.annotation.Value;
 import java.util.Comparator;
 import java.io.IOException;
+import java.time.Duration;
 
 /**
  * Integration test for the BookCoverCacheService
@@ -133,7 +134,7 @@ public class BookCoverManagementServiceSmokeTest { // Renamed class
         logger.info("Testing cover for: {} - ISBN13: {}, GoogleID: {}", bookLabel, book.getIsbn13(), book.getId());
 
         // Initial call
-        com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book); // Use renamed service
+        com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book).block(Duration.ofSeconds(5)); // Use renamed service
         String initialUrl = (initialCoverImages != null && initialCoverImages.getPreferredUrl() != null) ? initialCoverImages.getPreferredUrl() : "/images/placeholder-book-cover.svg";
         logger.info("[{}] Initial URL: {}", bookLabel, initialUrl);
 
@@ -141,7 +142,7 @@ public class BookCoverManagementServiceSmokeTest { // Renamed class
         Thread.sleep(20000);
 
         // Call again to see if the URL has been updated by background processing (e.g., to S3 or a final placeholder)
-        com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book); // Use renamed service
+        com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book).block(Duration.ofSeconds(5)); // Use renamed service
         String finalUrl = (finalCoverImages != null && finalCoverImages.getPreferredUrl() != null) ? finalCoverImages.getPreferredUrl() : "/images/placeholder-book-cover.svg";
         logger.info("[{}] URL after background processing: {}", bookLabel, finalUrl);
 
