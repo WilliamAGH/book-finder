@@ -7,7 +7,16 @@ import org.springframework.web.bind.annotation.RequestParam;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 
 /**
- * Controller advice for adding image resolution preferences to all models
+ * Controller advice for managing image resolution preferences
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Automatically adds resolution preference to all models
+ * - Exposes resolution options for template selection UI
+ * - Parses and validates user resolution preferences
+ * - Provides sensible defaults for invalid parameter values
+ * - Implements global controller advice pattern
  */
 @ControllerAdvice
 public class ImageResolutionPreferenceController {

@@ -7,7 +7,16 @@ import org.springframework.web.bind.annotation.RequestParam;
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
 /**
- * Controller advice for adding cover image source preferences to all models
+ * Controller advice for managing book cover image source preferences
+ * 
+ * @author William Callahan
+ * 
+ * Features:
+ * - Adds cover source preference to all models automatically
+ * - Exposes cover source options for templates
+ * - Parses and validates user cover source preferences
+ * - Provides fallbacks for invalid preference values
+ * - Implements global controller advice pattern
  */
 @ControllerAdvice
 public class BookCoverPreferenceController {

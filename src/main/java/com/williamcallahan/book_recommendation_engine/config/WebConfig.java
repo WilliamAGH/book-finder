@@ -1,3 +1,15 @@
+/**
+ * Configuration for static resource handling and web MVC settings
+ * 
+ * @author William Callahan
+ *
+ * Features:
+ * - Configures cached cover image serving from file system
+ * - Sets appropriate browser caching headers
+ * - Resolves dynamic paths based on application properties
+ * - Preserves standard resource handler mappings
+ * - Supports both custom and default resource locations
+ */
 package com.williamcallahan.book_recommendation_engine.config;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -15,6 +27,14 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${app.cover-cache.dir:covers}")
     private String coverCacheDirName; // This should match the directory name used in URLs, e.g., "covers"
 
+    /**
+     * Configures resource handlers for static content serving
+     * - Dynamically maps cover image cache directory
+     * - Sets appropriate cache control headers
+     * - Preserves default static resource mappings
+     * 
+     * @param registry The Spring MVC resource handler registry
+     */
     @Override
     public void addResourceHandlers(@NonNull ResourceHandlerRegistry registry) {
         // Resolve the absolute path to the cache directory.

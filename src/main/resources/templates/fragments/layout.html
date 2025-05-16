@@ -4,11 +4,37 @@
     .filter(cookie -> 'preferred_theme'.equals(cookie.name))
     .findFirst().orElse(null)?.value : null}" 
     th:attr="data-theme=${themePreference != null ? themePreference : '_auto_'}">
-<head th:fragment="head(title)">
+<head th:fragment="head(title, description, canonicalUrl, ogImage, keywords)">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
-    <title th:text="${title} + ' - Book Recommendation Engine'">Book Recommendation Engine</title>
+
+    <!-- Page Title -->
+    <title th:text="(${title != null && !#strings.isEmpty(title)} ? ${title} + ' - Book Finder' : 'Book Finder')">Book Finder</title>
+
+    <!-- SEO Meta Tags -->
+    <meta name="description" th:content="${description ?: 'Discover your next favorite book with our recommendation engine. Search, explore, and find personalized book suggestions.'}">
+    <link rel="canonical" th:href="${canonicalUrl}">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" th:content="${canonicalUrl}">
+    <meta property="og:title" th:content="(${title != null && !#strings.isEmpty(title)} ? ${title} + ' - Book Finder' : 'Book Finder')">
+    <meta property="og:description" th:content="${description ?: 'Discover your next favorite book with our recommendation engine. Search, explore, and find personalized book suggestions.'}">
+    <meta property="og:image" th:content="${ogImage}"> <!-- Controller will ensure ogImage is always set -->
+    <meta property="og:site_name" content="Book Finder">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" th:content="${canonicalUrl}">
+    <meta property="twitter:title" th:content="(${title != null && !#strings.isEmpty(title)} ? ${title} + ' - Book Finder' : 'Book Finder')">
+    <meta property="twitter:description" th:content="${description ?: 'Discover your next favorite book with our recommendation engine. Search, explore,and find personalized book suggestions.'}">
+    <meta property="twitter:image" th:content="${ogImage}"> <!-- Controller will ensure ogImage is always set -->
+    <meta name="twitter:site" content="@williamcallahan">
+
+    <meta name="keywords" th:content="${keywords ?: 'book recommendations, find books, book suggestions, reading, literature'}">
+    <meta name="robots" content="index, follow">
+
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
@@ -16,7 +42,7 @@
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/css/main.css">
+    <link rel="stylesheet" th:href="@{/css/main.css}">
     <link rel="icon" type="image/x-icon" th:href="@{/favicon.ico}" href="/favicon.ico">
     <!-- Additional CSS -->
     <th:block th:replace="${extraCSS} ?: _"></th:block>
@@ -26,7 +52,7 @@
 <!-- Navbar -->
 <nav th:fragment="navbar" id="main-navbar" class="navbar navbar-expand-lg sticky-top navbar-light">
     <div class="container">
-        <a class="navbar-brand" href="/">
+        <a class="navbar-brand" th:href="@{/}">
             <i class="fas fa-book-reader me-2"></i>Book Finder
         </a>
         <!-- Mobile-only theme toggle -->
@@ -53,8 +79,7 @@
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link" href="#" 
-                       onclick="document.getElementById('searchInput').focus(); return false;">
+                    <a class="nav-link" th:href="@{/explore}">
                         <i class="fas fa-book me-1"></i> Explore
                     </a>
                 </li>
@@ -96,13 +121,19 @@
     <!-- Bootstrap 5 JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <!-- Main JavaScript -->
-    <script src="/js/main.js"></script>
+    <script th:src="@{/js/main.js}" defer></script>
     <!-- STOMP over WebSocket for real-time cover updates -->
-    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js" defer></script>
     <!-- Additional Scripts -->
     <th:block th:replace="${extraScripts} ?: _"></th:block>
 </th:block>
+
+<!-- Clicky Analytics -->
+<a title="Web Analytics" href="https://clicky.com/101484793"><img alt="Clicky" src="https://static.getclicky.com/media/links/badge.gif" border="0" /></a>
+<script async src="https://static.getclicky.com/101484793.js"></script>
+<noscript><p><img alt="Clicky" width="1" height="1" src="//in.getclicky.com/101484793ns.gif" /></p></noscript>
+<!-- End Clicky Analytics -->
 
 </body>
 </html>

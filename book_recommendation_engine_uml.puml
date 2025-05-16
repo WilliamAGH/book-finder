@@ -1,4 +1,4 @@
-@startuml Book Recommendation Engine
+@startuml Book Finder
 
 ' Define the package
 package "com.williamcallahan.book_recommendation_engine" {
@@ -10,7 +10,7 @@ package "com.williamcallahan.book_recommendation_engine" {
     skinparam packageStyle rectangle
 
     ' Title
-    title Book Recommendation Engine - UML Class Diagram
+    title Book Finder - UML Class Diagram
 
     ' Package for model classes
     package "model" {

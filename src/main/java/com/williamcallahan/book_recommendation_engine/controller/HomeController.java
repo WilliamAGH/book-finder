@@ -2,11 +2,11 @@ package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheService; 
-// import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService; // Removed
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookCoverCacheService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
+import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -16,16 +16,31 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.view.RedirectView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 import java.util.List;
 import java.util.Collections;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Random;
+import java.util.stream.Collectors;
 
 /**
- * Controller for handling user-facing web pages such as the homepage, search page, and book detail pages.
- * It integrates with various services to fetch book data and uses BookCoverCacheService
- * to provide optimized cover image URLs for display.
+ * Controller for handling user-facing web pages in the Book Finder
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Renders home page with recently viewed and recommended books
+ * - Manages search page and search result display
+ * - Handles book detail pages with metadata and similar book recommendations
+ * - Processes ISBN lookups and redirects to canonical book URLs
+ * - Integrates with caching services for optimal performance
+ * - Applies SEO optimizations including metadata and keyword generation
+ * - Manages cover image resolution and source preferences
  */
 @Controller
 public class HomeController {
@@ -34,39 +49,76 @@ public class HomeController {
     private final BookCacheService bookCacheService; 
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
-    private final BookCoverCacheService bookCoverCacheService;
+    private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
-    // The minimum number of books to display on the homepage
     private static final int MIN_BOOKS_TO_DISPLAY = 5;
     
+    private static final List<String> EXPLORE_QUERIES = Arrays.asList(
+            "Classic literature",
+            "Modern thrillers",
+            "Space opera adventures",
+            "Historical fiction bestsellers",
+            "Award-winning science fiction",
+            "Inspiring biographies",
+            "Mind-bending philosophy",
+            "Beginner's cookbooks",
+            "Epic fantasy sagas",
+            "Cyberpunk futures",
+            "Cozy mysteries",
+            "Environmental science",
+            "Artificial intelligence ethics",
+            "World mythology",
+            "Travel memoirs"
+    );
+    private static final Random RANDOM = new Random();
+
     // Regex patterns for ISBN validation
     private static final Pattern ISBN10_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$");
     private static final Pattern ISBN13_PATTERN = Pattern.compile("^[0-9]{13}$");
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
+    /**
+     * Constructs the HomeController with required services
+     * 
+     * @param bookCacheService Service for retrieving and caching book information
+     * @param recentlyViewedService Service for tracking user book view history
+     * @param recommendationService Service for generating book recommendations
+     * @param bookCoverManagementService Service for retrieving and caching book cover images
+     * @param environmentService Service providing environment configuration information
+     */
     @Autowired
     public HomeController(BookCacheService bookCacheService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
-                          BookCoverCacheService bookCoverCacheService,
+                          BookCoverManagementService bookCoverManagementService,
                           EnvironmentService environmentService) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
-        this.bookCoverCacheService = bookCoverCacheService;
+        this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
     }
 
     /**
      * Handles requests to the home page
+     * - Displays recently viewed books for returning users
+     * - Populates with default recommendations for new users
+     * - Optimizes cover images for display through caching service
      *
-     * @param model the model for the view
-     * @return the name of the template to render
+     * @param model The model for the view
+     * @return Mono containing the name of the template to render
      */
     @GetMapping("/")
     public Mono<String> home(Model model) {
         model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
         model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
+        model.addAttribute("activeTab", "home");
+        model.addAttribute("title", "Home");
+        model.addAttribute("description", "Discover your next favorite book with our recommendation engine. Explore recently viewed books and new arrivals.");
+        model.addAttribute("canonicalUrl", "https://findmybook.net/"); 
+        model.addAttribute("ogImage", "https://findmybook.net/images/default-social-image.png"); // Default OG image
+        model.addAttribute("keywords", "book recommendations, find books, book suggestions, reading, literature, home");
+
         // Add recently viewed books to the model
         List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
         model.addAttribute("activeTab", "home"); // Set early
@@ -75,7 +127,7 @@ public class HomeController {
 
         if (recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
             // Use BookCacheService for searching default books
-            recentBooksMono = bookCacheService.searchBooksReactive("Java programming", 0, MIN_BOOKS_TO_DISPLAY) 
+            recentBooksMono = bookCacheService.searchBooksReactive("ag riddle", 0, MIN_BOOKS_TO_DISPLAY) 
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(recentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
@@ -92,46 +144,59 @@ public class HomeController {
             recentBooksMono = Mono.just(recentBooks);
         }
 
-        return recentBooksMono.map(finalRecentBooks -> {
-            // Process cover images for all books to be displayed
-            for (Book book : finalRecentBooks) {
-                if (book != null) {
-                    try {
-                        com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
-                        book.setCoverImages(coverImagesResult); // Set the CoverImages object
-
-                        // Set the direct coverImageUrl as a fallback or primary display if needed
-                        if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
-                            book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
-                        } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                            // If no preferred URL from service and no existing Google URL, use placeholder
-                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
-                        }
-                        // Clear other potentially stale direct image properties if CoverImages is now the authority
-                        book.setCoverImageWidth(null);
-                        book.setCoverImageHeight(null);
-                        book.setIsCoverHighResolution(null);
-                    } catch (Exception e) {
-                        String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() :
-                                                 ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
-                        logger.warn("Error getting initial cover URL for book with identifier '{}': {}", identifierForLog, e.getMessage());
-                        if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                           book.setCoverImageUrl("/images/placeholder-book-cover.svg");
-                        }
+        return recentBooksMono.flatMap(finalRecentBooks ->
+            Flux.fromIterable(finalRecentBooks)
+                .concatMap(book -> { // concatMap preserves order and processes one by one
+                    if (book == null) {
+                        return Mono.justOrEmpty(null); // Or handle as an error / skip
                     }
-                }
-            }
-            model.addAttribute("recentBooks", finalRecentBooks);
-            return "index"; // Return template name
-        });
+                    return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+                        .map(coverImagesResult -> {
+                            book.setCoverImages(coverImagesResult);
+                            if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
+                                book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
+                            } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                                book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                            }
+                            book.setCoverImageWidth(null);
+                            book.setCoverImageHeight(null);
+                            book.setIsCoverHighResolution(null);
+                            return book;
+                        })
+                        .onErrorResume(e -> {
+                            String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() :
+                                                     ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
+                            logger.warn("Error getting initial cover URL for book with identifier '{}' in home: {}", identifierForLog, e.getMessage());
+                            if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                               book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                            }
+                            // Ensure CoverImages is at least initialized to avoid NPEs in template
+                            if (book.getCoverImages() == null) {
+                                book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
+                                    book.getCoverImageUrl(), book.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                                ));
+                            }
+                            return Mono.just(book); // Return the book even if cover fetching failed
+                        });
+                })
+                .filter(java.util.Objects::nonNull) // Filter out any null books if handled that way
+                .collectList()
+                .map(processedBooks -> {
+                    model.addAttribute("recentBooks", processedBooks);
+                    return "index";
+                })
+        );
     }
     
     /**
      * Handles requests to the search results page
+     * - Sets up model attributes for search view
+     * - Configures SEO metadata for search page
+     * - Prepares for client-side API calls
      *
-     * @param query the search query
-     * @param model the model for the view
-     * @return the name of the template to render
+     * @param query The search query string from user input
+     * @param model The model for the view
+     * @return The name of the template to render (search.html)
      */
     @GetMapping("/search")
     public String search(String query, Model model) {
@@ -139,6 +204,11 @@ public class HomeController {
         model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
         model.addAttribute("query", query);
         model.addAttribute("activeTab", "search");
+        model.addAttribute("title", "Search Books");
+        model.addAttribute("description", "Search our extensive catalog of books by title, author, or ISBN. Find detailed information and recommendations.");
+        model.addAttribute("canonicalUrl", "https://findmybook.net/search"); 
+        model.addAttribute("ogImage", "https://findmybook.net/images/default-social-image.png"); // Default OG image
+        model.addAttribute("keywords", "book search, find books by title, find books by author, isbn lookup, book catalog"); // Default keywords
         return "search";
     }
     
@@ -164,55 +234,115 @@ public class HomeController {
         model.addAttribute("searchPage", page);
         model.addAttribute("searchSort", sort);
         model.addAttribute("searchView", view);
+        // Default SEO attributes in case book is not found or an error occurs
+        model.addAttribute("title", "Book Details");
+        model.addAttribute("description", "Detailed information about the selected book.");
+        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + id);
+        model.addAttribute("ogImage", "https://findmybook.net/images/og-logo.png"); // Default OG image
+        model.addAttribute("keywords", "book, literature, reading, book details"); // Default keywords
 
         // Use BookCacheService to get the main book
-        Mono<Book> bookMono = bookCacheService.getBookByIdReactive(id)
-            .doOnSuccess(book -> {
-                if (book != null) {
-                    // Update cover URL using BookCoverCacheService before adding to model
-                    com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
-                    book.setCoverImages(coverImagesResult);
-                    if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
-                        book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
-                    } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                        book.setCoverImageUrl("/images/placeholder-book-cover.svg");
-                    }
-                    model.addAttribute("book", book);
-                    try {
-                        recentlyViewedService.addToRecentlyViewed(book);
-                    } catch (Exception e) {
-                        logger.warn("Failed to add book to recently viewed for book ID {}: {}", book.getId(), e.getMessage());
-                    }
-                } else {
+        Mono<Book> bookMonoWithCover = bookCacheService.getBookByIdReactive(id)
+            .flatMap(book -> {
+                if (book == null) {
                     logger.info("No book found with ID: {} via BookCacheService", id);
-                    model.addAttribute("book", null); 
+                    model.addAttribute("book", null);
+                    return Mono.empty(); // No book found, propagate empty to handle later
                 }
+                // Book found, now fetch its cover images
+                return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+                    .map(coverImagesResult -> {
+                        book.setCoverImages(coverImagesResult);
+                        String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg"; // Default placeholder
+                        if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
+                            book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
+                            effectiveCoverImageUrl = coverImagesResult.getPreferredUrl();
+                        } else if (book.getCoverImageUrl() != null && !book.getCoverImageUrl().isEmpty()) {
+                            effectiveCoverImageUrl = book.getCoverImageUrl();
+                        }
+                        
+                        model.addAttribute("book", book);
+                        model.addAttribute("title", book.getTitle() != null ? book.getTitle() : "Book Details");
+                        model.addAttribute("description", SeoUtils.truncateDescription(book.getDescription(), 170));
+                        
+                        // Set ogImage: use specific book cover if not placeholder, else use site default
+                        String finalOgImage = (effectiveCoverImageUrl != null && !effectiveCoverImageUrl.contains("/images/placeholder-book-cover.svg")) 
+                                            ? effectiveCoverImageUrl 
+                                            : "https://findmybook.net/images/og-logo.png";
+                        model.addAttribute("ogImage", finalOgImage);
+                        
+                        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
+                        model.addAttribute("keywords", generateKeywords(book));
+
+                        try {
+                            recentlyViewedService.addToRecentlyViewed(book);
+                        } catch (Exception e) {
+                            logger.warn("Failed to add book to recently viewed for book ID {}: {}", book.getId(), e.getMessage());
+                        }
+                        return book;
+                    })
+                    .onErrorResume(e -> { // Handle errors from getInitialCoverUrlAndTriggerBackgroundUpdate
+                        logger.warn("Error getting cover for book ID {}: {}. Using placeholder.", book.getId(), e.getMessage());
+                        book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                         if (book.getCoverImages() == null) {
+                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
+                                book.getCoverImageUrl(), book.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                            ));
+                        }
+                        model.addAttribute("book", book); // Add book with placeholder cover
+                        // Set SEO attributes even on cover error
+                        model.addAttribute("title", book.getTitle() != null ? book.getTitle() : "Book Details");
+                        model.addAttribute("description", SeoUtils.truncateDescription(book.getDescription(), 170));
+                        
+                        // Fallback ogImage logic on error
+                        String errorOgImage = (book.getCoverImageUrl() != null && !book.getCoverImageUrl().contains("/images/placeholder-book-cover.svg"))
+                                            ? book.getCoverImageUrl()
+                                            : "https://findmybook.net/images/og-logo.png";
+                        model.addAttribute("ogImage", errorOgImage);
+
+                        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
+                        model.addAttribute("keywords", generateKeywords(book));
+                        return Mono.just(book);
+                    });
             })
-            .doOnError(e -> {
+            .doOnError(e -> { // Errors from getBookByIdReactive
                  logger.error("Error getting book with ID: {} via BookCacheService", id, e);
                  model.addAttribute("error", "An error occurred while retrieving this book. Please try again later.");
                  model.addAttribute("book", null);
             })
-            .onErrorResume(e -> Mono.empty());
+            .onErrorResume(e -> Mono.empty()); // If getBookByIdReactive fails, propagate empty
 
-        return bookMono
-            .flatMap(fetchedBook -> { // fetchedBook can be null
-                // Fetch similar books using RecommendationService (which now also uses BookCacheService for its source book)
+        return bookMonoWithCover
+            .flatMap(fetchedBook -> { // fetchedBook is the main book, potentially null if initial fetch failed and resulted in empty()
+                // Fetch similar books using RecommendationService
                 Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 6)
-                    .map(similarBooksList -> {
-                        for (Book similarBook : similarBooksList) {
-                            if (similarBook != null) {
-                                com.williamcallahan.book_recommendation_engine.types.CoverImages similarCoverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook);
-                                similarBook.setCoverImages(similarCoverImagesResult);
-                                if (similarCoverImagesResult != null && similarCoverImagesResult.getPreferredUrl() != null) {
-                                    similarBook.setCoverImageUrl(similarCoverImagesResult.getPreferredUrl());
-                                } else if (similarBook.getCoverImageUrl() == null || similarBook.getCoverImageUrl().isEmpty()) {
+                    .flatMap(similarBooksList -> Flux.fromIterable(similarBooksList)
+                        .concatMap(similarBook -> {
+                            if (similarBook == null) return Mono.justOrEmpty(null);
+                            return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook)
+                                .map(coverResult -> {
+                                    similarBook.setCoverImages(coverResult);
+                                    if (coverResult != null && coverResult.getPreferredUrl() != null) {
+                                        similarBook.setCoverImageUrl(coverResult.getPreferredUrl());
+                                    } else if (similarBook.getCoverImageUrl() == null || similarBook.getCoverImageUrl().isEmpty()) {
+                                        similarBook.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                    }
+                                    return similarBook;
+                                })
+                                .onErrorResume(e -> {
+                                    logger.warn("Error getting cover for similar book ID {}: {}", similarBook.getId(), e.getMessage());
                                     similarBook.setCoverImageUrl("/images/placeholder-book-cover.svg");
-                                }
-                            }
-                        }
-                        return similarBooksList;
-                    })
+                                    if (similarBook.getCoverImages() == null) {
+                                       similarBook.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
+                                            similarBook.getCoverImageUrl(), similarBook.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                                        ));
+                                    }
+                                    return Mono.just(similarBook);
+                                });
+                        })
+                        .filter(java.util.Objects::nonNull)
+                        .collectList()
+                    )
                     .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
                     .doOnError(e -> {
                         logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());
@@ -224,13 +354,55 @@ public class HomeController {
                 if (fetchedBook != null) {
                     return similarBooksMono.thenReturn("book");
                 } else {
-                    // If main book was not found, we might still want to show an empty page or an error
+                    // If main book was not found, show an empty page or an error
                     // The model.addAttribute("book", null) and error attribute would have been set by bookMono's doOnSuccess/doOnError
                     return similarBooksMono.thenReturn("book");
                 }
             })
             .defaultIfEmpty("book") 
             .onErrorReturn("book"); 
+    }
+    
+    /**
+     * Generates a comma-separated string of keywords for SEO
+     * - Extracts keywords from book title, authors, and categories
+     * - Removes duplicates and very short words
+     * - Adds generic book-related terms
+     * - Limits total keywords to prevent keyword stuffing
+     * 
+     * @param book The book object to generate keywords from
+     * @return A comma-separated string of relevant keywords
+     */
+    private String generateKeywords(Book book) {
+        if (book == null) {
+            return "book, literature, reading"; // Default keywords
+        }
+        List<String> keywords = new ArrayList<>();
+        if (book.getTitle() != null && !book.getTitle().isEmpty()) {
+            keywords.addAll(Arrays.asList(book.getTitle().toLowerCase().split("\\s+")));
+        }
+        if (book.getAuthors() != null && !book.getAuthors().isEmpty()) {
+            for (String author : book.getAuthors()) {
+                keywords.addAll(Arrays.asList(author.toLowerCase().split("\\s+")));
+            }
+        }
+        if (book.getCategories() != null && !book.getCategories().isEmpty()) {
+            for (String category : book.getCategories()) {
+                keywords.addAll(Arrays.asList(category.toLowerCase().split("\\s+")));
+            }
+        }
+        // Add some generic terms
+        keywords.add("book");
+        keywords.add("details");
+        keywords.add("review");
+        keywords.add("summary");
+
+        // Remove duplicates and common short words, then join
+        return keywords.stream()
+                .distinct()
+                .filter(kw -> kw.length() > 2) // Filter out very short words
+                .limit(15) // Limit number of keywords
+                .collect(Collectors.joining(", "));
     }
     
     /**
@@ -338,5 +510,21 @@ public class HomeController {
         
         // Forward to the common ISBN handler
         return bookDetailByIsbn(sanitizedIsbn);
+    }
+
+    @GetMapping("/explore")
+    public RedirectView explore() {
+        String selectedQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
+        logger.info("Explore page requested, redirecting to search with query: '{}'", selectedQuery);
+        try {
+            String encodedQuery = URLEncoder.encode(selectedQuery, StandardCharsets.UTF_8.toString());
+            // Redirect to the search page with the selected query and a source indicator
+            RedirectView redirectView = new RedirectView("/search?query=" + encodedQuery + "&source=explore");
+            return redirectView;
+        } catch (java.io.UnsupportedEncodingException e) {
+            logger.error("Error encoding query parameter for explore redirect: {}", selectedQuery, e);
+            // Fallback to redirect without query or to an error page if critical
+            return new RedirectView("/search?source=explore&error=queryEncoding");
+        }
     }
 }

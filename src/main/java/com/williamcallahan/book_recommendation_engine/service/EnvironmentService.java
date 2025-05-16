@@ -6,14 +6,30 @@ import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 
 /**
- * Service to manage environment-specific configurations and feature flags.
- * Provides methods to check active profiles and retrieve environment settings.
+ * Service for environment detection and configuration management
+ * 
+ * @author William Callahan
+ * 
+ * Features:
+ * - Determines active Spring profiles (dev, prod)
+ * - Provides configuration properties to templates and services
+ * - Controls environment-specific features and behavior
+ * - Centralizes access to environment variables and properties
+ * - Enables conditional rendering based on environment context
+ * - Supports feature flags for staged rollouts and debugging
  */
 @Service("environmentService")
 public class EnvironmentService {
 
     private final Environment environment;
 
+    /**
+     * Constructs EnvironmentService with Spring environment
+     * - Injects the Spring Environment abstraction
+     * - Enables access to property sources and profiles
+     * 
+     * @param environment Spring Environment configuration object
+     */
     @Autowired
     public EnvironmentService(Environment environment) {
         this.environment = environment;

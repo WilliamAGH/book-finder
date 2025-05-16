@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="en">
-<head th:replace="~{fragments/layout :: head(title='Search Results')}">
+<head th:replace="~{fragments/layout :: head(title=${title}, description=${description}, canonicalUrl=${canonicalUrl}, ogImage=${ogImage}, keywords=${keywords})}">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search Results - Book Recommendation Engine</title>
+    <title>Search Results - Book Finder</title>
 </head>
 <body>
 
@@ -122,6 +122,7 @@
             <div class="position-relative book-cover-container">
                 <img src="/images/placeholder-book-cover.svg" 
                      class="card-img-top book-cover" 
+                     loading="lazy"
                      data-book-id="" 
                      data-preferred-url="" 
                      data-fallback-url="/images/placeholder-book-cover.svg" 
@@ -151,6 +152,7 @@
                     <div class="position-relative book-cover-container book-cover-wrapper h-100">
                         <img src="/images/placeholder-book-cover.svg" 
                              class="img-fluid rounded-start book-cover" 
+                             loading="lazy"
                              data-book-id="" 
                              data-preferred-url="" 
                              data-fallback-url="/images/placeholder-book-cover.svg" 
@@ -273,6 +275,20 @@
                     opt.classList.remove('active');
                 }
             });
+
+            // Check if the page was loaded from the Explore feature
+            const urlSource = urlParams.get('source');
+            if (urlSource === 'explore' && query) {
+                const resultsForTextElements = document.querySelectorAll('.search-header .text-muted');
+                resultsForTextElements.forEach(el => {
+                    const boldQuerySpan = el.querySelector('span.fw-bold');
+                    // Check if the bold span exists and its text content matches the current query
+                    if (boldQuerySpan && boldQuerySpan.textContent === query) {
+                        el.innerHTML = `Exploring: <span class="fw-bold">${query}</span> <i class="fas fa-compass ms-1 text-primary"></i>`;
+                        document.title = `Exploring: ${query} - Book Recommendation Engine`;
+                    }
+                });
+            }
             
             performSearch(query, currentPage * currentMaxResults, currentSort, currentCoverSource, currentResolution);
         }
@@ -289,7 +305,7 @@
                 
                 currentView = view;
                 
-                // If we have search results, re-render them
+                // If it has search results, re-render them
                 if (query) {
                     displayResults(window.lastSearchResults, currentView);
                 }
@@ -308,7 +324,7 @@
                 
                 currentSort = sortBy;
                 
-                // If we have search results, re-sort and re-render them
+                // If it has search results, re-sort and re-render them
                 if (query) {
                     performSearch(query, 0, sortBy, currentCoverSource, currentResolution);
                 }
@@ -859,8 +875,8 @@
         background-color: transparent !important;
     }
     
-    /* Hide stray pagination dot when pagination is empty */
-    #pagination:empty {
+    /* Hide stray pagination dot/container when pagination is empty */
+    nav[aria-label="Search results pages"]:has(#pagination:empty) {
         display: none !important;
     }
     

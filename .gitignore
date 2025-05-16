@@ -1,8 +1,10 @@
 HELP.md
 target/
+target_test-classes/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+covers/
 
 ### STS ###
 .apt_generated
@@ -12,7 +14,10 @@ target/
 .settings
 .springBeans
 .sts4-cache
+node
+node_modules
 
+!og-logo.png
 ### IntelliJ IDEA ###
 .idea
 *.iws
@@ -23,18 +28,21 @@ target/
 *.png
 *.webp
 *.svg
-!**/src/main/resources/static/images/image-not-available.png
-!**/src/main/resources/static/images/placeholder-book-cover.svg
+
+### FORCE INCLUDE ALL STATIC IMAGES ###
+!src/main/resources/static/images/*
 
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
 /dist/
 /nbdist/
+**/target/test-classes/
 /.nb-gradle/
 build/
 !**/src/main/**/build/
 !**/src/test/**/build/
+.claude
 
 ### VS Code ###
 .vscode/

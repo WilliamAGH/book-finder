@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
+import com.williamcallahan.book_recommendation_engine.types.PgVector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,17 +20,28 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Flux;
-
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.time.Duration;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Service for caching book data from Google Books API to improve performance.
- * Provides both in-memory and database caching with reactive support.
+ * Service for multi-level caching of book data with both synchronous and reactive APIs
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Implements multi-level caching strategy (in-memory, Spring Cache, database)
+ * - Provides reactive and traditional APIs for book data retrieval
+ * - Supports querying by Google Books ID, ISBN-10, and ISBN-13
+ * - Automatically caches book data fetched from Google Books API
+ * - Handles vector embeddings for book similarity recommendations
+ * - Manages cache invalidation for book cover updates
+ * - Includes scheduled cache cleanup for memory optimization
+ * - Provides fallback mechanisms when database is unavailable
  */
 @Service
 public class BookCacheService {
@@ -48,6 +60,18 @@ public class BookCacheService {
     @Value("${app.embedding.service.url:#{null}}")
     private String embeddingServiceUrl;
     
+    /**
+     * Constructs a BookCacheService with required dependencies
+     * 
+     * @param googleBooksService Service for fetching book data from Google Books API
+     * @param objectMapper JSON mapper for serializing book data
+     * @param webClientBuilder WebClient builder for embedding service communication
+     * @param cacheManager Spring cache manager for managing in-memory caches
+     * @param cachedBookRepository Repository for database-backed caching (optional)
+     * 
+     * @implNote Detects if database repository is available and adjusts caching behavior accordingly
+     * Initializes embedding service client with fallback to localhost when URL not configured
+     */
     @Autowired
     public BookCacheService(
             GoogleBooksService googleBooksService,
@@ -71,9 +95,13 @@ public class BookCacheService {
     }
     
     /**
-     * Get a book by ID with cache-first approach
-     * @param id The book ID
-     * @return The book if found
+     * Retrieves a book by its Google Books ID using multi-level cache approach
+     * 
+     * @param id The Google Books ID to look up
+     * @return The book if found, null otherwise
+     * 
+     * @implNote First checks in-memory cache, then database cache, finally calls Google Books API
+     * Automatically caches results from API calls for future use
      */
     @Cacheable(value = "books", key = "#id", unless = "#result == null")
     public Book getBookById(String id) {
@@ -91,7 +119,20 @@ public class BookCacheService {
         }
         
         logger.info("Cache miss for book ID: {}, fetching from Google Books API", id);
-        Book book = googleBooksService.getBookById(id).blockOptional().orElse(null);
+        // Adapt CompletableFuture to blocking Optional for the synchronous method
+        Book book = null;
+        try {
+            book = Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
+                .onErrorResume(ex -> {
+                    logger.error("Error fetching book by ID {} from GoogleBooksService: {}", id, ex.getMessage());
+                    return Mono.empty(); // Return empty Mono on error
+                })
+                .block(Duration.ofSeconds(5)); // Block with timeout
+        } catch (IllegalStateException e) { 
+             logger.error("Timeout or no item fetching book by ID {} from GoogleBooksService: {}", id, e.getMessage());
+        } catch (RuntimeException e) { 
+            logger.error("Error fetching book by ID {} from GoogleBooksService: {}", id, e.getMessage());
+        }
         
         if (book != null && cacheEnabled && cachedBookRepository != null) {
             // Asynchronously cache to database using the reactive method
@@ -105,9 +146,13 @@ public class BookCacheService {
     }
     
     /**
-     * Get a book by ISBN with cache-first approach
-     * @param isbn The book ISBN (can be ISBN-10 or ISBN-13)
+     * Retrieves books by ISBN using multi-level cache approach
+     * 
+     * @param isbn The book ISBN (supports both ISBN-10 and ISBN-13 formats)
      * @return List of books matching the ISBN
+     * 
+     * @implNote Handles both ISBN-10 and ISBN-13 formats with appropriate cache lookups
+     * Multiple books may match a single ISBN due to different editions
      */
     public List<Book> getBooksByIsbn(String isbn) {
         // Try to get from cache first
@@ -153,11 +198,15 @@ public class BookCacheService {
     }
     
     /**
-     * Search books with cache augmentation
-     * @param query The search query
-     * @param startIndex The index to start from
-     * @param maxResults The maximum number of results to return
-     * @return List of books matching the query
+     * Searches for books with the specified query and caches results
+     * 
+     * @param query The search query string
+     * @param startIndex The pagination starting index (0-based)
+     * @param maxResults Maximum number of results to return
+     * @return List of books matching the query with pagination applied
+     * 
+     * @implNote Results are cached asynchronously for future retrieval
+     * Implements client-side pagination on the full result set
      */
     public List<Book> searchBooks(String query, int startIndex, int maxResults) {
         logger.info("BookCacheService searching books with query: {}, requested startIndex: {}, maxResults: {}", query, startIndex, maxResults);
@@ -187,10 +236,14 @@ public class BookCacheService {
     }
     
     /**
-     * Get similar books based on semantic similarity
-     * @param bookId The source book ID
-     * @param count The number of similar books to return
-     * @return List of similar books
+     * Finds books similar to the specified book using vector similarity when available
+     * 
+     * @param bookId The source book ID to find similar books for
+     * @param count Maximum number of similar books to return
+     * @return List of books similar to the specified book
+     * 
+     * @implNote Attempts to use vector similarity from database cache first
+     * Falls back to Google Books API category/author matching if necessary
      */
     public List<Book> getSimilarBooks(String bookId, int count) {
         // First try using vector similarity if the book is in the cache and database is available
@@ -215,7 +268,20 @@ public class BookCacheService {
         
         logger.info("No vector similarity data for book ID: {}, using GoogleBooksService category/author matching", bookId);
         // Need the Book object to call the new getSimilarBooks method
-        Book sourceBook = googleBooksService.getBookById(bookId).blockOptional().orElse(null);
+        // Adapt CompletableFuture to blocking Optional for the synchronous method
+        Book sourceBook = null;
+        try {
+            sourceBook = Mono.fromCompletionStage(googleBooksService.getBookById(bookId)) // Convert CompletionStage to Mono
+                .onErrorResume(ex -> {
+                    logger.error("Error fetching source book by ID {} for similar search: {}", bookId, ex.getMessage());
+                    return Mono.empty();
+                })
+                .block(Duration.ofSeconds(5));
+        } catch (IllegalStateException e) {
+            logger.error("Timeout or no item fetching source book for similar search (ID {}): {}", bookId, e.getMessage());
+        } catch (RuntimeException e) {
+            logger.error("Error fetching source book for similar search (ID {}): {}", bookId, e.getMessage());
+        }
         if (sourceBook == null) {
             logger.warn("Source book for similar search not found (ID: {}), returning empty list.", bookId);
             return Collections.emptyList();
@@ -227,7 +293,10 @@ public class BookCacheService {
     
     
     /**
-     * Clean expired cache entries (run daily at midnight)
+     * Cleans expired cache entries from the in-memory cache
+     * 
+     * @implNote Scheduled to run daily at midnight
+     * Helps prevent memory leaks and ensures fresh data
      */
     @CacheEvict(value = "books", allEntries = true)
     @Scheduled(cron = "0 0 0 * * ?") 
@@ -236,9 +305,13 @@ public class BookCacheService {
     }
 
     /**
-     * Get a book by ID with cache-first approach - Reactive version
-     * @param id The book ID
-     * @return A Mono of the book if found, or empty Mono if not
+     * Retrieves a book by ID using reactive cache-first approach
+     * 
+     * @param id The Google Books ID to look up
+     * @return Mono emitting the book if found, or empty if not found
+     * 
+     * @implNote Implements reactive lookup through all cache layers
+     * Provides non-blocking alternative to getBookById method
      */
     // @Cacheable(value = "books", key = "#id", unless = "#result == null") // Reactive caching needs different setup
     public Mono<Book> getBookByIdReactive(String id) {
@@ -274,9 +347,19 @@ public class BookCacheService {
         return fetchFromGoogleAndUpdateCaches(id);
     }
 
+    /**
+     * Fetches a book from Google Books API and updates all cache layers
+     * 
+     * @param id The Google Books ID to fetch
+     * @return Mono emitting the fetched book or empty if not found
+     * 
+     * @implNote Updates both in-memory and database caches asynchronously
+     * Called when book is not found in any cache layer
+     */
     // Renamed from fetchFromGoogleAndCache to be more specific about updating caches
     private Mono<Book> fetchFromGoogleAndUpdateCaches(String id) {
-        return googleBooksService.getBookById(id) // This is already Mono<Book>
+        // googleBooksService.getBookById(id) already returns Mono<Book>
+        return Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
             .flatMap(book -> {
                 if (book != null) {
                     bookDetailCache.put(id, book); // Populate in-memory cache
@@ -293,9 +376,13 @@ public class BookCacheService {
     }
     
     /**
-     * Get a book by ISBN with cache-first approach - Reactive version
-     * @param isbn The book ISBN (can be ISBN-10 or ISBN-13)
-     * @return A Mono of a list of books matching the ISBN
+     * Retrieves books by ISBN using reactive cache-first approach
+     * 
+     * @param isbn The book ISBN (supports both ISBN-10 and ISBN-13 formats)
+     * @return Mono emitting list of books matching the ISBN
+     * 
+     * @implNote Provides non-blocking ISBN lookup with multi-layer cache checking
+     * Automatically determines ISBN format and uses appropriate repository method
      */
     public Mono<List<Book>> getBooksByIsbnReactive(String isbn) {
         if (cacheEnabled && cachedBookRepository != null) {
@@ -326,6 +413,15 @@ public class BookCacheService {
         return fetchByIsbnFromGoogleAndCache(isbn);
     }
 
+    /**
+     * Fetches books by ISBN from Google Books API and updates caches
+     * 
+     * @param isbn The ISBN to search for (ISBN-10 or ISBN-13)
+     * @return Mono emitting list of books matching the ISBN
+     * 
+     * @implNote Handles both ISBN-10 and ISBN-13 formats
+     * Caches each matched book individually for future retrieval
+     */
     private Mono<List<Book>> fetchByIsbnFromGoogleAndCache(String isbn) {
         return googleBooksService.searchBooksByISBN(isbn) // Returns Mono<List<Book>>
             .flatMap(books -> {
@@ -344,11 +440,15 @@ public class BookCacheService {
     }
 
     /**
-     * Search books with cache augmentation - Reactive version
-     * @param query The search query
-     * @param startIndex The index to start from (Note: Google API uses startIndex, this method applies pagination after full fetch if not using DB for search)
-     * @param maxResults The maximum number of results to return
-     * @return Mono of a list of books matching the query
+     * Searches for books with reactive API and result caching
+     * 
+     * @param query The search query string
+     * @param startIndex The pagination starting index (0-based)
+     * @param maxResults Maximum number of results to return
+     * @return Mono emitting list of books matching the query with pagination applied
+     * 
+     * @implNote Applies client-side pagination after retrieving full result set
+     * Background caches results while returning immediately to client
      */
     public Mono<List<Book>> searchBooksReactive(String query, int startIndex, int maxResults) {
         logger.info("BookCacheService searching books (reactive) with query: {}, startIndex: {}, maxResults: {}", query, startIndex, maxResults);
@@ -380,10 +480,14 @@ public class BookCacheService {
     }
     
     /**
-     * Get similar books based on semantic similarity - Reactive version
-     * @param bookId The source book ID
-     * @param count The number of similar books to return
-     * @return Mono of a list of similar books
+     * Finds books similar to the specified book using reactive vector similarity
+     * 
+     * @param bookId The source book ID to find similar books for
+     * @param count Maximum number of similar books to return
+     * @return Mono emitting list of books similar to the specified book
+     * 
+     * @implNote Provides non-blocking version of similarity search with fallbacks
+     * Prioritizes vector similarity when available and falls back to API-based similarity
      */
     public Mono<List<Book>> getSimilarBooksReactive(String bookId, int count) {
         if (cacheEnabled && cachedBookRepository != null) {
@@ -419,9 +523,20 @@ public class BookCacheService {
         return fallbackToGoogleSimilarBooks(bookId, count);
     }
 
+    /**
+     * Falls back to Google Books API for similar book recommendations
+     * 
+     * @param bookId The source book ID to find similar books for
+     * @param count Maximum number of similar books to return
+     * @return Mono emitting list of similar books
+     * 
+     * @implNote Called when database similarity search fails or returns no results
+     * Uses category and author matching instead of vector similarity
+     */
     private Mono<List<Book>> fallbackToGoogleSimilarBooks(String bookId, int count) {
         logger.info("Falling back to GoogleBooksService for similar books for ID: {} (or vector search yielded no results/source not in DB cache)", bookId);
-        return googleBooksService.getBookById(bookId) // reactive
+        // googleBooksService.getBookById(bookId) already returns Mono<Book>
+        return Mono.fromCompletionStage(googleBooksService.getBookById(bookId)) // Convert CompletionStage to Mono
             .flatMap(sourceBook -> {
                 if (sourceBook == null) {
                     logger.warn("Source book for similar search (Google fallback) not found (ID: {}), returning empty list.", bookId);
@@ -431,12 +546,21 @@ public class BookCacheService {
                     .map(list -> (List<Book>) list); // Explicit map to help compiler with type, though often not needed if signatures are clear.
                                                      // Or ensure getSimilarBooks directly provides Mono<List<Book>> that satisfies the chain.
             })
-            .switchIfEmpty(Mono.defer(() -> {
+            .switchIfEmpty(Mono.<List<Book>>defer(() -> {
                  logger.warn("GoogleBooksService.getBookById returned empty for ID {} during similar books fallback.", bookId);
-                 return Mono.just(Collections.emptyList());
+                 return Mono.just(Collections.<Book>emptyList());
             }));
     }
 
+    /**
+     * Generates vector embedding for a book to enable semantic similarity search
+     * 
+     * @param book The book to generate embedding for
+     * @return Mono emitting float array containing the embedding vector
+     * 
+     * @implNote Uses book metadata (title, authors, description, categories) to create text
+     * Calls external embedding service when available, falls back to placeholder implementation
+     */
     private Mono<float[]> generateEmbeddingReactive(Book book) {
         try {
             StringBuilder textBuilder = new StringBuilder();
@@ -475,6 +599,15 @@ public class BookCacheService {
         }
     }
 
+    /**
+     * Creates a deterministic placeholder embedding when embedding service unavailable
+     * 
+     * @param text The text to generate placeholder embedding for
+     * @return Float array containing deterministic pseudo-embedding based on text hash
+     * 
+     * @implNote Uses text hash with sine function to create repeatable unique vectors
+     * Ensures consistency for the same text input across multiple calls
+     */
     private float[] createPlaceholderEmbedding(String text) {
         float[] placeholder = new float[384];
         if (text == null || text.isEmpty()) return placeholder; // Should not happen if checked before
@@ -485,6 +618,16 @@ public class BookCacheService {
         return placeholder;
     }
 
+    /**
+     * Caches a book in the database using reactive approach
+     * 
+     * @param book The book to cache in the database
+     * @return Mono completing when caching operation completes or error occurs
+     * 
+     * @implNote Checks if book already exists in cache before saving
+     * Generates embedding vector for similarity search functionality
+     * Executes database operations on bounded elastic scheduler to avoid blocking
+     */
     private Mono<Void> cacheBookReactive(Book book) {
         if (!cacheEnabled || cachedBookRepository == null || book == null || book.getId() == null) {
             return Mono.empty();
@@ -503,7 +646,7 @@ public class BookCacheService {
                         .flatMap(embedding -> {
                             try {
                                 JsonNode rawData = objectMapper.valueToTree(book);
-                                CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, embedding);
+                                CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, new PgVector(embedding));
                                 // Wrap the blocking save operation
                                 return Mono.fromRunnable(() -> {
                                         if (cachedBookRepository != null) { // Final check before save
@@ -527,52 +670,70 @@ public class BookCacheService {
         ).then(); // Ensure the overall method returns Mono<Void> and subscribes to the defer's Mono
     }
 
+    /**
+     * Handles book cover update events by invalidating cached entries
+     * 
+     * @param event The event containing information about the updated book cover
+     * 
+     * @implNote Removes book from all cache layers when cover image is updated
+     * Prevents stale cover image URLs from being served to clients
+     */
     @EventListener
     public void handleBookCoverUpdate(BookCoverUpdatedEvent event) {
-        logger.info("Received BookCoverUpdatedEvent for googleBookId: {}, new URL: {}", event.getGoogleBookId(), event.getNewCoverUrl());
-        if (event.getGoogleBookId() == null || event.getNewCoverUrl() == null) {
-            logger.warn("Invalid BookCoverUpdatedEvent received: googleBookId or newCoverUrl is null.");
+        if (event.getGoogleBookId() == null) {
+            logger.warn("BookCoverUpdatedEvent received with null googleBookId. Cannot process cache eviction.");
             return;
         }
+        String bookId = event.getGoogleBookId();
 
-        String googleBookId = event.getGoogleBookId();
-        String newCoverUrl = event.getNewCoverUrl();
-
-        // 1. Update/Invalidate In-memory bookDetailCache (used by reactive flows)
-        Book inMemoryCachedBook = bookDetailCache.get(googleBookId);
-        if (inMemoryCachedBook != null) {
-            if (!newCoverUrl.equals(inMemoryCachedBook.getCoverImageUrl())) {
-                inMemoryCachedBook.setCoverImageUrl(newCoverUrl); 
-                logger.info("Updated in-memory bookDetailCache for googleBookId: {}", googleBookId);
-            }
+        // Clear from Spring's cache if it holds Book objects directly
+        Optional.ofNullable(cacheManager.getCache("books")).ifPresent(c -> {
+            logger.debug("Evicting book ID {} from Spring 'books' cache due to cover update.", bookId);
+            c.evict(bookId);
+        });
+        // Clear from local ConcurrentHashMap
+        if (bookDetailCache.containsKey(bookId)) {
+            bookDetailCache.remove(bookId);
+            logger.debug("Removed book ID {} from local bookDetailCache due to cover update.", bookId);
         }
+        // The database cache (CachedBook) would ideally be updated with the new URL if that event also carries it,
+        // or this event primarily serves to invalidate other caches that might hold the old URL.
+        // If CachedBookRepository.save() is called elsewhere with the updated Book object, that handles persistence.
+        logger.info("Processed cache invalidations for book ID {} due to BookCoverUpdatedEvent.", bookId);
+    }
 
-        // 2. Update Persistent Database Cache (CachedBookRepository)
-        if (cacheEnabled && cachedBookRepository != null) {
+    /**
+     * Retrieves all distinct Google Books IDs from the persistent cache
+     * 
+     * @return Set of unique Google Books IDs for sitemap generation
+     * 
+     * @implNote Returns empty set if caching is disabled or repository unavailable
+     * Used primarily for sitemap generation and bulk operations
+     */
+    public java.util.Set<String> getAllCachedBookIds() {
+        // Prioritize persistent repository if available and enabled
+        if (cacheEnabled && cachedBookRepository != null && 
+            !(cachedBookRepository instanceof com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookRepository)) {
             try {
-                Optional<CachedBook> cachedBookOptional = cachedBookRepository.findByGoogleBooksId(googleBookId);
-                if (cachedBookOptional.isPresent()) {
-                    CachedBook dbCachedBook = cachedBookOptional.get();
-                    if (!newCoverUrl.equals(dbCachedBook.getCoverImageUrl())) {
-                        dbCachedBook.setCoverImageUrl(newCoverUrl);
-                        cachedBookRepository.save(dbCachedBook);
-                        logger.info("Updated cover URL in database cache (CachedBook) for googleBookId: {}", googleBookId);
-                    } else {
-                        logger.info("Cover URL for database cached book (CachedBook) with googleBookId: {} is already up-to-date.", googleBookId);
-                    }
-                } else {
-                    logger.warn("Book with googleBookId: {} not found in CachedBookRepository for cover update.", googleBookId);
-                }
+                logger.info("Fetching all distinct Google Books IDs from active persistent CachedBookRepository.");
+                java.util.Set<String> ids = cachedBookRepository.findAllDistinctGoogleBooksIds();
+                logger.info("Retrieved {} distinct book IDs from persistent repository for sitemap.", ids != null ? ids.size() : 0);
+                return ids != null ? ids : Collections.emptySet();
             } catch (Exception e) {
-                logger.error("Error updating CachedBookRepository for googleBookId {}: {}", googleBookId, e.getMessage(), e);
+                logger.error("Error fetching all distinct Google Books IDs from persistent repository: {}", e.getMessage(), e);
+                // Fall through to in-memory cache if persistent fetch fails, or return empty if preferred.
+                // For now, let's fall through to ensure some IDs might still be available for sitemap.
             }
         }
 
-        // 3. Invalidate Spring Cache ("books") for the specific book ID
-        org.springframework.cache.Cache springCache = cacheManager.getCache("books");
-        if (springCache != null) {
-            springCache.evictIfPresent(googleBookId);
-            logger.info("Evicted Spring Cache entry for 'books' with key (googleBookId): {}", googleBookId);
+        // If persistent repository is not used, or failed, try the in-memory ConcurrentHashMap
+        if (!bookDetailCache.isEmpty()) {
+            logger.info("Persistent repository not used or failed; fetching IDs from in-memory bookDetailCache ({} items).", bookDetailCache.size());
+            // Return a new HashSet to avoid concurrent modification issues if the cache is modified elsewhere
+            return new java.util.HashSet<>(bookDetailCache.keySet());
         }
+        
+        logger.warn("No active persistent cache and in-memory bookDetailCache is empty. Cannot provide book IDs for sitemap.");
+        return Collections.emptySet();
     }
 }

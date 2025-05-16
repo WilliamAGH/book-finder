@@ -15,15 +15,28 @@ import java.nio.file.Paths;
 import org.springframework.beans.factory.annotation.Value;
 import java.util.Comparator;
 import java.io.IOException;
+import java.time.Duration;
 
+/**
+ * Integration test for the BookCoverCacheService
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Tests the end-to-end book cover retrieval flow
+ * - Verifies initial cover loading and background processing
+ * - Checks S3 upload functionality
+ * - Tests multiple book scenarios (known good, likely placeholder, new books)
+ * - Validates cache directory operations
+ */
 @SpringBootTest
-@ActiveProfiles("test") // Assuming you might have a 'test' profile for specific configurations
-public class BookCoverCacheServiceSmokeTest {
+@ActiveProfiles("test") // Using test profile for safer configurations
+public class BookCoverManagementServiceSmokeTest { // Renamed class
 
-    private static final Logger logger = LoggerFactory.getLogger(BookCoverCacheServiceSmokeTest.class);
+    private static final Logger logger = LoggerFactory.getLogger(BookCoverManagementServiceSmokeTest.class); // Renamed logger class
 
     @Autowired
-    private BookCoverCacheService bookCoverCacheService;
+    private BookCoverManagementService bookCoverManagementService; // Renamed service
 
     @Value("${app.cover-cache.dir:/tmp/book-covers}") // Ensure this matches your config
     private String cacheDirString;
@@ -32,6 +45,11 @@ public class BookCoverCacheServiceSmokeTest {
     private Book book2_likelyPlaceholder;
     private Book book3_newToSystem;
 
+    /**
+     * Set up test data and clean the cache directory before each test
+     * 
+     * WARNING: This is destructive - it deletes files in the cache directory
+     */
     @BeforeEach
     void setUp() {
         // Clean the cache directory before each test for consistent results
@@ -83,6 +101,11 @@ public class BookCoverCacheServiceSmokeTest {
         logger.info("Test setup complete. Cache directory is: {}", cacheDirString);
     }
 
+    /**
+     * Tests the full book cover loading workflow including background processing
+     * 
+     * @throws InterruptedException If the test is interrupted while waiting for background processing
+     */
     @Test
     void testBookCoverLoadingFlow() throws InterruptedException {
         logger.info("--- Starting Smoke Test for Book Cover Loading ---");
@@ -100,11 +123,18 @@ public class BookCoverCacheServiceSmokeTest {
         logger.info("--- Remember to manually check image rendering in a browser if S3 URLs are generated. ---");
     }
 
+    /**
+     * Helper method to test cover retrieval for a specific book
+     * 
+     * @param book The book to test cover retrieval for
+     * @param bookLabel A descriptive label for logging
+     * @throws InterruptedException If the test is interrupted while waiting for background processing
+     */
     private void performTestForBook(Book book, String bookLabel) throws InterruptedException {
         logger.info("Testing cover for: {} - ISBN13: {}, GoogleID: {}", bookLabel, book.getIsbn13(), book.getId());
 
         // Initial call
-        com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book).block(Duration.ofSeconds(5)); // Use renamed service
         String initialUrl = (initialCoverImages != null && initialCoverImages.getPreferredUrl() != null) ? initialCoverImages.getPreferredUrl() : "/images/placeholder-book-cover.svg";
         logger.info("[{}] Initial URL: {}", bookLabel, initialUrl);
 
@@ -112,7 +142,7 @@ public class BookCoverCacheServiceSmokeTest {
         Thread.sleep(20000);
 
         // Call again to see if the URL has been updated by background processing (e.g., to S3 or a final placeholder)
-        com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book).block(Duration.ofSeconds(5)); // Use renamed service
         String finalUrl = (finalCoverImages != null && finalCoverImages.getPreferredUrl() != null) ? finalCoverImages.getPreferredUrl() : "/images/placeholder-book-cover.svg";
         logger.info("[{}] URL after background processing: {}", bookLabel, finalUrl);
 
@@ -123,4 +153,4 @@ public class BookCoverCacheServiceSmokeTest {
         }
         logger.info("--- Finished test for {} ---", bookLabel);
     }
-} 
+}

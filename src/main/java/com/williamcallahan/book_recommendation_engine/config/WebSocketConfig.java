@@ -9,8 +9,16 @@ import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.lang.NonNull;
 
 /**
- * WebSocket configuration for real-time communication.
- * Enables STOMP messaging with a simple in-memory broker.
+ * WebSocket configuration for real-time communication
+ * 
+ * @author William Callahan
+ *
+ * Features:
+ * - Enables STOMP messaging with simple in-memory broker
+ * - Configures WebSocket endpoints with SockJS fallback
+ * - Supports CORS with configurable origin patterns
+ * - Defines application destination prefixes
+ * - Used for real-time book cover update notifications
  */
 @Configuration
 @EnableWebSocketMessageBroker
@@ -20,7 +28,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private String allowedOrigins;
 
     /**
-     * Configures the message broker for WebSocket communication.
+     * Configures the message broker for WebSocket communication
+     * - Sets up in-memory broker for topic destinations
+     * - Defines application destination prefix for client messages
+     * - Optimized for simple publish-subscribe messaging patterns
      * 
      * @param config the message broker registry
      */
@@ -31,7 +42,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     }
 
     /**
-     * Registers STOMP endpoints for WebSocket connections.
+     * Registers STOMP endpoints for WebSocket connections
+     * - Creates main WebSocket endpoint at /ws path
+     * - Configures SockJS fallback for browsers without WebSocket support
+     * - Sets CORS allowed origins from application properties
+     * - Enables cross-origin WebSocket connections
      * 
      * @param registry the STOMP endpoint registry
      */
