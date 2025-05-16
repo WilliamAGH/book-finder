@@ -1,3 +1,15 @@
+/**
+ * Controller for handling application errors and providing diagnostic information
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Implements Spring Boot's ErrorController interface
+ * - Captures detailed error information including stack traces
+ * - Renders user-friendly error diagnostic page
+ * - Provides enhanced error details for debugging
+ * - Extracts exception type information when available
+ */
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +28,17 @@ public class ErrorDiagnosticsController implements ErrorController {
     @Autowired
     private ErrorAttributes errorAttributes;
 
+    /**
+     * Handles all application errors and prepares diagnostic information
+     * - Extracts error attributes from the request
+     * - Includes stack traces and exception details
+     * - Populates model with error information for template rendering
+     * - Extracts exception class name when available
+     * 
+     * @param request WebRequest containing error information
+     * @param model Spring MVC model for view rendering
+     * @return Template name for error page
+     */
     @RequestMapping("/error")
     public String handleError(WebRequest request, Model model) {
         Map<String, Object> errors = errorAttributes.getErrorAttributes(request, 

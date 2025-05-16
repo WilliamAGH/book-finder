@@ -1,6 +1,15 @@
 /**
- * REST controller for handling book-related API requests such as search, details, and recommendations.
- * Optimizes cover image URL resolution for API responses.
+ * REST controller for handling book-related API requests
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Provides reactive endpoints for book searches, details, and recommendations
+ * - Supports search by general query, title, author, and ISBN
+ * - Offers optimized cover image URL resolution for API responses
+ * - Handles image resolution preferences and cover source options
+ * - Tracks recently viewed books for personalized recommendations
+ * - Implements similar book recommendations based on source books
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
@@ -39,6 +48,14 @@ public class BookController {
     private final RecommendationService recommendationService;
     private final BookImageOrchestrationService bookImageOrchestrationService;
     
+    /**
+     * Constructs the BookController with all required services.
+     *
+     * @param bookCacheService Service for caching and retrieving book data from various sources
+     * @param recentlyViewedService Service for tracking and managing recently viewed books
+     * @param recommendationService Service for generating book recommendations based on various criteria
+     * @param bookImageOrchestrationService Service for orchestrating book cover image retrieval and processing
+     */
     @Autowired
     public BookController(BookCacheService bookCacheService, 
                           RecentlyViewedService recentlyViewedService,
@@ -51,11 +68,14 @@ public class BookController {
     }
     
     /**
-     * Search books by keyword
-     * @param query Search query
-     * @param startIndex Start index for pagination (optional)
-     * @param maxResults Maximum number of results (optional)
-     * @return List of books matching the query
+     * Search books by keyword with support for pagination, cover source preferences, and image resolution filtering.
+     * 
+     * @param query Search query string to find matching books
+     * @param startIndex Start index for pagination (optional, defaults to 0)
+     * @param maxResults Maximum number of results to return (optional, defaults to 10)
+     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
+     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @return Mono containing ResponseEntity with map of search results including pagination details
      */
     @GetMapping("/search")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooks(
@@ -89,7 +109,7 @@ public class BookController {
                 if (currentPaginatedBooks.isEmpty()) {
                     Map<String, Object> response = new HashMap<>();
                     // Since BookCacheService already paginates, if it's empty, it means no results for this page
-                    // We cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
+                    // I cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
                     response.put("resultsInPage", 0);
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
@@ -150,6 +170,13 @@ public class BookController {
             });
     }
     
+    /**
+     * Converts a string representation of cover image source to the corresponding enum value.
+     * Safely handles invalid values by returning the default CoverImageSource.ANY.
+     *
+     * @param source String representation of a cover image source
+     * @return The corresponding CoverImageSource enum value, or ANY if not valid
+     */
     private CoverImageSource getCoverImageSourceFromString(String source) {
         try {
             return CoverImageSource.valueOf(source.toUpperCase());
@@ -158,6 +185,13 @@ public class BookController {
         }
     }
 
+    /**
+     * Converts a string representation of image resolution preference to the corresponding enum value.
+     * Safely handles invalid values by returning the default ImageResolutionPreference.ANY.
+     *
+     * @param resolution String representation of an image resolution preference
+     * @return The corresponding ImageResolutionPreference enum value, or ANY if not valid
+     */
     private ImageResolutionPreference getImageResolutionPreferenceFromString(String resolution) {
         try {
             return ImageResolutionPreference.valueOf(resolution.toUpperCase());
@@ -167,9 +201,13 @@ public class BookController {
     }
     
     /**
-     * Search books by title
-     * @param title Book title
-     * @return List of books matching the title
+     * Search books by title with support for cover source preferences and image resolution filtering.
+     * Uses "intitle:" advanced search operator to find books with matching titles.
+     * 
+     * @param title Book title to search for
+     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
+     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @return Mono containing ResponseEntity with map of search results filtered by title
      */
     @GetMapping("/search/title")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooksByTitle(
@@ -227,9 +265,13 @@ public class BookController {
     }
     
     /**
-     * Search books by author
-     * @param author Book author
-     * @return List of books matching the author
+     * Search books by author with support for cover source preferences and image resolution filtering.
+     * Uses "inauthor:" advanced search operator to find books by specified author.
+     * 
+     * @param author Author name to search for
+     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
+     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @return Mono containing ResponseEntity with map of search results filtered by author
      */
     @GetMapping("/search/author")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooksByAuthor(
@@ -287,9 +329,13 @@ public class BookController {
     }
     
     /**
-     * Search books by ISBN
-     * @param isbn Book ISBN (can be ISBN-10 or ISBN-13)
-     * @return List of books matching the ISBN
+     * Search books by ISBN with support for cover source preferences and image resolution filtering.
+     * Supports both ISBN-10 and ISBN-13 formats for precise book identification.
+     * 
+     * @param isbn Book ISBN number (can be ISBN-10 or ISBN-13 format)
+     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
+     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @return Mono containing ResponseEntity with map of search results for the specific ISBN
      */
     @GetMapping("/search/isbn")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooksByISBN(
@@ -347,9 +393,13 @@ public class BookController {
     }
     
     /**
-     * Get book by ID
-     * @param id Book ID
-     * @return Book details if found
+     * Get book details by ID with support for cover source preferences and image resolution filtering.
+     * Adds viewed book to recently viewed history for recommendation tracking.
+     * 
+     * @param id Book identifier to retrieve
+     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
+     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @return Mono containing ResponseEntity with the book if found, or not found status if not available
      */
     @GetMapping("/{id}")
     public Mono<ResponseEntity<Book>> getBookById(
@@ -394,9 +444,11 @@ public class BookController {
     }
     
     /**
-     * Handle validation errors
-     * @param ex The exception
-     * @return Error response
+     * Handle validation errors for request parameters across all endpoints.
+     * Converts IllegalArgumentException to proper HTTP 400 Bad Request responses.
+     * 
+     * @param ex The IllegalArgumentException thrown during request processing
+     * @return ResponseEntity with error details and 400 status code
      */
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
@@ -407,10 +459,14 @@ public class BookController {
     }
     
     /**
-     * Get similar books recommendations for a specific book
-     * @param id Book ID to find similar books for
-     * @param count Number of recommendations to return (optional)
-     * @return List of similar books
+     * Get similar books recommendations for a specific book with support for cover source and resolution preferences.
+     * Uses the recommendation engine to find books similar to the given book ID based on various criteria.
+     * 
+     * @param id Source book ID to find similar books for
+     * @param count Number of recommendations to return (optional, defaults to 6)
+     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
+     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @return Mono containing ResponseEntity with map of similar book recommendations
      */
     @GetMapping("/{id}/similar")
     public Mono<ResponseEntity<Map<String, Object>>> getSimilarBooks(
@@ -425,8 +481,8 @@ public class BookController {
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // RecommendationService already uses BookCacheService for the source book, so this part is fine
-        // We just need to ensure the sourceBook for the recommendationService.getSimilarBooks call is fetched via BookCacheService if it were done here,
-        // but since RecommendationService handles that internally, we only need to process the results
+        // I just need to ensure the sourceBook for the recommendationService.getSimilarBooks call is fetched via BookCacheService if it were done here,
+        // but since RecommendationService handles that internally, this only need to process the results
         return recommendationService.getSimilarBooks(id, count) 
             .flatMap(similarBooksList -> {
                 List<Book> currentSimilarBooks = (similarBooksList == null) ? Collections.emptyList() : similarBooksList;

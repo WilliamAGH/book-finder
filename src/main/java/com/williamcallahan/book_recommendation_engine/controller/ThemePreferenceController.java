@@ -13,7 +13,16 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Controller for handling theme preferences
+ * Controller for managing user theme preferences (light/dark mode)
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Persists theme preferences via cookies
+ * - Supports explicit light/dark mode selection
+ * - Allows fallback to system theme preference
+ * - Exposes REST API for theme operations
+ * - Implements secure cookie management
  */
 @Controller
 @RequestMapping("/api/theme")
@@ -83,7 +92,14 @@ public class ThemePreferenceController {
     }
     
     /**
-     * Helper method to get theme cookie value
+     * Helper method to extract theme preference from request cookies
+     * - Searches for theme cookie in the request
+     * - Returns null if cookie is not found
+     * - Safely handles empty cookie arrays
+     * - Uses Java 8 Stream API for clean cookie processing
+     *
+     * @param request HttpServletRequest containing cookies
+     * @return Theme value from cookie or null if not found
      */
     private String getThemeCookieValue(HttpServletRequest request) {
         Cookie[] cookies = request.getCookies();

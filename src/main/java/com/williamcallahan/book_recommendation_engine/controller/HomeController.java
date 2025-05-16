@@ -2,10 +2,9 @@ package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheService; 
-// import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService; // Removed
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookCoverCacheService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService; // Updated import
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
@@ -21,11 +20,23 @@ import java.util.regex.Pattern;
 import java.util.List;
 import java.util.Collections;
 import java.util.ArrayList;
+import java.util.Arrays; // Added for keyword generation
+import java.util.Random; // Added for random query selection
+import java.util.stream.Collectors; // Added for keyword generation
 
 /**
- * Controller for handling user-facing web pages such as the homepage, search page, and book detail pages.
- * It integrates with various services to fetch book data and uses BookCoverCacheService
- * to provide optimized cover image URLs for display.
+ * Controller for handling user-facing web pages in the book recommendation engine
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Renders home page with recently viewed and recommended books
+ * - Manages search page and search result display
+ * - Handles book detail pages with metadata and similar book recommendations
+ * - Processes ISBN lookups and redirects to canonical book URLs
+ * - Integrates with caching services for optimal performance
+ * - Applies SEO optimizations including metadata and keyword generation
+ * - Manages cover image resolution and source preferences
  */
 @Controller
 public class HomeController {
@@ -34,39 +45,77 @@ public class HomeController {
     private final BookCacheService bookCacheService; 
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
-    private final BookCoverCacheService bookCoverCacheService;
+    private final BookCoverManagementService bookCoverManagementService; // Updated type
     private final EnvironmentService environmentService;
     // The minimum number of books to display on the homepage
     private static final int MIN_BOOKS_TO_DISPLAY = 5;
     
+    private static final List<String> EXPLORE_QUERIES = Arrays.asList(
+            "Classic literature",
+            "Modern thrillers",
+            "Space opera adventures",
+            "Historical fiction bestsellers",
+            "Award-winning science fiction",
+            "Inspiring biographies",
+            "Mind-bending philosophy",
+            "Beginner's cookbooks",
+            "Epic fantasy sagas",
+            "Cyberpunk futures",
+            "Cozy mysteries",
+            "Environmental science",
+            "Artificial intelligence ethics",
+            "World mythology",
+            "Travel memoirs"
+    );
+    private static final Random RANDOM = new Random();
+
     // Regex patterns for ISBN validation
     private static final Pattern ISBN10_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$");
     private static final Pattern ISBN13_PATTERN = Pattern.compile("^[0-9]{13}$");
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
+    /**
+     * Constructs the HomeController with required services
+     * 
+     * @param bookCacheService Service for retrieving and caching book information
+     * @param recentlyViewedService Service for tracking user book view history
+     * @param recommendationService Service for generating book recommendations
+     * @param bookCoverManagementService Service for retrieving and caching book cover images
+     * @param environmentService Service providing environment configuration information
+     */
     @Autowired
     public HomeController(BookCacheService bookCacheService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
-                          BookCoverCacheService bookCoverCacheService,
+                          BookCoverManagementService bookCoverManagementService, // Updated parameter type
                           EnvironmentService environmentService) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
-        this.bookCoverCacheService = bookCoverCacheService;
+        this.bookCoverManagementService = bookCoverManagementService; // Updated assignment
         this.environmentService = environmentService;
     }
 
     /**
      * Handles requests to the home page
+     * - Displays recently viewed books for returning users
+     * - Populates with default recommendations for new users
+     * - Optimizes cover images for display through caching service
      *
-     * @param model the model for the view
-     * @return the name of the template to render
+     * @param model The model for the view
+     * @return Mono containing the name of the template to render
      */
     @GetMapping("/")
     public Mono<String> home(Model model) {
         model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
         model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
+        model.addAttribute("activeTab", "home");
+        model.addAttribute("title", "Home");
+        model.addAttribute("description", "Discover your next favorite book with our recommendation engine. Explore recently viewed books and new arrivals.");
+        model.addAttribute("canonicalUrl", "https://findmybook.net/"); 
+        model.addAttribute("ogImage", "https://findmybook.net/images/default-social-image.png"); // Default OG image
+        model.addAttribute("keywords", "book recommendations, find books, book suggestions, reading, literature, home");
+
         // Add recently viewed books to the model
         List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
         model.addAttribute("activeTab", "home"); // Set early
@@ -75,7 +124,7 @@ public class HomeController {
 
         if (recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
             // Use BookCacheService for searching default books
-            recentBooksMono = bookCacheService.searchBooksReactive("Java programming", 0, MIN_BOOKS_TO_DISPLAY) 
+            recentBooksMono = bookCacheService.searchBooksReactive("ag riddle", 0, MIN_BOOKS_TO_DISPLAY) 
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(recentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
@@ -97,7 +146,7 @@ public class HomeController {
             for (Book book : finalRecentBooks) {
                 if (book != null) {
                     try {
-                        com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                        com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book); // Updated service call
                         book.setCoverImages(coverImagesResult); // Set the CoverImages object
 
                         // Set the direct coverImageUrl as a fallback or primary display if needed
@@ -128,10 +177,13 @@ public class HomeController {
     
     /**
      * Handles requests to the search results page
+     * - Sets up model attributes for search view
+     * - Configures SEO metadata for search page
+     * - Prepares for client-side API calls
      *
-     * @param query the search query
-     * @param model the model for the view
-     * @return the name of the template to render
+     * @param query The search query string from user input
+     * @param model The model for the view
+     * @return The name of the template to render (search.html)
      */
     @GetMapping("/search")
     public String search(String query, Model model) {
@@ -139,6 +191,11 @@ public class HomeController {
         model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
         model.addAttribute("query", query);
         model.addAttribute("activeTab", "search");
+        model.addAttribute("title", "Search Books");
+        model.addAttribute("description", "Search our extensive catalog of books by title, author, or ISBN. Find detailed information and recommendations.");
+        model.addAttribute("canonicalUrl", "https://findmybook.net/search"); 
+        model.addAttribute("ogImage", "https://findmybook.net/images/default-social-image.png"); // Default OG image
+        model.addAttribute("keywords", "book search, find books by title, find books by author, isbn lookup, book catalog"); // Default keywords
         return "search";
     }
     
@@ -164,20 +221,36 @@ public class HomeController {
         model.addAttribute("searchPage", page);
         model.addAttribute("searchSort", sort);
         model.addAttribute("searchView", view);
+        // Default SEO attributes in case book is not found or an error occurs
+        model.addAttribute("title", "Book Details");
+        model.addAttribute("description", "Detailed information about the selected book.");
+        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + id);
 
         // Use BookCacheService to get the main book
         Mono<Book> bookMono = bookCacheService.getBookByIdReactive(id)
             .doOnSuccess(book -> {
                 if (book != null) {
-                    // Update cover URL using BookCoverCacheService before adding to model
-                    com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+                    // Update cover URL using BookCoverManagementService before adding to model
+                    com.williamcallahan.book_recommendation_engine.types.CoverImages coverImagesResult = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book); // Updated service call
                     book.setCoverImages(coverImagesResult);
+                    String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg"; // Default placeholder
                     if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
                         book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
-                    } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                        book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        effectiveCoverImageUrl = coverImagesResult.getPreferredUrl();
+                    } else if (book.getCoverImageUrl() != null && !book.getCoverImageUrl().isEmpty()) {
+                        // Use existing cover image URL if service result is null but book has one
+                        effectiveCoverImageUrl = book.getCoverImageUrl();
                     }
+                    
                     model.addAttribute("book", book);
+
+                    // SEO Attributes
+                    model.addAttribute("title", book.getTitle() != null ? book.getTitle() : "Book Details");
+                    model.addAttribute("description", truncateDescription(book.getDescription(), 170));
+                    model.addAttribute("ogImage", effectiveCoverImageUrl);
+                    model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
+                    model.addAttribute("keywords", generateKeywords(book));
+
                     try {
                         recentlyViewedService.addToRecentlyViewed(book);
                     } catch (Exception e) {
@@ -186,6 +259,7 @@ public class HomeController {
                 } else {
                     logger.info("No book found with ID: {} via BookCacheService", id);
                     model.addAttribute("book", null); 
+                    // Keep default SEO attributes if book is null
                 }
             })
             .doOnError(e -> {
@@ -202,7 +276,7 @@ public class HomeController {
                     .map(similarBooksList -> {
                         for (Book similarBook : similarBooksList) {
                             if (similarBook != null) {
-                                com.williamcallahan.book_recommendation_engine.types.CoverImages similarCoverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook);
+                                com.williamcallahan.book_recommendation_engine.types.CoverImages similarCoverImagesResult = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook); // Updated service call
                                 similarBook.setCoverImages(similarCoverImagesResult);
                                 if (similarCoverImagesResult != null && similarCoverImagesResult.getPreferredUrl() != null) {
                                     similarBook.setCoverImageUrl(similarCoverImagesResult.getPreferredUrl());
@@ -224,13 +298,94 @@ public class HomeController {
                 if (fetchedBook != null) {
                     return similarBooksMono.thenReturn("book");
                 } else {
-                    // If main book was not found, we might still want to show an empty page or an error
+                    // If main book was not found, show an empty page or an error
                     // The model.addAttribute("book", null) and error attribute would have been set by bookMono's doOnSuccess/doOnError
                     return similarBooksMono.thenReturn("book");
                 }
             })
             .defaultIfEmpty("book") 
             .onErrorReturn("book"); 
+    }
+    
+    /**
+     * Truncates a string to a maximum length while preserving whole words
+     * - Removes HTML tags for clean text presentation
+     * - Adds ellipsis to indicate truncation
+     * - Attempts to break at word boundaries when possible
+     * - Used for generating SEO meta descriptions
+     *
+     * @param text The text to truncate
+     * @param maxLength The maximum length of the truncated text
+     * @return The truncated plain text with HTML removed
+     */
+    private String truncateDescription(String text, int maxLength) {
+        if (text == null || text.isEmpty()) {
+            return "No description available.";
+        }
+        // Basic HTML removal
+        String plainText = text.replaceAll("<[^>]*>", "").replaceAll("\\\\s+", " ").trim();
+
+        if (plainText.length() <= maxLength) {
+            return plainText;
+        }
+
+        String Suffix = "...";
+        int truncatedLength = maxLength - Suffix.length();
+
+        if (truncatedLength <= 0) {
+            return Suffix; // Or an empty string, depending on desired behavior
+        }
+        
+        String sub = plainText.substring(0, truncatedLength);
+        int lastSpace = sub.lastIndexOf(' ');
+
+        if (lastSpace > 0 && lastSpace < truncatedLength) { // Found a space to break at
+            return sub.substring(0, lastSpace) + Suffix;
+        } else { // No space found or it's at the very end, just cut
+            return sub + Suffix;
+        }
+    }
+
+    /**
+     * Generates a comma-separated string of keywords for SEO
+     * - Extracts keywords from book title, authors, and categories
+     * - Removes duplicates and very short words
+     * - Adds generic book-related terms
+     * - Limits total keywords to prevent keyword stuffing
+     * 
+     * @param book The book object to generate keywords from
+     * @return A comma-separated string of relevant keywords
+     */
+    private String generateKeywords(Book book) {
+        if (book == null) {
+            return "book, literature, reading"; // Default keywords
+        }
+        List<String> keywords = new ArrayList<>();
+        if (book.getTitle() != null && !book.getTitle().isEmpty()) {
+            keywords.addAll(Arrays.asList(book.getTitle().toLowerCase().split("\\\\s+")));
+        }
+        if (book.getAuthors() != null && !book.getAuthors().isEmpty()) {
+            for (String author : book.getAuthors()) {
+                keywords.addAll(Arrays.asList(author.toLowerCase().split("\\\\s+")));
+            }
+        }
+        if (book.getCategories() != null && !book.getCategories().isEmpty()) {
+            for (String category : book.getCategories()) {
+                keywords.addAll(Arrays.asList(category.toLowerCase().split("\\\\s+")));
+            }
+        }
+        // Add some generic terms
+        keywords.add("book");
+        keywords.add("details");
+        keywords.add("review");
+        keywords.add("summary");
+
+        // Remove duplicates and common short words, then join
+        return keywords.stream()
+                .distinct()
+                .filter(kw -> kw.length() > 2) // Filter out very short words
+                .limit(15) // Limit number of keywords
+                .collect(Collectors.joining(", "));
     }
     
     /**
@@ -338,5 +493,16 @@ public class HomeController {
         
         // Forward to the common ISBN handler
         return bookDetailByIsbn(sanitizedIsbn);
+    }
+
+    @GetMapping("/explore")
+    public RedirectView explore() {
+        String selectedQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
+        logger.info("Explore page requested, redirecting to search with query: '{}'", selectedQuery);
+        // Redirect to the search page with the selected query and a source indicator
+        RedirectView redirectView = new RedirectView("/search");
+        redirectView.addStaticAttribute("query", selectedQuery);
+        redirectView.addStaticAttribute("source", "explore"); // To identify the context on the search page
+        return redirectView;
     }
 }
