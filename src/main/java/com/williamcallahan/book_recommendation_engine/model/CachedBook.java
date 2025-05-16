@@ -8,6 +8,8 @@ package com.williamcallahan.book_recommendation_engine.model;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import com.williamcallahan.book_recommendation_engine.types.PgVector;
+import com.williamcallahan.book_recommendation_engine.types.PgVectorConverter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -85,8 +87,9 @@ public class CachedBook {
     @Column(name = "purchase_link")
     private String purchaseLink;
 
-    @Column(columnDefinition = "vector(384)")
-    private float[] embedding;
+    @Column(columnDefinition = "vector(384)") // The actual DB type is 'vector'. Converter handles Java to DB string.
+    @Convert(converter = PgVectorConverter.class)
+    private PgVector embedding;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "raw_data", columnDefinition = "jsonb", nullable = false)
@@ -112,7 +115,7 @@ public class CachedBook {
      * @param embedding Vector embedding for similarity search
      * @return New CachedBook entity ready for persistence
      */
-    public static CachedBook fromBook(Book book, JsonNode rawData, float[] embedding) {
+    public static CachedBook fromBook(Book book, JsonNode rawData, PgVector embedding) {
         CachedBook cachedBook = new CachedBook();
         cachedBook.setId(book.getId());
         cachedBook.setGoogleBooksId(book.getId());

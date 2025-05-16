@@ -1,6 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.repository;
 
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import com.williamcallahan.book_recommendation_engine.types.PgVector;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -63,7 +64,6 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
                    "LIMIT :limit", nativeQuery = true)
     List<CachedBook> findSimilarBooksByIdInternal(@Param("bookId") String bookId, @Param("limit") int limit);
     
-    // Additional database-specific queries that may be useful
     
     /**
      * Find books with titles containing the specified query string
@@ -73,7 +73,7 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
      * @param query Search string to match against book titles
      * @return List of books with matching titles
      */
-    @Query(value = "SELECT c FROM CachedBook c WHERE LOWER(c.title) LIKE LOWER(CONCAT('%', :query, '%'))")
+    @Query(value = "SELECT c FROM CachedBook c WHERE c.title ILIKE CONCAT('%', :query, '%')", nativeQuery = true)
     List<CachedBook> findByTitleContainingIgnoreCase(@Param("query") String query);
     
     /**
@@ -95,7 +95,10 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
      * @param category Category name to search for
      * @return List of books in the specified category
      */
-    @Query(value = "SELECT c FROM CachedBook c WHERE EXISTS (SELECT 1 FROM UNNEST(c.categories) cat WHERE LOWER(cat) LIKE LOWER(CONCAT('%', :category, '%')))")
+    @Query(value = "SELECT c.* FROM cached_books c "
+                + "WHERE EXISTS (SELECT 1 FROM UNNEST(c.categories) AS cat "
+                + "WHERE LOWER(cat) LIKE LOWER(CONCAT('%', :category, '%')))",
+           nativeQuery = true)
     List<CachedBook> findByCategory(@Param("category") String category);
     
     /**
@@ -109,7 +112,7 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
      * @return List of books sorted by similarity to the input embedding
      */
     @Query(value = "SELECT c.* FROM cached_books c ORDER BY vector_similarity(c.embedding, :embedding) DESC LIMIT :limit", nativeQuery = true)
-    List<CachedBook> findSimilarBooks(@Param("embedding") float[] embedding, @Param("limit") int limit);
+    List<CachedBook> findSimilarBooks(@Param("embedding") PgVector embedding, @Param("limit") int limit);
 
     @Override
     @Query("SELECT DISTINCT c.googleBooksId FROM CachedBook c WHERE c.googleBooksId IS NOT NULL")
