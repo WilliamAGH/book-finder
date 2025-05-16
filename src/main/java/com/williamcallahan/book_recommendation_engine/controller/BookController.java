@@ -109,7 +109,8 @@ public class BookController {
                 if (currentPaginatedBooks.isEmpty()) {
                     Map<String, Object> response = new HashMap<>();
                     // Since BookCacheService already paginates, if it's empty, it means no results for this page
-                    // I cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
+                    // Cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
+                    response.put("books", Collections.emptyList());
                     response.put("resultsInPage", 0);
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
@@ -481,8 +482,8 @@ public class BookController {
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // RecommendationService already uses BookCacheService for the source book, so this part is fine
-        // I just need to ensure the sourceBook for the recommendationService.getSimilarBooks call is fetched via BookCacheService if it were done here,
-        // but since RecommendationService handles that internally, this only need to process the results
+        // Ensure that the sourceBook for the recommendationService.getSimilarBooks call is fetched via BookCacheService if required.
+        // but since RecommendationService handles that internally, we only need to process the results
         return recommendationService.getSimilarBooks(id, count) 
             .flatMap(similarBooksList -> {
                 List<Book> currentSimilarBooks = (similarBooksList == null) ? Collections.emptyList() : similarBooksList;
