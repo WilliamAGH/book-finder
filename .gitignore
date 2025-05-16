@@ -28,8 +28,9 @@ node_modules
 *.png
 *.webp
 *.svg
-!**/src/main/resources/static/images/image-not-available.png
-!**/src/main/resources/static/images/placeholder-book-cover.svg
+
+### FORCE INCLUDE ALL STATIC IMAGES ###
+!src/main/resources/static/images/*
 
 ### NetBeans ###
 /nbproject/private/
