@@ -69,7 +69,7 @@ spring:
       cache:
         cachecontrol:
           max-age: 365d # Cache versioned resources for 1 year
-        # For unversioned resources, we can also set a shorter cache period if desired
+        # For unversioned resources, it can also set a shorter cache period
         # period: 7d 
         # use-cache-control-header: true # Ensure Cache-Control header is used
 

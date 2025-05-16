@@ -3,6 +3,7 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+covers
 
 ### STS ###
 .apt_generated
@@ -12,7 +13,10 @@ target/
 .settings
 .springBeans
 .sts4-cache
+node
+node_modules
 
+!og-logo.png
 ### IntelliJ IDEA ###
 .idea
 *.iws
@@ -31,10 +35,12 @@ target/
 /nbbuild/
 /dist/
 /nbdist/
+target_test-classes
 /.nb-gradle/
 build/
 !**/src/main/**/build/
 !**/src/test/**/build/
+.claude
 
 ### VS Code ###
 .vscode/

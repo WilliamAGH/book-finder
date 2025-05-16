@@ -1,168 +1,94 @@
-# Live Demo
-
-Visit [findmybook.net](https://findmybook.net) or [book-recommendation-engine.williamcallahan.com](https://book-recommendation-engine.williamcallahan.com) to see a live working demo!
-
 # Book Recommendation Engine
 
-A Spring Boot application that provides the ability to look up almost any book ever written and get book recommendations using OpenAI integration.
+**Live Demo:** [findmybook.net](https://findmybook.net)
 
-## Technologies
+A Spring Boot application for book lookup and recommendations using Spring AI with OpenAI and Google Books API.
 
-- Spring Boot 3.4.5
-- Spring Web & WebFlux
-- Thymeleaf with HTMX
-- Spring AI with OpenAI
-- Google Books API integration
-- PostgreSQL
-- Spring Session
+## Core Technologies
+
+- Java 21, Spring Boot 3.4.5 (WebFlux, Thymeleaf, HTMX, Spring AI)
+- PostgreSQL, Google Books API, OpenAI
 
 ## Prerequisites
 
 - Java 21
-- Maven 3.6+
-- PostgreSQL database
-- OpenAI API key
+- Maven 3.6+ (Packages available at [search.maven.org](https://search.maven.org/))
+- PostgreSQL
+- OpenAI API Key (optional, for AI features)
+- Google Books API Key (optional, for enhanced book data)
 
 ## Configuration
 
-The application uses environment variables for configuration, which can be set in a `.env` file for local development. The application is configured to use HTTPS with a self-signed certificate.
-
-1. Copy the `.env.example` file to `.env` and update the values:
-
-```bash
-cp .env.example .env
-```
-
-2. Edit the `.env` file with your specific configuration, refer to the `.env.example` file for more details.
-
-The application will automatically load these variables at startup using the spring-dotenv library.
+Use a `.env` file for local setup (copy from `.env.example` and update values). Key variables:
+- `SERVER_PORT`
+- `SPRING_DATASOURCE_URL`, `_USERNAME`, `_PASSWORD`
+- `SPRING_AI_OPENAI_API_KEY`
+- `GOOGLE_BOOKS_API_KEY`
+- `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, etc. (for S3 features)
 
 ## Running the Application
 
-The application uses Spring Profiles to manage configurations for different environments.
-- **`prod` (Production Profile):** This is the **default profile**. If no profile is specified, the application runs with production settings.
-- **`dev` (Development Profile):** This profile is used for local development and enables features like more verbose logging and development-specific UI indicators.
+Spring Profiles: `prod` (default), `dev`.
 
-### Development Mode
-
-To run in development mode (activating the `dev` profile):
+**Development Mode (with `dev` profile):**
 ```bash
 ./mvnw spring-boot:run -Dspring.profiles.active=dev
 ```
-This enables development-specific configurations, such as more detailed logging and UI indicators for debugging.
-
-The server will typically be available at https://localhost:8081 (or as configured by `SERVER_PORT` in your `.env` file).
-
-For hot-reload during development (with the `dev` profile):
+Hot reload:
 ```bash
 ./mvnw spring-boot:run -Dspring.profiles.active=dev -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
 ```
+App typically at `http://localhost:8081` (or `SERVER_PORT`).
 
-### Production Mode
-
-To run in production mode explicitly (or by default if no profile is specified):
+**Production Mode (default or explicit `prod` profile):**
 ```bash
 ./mvnw spring-boot:run -Dspring.profiles.active=prod
-```
-Alternatively, when running the packaged JAR, it will also default to the `prod` profile unless overridden:
-```bash
-java -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar 
-# To explicitly set prod profile for JAR:
-# java -Dspring.profiles.active=prod -jar target/your-app.jar
-```
-For production deployments, ensure environment variables are set directly in your hosting environment or through a production-specific `.env` file if your deployment mechanism supports it.
-
-## Managing Server Ports
-
-If you need to kill previous instances of the web server or free up the application port (default: 8080):
-
-### On macOS/Linux
-
-1. Find the process using the port (replace 8080 if using a different port):
-
-```bash
-lsof -i :8080
-```
-
-2. Kill the process (replace <PID> with the actual process ID):
-
-```bash
-kill -9 <PID>
-```
-
-### On Windows
-
-1. Find the process:
-
-```cmd
-netstat -ano | findstr :8080
-```
-
-2. Kill the process (replace <PID> with the actual process ID):
-
-```cmd
-taskkill /PID <PID> /F
 ```
 
 ## Building and Deployment
 
-### Build JAR
-
+**Build JAR:**
 ```bash
 ./mvnw clean package
 ```
 
-### Run JAR
-
+**Run JAR:**
 ```bash
 java -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar
+# Explicitly set profile for JAR (e.g., prod):
+# java -Dspring.profiles.active=prod -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar
 ```
 
-### Docker
-
-Build and run with Docker:
-
+**Docker:**
+1. Build image: `./mvnw spring-boot:build-image`
+2. Run container (example using port 8081, adjust if `SERVER_PORT` differs):
 ```bash
-./mvnw spring-boot:build-image
-# The Docker image now defaults to port 8080 internally.
-# The SERVER_PORT environment variable (e.g., from your .env file) can override this.
-#
-# If your .env file (typically copied from .env.example) sets SERVER_PORT=8081,
-# the application will listen on 8081 inside the container. Use:
 docker run -p 8081:8081 --env-file .env book_recommendation_engine:0.0.1-SNAPSHOT
-#
-# If SERVER_PORT is not set in your .env file, or is set to 8080,
-# the application will listen on the default 8080 inside the container. Use:
-# docker run -p 8080:8080 --env-file .env book_recommendation_engine:0.0.1-SNAPSHOT
-# (You can change the first '8080' in '-p 8080:8080' to any host port you prefer)
 ```
 
-### Cloud Deployment
+## Key Endpoints
 
-Environment variables should be configured in your cloud provider's settings.
+- **Web Interface:** `http://localhost:{SERVER_PORT}` or `https://findmybook.net`
+- **Health Check:** `/actuator/health`
+  - Production: `https://findmybook.net/actuator/health`
+  - Development: `https://dev.findmybook.net/actuator/health`
+  - Dockerfile Example:
+    ```Dockerfile
+    HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+      CMD curl --fail http://localhost:8080/actuator/health || exit 1
+    # (Adjust localhost:8080 to internal container port if different)
+    ```
+  - Provides overall status and detailed `components` status (Redis, S3, DB, homepage, search page, book detail page, etc.). 
+  - The `book_detail_page` health check requires the `healthcheck.test-book-id` property to be set (e.g., in `.env` or as an environment variable) to a valid book ID.
+  - Resilient checks report `UP` even with transient issues for certain components (like Redis or S3 if disabled/misconfigured), providing details in the response.
 
-## API and Web Interface
-
-A basic web interface is available at https://localhost:8081. The application currently includes:
-
-- A home page controller (`HomeController`) that serves the main page
-- A simple welcome page template
-- A Book API with the following endpoints:
-  - `GET /api/books/search?query={query}` - Search books by keyword
-  - `GET /api/books/search/title?title={title}` - Search books by title
-  - `GET /api/books/search/author?author={author}` - Search books by author
-  - `GET /api/books/search/isbn?isbn={isbn}` - Search books by ISBN
-  - `GET /api/books/{id}` - Get a book by its ID
-
-The Book API integrates with Google Books API to provide access to an extensive database of books, including their cover images, descriptions, authors, and more. This integration enables book search and recommendation features.
-
-Additional API routes and features might be added in future updates.
+- **Book API Examples:**
+  - `GET /api/books/search?query={keyword}`
+  - `GET /api/books/{id}`
 
 ## Logging
 
-This application logs all incoming HTTP requests and responses, including method, path, status, and response time, using a custom servlet filter (`RequestLoggingFilter`).
-
-Log output appears in the console by default and can be configured via `application.properties` for advanced logging needs.
+Incoming HTTP requests are logged. Configure levels in `application.properties` or `application.yml`.
 
 ## Testing
 
@@ -170,15 +96,38 @@ Log output appears in the console by default and can be configured via `applicat
 ./mvnw test
 ```
 
-## Known Issues and Solutions
+## Troubleshooting
 
-1**MacOS DNS Resolution Error**: For MacOS users, especially on Apple Silicon (M1/M2), the application includes the `netty-resolver-dns-native-macos` dependency to fix DNS resolution issues.
+**Port Conflicts (macOS/Linux):**
+1. Find PID: `lsof -i :{PORT}` (e.g., `lsof -i :8081`)
+2. Kill PID: `kill -9 <PID>`
+
+**Port Conflicts (Windows):**
+1. Find PID: `netstat -ano | findstr :{PORT}`
+2. Kill PID: `taskkill /PID <PID> /F`
+
+**MacOS DNS Resolution:** Includes `netty-resolver-dns-native-macos` for M1/M2 Macs.
 
 ## UML Diagram
 
-A UML class diagram for this project is available in the `src/main/resources/uml` directory. The diagram shows the main classes, their properties, methods, and relationships in the Book Recommendation Engine project.
+See [UML README](src/main/resources/uml/README.md).
 
-To generate the UML diagram, you can use PlantUML. See the [UML README](src/main/resources/uml/README.md) for more information.
+## Manual Sitemap Generation
+
+To manually trigger the update of book IDs for the sitemap (e.g., `sitemap_books.xml`):
+
+**Local Development:**
+```bash
+curl -X POST http://localhost:8081/admin/trigger-sitemap-update
+```
+
+**Production (if accessible and secured appropriately):**
+```bash
+# Ensure this admin endpoint is appropriately secured in a production environment if exposed publicly.
+# Replace https://findmybook.net with your actual admin domain if different,
+# and ensure authentication/authorization is in place.
+curl -X POST https://findmybook.net/admin/trigger-sitemap-update
+```
 
 ## License
 
@@ -186,4 +135,4 @@ MIT License
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a pull request or open an issue here on Github!
+Pull requests and issues are welcome!
