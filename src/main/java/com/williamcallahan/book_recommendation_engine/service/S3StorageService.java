@@ -69,17 +69,13 @@ public class S3StorageService {
     public CompletableFuture<String> uploadFileAsync(String keyName, InputStream inputStream, long contentLength, String contentType) {
         return Mono.fromCallable(() -> {
             try {
-                // Create a byte array from the input stream to avoid closed channel issues
-                // This readAllBytes itself is blocking, but it's part of the callable on boundedElastic.
-                byte[] bytes = inputStream.readAllBytes();
-                
                 PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                         .bucket(bucketName)
                         .key(keyName)
                         .contentType(contentType)
                         .build();
 
-                s3Client.putObject(putObjectRequest, RequestBody.fromBytes(bytes));
+                s3Client.putObject(putObjectRequest, RequestBody.fromInputStream(inputStream, contentLength));
                 
                 logger.info("Successfully uploaded {} to S3 bucket {}", keyName, bucketName);
 
@@ -109,8 +105,8 @@ public class S3StorageService {
         })
         .subscribeOn(Schedulers.boundedElastic()) // Execute the blocking call on an I/O-optimized scheduler
         .onErrorResume(e -> {
-            // Log already happened in the callable, just return null for the CompletableFuture
-            return Mono.justOrEmpty(null); 
+            // Log already happened in the callable, rethrow the exception
+            return Mono.error(e); 
         })
         .toFuture(); // Convert the Mono to CompletableFuture
     }

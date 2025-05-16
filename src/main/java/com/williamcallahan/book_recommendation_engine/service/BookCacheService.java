@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
+import com.williamcallahan.book_recommendation_engine.types.PgVector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -633,7 +634,7 @@ public class BookCacheService {
                         .flatMap(embedding -> {
                             try {
                                 JsonNode rawData = objectMapper.valueToTree(book);
-                                CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, embedding);
+                                CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, new PgVector(embedding));
                                 // Wrap the blocking save operation
                                 return Mono.fromRunnable(() -> {
                                         if (cachedBookRepository != null) { // Final check before save

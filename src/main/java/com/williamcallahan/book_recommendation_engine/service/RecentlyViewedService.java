@@ -2,14 +2,12 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.*;
-// import java.util.concurrent.CompletableFuture; // Removed unused import
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import reactor.core.publisher.Mono;
@@ -42,14 +40,14 @@ public class RecentlyViewedService {
     }
 
     /**
-     * Add a book to the recently viewed list.
+     * Add a book to the recently viewed list
      *
      * @param book the book to add
      */
     public void addToRecentlyViewed(Book book) {
         synchronized (recentlyViewedBooks) {
             // Remove the book if it already exists to avoid duplicates
-            recentlyViewedBooks.removeIf(b -> b.getId().equals(book.getId()));
+            recentlyViewedBooks.removeIf(b -> java.util.Objects.equals(b.getId(), book.getId()));
 
             // Add the book to the beginning of the list
             recentlyViewedBooks.addFirst(book);
@@ -62,12 +60,11 @@ public class RecentlyViewedService {
     }
 
     /**
-     * Asynchronously fetches and processes default books if no books have been viewed.
-     * This method is now fully non-blocking internally.
+     * Asynchronously fetches and processes default books if no books have been viewed
+     * This method is now fully non-blocking internally
      *
-     * @return A Mono containing a list of default books.
+     * @return A Mono containing a list of default books
      */
-    @Async("mvcTaskExecutor") // Still run on async executor, but the Mono itself is non-blocking
     public Mono<List<Book>> fetchDefaultBooksAsync() {
         logger.debug("Fetching default books reactively.");
         return googleBooksService.searchBooksAsyncReactive("java programming")
@@ -90,8 +87,8 @@ public class RecentlyViewedService {
     }
     
     /**
-     * Get the list of recently viewed books.
-     * If the list is empty, it attempts to fetch default books.
+     * Get the list of recently viewed books
+     * If the list is empty, it attempts to fetch default books
      *
      * @return a list of recently viewed books or default books
      */
@@ -100,7 +97,7 @@ public class RecentlyViewedService {
         if (recentlyViewedBooks.isEmpty()) {
             List<Book> defaultBooks = Collections.emptyList();
             try {
-                // This call blocks the current thread, but not while holding the recentlyViewedBooks lock.
+                // This call blocks the current thread, but not while holding the recentlyViewedBooks lock
                 // The underlying fetchDefaultBooksAsync is now non-blocking until .toFuture().get()
                 logger.debug("Recently viewed is empty, attempting to fetch default books.");
                 defaultBooks = fetchDefaultBooksAsync().toFuture().get(); // Blocks here
@@ -144,7 +141,6 @@ public class RecentlyViewedService {
         }
 
         // Check if it's our placeholder image
-        // Consider making "placeholder-book-cover.svg" a constant
         return !imageUrl.contains("placeholder-book-cover.svg");
     }
 

@@ -131,9 +131,9 @@ public class CoverSourceFetchingService {
                             provisionalUrlHint, finalHintSourceName, bookIdForLog, cachedFromHintDetails.getWidth(), cachedFromHintDetails.getHeight());
                     return processCoverSourcesSequentially(book, bookIdForLog, provenanceData);
                 })
-                .exceptionally(ex -> {
+                .exceptionallyCompose(ex -> {
                     logger.error("Exception processing provisionalUrlHint {} for Book ID {}. Falling back. Error: {}", provisionalUrlHint, bookIdForLog, ex.getMessage());
-                    return processCoverSourcesSequentially(book, bookIdForLog, provenanceData).join(); // .join() for simplicity in exceptionally block
+                    return processCoverSourcesSequentially(book, bookIdForLog, provenanceData); // Return the CF directly
                 });
         }
         // No valid provisional hint, or hint was local cache path, proceed to full scan
@@ -262,16 +262,20 @@ public class CoverSourceFetchingService {
         logger.debug("Attempting S3 for Book ID {}", bookIdForLog);
         // Direct S3 check through HEAD request
         // Returns S3 URL without downloading content
-        return s3BookCoverService.fetchCover(book) // This now returns CompletableFuture<ImageDetails>
-            // .toFuture() // Removed redundant .toFuture()
-            .thenCompose(s3RemoteDetails -> {
-                if (isValidImageDetails(s3RemoteDetails) && s3RemoteDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                    // S3 URL directly usable without local caching
-                    logger.info("S3 provided valid image for Book ID {}: {}", bookIdForLog, s3RemoteDetails.getUrlOrPath());
-                    return CompletableFuture.completedFuture(s3RemoteDetails);
+        return s3BookCoverService.fetchCover(book) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
+            .thenCompose(s3RemoteDetailsOptional -> { // s3RemoteDetailsOptional is Optional<ImageDetails>
+                if (s3RemoteDetailsOptional.isPresent()) {
+                    ImageDetails s3RemoteDetails = s3RemoteDetailsOptional.get();
+                    if (isValidImageDetails(s3RemoteDetails) && s3RemoteDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
+                        // S3 URL directly usable without local caching
+                        logger.info("S3 provided valid image for Book ID {}: {}", bookIdForLog, s3RemoteDetails.getUrlOrPath());
+                        return CompletableFuture.completedFuture(s3RemoteDetails);
+                    }
+                    logger.debug("S3 provided Optional<ImageDetails> but it was not valid or not from S3_CACHE for Book ID {}. Details: {}", bookIdForLog, s3RemoteDetails);
+                } else {
+                    logger.debug("S3 did not provide Optional<ImageDetails> for Book ID {}.", bookIdForLog);
                 }
-                logger.debug("S3 did not provide a valid remote URL for Book ID {} or source was not S3_CACHE. Details: {}", bookIdForLog, s3RemoteDetails);
-                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "s3-failed-or-not-s3"));
+                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "s3-failed-or-not-s3-or-empty-optional"));
             })
             .exceptionally(ex -> {
                 logger.error("Exception trying S3 for Book ID {}: {}", bookIdForLog, ex.getMessage());
@@ -302,27 +306,35 @@ public class CoverSourceFetchingService {
             return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-known-bad-" + sizeSuffix));
         }
         logger.debug("Attempting OpenLibrary for ISBN {}, size {} (Book ID for log: {})", isbn, sizeSuffix, bookIdForLog);
+        final String finalIsbn = isbn; // For use in lambda
 
-        return openLibraryService.fetchOpenLibraryCoverDetails(isbn, sizeSuffix) // This now returns CompletableFuture<ImageDetails>
-            // .toFuture() // Removed redundant .toFuture()
-            .thenCompose(remoteImageDetails -> {
-                if (remoteImageDetails != null && remoteImageDetails.getUrlOrPath() != null && !remoteImageDetails.getUrlOrPath().isEmpty()) {
-                    return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "OpenLibrary-" + sizeSuffix)
-                        .thenApply(cachedDetails -> { // Ensure we return the details of the *cached* version
-                             if (isValidImageDetails(cachedDetails)) return cachedDetails;
-                             coverCacheManager.addKnownBadOpenLibraryIsbn(isbn); // Mark as bad if download/cache failed
-                             return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-dl-fail");
-                        });
+        return openLibraryService.fetchOpenLibraryCoverDetails(isbn, sizeSuffix) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
+            .thenCompose(remoteImageDetailsOptional -> { // remoteImageDetailsOptional is Optional<ImageDetails>
+                if (remoteImageDetailsOptional.isPresent()) {
+                    ImageDetails remoteImageDetails = remoteImageDetailsOptional.get();
+                    if (remoteImageDetails.getUrlOrPath() != null && !remoteImageDetails.getUrlOrPath().isEmpty()) {
+                        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "OpenLibrary-" + sizeSuffix)
+                            .thenApply(cachedDetails -> { // Ensure we return the details of the *cached* version
+                                 if (isValidImageDetails(cachedDetails)) return cachedDetails;
+                                 coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn); // Mark as bad if download/cache failed
+                                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-dl-fail");
+                            });
+                    } else {
+                        // Optional was present, but ImageDetails inside had no URL
+                         logger.warn("OpenLibraryService provided ImageDetails but no URL for ISBN {} size {}.", finalIsbn, sizeSuffix);
+                    }
+                } else {
+                     // Optional was empty
+                    logger.warn("OpenLibraryService did not provide ImageDetails for ISBN {} size {}.", finalIsbn, sizeSuffix);
                 }
-                logger.warn("OpenLibraryService did not provide a valid remote URL for ISBN {} size {}.", isbn, sizeSuffix);
-                // Add failed attempt to provenance (no URL from service)
-                ImageProvenanceData.AttemptedSourceInfo olAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.OPEN_LIBRARY, "isbn:" + isbn + ", size:" + sizeSuffix, ImageAttemptStatus.FAILURE_404);
+                // Common failure path if not returned earlier
+                ImageProvenanceData.AttemptedSourceInfo olAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.OPEN_LIBRARY, "isbn:" + finalIsbn + ", size:" + sizeSuffix, ImageAttemptStatus.FAILURE_404);
                 provenanceData.getAttemptedImageSources().add(olAttempt);
-                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-no-url"));
+                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-no-url-or-empty"));
             })
             .exceptionally(ex -> {
-                logger.error("Exception trying OpenLibrary for ISBN {}, size {}: {}", isbn, sizeSuffix, ex.getMessage());
-                coverCacheManager.addKnownBadOpenLibraryIsbn(isbn);
+                logger.error("Exception trying OpenLibrary for ISBN {}, size {}: {}", finalIsbn, sizeSuffix, ex.getMessage());
+                coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn);
                 ImageProvenanceData.AttemptedSourceInfo olAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.OPEN_LIBRARY, "isbn:" + isbn + ", size:" + sizeSuffix, ImageAttemptStatus.FAILURE_GENERIC);
                 olAttempt.setFailureReason(ex.getMessage());
                 provenanceData.getAttemptedImageSources().add(olAttempt);
@@ -425,27 +437,43 @@ public class CoverSourceFetchingService {
         }
         logger.debug("Attempting Longitood for ISBN {} (Book ID for log: {})", isbn, bookIdForLog);
 
-        return longitoodService.fetchCover(book) // This now returns CompletableFuture<ImageDetails>
+        final String finalIsbn = isbn; // For use in lambda
+
+        return longitoodService.fetchCover(book) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
             // .toFuture() // Removed redundant .toFuture()
-            .thenCompose(remoteImageDetails -> {
-                if (remoteImageDetails != null && remoteImageDetails.getUrlOrPath() != null && !remoteImageDetails.getUrlOrPath().isEmpty()) {
-                    return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "Longitood")
-                         .thenApply(cachedDetails -> {
-                             if (isValidImageDetails(cachedDetails)) return cachedDetails;
-                             coverCacheManager.addKnownBadLongitoodIsbn(isbn);
-                             return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-dl-fail");
-                         });
+            .thenCompose(remoteImageDetailsOptional -> { // remoteImageDetailsOptional is Optional<ImageDetails>
+                if (remoteImageDetailsOptional.isPresent()) {
+                    ImageDetails remoteImageDetails = remoteImageDetailsOptional.get();
+                    if (remoteImageDetails.getUrlOrPath() != null && !remoteImageDetails.getUrlOrPath().isEmpty()) {
+                        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "Longitood")
+                             .thenApply(cachedDetails -> {
+                                 if (isValidImageDetails(cachedDetails)) {
+                                     return cachedDetails;
+                                 }
+                                 // Download or caching failed for a valid URL
+                                 coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn); 
+                                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-dl-fail");
+                             });
+                    } else {
+                        // Optional was present, but ImageDetails inside had no URL
+                        logger.warn("LongitoodService provided ImageDetails but no URL for ISBN {}.", finalIsbn);
+                        coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
+                    }
+                } else {
+                    // Optional was empty
+                    logger.warn("LongitoodService did not provide ImageDetails for ISBN {}.", finalIsbn);
+                    coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
                 }
-                logger.warn("LongitoodService did not provide a valid remote URL for ISBN {}.", isbn);
-                coverCacheManager.addKnownBadLongitoodIsbn(isbn);
-                ImageProvenanceData.AttemptedSourceInfo ltAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.LONGITOOD, "isbn:" + isbn, ImageAttemptStatus.FAILURE_404);
+                
+                // Common failure path if not returned earlier
+                ImageProvenanceData.AttemptedSourceInfo ltAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.LONGITOOD, "isbn:" + finalIsbn, ImageAttemptStatus.FAILURE_404);
                 provenanceData.getAttemptedImageSources().add(ltAttempt);
-                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-no-url"));
+                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-no-url-or-empty"));
             })
             .exceptionally(ex -> {
-                logger.error("Exception trying Longitood for ISBN {}: {}", isbn, ex.getMessage());
-                coverCacheManager.addKnownBadLongitoodIsbn(isbn);
-                ImageProvenanceData.AttemptedSourceInfo ltAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.LONGITOOD, "isbn:" + isbn, ImageAttemptStatus.FAILURE_GENERIC);
+                logger.error("Exception trying Longitood for ISBN {}: {}", finalIsbn, ex.getMessage());
+                coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
+                ImageProvenanceData.AttemptedSourceInfo ltAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.LONGITOOD, "isbn:" + finalIsbn, ImageAttemptStatus.FAILURE_GENERIC);
                 ltAttempt.setFailureReason(ex.getMessage());
                 provenanceData.getAttemptedImageSources().add(ltAttempt);
                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-exception");

@@ -47,7 +47,6 @@ public class LocalDiskCoverCacheService {
     private static final Logger logger = LoggerFactory.getLogger(LocalDiskCoverCacheService.class);
     private static final String LOCAL_PLACEHOLDER_PATH = "/images/placeholder-book-cover.svg";
     private static final String GOOGLE_PLACEHOLDER_CLASSPATH_PATH = "/images/image-not-available.png";
-    // Assuming OpenLibrary placeholder is not a specific file but detected by content/hash if necessary
 
     @Value("${app.cover-cache.enabled:true}")
     private boolean cacheEnabled;
@@ -59,13 +58,12 @@ public class LocalDiskCoverCacheService {
     private int maxCacheAgeDays;
 
     private Path cacheDir;
-    private String cacheDirName; // To construct web-safe paths
+    private String cacheDirName;
     private byte[] googlePlaceholderHash;
-    // private byte[] openLibraryPlaceholderHash; // If we had a specific OL placeholder file
 
     private final WebClient webClient;
     private final CoverCacheManager coverCacheManager;
-    private final ScheduledExecutorService scheduler; // To be initialized in constructor or init
+    private final ScheduledExecutorService scheduler;
 
     /**
      * Constructs the LocalDiskCoverCacheService
@@ -76,10 +74,9 @@ public class LocalDiskCoverCacheService {
     public LocalDiskCoverCacheService(WebClient.Builder webClientBuilder, CoverCacheManager coverCacheManager) {
         this.webClient = webClientBuilder.build();
         this.coverCacheManager = coverCacheManager;
-        // Initialize daemon scheduler for cleanup tasks
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {
             Thread t = Executors.defaultThreadFactory().newThread(r);
-            t.setDaemon(true); // Allow JVM to exit if only scheduler threads are running
+            t.setDaemon(true);
             t.setName("LocalDiskCoverCache-CleanupScheduler");
             return t;
         });
@@ -100,7 +97,7 @@ public class LocalDiskCoverCacheService {
         }
         try {
             this.cacheDir = Paths.get(cacheDirString);
-            this.cacheDirName = this.cacheDir.getFileName().toString(); // e.g., "book-covers"
+            this.cacheDirName = this.cacheDir.getFileName().toString();
 
             if (!Files.exists(cacheDir)) {
                 Files.createDirectories(cacheDir);
@@ -132,8 +129,11 @@ public class LocalDiskCoverCacheService {
             }
 
             // Schedule cleanup task
-            scheduler.scheduleAtFixedRate(this::safeCleanupOldCachedCovers, maxCacheAgeDays, maxCacheAgeDays, TimeUnit.DAYS);
-            logger.info("Scheduled cleanup of old cached covers older than {} days to run every {} days", maxCacheAgeDays, maxCacheAgeDays);
+            long initialDelayDays = Math.max(0, Math.min(1, maxCacheAgeDays)); // Run quickly on startup, but not less than 0
+            long periodDays = Math.max(1, maxCacheAgeDays); // Ensure period is at least 1 day
+
+            scheduler.scheduleAtFixedRate(this::safeCleanupOldCachedCovers, initialDelayDays, periodDays, TimeUnit.DAYS);
+            logger.info("Scheduled cleanup of old cached covers (older than {} days) to run with initial delay of {} day(s) and then every {} days", maxCacheAgeDays, initialDelayDays, periodDays);
 
         } catch (IOException e) { // For Files.createDirectories
             logger.error("Failed to create or access book cover cache directory: {}. Disabling local disk caching.", cacheDirString, e);
@@ -214,9 +214,11 @@ public class LocalDiskCoverCacheService {
                             if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_PLACEHOLDER_DETECTED);
                             return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "googleplaceholder"));
                         }
-                        // Add similar check for openLibraryPlaceholderHash if it's defined
 
-                        Files.write(destinationPath, imageBytes);
+                        Files.write(destinationPath, imageBytes, 
+                            java.nio.file.StandardOpenOption.CREATE, 
+                            java.nio.file.StandardOpenOption.WRITE, 
+                            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
                         coverCacheManager.putPathToUrlCache(imageUrl, webSafeCachedPath);
                         logger.info("Successfully cached image for BookID: {} from URL: {} to {}", bookIdForLog, imageUrl, webSafeCachedPath);
 
@@ -267,13 +269,12 @@ public class LocalDiskCoverCacheService {
      * @return ImageDetails object representing the local placeholder
      */
     public ImageDetails createPlaceholderImageDetails(String bookIdForLog, String reasonSuffix) {
-        // Ensure reasonSuffix is not excessively long or problematic for an ID
         String cleanReasonSuffix = reasonSuffix != null ? reasonSuffix.replaceAll("[^a-zA-Z0-9-]", "_") : "unknown";
         return new ImageDetails(
                 LOCAL_PLACEHOLDER_PATH,
                 "SYSTEM_PLACEHOLDER",
                 "placeholder-" + cleanReasonSuffix + "-" + bookIdForLog,
-                CoverImageSource.LOCAL_CACHE, // Placeholder is always considered local cache
+                CoverImageSource.LOCAL_CACHE,
                 ImageResolutionPreference.UNKNOWN
         );
     }
@@ -308,7 +309,7 @@ public class LocalDiskCoverCacheService {
     private void safeCleanupOldCachedCovers() {
         try {
             cleanupOldCachedCovers();
-        } catch (Throwable t) { // Catch everything to prevent scheduler death
+        } catch (Throwable t) {
             logger.error("Uncaught exception in LocalDiskCoverCacheService cleanup task. Scheduler thread might have died if not for this catch.", t);
         }
     }
@@ -318,7 +319,7 @@ public class LocalDiskCoverCacheService {
      * - Files older than maxCacheAgeDays are deleted
      * - Runs on a schedule defined by scheduler
      */
-    private void cleanupOldCachedCovers() { // This method can now throw exceptions, safeCleanupOldCachedCovers will catch them
+    private void cleanupOldCachedCovers() {
         if (!cacheEnabled || cacheDir == null) {
             logger.debug("Cleanup: Local disk cache disabled or directory not set, skipping cleanup");
             return;
@@ -350,8 +351,6 @@ public class LocalDiskCoverCacheService {
             logger.info("Completed cleanup of old cached book covers. Deleted {} files", deleteCount[0]);
         } catch (IOException e) {
             logger.error("Error during cleanup of cached book covers in {}", cacheDir, e);
-            // Allow IOException to be caught by safeCleanupOldCachedCovers
-            // Or handle more specifically if needed, but the outer catch is the safety net.
         }
     }
 
@@ -364,18 +363,14 @@ public class LocalDiskCoverCacheService {
             logger.info("Shutting down LocalDiskCoverCacheService scheduler...");
             scheduler.shutdown();
             try {
-                // Wait a while for existing tasks to terminate
                 if (!scheduler.awaitTermination(60, TimeUnit.SECONDS)) {
-                    scheduler.shutdownNow(); // Cancel currently executing tasks
-                    // Wait a while for tasks to respond to being cancelled
+                    scheduler.shutdownNow();
                     if (!scheduler.awaitTermination(60, TimeUnit.SECONDS)) {
                         logger.error("LocalDiskCoverCacheService scheduler did not terminate.");
                     }
                 }
             } catch (InterruptedException ie) {
-                // (Re-)Cancel if current thread also interrupted
                 scheduler.shutdownNow();
-                // Preserve interrupt status
                 Thread.currentThread().interrupt();
             }
             logger.info("LocalDiskCoverCacheService scheduler shut down.");

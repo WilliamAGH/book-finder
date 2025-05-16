@@ -16,11 +16,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-// import reactor.core.scheduler.Schedulers; // Removed unused import
+import reactor.core.publisher.Mono;
 
-import java.nio.file.Files; // Added import
-import java.nio.file.Path;   // Added import
-import java.nio.file.Paths;  // Added import
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 /**
  * Orchestrates the retrieval, caching, and background updating of book cover images
@@ -78,107 +78,113 @@ public class BookCoverManagementService {
         this.environmentService = environmentService;
     }
 
+    private CoverImages createPlaceholderCoverImages(String bookIdForLog) {
+        CoverImages placeholder = new CoverImages();
+        String localPlaceholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
+        placeholder.setPreferredUrl(localPlaceholderPath);
+        placeholder.setFallbackUrl(localPlaceholderPath);
+        placeholder.setSource(CoverImageSource.LOCAL_CACHE);
+        logger.warn("Returning placeholder for book ID: {}", bookIdForLog);
+        return placeholder;
+    }
+
     /**
      * Gets the initial cover URL for immediate display and triggers background processing for updates
      * - Checks S3, final, and provisional caches for an existing image
      * - Uses book's existing cover URL or a placeholder if no cached version is found
      * - Initiates an asynchronous background process to find and cache the best quality cover
      * @param book The book to retrieve the cover image for
-     * @return CoverImages object containing preferred and fallback URLs, and the source
+     * @return Mono<CoverImages> object containing preferred and fallback URLs, and the source
      */
-    public CoverImages getInitialCoverUrlAndTriggerBackgroundUpdate(Book book) {
-        CoverImages result = new CoverImages();
-        result.setSource(CoverImageSource.UNDEFINED);
+    public Mono<CoverImages> getInitialCoverUrlAndTriggerBackgroundUpdate(Book book) {
         String localPlaceholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
 
         if (!cacheEnabled) {
-            logger.warn("Cover caching is disabled, returning placeholder for book ID: {}", book != null ? book.getId() : "null");
-            result.setPreferredUrl(localPlaceholderPath);
-            result.setFallbackUrl(localPlaceholderPath);
-            result.setSource(CoverImageSource.LOCAL_CACHE);
-            return result;
+            return Mono.just(createPlaceholderCoverImages(book != null ? book.getId() : "null (cache disabled)"));
         }
 
         if (book == null || (book.getIsbn13() == null && book.getIsbn10() == null && book.getId() == null)) {
-            logger.warn("Book or all relevant identifiers are null. Cannot process for initial cover URL");
-            result.setPreferredUrl(localPlaceholderPath);
-            result.setFallbackUrl(localPlaceholderPath);
-            result.setSource(CoverImageSource.LOCAL_CACHE);
-            return result;
+            return Mono.just(createPlaceholderCoverImages("null (book or identifiers null)"));
         }
 
         String identifierKey = ImageCacheUtils.getIdentifierKey(book);
         if (identifierKey == null) {
-            logger.warn("Could not determine a valid identifierKey for book with ID: {}. Returning placeholder", book.getId());
-            result.setPreferredUrl(localPlaceholderPath);
-            result.setFallbackUrl(localPlaceholderPath);
-            result.setSource(CoverImageSource.LOCAL_CACHE);
-            return result;
+            return Mono.just(createPlaceholderCoverImages(book.getId() + " (identifierKey null)"));
         }
 
         // 1. Check S3 (via S3BookCoverService which might have its own internal cache for S3 object existence)
         // S3BookCoverService.fetchCover should ideally return ImageDetails with an S3 URL if found.
-        try {
-            // s3BookCoverService.fetchCover now returns CompletableFuture.
-            // The blocking S3 SDK calls within its reactive chain are already on Schedulers.boundedElastic().
-            ImageDetails s3Details = s3BookCoverService.fetchCover(book).join(); // Use join() for CompletableFuture
-            if (s3Details != null && s3Details.getUrlOrPath() != null && s3Details.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                logger.debug("Initial check: Found S3 cover for identifier {}: {}", identifierKey, s3Details.getUrlOrPath());
-                result.setPreferredUrl(s3Details.getUrlOrPath());
-                result.setSource(CoverImageSource.S3_CACHE);
-                result.setFallbackUrl((book.getCoverImageUrl() != null && !book.getCoverImageUrl().equals(localPlaceholderPath)) ? book.getCoverImageUrl() : localPlaceholderPath);
-                coverCacheManager.putFinalImageDetails(identifierKey, s3Details); // Cache S3 details as final
-                return result;
-            }
-        } catch (Exception e) {
-            logger.warn("Error during initial S3 check for identifier {}: {}", identifierKey, e.getMessage());
-            // Proceed to other caches
-        }
-        
-        // 2. Check final in-memory cache (already processed and best image known)
+        // Convert CompletableFuture to Mono
+        return Mono.fromFuture(s3BookCoverService.fetchCover(book)) // This now returns CompletableFuture<Optional<ImageDetails>>
+            .flatMap(imageDetailsOptionalFromS3 -> { // imageDetailsOptionalFromS3 is Optional<ImageDetails>
+                if (imageDetailsOptionalFromS3.isPresent()) {
+                    ImageDetails imageDetailsFromS3 = imageDetailsOptionalFromS3.get();
+                    if (imageDetailsFromS3.getUrlOrPath() != null && imageDetailsFromS3.getCoverImageSource() == CoverImageSource.S3_CACHE) {
+                        logger.debug("Initial check: Found S3 cover for identifier {}: {}", identifierKey, imageDetailsFromS3.getUrlOrPath());
+                        CoverImages s3Result = new CoverImages();
+                        s3Result.setPreferredUrl(imageDetailsFromS3.getUrlOrPath());
+                        s3Result.setSource(CoverImageSource.S3_CACHE);
+                        s3Result.setFallbackUrl((book.getCoverImageUrl() != null && !book.getCoverImageUrl().equals(localPlaceholderPath)) ? book.getCoverImageUrl() : localPlaceholderPath);
+                        coverCacheManager.putFinalImageDetails(identifierKey, imageDetailsFromS3); // Cache S3 ImageDetails
+                        return Mono.just(s3Result);
+                    }
+                    logger.debug("S3 check: Optional<ImageDetails> was present but content not valid S3 cache for identifier {}: {}", identifierKey, imageDetailsFromS3);
+                } else {
+                     logger.debug("S3 check: Optional<ImageDetails> was empty for identifier {}", identifierKey);
+                }
+                // S3 miss, invalid details, or empty Optional, proceed to check other caches
+                return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
+            })
+            .onErrorResume(e -> { // This catches errors from s3BookCoverService.fetchCover(book) or the flatMap processing
+                logger.warn("Error during S3 fetch or processing for identifier {}: {}", identifierKey, e.getMessage());
+                // Error in S3 fetch or its processing, proceed to check other caches
+                return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
+            })
+            .defaultIfEmpty(createPlaceholderCoverImages(book.getId() + " (all checks failed or resulted in empty)"));
+    }
+
+    private Mono<CoverImages> checkMemoryCachesAndDefaults(Book book, String identifierKey, String localPlaceholderPath) {
+        // 2. Check final in-memory cache
         ImageDetails finalCachedImageDetails = coverCacheManager.getFinalImageDetails(identifierKey);
         if (finalCachedImageDetails != null && finalCachedImageDetails.getUrlOrPath() != null) {
             logger.debug("Returning final cached ImageDetails for identifierKey {}: Path: {}, Source: {}",
                 identifierKey, finalCachedImageDetails.getUrlOrPath(), finalCachedImageDetails.getCoverImageSource());
-            result.setPreferredUrl(finalCachedImageDetails.getUrlOrPath());
-            result.setSource(finalCachedImageDetails.getCoverImageSource() != null ? finalCachedImageDetails.getCoverImageSource() : CoverImageSource.UNDEFINED);
-            result.setFallbackUrl(determineFallbackUrl(book, finalCachedImageDetails.getUrlOrPath(), localPlaceholderPath));
-            return result;
+            CoverImages finalCacheResult = new CoverImages();
+            finalCacheResult.setPreferredUrl(finalCachedImageDetails.getUrlOrPath());
+            finalCacheResult.setSource(finalCachedImageDetails.getCoverImageSource() != null ? finalCachedImageDetails.getCoverImageSource() : CoverImageSource.UNDEFINED);
+            finalCacheResult.setFallbackUrl(determineFallbackUrl(book, finalCachedImageDetails.getUrlOrPath(), localPlaceholderPath));
+            return Mono.just(finalCacheResult);
         }
 
-        // 3. Check provisional in-memory cache
+        // 3. Check provisional or use book's URL or placeholder
+        CoverImages provisionalResult = new CoverImages();
         String provisionalUrl = coverCacheManager.getProvisionalUrl(identifierKey);
         String urlToUseAsPreferred;
-        CoverImageSource inferredProvisionalSource = CoverImageSource.UNDEFINED;
+        CoverImageSource inferredProvisionalSource;
 
         if (provisionalUrl != null) {
-            logger.debug("Returning provisional cached URL for identifierKey {}: {}", identifierKey, provisionalUrl);
             urlToUseAsPreferred = provisionalUrl;
             inferredProvisionalSource = inferSourceFromUrl(provisionalUrl, localPlaceholderPath);
         } else {
-            // 4. Use book's existing cover URL if available and not placeholder
             if (book.getCoverImageUrl() != null && !book.getCoverImageUrl().isEmpty() && !book.getCoverImageUrl().equals(localPlaceholderPath)) {
                 urlToUseAsPreferred = book.getCoverImageUrl();
-                logger.debug("Using existing coverImageUrl from book object as provisional for identifierKey {}: {}", identifierKey, urlToUseAsPreferred);
                 inferredProvisionalSource = inferSourceFromUrl(urlToUseAsPreferred, localPlaceholderPath);
             } else {
-                // 5. Fallback to placeholder
                 urlToUseAsPreferred = localPlaceholderPath;
                 inferredProvisionalSource = CoverImageSource.LOCAL_CACHE;
-                logger.debug("No provisional URL for identifierKey {}, will use placeholder and process in background", identifierKey);
             }
             coverCacheManager.putProvisionalUrl(identifierKey, urlToUseAsPreferred);
         }
         
-        result.setPreferredUrl(urlToUseAsPreferred);
-        result.setSource(inferredProvisionalSource);
-        result.setFallbackUrl(determineFallbackUrl(book, urlToUseAsPreferred, localPlaceholderPath));
-
+        provisionalResult.setPreferredUrl(urlToUseAsPreferred);
+        provisionalResult.setSource(inferredProvisionalSource);
+        provisionalResult.setFallbackUrl(determineFallbackUrl(book, urlToUseAsPreferred, localPlaceholderPath));
+        
         // Trigger background processing
         processCoverInBackground(book, urlToUseAsPreferred.equals(localPlaceholderPath) ? null : urlToUseAsPreferred);
-        return result;
+        return Mono.just(provisionalResult);
     }
-
+    
     /**
      * Infers the CoverImageSource from a given URL string
      * @param url The URL to infer source from
@@ -249,101 +255,93 @@ public class BookCoverManagementService {
 
         coverSourceFetchingService.getBestCoverImageUrlAsync(book, provisionalUrlHint, provenanceData)
             .thenAcceptAsync(finalImageDetails -> {
+                String localPlaceholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
                 if (finalImageDetails == null || finalImageDetails.getUrlOrPath() == null || 
-                    finalImageDetails.getUrlOrPath().equals(localDiskCoverCacheService.getLocalPlaceholderPath())) {
+                    finalImageDetails.getUrlOrPath().equals(localPlaceholderPath)) {
                     
                     logger.warn("Background: Final processing for {} (BookID {}) yielded placeholder or null. Final cache updated with placeholder", identifierKey, bookIdForLog);
                     ImageDetails placeholderDetails = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-fetch-failed");
                     coverCacheManager.putFinalImageDetails(identifierKey, placeholderDetails);
-                    coverCacheManager.invalidateProvisionalUrl(identifierKey); // Remove potentially misleading provisional URL
+                    coverCacheManager.invalidateProvisionalUrl(identifierKey);
                     eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, placeholderDetails.getUrlOrPath(), book.getId(), placeholderDetails.getCoverImageSource()));
-                    // Log provenance if debug mode is on
                     if (environmentService.isBookCoverDebugMode()) {
-                         // Consider logging provenanceData to a file or separate system if it's large/complex
                         logger.info("Background Provenance (Placeholder) for {}: {}", identifierKey, provenanceData.toString());
                     }
                     return;
                 }
 
-                // A valid image was found
                 logger.info("Background: Best image found for {} (BookID {}): URL/Path: {}, Source: {}",
                     identifierKey, bookIdForLog, finalImageDetails.getUrlOrPath(), finalImageDetails.getCoverImageSource());
 
-                // If the best image is locally cached (not from S3 directly), try to upload it to S3
                 if (finalImageDetails.getCoverImageSource() != CoverImageSource.S3_CACHE &&
                     finalImageDetails.getUrlOrPath().startsWith("/" + localDiskCoverCacheService.getCacheDirName())) {
                     
                     logger.info("Background: Image for {} (BookID {}) is locally cached from {}. Triggering S3 upload",
                         identifierKey, bookIdForLog, finalImageDetails.getCoverImageSource());
                     
-                    // S3BookCoverService's enhanced method will handle processing and upload
-                    // It should return the new S3 ImageDetails upon success
-                    // We need to read the file bytes first
                     try {
-                        Path localImagePath = Paths.get(localDiskCoverCacheService.getCacheDirString(), finalImageDetails.getUrlOrPath().substring(("/" + localDiskCoverCacheService.getCacheDirName() + "/").length()));
-                        byte[] imageBytes = Files.readAllBytes(localImagePath);
-                        String fileExtension = ImageCacheUtils.getFileExtensionFromUrl(finalImageDetails.getUrlOrPath());
-                        // MimeType determined based on file extension
-                        // Width and height values from finalImageDetails
-                        Integer width = finalImageDetails.getWidth() != null ? finalImageDetails.getWidth() : 0;
-                        Integer height = finalImageDetails.getHeight() != null ? finalImageDetails.getHeight() : 0;
+                        Path cacheDir = Paths.get(localDiskCoverCacheService.getCacheDirString());
+                        Path relativeImagePath = Paths.get(finalImageDetails.getUrlOrPath()).getFileName();
+                        Path localImagePath = cacheDir.resolve(relativeImagePath);
 
-                        s3BookCoverService.uploadProcessedCoverToS3Async(
-                            imageBytes,
-                            fileExtension,
-                            null, // MimeType - S3BookCoverService's imageProcessingService should handle this
-                            width,
-                            height,
-                            bookIdForLog, // bookId for S3 key generation
-                            finalImageDetails.getSourceName(), // original source for S3 key
-                            provenanceData // Pass provenance data along
-                        )
-                        .doOnSuccess(s3UploadedDetails -> { // Use doOnSuccess for side effects with Mono
-                            if (s3UploadedDetails != null && s3UploadedDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                                logger.info("Background: Successfully uploaded to S3 for {}. New S3 URL: {}. Updating final cache and publishing event",
-                                    identifierKey, s3UploadedDetails.getUrlOrPath());
-                                coverCacheManager.putFinalImageDetails(identifierKey, s3UploadedDetails);
-                                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, s3UploadedDetails.getUrlOrPath(), book.getId(), CoverImageSource.S3_CACHE));
-                            } else {
-                                // S3 upload failed or didn't result in S3_CACHE, stick with the locally found best image
-                                logger.warn("Background: S3 upload failed or did not return S3_CACHE for {}. Using locally found best image: {}", identifierKey, finalImageDetails.getUrlOrPath());
+                        if (!Files.exists(localImagePath)) {
+                            logger.warn("Background: Local image {} does not exist for BookID {}, cannot upload to S3. Using local details.", localImagePath, bookIdForLog);
+                            coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
+                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                        } else {
+                            byte[] imageBytes = Files.readAllBytes(localImagePath);
+                            String fileExtension = ImageCacheUtils.getFileExtensionFromUrl(finalImageDetails.getUrlOrPath());
+                            Integer width = finalImageDetails.getWidth() != null ? finalImageDetails.getWidth() : 0;
+                            Integer height = finalImageDetails.getHeight() != null ? finalImageDetails.getHeight() : 0;
+
+                            s3BookCoverService.uploadProcessedCoverToS3Async(
+                                imageBytes, fileExtension, null, width, height,
+                                bookIdForLog, finalImageDetails.getSourceName(), provenanceData
+                            )
+                            .doOnSuccess(s3UploadedDetails -> {
+                                if (s3UploadedDetails != null && s3UploadedDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
+                                    logger.info("Background: Successfully uploaded to S3 for {}. New S3 URL: {}. Updating final cache.",
+                                        identifierKey, s3UploadedDetails.getUrlOrPath());
+                                    coverCacheManager.putFinalImageDetails(identifierKey, s3UploadedDetails);
+                                    eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, s3UploadedDetails.getUrlOrPath(), book.getId(), CoverImageSource.S3_CACHE));
+                                } else {
+                                    logger.warn("Background: S3 upload failed or didn't return S3_CACHE for {}. Using local: {}", identifierKey, finalImageDetails.getUrlOrPath());
+                                    coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
+                                    eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                                }
+                            })
+                            .doOnError(s3Ex -> {
+                                logger.error("Background: Exception in S3 upload chain for {}: {}. Using local.", identifierKey, s3Ex.getMessage(), s3Ex);
                                 coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                                 eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
-                            }
-                        })
-                        .doOnError(s3Ex -> { // Handle errors from the S3 upload Mono
-                            logger.error("Background: Exception during S3 upload chain for {}: {}. Using locally found best image.", identifierKey, s3Ex.getMessage(), s3Ex);
-                            coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails); // Fallback to local
-                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
-                        })
-                        .subscribe(); // Subscribe to trigger the Mono execution
+                            })
+                            .subscribe();
+                        }
                     } catch (java.io.IOException e) {
-                        logger.error("Background: Failed to read local image file {} for S3 upload for BookID {}: {}", 
+                        logger.error("Background: IOException for local image {} for S3 upload (BookID {}): {}", 
                             finalImageDetails.getUrlOrPath(), bookIdForLog, e.getMessage());
-                        // Fallback to using the local details if reading fails
                         coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                         eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                     }
                 } else {
-                    // Image is already from S3 or not a local cache candidate for S3 upload, just update cache and publish
                     coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                     eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                 }
                 
-                coverCacheManager.invalidateProvisionalUrl(identifierKey); // Clean up provisional cache
+                coverCacheManager.invalidateProvisionalUrl(identifierKey);
 
                 if (environmentService.isBookCoverDebugMode()) {
                     logger.info("Background Provenance (Success) for {}: {}", identifierKey, provenanceData.toString());
                 }
 
-            }, java.util.concurrent.ForkJoinPool.commonPool()) // Use a common pool for CPU-bound tasks after IO
+            }, java.util.concurrent.ForkJoinPool.commonPool())
             .exceptionally(ex -> {
                 logger.error("Background: Top-level exception in processCoverInBackground for {} (BookID {}): {}",
                     identifierKey, bookIdForLog, ex.getMessage(), ex);
-                // Ensure caches are cleaned up or set to placeholder on top-level failure
                 coverCacheManager.invalidateProvisionalUrl(identifierKey);
-                coverCacheManager.putFinalImageDetails(identifierKey, localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-exception"));
-                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, localDiskCoverCacheService.getLocalPlaceholderPath(), book.getId(), CoverImageSource.LOCAL_CACHE));
+                ImageDetails placeholderOnError = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-exception");
+                coverCacheManager.putFinalImageDetails(identifierKey, placeholderOnError);
+                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, placeholderOnError.getUrlOrPath(), book.getId(), placeholderOnError.getCoverImageSource()));
                 return null;
             });
     }

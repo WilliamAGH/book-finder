@@ -39,7 +39,7 @@ public class BookImageOrchestrationService {
     private static final String DEFAULT_PLACEHOLDER_IMAGE = "/images/placeholder-book-cover.svg";
 
     /** Service for handling cover image caching and background processing */
-    private final BookCoverManagementService bookCoverManagementService; // Renamed
+    private final BookCoverManagementService bookCoverManagementService;
 
     /** Flag indicating whether S3 storage is enabled */
     @Value("${s3.enabled:true}")
@@ -53,7 +53,6 @@ public class BookImageOrchestrationService {
     @Value("${app.cover-cache.dir:covers}")
     private String cacheDirName;
 
-    // Removed maxFileSizeBytes as it's primarily used in S3BookCoverService
 
     /**
      * Constructs a new BookImageOrchestrationService with the required dependencies.
@@ -61,8 +60,8 @@ public class BookImageOrchestrationService {
      * @param bookCoverManagementService The service for cache management and background processing
      */
     @Autowired
-    public BookImageOrchestrationService(BookCoverManagementService bookCoverManagementService) { // Renamed parameter
-        this.bookCoverManagementService = bookCoverManagementService; // Renamed field
+    public BookImageOrchestrationService(BookCoverManagementService bookCoverManagementService) {
+        this.bookCoverManagementService = bookCoverManagementService;
     }
 
     /**
@@ -92,7 +91,6 @@ public class BookImageOrchestrationService {
      * @see #getBestCoverUrlAsync(Book, CoverImageSource, ImageResolutionPreference)
      */
     public CompletableFuture<Book> getBestCoverUrlAsync(Book book, CoverImageSource preferredSource) {
-        // Pass through resolution preference, though it's less critical for this initial setup
         return getBestCoverUrlAsync(book, preferredSource, ImageResolutionPreference.ANY);
     }
     
@@ -140,16 +138,12 @@ public class BookImageOrchestrationService {
             return CompletableFuture.completedFuture(book);
         }
 
-        // Capture the original cover URL from the book (e.g., from Google Books API) to use as a fallback
-        // This should be the URL as initially fetched before any caching logic modifies it
+        // Capture the original cover URL from the book to use as a fallback
         String originalSourceUrl = book.getCoverImageUrl(); // Assumes this is populated by GoogleBooksService
         if (originalSourceUrl == null || originalSourceUrl.isEmpty()) {
             originalSourceUrl = book.getImageUrl(); // Check imageUrl as another possible field for original
         }
         if (originalSourceUrl == null || originalSourceUrl.isEmpty() || originalSourceUrl.equals(DEFAULT_PLACEHOLDER_IMAGE)) {
-            // If no meaningful original URL, use a default placeholder for the fallback as well
-            // However, BookCoverCacheService might itself return a placeholder, which is fine
-            // The goal is that fallbackUrl is _truly_ the original, or a placeholder if none existed
             originalSourceUrl = DEFAULT_PLACEHOLDER_IMAGE; 
         }
         final String finalFallbackUrl = originalSourceUrl;
@@ -157,32 +151,42 @@ public class BookImageOrchestrationService {
         logger.debug("Fetching initial cover for book {} (ID: {}), preferred source: {}, resolution: {}. Fallback will be: {}", 
             book.getTitle(), book.getId(), preferredSource, resolutionPreference, finalFallbackUrl);
 
-        // BookCoverManagementService will provide an initial URL (cached or original) and trigger background processing
-        CoverImages coverImagesResult = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book); // Use renamed service
-        String initialPreferredUrl = (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) ? coverImagesResult.getPreferredUrl() : DEFAULT_PLACEHOLDER_IMAGE;
+        // Convert Mono<CoverImages> to CompletableFuture
+        return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+            .toFuture() // Converts Mono<CoverImages> to CompletableFuture<CoverImages>
+            .thenApply(coverImagesResult -> {
+                String initialPreferredUrl = (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) ? coverImagesResult.getPreferredUrl() : DEFAULT_PLACEHOLDER_IMAGE;
 
-        // Now, populate our new CoverImages structure
-        // The 'initialPreferredUrl' is what BookCoverManagementService decided is best for now
-        // 'finalFallbackUrl' is what it captured as the original
-        // Use the source from the coverImagesResult obtained from BookCoverManagementService
-        CoverImageSource sourceFromResult = (coverImagesResult != null && coverImagesResult.getSource() != null) ? coverImagesResult.getSource() : CoverImageSource.UNDEFINED;
-        book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl, sourceFromResult));
-        
-        // Assuming BookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate might set book.coverImageUrl directly
-        // or we rely on the returned CoverImages.preferredUrl.
-        // For clarity, let's ensure book.coverImageUrl is set from the result here.
-        book.setCoverImageUrl(initialPreferredUrl);
+                // Populate CoverImages structure
+                CoverImageSource sourceFromResult = (coverImagesResult != null && coverImagesResult.getSource() != null) ? coverImagesResult.getSource() : CoverImageSource.UNDEFINED;
+                
+                if (coverImagesResult == null) {
+                    logger.warn("coverImagesResult was null for book ID {}. Using default placeholder.", book.getId());
+                    book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, CoverImageSource.LOCAL_CACHE));
+                    book.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
+                } else {
+                    book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl, sourceFromResult));
+                    book.setCoverImageUrl(initialPreferredUrl);
+                }
 
+                // Set resolution details to null for background processing
+                book.setCoverImageWidth(null);
+                book.setCoverImageHeight(null);
+                book.setIsCoverHighResolution(null);
 
-        // Explicitly set resolution details to null. These will be updated by background processing
-        // once the actual image is fetched and analyzed by BookCoverCacheService or S3BookCoverService
-        book.setCoverImageWidth(null);
-        book.setCoverImageHeight(null);
-        book.setIsCoverHighResolution(null);
-
-        logger.debug("Book ID {}: CoverImages set - Preferred URL: '{}', Fallback URL: '{}'. Background processing initiated by cache service.",
-                     book.getId(), initialPreferredUrl, finalFallbackUrl);
-        
-        return CompletableFuture.completedFuture(book);
+                logger.debug("Book ID {}: CoverImages set - Preferred URL: '{}', Fallback URL: '{}'. Background processing initiated by cache service.",
+                             book.getId(), book.getCoverImageUrl(), finalFallbackUrl);
+                
+                return book;
+            })
+            .exceptionally(ex -> {
+                logger.error("Error processing cover images for book ID {}: {}. Using placeholders.", book.getId(), ex.getMessage(), ex);
+                book.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
+                book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, CoverImageSource.LOCAL_CACHE));
+                book.setCoverImageWidth(null);
+                book.setCoverImageHeight(null);
+                book.setIsCoverHighResolution(null);
+                return book;
+            });
     }
 }

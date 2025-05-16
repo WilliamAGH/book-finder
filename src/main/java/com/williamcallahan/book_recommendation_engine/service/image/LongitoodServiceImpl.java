@@ -2,7 +2,7 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.types.LongitoodService;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails; // Added import
+import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
@@ -17,6 +17,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -53,16 +54,16 @@ public class LongitoodServiceImpl implements LongitoodService {
      * Fetches book cover image from Longitood API
      *
      * @param book The book to fetch a cover for
-     * @return A Mono emitting ImageDetails if a cover is found, or an empty Mono if not available
+     * @return A Mono emitting Optional<ImageDetails> if a cover is found, or an empty Mono if not available
      */
     @Override
     @CircuitBreaker(name = "longitoodService", fallbackMethod = "fetchCoverFallback")
     @TimeLimiter(name = "longitoodService") // Using default config from application.properties or a specific one if defined
-    public CompletableFuture<ImageDetails> fetchCover(Book book) {
+    public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
         String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
         if (isbn == null || isbn.trim().isEmpty()) {
             logger.warn("No ISBN found for book ID: {}, cannot fetch cover from Longitood", book.getId());
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
 
         String apiUrl = "https://bookcover.longitood.com/bookcover/" + isbn;
@@ -85,27 +86,28 @@ public class LongitoodServiceImpl implements LongitoodService {
                             CoverImageSource.LONGITOOD,
                             ImageResolutionPreference.ORIGINAL
                         );
-                        return Mono.just(imageDetails);
+                        return Mono.just(Optional.of(imageDetails));
                     }
                 }
                 logger.debug("No valid cover URL found from Longitood API for book {}", book.getId());
-                return Mono.empty();
+                return Mono.just(Optional.<ImageDetails>empty());
             })
             .onErrorResume(WebClientResponseException.class, e -> {
                 logger.warn("Longitood API error for book {}: {}", book.getId(), e.getMessage());
-                return Mono.empty();
+                return Mono.just(Optional.<ImageDetails>empty());
             })
             .onErrorResume(Exception.class, e -> {
                  logger.error("Unexpected error during Longitood API call for book {}: {}", book.getId(), e.getMessage(), e);
-                 return Mono.empty();
+                 return Mono.just(Optional.<ImageDetails>empty());
             })
+            .defaultIfEmpty(Optional.<ImageDetails>empty())
             .toFuture();
     }
 
     // Fallback method for fetchCover
-    public CompletableFuture<ImageDetails> fetchCoverFallback(Book book, Throwable t) {
+    public CompletableFuture<Optional<ImageDetails>> fetchCoverFallback(Book book, Throwable t) {
         String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
         logger.warn("LongitoodService.fetchCover circuit breaker opened for book ID: {}, ISBN: {}. Error: {}", book.getId(), isbn, t.getMessage());
-        return CompletableFuture.completedFuture(null); // Return null or an empty ImageDetails
+        return CompletableFuture.completedFuture(Optional.empty());
     }
 }

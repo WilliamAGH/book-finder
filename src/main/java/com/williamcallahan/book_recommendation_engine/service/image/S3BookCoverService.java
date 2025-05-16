@@ -41,6 +41,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.util.concurrent.CompletableFuture;
+import java.util.Optional;
 
 /**
  * Service for managing book cover images in S3 object storage
@@ -98,14 +99,14 @@ public class S3BookCoverService implements ExternalCoverService {
     public S3BookCoverService(WebClient.Builder webClientBuilder,
                                ImageProcessingService imageProcessingService,
                                EnvironmentService environmentService,
-                               S3Client s3Client, // Injected S3Client
-                               @Value("${s3.enabled:true}") boolean s3Enabled // Inject s3Enabled for consistency
+                               S3Client s3Client // Injected S3Client
+                               // Removed @Value("${s3.enabled:true}") boolean s3Enabled from parameters
                                ) {
         this.webClient = webClientBuilder.build();
         this.imageProcessingService = imageProcessingService;
         this.environmentService = environmentService;
         this.s3Client = s3Client; // Use injected client
-        this.s3EnabledCheck = s3Enabled; // Store the configured s3Enabled status
+        // this.s3EnabledCheck = s3Enabled; // Removed assignment, s3EnabledCheck field is @Value injected
         this.objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         this.objectExistsCache = Caffeine.newBuilder()
             .maximumSize(2000)
@@ -132,6 +133,14 @@ public class S3BookCoverService implements ExternalCoverService {
     @PreDestroy
     public void destroy() {
         logger.info("S3BookCoverService @PreDestroy called. S3Client lifecycle managed by Spring config.");
+    }
+
+    /**
+     * Checks if S3 functionality is enabled and the client is available.
+     * @return true if S3 is enabled and usable, false otherwise.
+     */
+    public boolean isS3Enabled() {
+        return this.s3EnabledCheck && this.s3Client != null;
     }
     
     /**
@@ -169,13 +178,13 @@ public class S3BookCoverService implements ExternalCoverService {
      * - Returns empty result if book has no valid identifier or S3 is disabled
      * 
      * @param book Book object containing identifiers to search with
-     * @return CompletableFuture with ImageDetails if cover exists in S3, null otherwise
+     * @return CompletableFuture with Optional<ImageDetails> if cover exists in S3, empty Optional otherwise
      */
     @Override
-    public CompletableFuture<ImageDetails> fetchCover(Book book) {
+    public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
         if (!s3EnabledCheck || s3Client == null || book == null) {
             if (!s3EnabledCheck || s3Client == null) logger.debug("S3 fetchCover skipped: S3 disabled or S3Client not available.");
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
         String bookKey = book.getId();
         if (bookKey == null || bookKey.trim().isEmpty()) bookKey = book.getIsbn13();
@@ -183,7 +192,7 @@ public class S3BookCoverService implements ExternalCoverService {
         
         if (bookKey == null || bookKey.trim().isEmpty()) {
             logger.warn("Cannot fetch S3 cover for book without a valid ID or ISBN. Title: {}", book.getTitle());
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
 
         final String finalBookKey = bookKey;
@@ -206,12 +215,15 @@ public class S3BookCoverService implements ExternalCoverService {
                         String cdnUrl = getS3CoverUrl(finalBookKey, fileExtension, sourceForS3Key);
                         logger.debug("Found existing S3 cover for book {} from source key '{}': {}", finalBookKey, sourceForS3Key, cdnUrl);
                         // Assuming width/height are not known from S3 HEAD request alone, use constructor without them
-                        return new com.williamcallahan.book_recommendation_engine.types.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL);
+                        return Optional.of(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL));
                     })
+                    .switchIfEmpty(Mono.just(Optional.empty()))
             )
-            .next() // Take the first one found
+            .filter(Optional::isPresent)
+            .next()
+            .defaultIfEmpty(Optional.empty())
             .doOnTerminate(() -> logger.debug("S3 cover check completed for book {}.", finalBookKey))
-            .toFuture(); // Convert Mono to CompletableFuture
+            .toFuture();
     }
     
     /**
@@ -238,11 +250,21 @@ public class S3BookCoverService implements ExternalCoverService {
             boolean exists = response != null; 
             objectExistsCache.put(s3Key, exists);
             return exists;
-        } catch (NoSuchKeyException e) {
+        } catch (NoSuchKeyException e) { // Specifically for object not found
             objectExistsCache.put(s3Key, false);
             return false;
-        } catch (Exception e) {
-            logger.error("Error checking S3 object existence for key {}: {}", s3Key, e.getMessage());
+        } catch (software.amazon.awssdk.services.s3.model.S3Exception s3e) { // Catch broader S3 exceptions
+            if (s3e.statusCode() == 404) { // Not Found
+                objectExistsCache.put(s3Key, false);
+                return false;
+            }
+            // For other S3 errors, log it and return false
+            logger.error("S3Exception checking S3 object existence for key {}: Status={}, Message={}", s3Key, s3e.statusCode(), s3e.getMessage());
+            objectExistsCache.put(s3Key, false); // Or consider not caching on general S3 errors
+            return false;
+        } catch (Exception e) { // Catch any other unexpected exceptions
+            logger.error("Unexpected error checking S3 object existence for key {}: {}", s3Key, e.getMessage(), e);
+            objectExistsCache.put(s3Key, false); // Or consider not caching
             return false; 
         }
     }
@@ -275,17 +297,27 @@ public class S3BookCoverService implements ExternalCoverService {
                 s3Client.headObject(HeadObjectRequest.builder().bucket(s3BucketName).key(s3Key).build());
                 return true; // If no exception, object exists
             } catch (NoSuchKeyException e) {
-                return false; // Object does not exist
-            } catch (Exception e) {
-                logger.error("Error checking S3 object existence for key {} (async): {}", s3Key, e.getMessage());
+                return false; // Object does not exist specifically
+            } catch (software.amazon.awssdk.services.s3.model.S3Exception s3e) {
+                if (s3e.statusCode() == 404) {
+                    return false; // Object not found via S3Exception
+                }
+                // For other S3 errors, log it and re-throw to be handled by onErrorResume
+                logger.error("S3Exception (async) checking S3 object existence for key {}: Status={}, Message={}", s3Key, s3e.statusCode(), s3e.getMessage());
+                throw s3e; 
+            } catch (Exception e) { // Catch any other unexpected exceptions
+                logger.error("Unexpected error (async) checking S3 object existence for key {}: {}", s3Key, e.getMessage(), e);
                 throw e; // Re-throw to be handled by onErrorResume
             }
         })
         .subscribeOn(Schedulers.boundedElastic()) // Offload blocking call
-        .doOnSuccess(exists -> objectExistsCache.put(s3Key, exists))
+        .doOnSuccess(exists -> objectExistsCache.put(s3Key, exists)) // Cache success (true or false from try-catch)
         .onErrorResume(e -> {
-            // For general errors (not NoSuchKey), don't cache 'false' indefinitely, or let it propagate
-            logger.warn("Async S3 check failed for key {}, returning false. Error: {}", s3Key, e.getMessage());
+            // This will catch exceptions re-thrown from the try-catch block (e.g., non-404 S3Exception, other unexpected errors)
+            // We cache 'false' in these error cases to prevent repeated failed attempts for a while.
+            // Depending on the error, one might choose not to cache or cache for a shorter duration.
+            objectExistsCache.put(s3Key, false); 
+            logger.warn("Async S3 check failed for key {} due to {}. Caching as non-existent.", s3Key, e.getClass().getSimpleName());
             return Mono.just(false); 
         });
     }

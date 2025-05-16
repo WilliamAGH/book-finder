@@ -17,13 +17,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.core.ResponseInputStream;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -72,6 +72,7 @@ public class BookSitemapService {
 
     /**
      * Internal method to fetch and parse book IDs from S3
+     * Handles empty streams and parsing errors with appropriate fallbacks
      * 
      * @return Set of book IDs from S3
      * @throws IOException if fetch or parse fails
@@ -81,18 +82,24 @@ public class BookSitemapService {
                 .bucket(s3BucketName)
                 .key(accumulatedIdsS3Key)
                 .build();
-        try {
-            ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
-            String jsonContent = objectBytes.asString(StandardCharsets.UTF_8);
-            if (jsonContent.isEmpty()) {
-                logger.info("S3 file '{}' is empty. Returning new HashSet.", accumulatedIdsS3Key);
+        try (ResponseInputStream<GetObjectResponse> s3ObjectStream = s3Client.getObject(getObjectRequest)) {
+            // Attempt to parse the JSON stream directly to a Set of Strings
+            // Empty or malformed content is handled in the catch blocks
+            Set<String> bookIds = objectMapper.readValue(s3ObjectStream, new TypeReference<Set<String>>() {});
+            if (bookIds == null) {
+                logger.info("S3 file '{}' parsed to null. Returning new HashSet to be safe.", accumulatedIdsS3Key);
                 return new HashSet<>();
             }
-            return objectMapper.readValue(jsonContent, new TypeReference<Set<String>>() {});
+            return bookIds;
         } catch (NoSuchKeyException e) {
             logger.info("Accumulated book IDs file not found in S3 ('{}'). Returning new HashSet for initial creation.", accumulatedIdsS3Key);
             return new HashSet<>();
         } catch (IOException e) {
+            // Handle empty content case gracefully
+            if (e instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException && e.getMessage().toLowerCase().contains("no content to map")) {
+                logger.info("S3 file '{}' is empty or has no content to map. Returning new HashSet.", accumulatedIdsS3Key);
+                return new HashSet<>();
+            }
             logger.error("IOException during S3 getObject or parsing for key '{}': {}", accumulatedIdsS3Key, e.getMessage());
             throw e;
         } catch (Exception e) {
@@ -103,6 +110,7 @@ public class BookSitemapService {
 
     /**
      * Get accumulated book IDs from S3 for sitemap generation
+     * Provides a non-throwing facade for the internal fetch method
      * 
      * @return Set of book IDs, empty set on error
      */
@@ -117,14 +125,19 @@ public class BookSitemapService {
 
     /**
      * Update accumulated book IDs in S3 with new IDs from cache
+     * Fetches existing IDs from S3, merges with current IDs from cache,
+     * and uploads the combined set only if changes are detected
      * 
-     * Key steps:
-     * - Fetch existing IDs from S3
-     * - Get current IDs from cache
-     * - Merge and upload if changes detected
+     * Process flow:
+     * 1. Fetch existing accumulated book IDs from S3
+     * 2. Retrieve current book IDs from cache 
+     * 3. Merge both sets and detect changes
+     * 4. If changes found, sort and upload to S3
      */
     public void updateAccumulatedBookIdsInS3() {
         logger.info("Starting update of accumulated book IDs in S3 (key: {}).", accumulatedIdsS3Key);
+        
+        // Step 1: Fetch existing IDs from S3
         Set<String> accumulatedIds;
         try {
             accumulatedIds = fetchAndParseBookIdsFromS3Internal();
@@ -136,17 +149,16 @@ public class BookSitemapService {
         int initialSize = accumulatedIds.size();
         logger.info("Fetched {} existing book IDs from S3.", initialSize);
 
+        // Step 2: Get current IDs from cache
         Set<String> currentCachedIds;
         try {
-            // logger.warn("Placeholder for bookCacheService.getAllCachedBookIds() is being used. Implement actual logic in BookCacheService.");
-            // BookCacheService localBcs = this.bookCacheService; // No longer needed as direct call
-            currentCachedIds = this.bookCacheService.getAllCachedBookIds(); // Direct call to the implemented method
+            currentCachedIds = this.bookCacheService.getAllCachedBookIds();
             
-            if (currentCachedIds == null) { // getAllCachedBookIds might still return null if underlying repo call fails softly
+            if (currentCachedIds == null) {
                 currentCachedIds = Collections.emptySet();
                 logger.warn("bookCacheService.getAllCachedBookIds() returned null. Using empty set for current update cycle.");
             }
-        } catch (UnsupportedOperationException e) { // This might occur if the repo impl is missing findAllDistinctGoogleBooksIds
+        } catch (UnsupportedOperationException e) {
             logger.error("BookCacheService does not support getAllCachedBookIds(). S3 sitemap accumulation cannot proceed.", e);
             return;
         } catch (Exception e) {
@@ -156,26 +168,28 @@ public class BookSitemapService {
         
         logger.info("Fetched {} book IDs from current cache.", currentCachedIds.size());
 
+        // Step 3: Merge and detect changes
         boolean newIdsAdded = accumulatedIds.addAll(currentCachedIds);
 
-            if (newIdsAdded || accumulatedIds.size() != initialSize) {
-                logger.info("New book IDs found or size changed. Total accumulated IDs: {}. Sorting and uploading to S3.", accumulatedIds.size());
-                try {
-                    // Convert Set to List and sort alphabetically
-                    List<String> sortedIds = new ArrayList<>(accumulatedIds);
-                    Collections.sort(sortedIds);
+        // Step 4: Upload if changes detected
+        if (newIdsAdded || accumulatedIds.size() != initialSize) {
+            logger.info("New book IDs found or size changed. Total accumulated IDs: {}. Sorting and uploading to S3.", accumulatedIds.size());
+            try {
+                // Convert Set to List and sort alphabetically for consistent storage
+                List<String> sortedIds = new ArrayList<>(accumulatedIds);
+                Collections.sort(sortedIds);
 
-                    String updatedJsonContent = objectMapper.writeValueAsString(sortedIds); // Serialize the sorted list
-                    PutObjectRequest putObjectRequest = PutObjectRequest.builder()
-                            .bucket(s3BucketName)
-                            .key(accumulatedIdsS3Key)
-                            .contentType("application/json")
-                            .build();
-                    s3Client.putObject(putObjectRequest, RequestBody.fromString(updatedJsonContent, StandardCharsets.UTF_8));
-                    logger.info("Successfully uploaded {} sorted accumulated book IDs to S3 (key: {}).", sortedIds.size(), accumulatedIdsS3Key);
-                } catch (IOException e) {
-                    logger.error("Error serializing or uploading sorted accumulated book IDs to S3 (key: {}): {}", accumulatedIdsS3Key, e.getMessage());
-                } catch (Exception e) {
+                String updatedJsonContent = objectMapper.writeValueAsString(sortedIds);
+                PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                        .bucket(s3BucketName)
+                        .key(accumulatedIdsS3Key)
+                        .contentType("application/json")
+                        .build();
+                s3Client.putObject(putObjectRequest, RequestBody.fromString(updatedJsonContent, StandardCharsets.UTF_8));
+                logger.info("Successfully uploaded {} sorted accumulated book IDs to S3 (key: {}).", sortedIds.size(), accumulatedIdsS3Key);
+            } catch (IOException e) {
+                logger.error("Error serializing or uploading sorted accumulated book IDs to S3 (key: {}): {}", accumulatedIdsS3Key, e.getMessage());
+            } catch (Exception e) {
                 logger.error("Unexpected error writing accumulated book IDs to S3 (key: {}): {}", accumulatedIdsS3Key, e.getMessage());
             }
         } else {
