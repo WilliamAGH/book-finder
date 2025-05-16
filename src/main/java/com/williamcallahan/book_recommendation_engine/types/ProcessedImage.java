@@ -3,9 +3,16 @@ package com.williamcallahan.book_recommendation_engine.types;
 import java.util.Arrays; // For Arrays.copyOf
 
 /**
- * Record representing a processed image with its metadata.
- * Used to pass processed image data between services along with important properties
- * like dimensions, file type, and processing status.
+ * Record representing a processed image with its metadata
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Immutable container for image data and metadata
+ * - Supports both successful and failed processing results
+ * - Tracks image dimensions and format information
+ * - Provides static factory methods for easy instantiation
+ * - Implements defensive copy for mutable byte arrays
  * 
  * @param processedBytes The processed image data as a byte array
  * @param newFileExtension The file extension for the processed image (e.g., ".jpg")

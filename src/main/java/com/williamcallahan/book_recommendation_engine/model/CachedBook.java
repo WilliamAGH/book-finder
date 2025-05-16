@@ -1,3 +1,8 @@
+/**
+ * Entity model for caching book information in database
+ * 
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,6 +16,13 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * Persistent entity for storing book data in database
+ * - Extends book model with caching metadata
+ * - Tracks access patterns and embedding vectors for similarity search
+ * - Contains conversion methods between Book and CachedBook
+ * - Used for reducing API calls and improving performance
+ */
 @Entity
 @Table(name = "cached_books")
 @Data
@@ -89,7 +101,17 @@ public class CachedBook {
     @Column(name = "access_count", nullable = false)
     private Integer accessCount;
 
-    // Convert from Book to CachedBook
+    /**
+     * Convert from Book to CachedBook entity
+     * - Creates a persistent entity from transient book object
+     * - Adds metadata for caching like timestamps and access count
+     * - Stores vector embedding for similarity search
+     * 
+     * @param book Book object to convert
+     * @param rawData Raw JSON data from external API
+     * @param embedding Vector embedding for similarity search
+     * @return New CachedBook entity ready for persistence
+     */
     public static CachedBook fromBook(Book book, JsonNode rawData, float[] embedding) {
         CachedBook cachedBook = new CachedBook();
         cachedBook.setId(book.getId());
@@ -120,7 +142,14 @@ public class CachedBook {
         return cachedBook;
     }
 
-    // Convert to Book
+    /**
+     * Convert CachedBook entity to Book object
+     * - Creates a transient Book object from persistent entity
+     * - Transfers all book metadata to Book model
+     * - Used when returning cached books to application layer
+     * 
+     * @return Book object with data from this cached entity
+     */
     public Book toBook() {
         Book book = new Book();
         book.setId(this.googleBooksId);
