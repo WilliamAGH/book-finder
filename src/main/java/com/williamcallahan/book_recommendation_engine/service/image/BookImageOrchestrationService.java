@@ -1,6 +1,8 @@
 /**
  * Orchestrates the retrieval and management of book cover image URLs.
  * 
+ * @author William Callahan
+ * 
  * This service coordinates the process of retrieving book cover images from various sources,
  * prioritizing cached images when available before fetching from external services. It works
  * with BookCoverCacheService to provide fast initial image URLs while triggering
@@ -37,7 +39,7 @@ public class BookImageOrchestrationService {
     private static final String DEFAULT_PLACEHOLDER_IMAGE = "/images/placeholder-book-cover.svg";
 
     /** Service for handling cover image caching and background processing */
-    private final BookCoverCacheService bookCoverCacheService;
+    private final BookCoverManagementService bookCoverManagementService; // Renamed
 
     /** Flag indicating whether S3 storage is enabled */
     @Value("${s3.enabled:true}")
@@ -51,18 +53,16 @@ public class BookImageOrchestrationService {
     @Value("${app.cover-cache.dir:covers}")
     private String cacheDirName;
 
-    /** Maximum allowed file size for cover images in bytes (5MB default) */
-    @Value("${app.cover-cache.max-file-size-bytes:5242880}")
-    private long maxFileSizeBytes;
+    // Removed maxFileSizeBytes as it's primarily used in S3BookCoverService
 
     /**
      * Constructs a new BookImageOrchestrationService with the required dependencies.
      *
-     * @param bookCoverCacheService The service for cache management and background processing
+     * @param bookCoverManagementService The service for cache management and background processing
      */
     @Autowired
-    public BookImageOrchestrationService(BookCoverCacheService bookCoverCacheService) {
-        this.bookCoverCacheService = bookCoverCacheService;
+    public BookImageOrchestrationService(BookCoverManagementService bookCoverManagementService) { // Renamed parameter
+        this.bookCoverManagementService = bookCoverManagementService; // Renamed field
     }
 
     /**
@@ -157,19 +157,22 @@ public class BookImageOrchestrationService {
         logger.debug("Fetching initial cover for book {} (ID: {}), preferred source: {}, resolution: {}. Fallback will be: {}", 
             book.getTitle(), book.getId(), preferredSource, resolutionPreference, finalFallbackUrl);
 
-        // BookCoverCacheService will provide an initial URL (cached or original) and trigger background processing
-        CoverImages coverImagesResult = bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate(book);
+        // BookCoverManagementService will provide an initial URL (cached or original) and trigger background processing
+        CoverImages coverImagesResult = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book); // Use renamed service
         String initialPreferredUrl = (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) ? coverImagesResult.getPreferredUrl() : DEFAULT_PLACEHOLDER_IMAGE;
 
         // Now, populate our new CoverImages structure
-        // The 'initialPreferredUrl' is what BookCoverCacheService decided is best for now
-        // 'finalFallbackUrl' is what we captured as the original
-        // Use the source from the coverImagesResult obtained from BookCoverCacheService
+        // The 'initialPreferredUrl' is what BookCoverManagementService decided is best for now
+        // 'finalFallbackUrl' is what it captured as the original
+        // Use the source from the coverImagesResult obtained from BookCoverManagementService
         CoverImageSource sourceFromResult = (coverImagesResult != null && coverImagesResult.getSource() != null) ? coverImagesResult.getSource() : CoverImageSource.UNDEFINED;
         book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl, sourceFromResult));
         
-        // book.setCoverImageUrl() is already updated by bookCoverCacheService.getInitialCoverUrlAndTriggerBackgroundUpdate()
-        // So, the top-level coverImageUrl will reflect the preferred URL
+        // Assuming BookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate might set book.coverImageUrl directly
+        // or we rely on the returned CoverImages.preferredUrl.
+        // For clarity, let's ensure book.coverImageUrl is set from the result here.
+        book.setCoverImageUrl(initialPreferredUrl);
+
 
         // Explicitly set resolution details to null. These will be updated by background processing
         // once the actual image is fetched and analyzed by BookCoverCacheService or S3BookCoverService

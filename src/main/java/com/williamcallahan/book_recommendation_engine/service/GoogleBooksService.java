@@ -8,17 +8,30 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 import java.time.Duration;
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture; // Added import
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * Service for interacting with the Google Books API
+ * - Provides reactive interfaces for searching and retrieving book information
+ * - Handles API communication with retry logic and error handling
+ * - Converts Google Books API responses to Book domain objects
+ * - Implements search by title, author, ISBN and similarity
+ * - Manages cover image URL transformations for optimal quality
+ *
+ * @author William Callahan
+ */
 @Service
 public class GoogleBooksService {
 
@@ -32,10 +45,31 @@ public class GoogleBooksService {
     @Value("${googlebooks.api.key}")
     private String googleBooksApiKey;
 
+    /**
+     * Constructs a GoogleBooksService with configured WebClient
+     * - Initializes reactive HTTP client for API communication
+     * 
+     * @param webClientBuilder Spring WebClient builder for constructing the client
+     */
     public GoogleBooksService(WebClient.Builder webClientBuilder) {
         this.webClient = webClientBuilder.build();
     }
 
+    /**
+     * Performs a search against the Google Books API
+     * - Executes an HTTP GET request with the provided query parameters
+     * - Implements retry logic with exponential backoff for transient errors
+     * - Returns raw JsonNode response for further processing
+     * - Handles pagination through startIndex parameter
+     * 
+     * @param query Search query string
+     * @param startIndex Starting index for pagination (0-based)
+     * @param orderBy Result ordering preference (e.g., "newest", "relevance")
+     * @param langCode Optional language code filter (e.g., "en", "fr")
+     * @return Mono containing the raw JsonNode response from the API
+     */
+    @CircuitBreaker(name = "googleBooksService", fallbackMethod = "searchBooksFallback")
+    @TimeLimiter(name = "googleBooksService")
     public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
         String url = String.format("%s/volumes?q=%s&startIndex=%d&maxResults=40&key=%s",
                 googleBooksApiUrl, query, startIndex, googleBooksApiKey);
@@ -58,12 +92,26 @@ public class GoogleBooksService {
                         return retrySignal.failure();
                     }))
                 .onErrorResume(e -> {
-                    // This now catches errors after retries are exhausted or if the error wasn't retryable
-                    logger.error("Error fetching page for query '{}' at startIndex {} after retries or due to non-retryable error: {}", query, startIndex, e.getMessage());
+                    if (e instanceof io.netty.handler.ssl.SslHandshakeTimeoutException) {
+                        logger.error("SSL Handshake Timeout for query '{}' at startIndex {} after retries. This often indicates network connectivity or firewall issues to www.googleapis.com:443. Error: {}", query, startIndex, e.getMessage());
+                    } else {
+                        logger.error("Error fetching page for query '{}' at startIndex {} after retries or due to non-retryable error: {}", query, startIndex, e.getMessage());
+                    }
                     return Mono.empty();
                 });
     }
 
+    /**
+     * Performs a comprehensive search across multiple Google Books API pages
+     * - Implements pagination across multiple results pages 
+     * - Processes each page concurrently using reactive streams
+     * - Converts API response items to Book domain objects
+     * - Enforces maximum result limits to prevent excessive API calls
+     * 
+     * @param query Search query string to send to the API
+     * @param langCode Optional language code to restrict results (e.g., "en", "fr")
+     * @return Mono containing a list of Book objects retrieved from the API
+     */
     public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
         final int maxResultsPerPage = 40;
         final int maxTotalResults = 200;
@@ -93,35 +141,104 @@ public class GoogleBooksService {
             });
     }
 
+    /**
+     * Search books with default language setting
+     * - Convenience method that calls searchBooksAsyncReactive without language restriction
+     * 
+     * @param query Search query string to send to the API
+     * @return Mono containing a list of Book objects retrieved from the API
+     */
     public Mono<List<Book>> searchBooksAsyncReactive(String query) {
         return searchBooksAsyncReactive(query, null);
     }
 
+    /**
+     * Search books by title with language filtering
+     * - Uses the 'intitle:' Google Books API qualifier
+     * - Allows restricting results to specific language
+     * 
+     * @param title Book title to search for
+     * @param langCode Optional language code to restrict results
+     * @return Mono containing a list of Book objects matching the title
+     */
     public Mono<List<Book>> searchBooksByTitle(String title, String langCode) {
         return searchBooksAsyncReactive("intitle:" + title, langCode);
     }
 
+    /**
+     * Search books by title with default language setting
+     * - Convenience method that calls searchBooksByTitle without language restriction
+     * 
+     * @param title Book title to search for
+     * @return Mono containing a list of Book objects matching the title
+     */
     public Mono<List<Book>> searchBooksByTitle(String title) {
         return searchBooksByTitle(title, null);
     }
 
+    /**
+     * Search books by author with language filtering
+     * - Uses the 'inauthor:' Google Books API qualifier
+     * - Allows restricting results to specific language
+     * - Executes search across Google Books catalog
+     * - Converts API responses to domain objects
+     * 
+     * @param author Author name to search for
+     * @param langCode Optional language code to restrict results
+     * @return Mono containing a list of Book objects by the specified author
+     */
     public Mono<List<Book>> searchBooksByAuthor(String author, String langCode) {
         return searchBooksAsyncReactive("inauthor:" + author, langCode);
     }
 
+    /**
+     * Search books by author with default language setting
+     * - Convenience method that calls searchBooksByAuthor without language restriction
+     * 
+     * @param author Author name to search for
+     * @return Mono containing a list of Book objects by the specified author
+     */
     public Mono<List<Book>> searchBooksByAuthor(String author) {
         return searchBooksByAuthor(author, null);
     }
 
+    /**
+     * Search books by ISBN with language filtering
+     * - Uses the 'isbn:' Google Books API qualifier for precise matching
+     * - Allows restricting results to specific language
+     * 
+     * @param isbn ISBN identifier to search for
+     * @param langCode Optional language code to restrict results
+     * @return Mono containing a list of Book objects matching the ISBN
+     */
     public Mono<List<Book>> searchBooksByISBN(String isbn, String langCode) {
         return searchBooksAsyncReactive("isbn:" + isbn, langCode);
     }
 
+    /**
+     * Search books by ISBN with default language setting
+     * - Convenience method that calls searchBooksByISBN without language restriction
+     * 
+     * @param isbn ISBN identifier to search for
+     * @return Mono containing a list of Book objects matching the ISBN
+     */
     public Mono<List<Book>> searchBooksByISBN(String isbn) {
         return searchBooksByISBN(isbn, null);
     }
 
-    public Mono<Book> getBookById(String bookId) {
+    /**
+     * Retrieve a specific book by its Google Books volume ID
+     * - Fetches detailed book information using the volume ID
+     * - Implements retry logic with exponential backoff for transient errors
+     * - Converts API response to Book domain object
+     * - Returns empty Mono if book cannot be found or errors occur
+     * 
+     * @param bookId Google Books volume ID
+     * @return Mono containing the Book object if found, empty Mono otherwise
+     */
+    @CircuitBreaker(name = "googleBooksService", fallbackMethod = "getBookByIdFallback")
+    @TimeLimiter(name = "googleBooksService")
+    public CompletableFuture<Book> getBookById(String bookId) {
         String url = String.format("%s/volumes/%s?key=%s", googleBooksApiUrl, bookId, googleBooksApiKey);
         return webClient.get()
                 .uri(url)
@@ -141,11 +258,24 @@ public class GoogleBooksService {
                     return null;
                 })
                 .onErrorResume(e -> {
-                    logger.error("Error fetching book by ID {} after retries or due to non-retryable error: {}", bookId, e.getMessage());
+                    if (e instanceof io.netty.handler.ssl.SslHandshakeTimeoutException) {
+                        logger.error("SSL Handshake Timeout for book ID {} after retries. This often indicates network connectivity or firewall issues to www.googleapis.com:443. Error: {}", bookId, e.getMessage());
+                    } else {
+                        logger.error("Error fetching book by ID {} after retries or due to non-retryable error: {}", bookId, e.getMessage());
+                    }
                     return Mono.empty(); // Return an empty Mono on error
-                });
+                })
+                .toFuture(); // Convert Mono to CompletableFuture
     }
 
+    /**
+     * Converts a JSON item from the Google Books API response to a Book object
+     * - Delegates to convertSingleItemToBook for actual conversion
+     * - Handles null items safely
+     * 
+     * @param item JsonNode from Google Books API response
+     * @return Converted Book object or null if input is null
+     */
     private Book convertGroupToBook(JsonNode item) {
         if (item == null) {
             return null;
@@ -156,6 +286,15 @@ public class GoogleBooksService {
         return book;
     }
 
+    /**
+     * Converts a single volume item JSON to a complete Book object
+     * - Creates new Book instance and populates all fields
+     * - Stores raw JSON for future reference
+     * - Extracts all book metadata from various sections of response
+     * 
+     * @param item JsonNode containing volume information
+     * @return Fully populated Book object
+     */
     private Book convertSingleItemToBook(JsonNode item) {
         Book book = new Book();
         if (item != null) {
@@ -168,6 +307,16 @@ public class GoogleBooksService {
         return book;
     }
     
+    /**
+     * Extracts base book information from volume info JSON
+     * - Sets core book metadata like title, authors, publisher
+     * - Extracts dates and descriptions
+     * - Processes cover image URLs
+     * - Extracts edition information from industry identifiers
+     * 
+     * @param item Main JsonNode containing book data
+     * @param book Book object to populate with extracted data
+     */
     private void extractBookBaseInfo(JsonNode item, Book book) {
         if (item == null || !item.has("volumeInfo")) {
             return;
@@ -199,6 +348,14 @@ public class GoogleBooksService {
         }
     }
 
+    /**
+     * Extracts author names from volume info
+     * - Processes author array from JSON
+     * - Returns empty list if no authors are found
+     * 
+     * @param volumeInfo JsonNode containing volume information
+     * @return List of author names extracted from the volume info
+     */
     private List<String> getAuthorsFromVolumeInfo(JsonNode volumeInfo) {
         List<String> authors = new ArrayList<>();
         if (volumeInfo.has("authors")) {
@@ -209,7 +366,13 @@ public class GoogleBooksService {
 
     /**
      * Get the best available cover image URL from the volume info
-     * This method still returns a single URL for backward compatibility
+     * - Extracts image links from Google Books API response
+     * - Prioritizes higher resolution images when available
+     * - Uses URL enhancement to optimize image quality
+     * - Maintains backward compatibility with single URL return value
+     * 
+     * @param volumeInfo JsonNode containing volume information
+     * @return Best available cover image URL or null if none found
      */
     private String getGoogleCoverImageFromVolumeInfo(JsonNode volumeInfo) {
         if (volumeInfo.has("imageLinks")) {
@@ -239,10 +402,15 @@ public class GoogleBooksService {
     }
     
     /**
-     * Enhance a Google Books cover URL to get the best quality possible
-     * @param url The original URL
-     * @param quality The desired quality ("high", "medium", or "low")
-     * @return The enhanced URL
+     * Enhances a Google Books cover URL to get optimal image quality
+     * - Upgrades HTTP to HTTPS for secure connections
+     * - Removes or adjusts image sizing parameters for better quality
+     * - Applies quality-specific optimizations based on requested level
+     * - Handles URL parameter cleanup to ensure valid URLs
+     * 
+     * @param url The original image URL from Google Books API
+     * @param quality The desired image quality ("high", "medium", or "low")
+     * @return Enhanced URL optimized for requested quality level
      */
     private String enhanceGoogleCoverUrl(String url, String quality) {
         if (url == null) return null;
@@ -335,6 +503,14 @@ public class GoogleBooksService {
         return enhancedUrl;
     }
     
+    /**
+     * Sets additional book fields from the sale info section
+     * - Extracts pricing and currency information
+     * - Handles nested JSON structure safely
+     * 
+     * @param item JsonNode containing book data
+     * @param book Book object to populate with extracted data
+     */
     private void setAdditionalFields(JsonNode item, Book book) {
         if (item.has("saleInfo")) {
             JsonNode saleInfo = item.get("saleInfo");
@@ -350,6 +526,14 @@ public class GoogleBooksService {
         }
     }
 
+    /**
+     * Sets web reader and access links for the book
+     * - Extracts links from the accessInfo section
+     * - Sets web reader URL for browser-based reading
+     * 
+     * @param item JsonNode containing book data
+     * @param book Book object to populate with extracted links
+     */
     private void setLinks(JsonNode item, Book book) {
         if (item.has("accessInfo")) {
             JsonNode accessInfo = item.get("accessInfo");
@@ -359,6 +543,16 @@ public class GoogleBooksService {
         }
     }
 
+    /**
+     * Parses published date from volume info with flexible formatting
+     * - Attempts to parse full date format (yyyy-MM-dd) first
+     * - Falls back to year-only format (yyyy) if full date fails
+     * - Returns null if date cannot be parsed
+     * - Handles common date format variations in Google Books API
+     * 
+     * @param volumeInfo JsonNode containing volume information
+     * @return Parsed Date object or null if date cannot be parsed
+     */
     private Date parsePublishedDate(JsonNode volumeInfo) {
         if (volumeInfo.has("publishedDate")) {
             String dateString = volumeInfo.get("publishedDate").asText();
@@ -378,6 +572,15 @@ public class GoogleBooksService {
         return null;
     }
 
+    /**
+     * Extracts edition information from industry identifiers
+     * - Creates EditionInfo objects from identifier JSON
+     * - Adds edition information to the provided list
+     * - Handles ISBN and other identifier types
+     * 
+     * @param identifier JsonNode containing identifier information
+     * @param otherEditions List to add extracted EditionInfo objects to
+     */
     private void extractEditionInfoFromItem(JsonNode identifier, List<Book.EditionInfo> otherEditions) {
         if (identifier.has("type") && identifier.has("identifier")) {
             String type = identifier.get("type").asText();
@@ -389,6 +592,17 @@ public class GoogleBooksService {
         }
     }
 
+    /**
+     * Finds books similar to the given book based on author and title
+     * - Creates a search query using author and title information
+     * - Excludes the original book from results
+     * - Limits results to a maximum of 5 similar books
+     * - Returns empty list for invalid input or when no similar books found
+     * - Used for book recommendation features
+     * 
+     * @param book Book to find similar books for
+     * @return Mono containing a list of similar Book objects, limited to 5 results
+     */
     public Mono<List<Book>> getSimilarBooks(Book book) {
         if (book == null || book.getAuthors() == null || book.getAuthors().isEmpty() || book.getTitle() == null) {
             return Mono.just(Collections.emptyList());
@@ -413,4 +627,21 @@ public class GoogleBooksService {
                 .collect(Collectors.toList())
             );
     }
+
+    // Fallback methods
+    public Mono<JsonNode> searchBooksFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
+        logger.warn("GoogleBooksService.searchBooks circuit breaker opened for query: '{}', startIndex: {}. Error: {}", query, startIndex, t.getMessage());
+        return Mono.empty(); // Return empty JsonNode or a default structure if appropriate
+    }
+
+    public CompletableFuture<Book> getBookByIdFallback(String bookId, Throwable t) {
+        logger.warn("GoogleBooksService.getBookById circuit breaker opened for bookId: {}. Error: {}", bookId, t.getMessage());
+        return CompletableFuture.completedFuture(null); // Return a completed CompletableFuture with null or an empty Book
+    }
+
+    /**
+     * Circuit breaker fallbacks for higher-level search methods
+     * - Root cause handled by searchBooks/getBookById fallbacks
+     * - No additional fallbacks required for derived methods
+     */
 }

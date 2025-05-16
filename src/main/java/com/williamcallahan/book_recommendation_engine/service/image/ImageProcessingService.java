@@ -3,6 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
@@ -17,8 +18,18 @@ import java.io.IOException;
 import java.util.Iterator;
 
 /**
- * Service for processing and optimizing book cover images.
- * Provides functionality to resize and compress images for storage in S3 or other systems.
+ * Service for processing and optimizing book cover images
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Resizes large images to standardized dimensions
+ * - Preserves aspect ratio during resizing operations
+ * - Converts images to consistent color format (RGB)
+ * - Compresses to JPEG format with configurable quality
+ * - Prevents upscaling of small images to maintain quality
+ * - Provides detailed processing logs for troubleshooting
+ * - Returns standardized result object with success/failure info
  */
 @Service
 public class ImageProcessingService {
@@ -30,13 +41,22 @@ public class ImageProcessingService {
     private static final int NO_UPSCALE_THRESHOLD_WIDTH = 300; // Don't upscale if original is smaller than this
 
     /**
-     * Processes an image for S3 storage, optimizing size and quality.
-     * Resizes large images while maintaining aspect ratio and compresses to JPEG format.
+     * Processes an image for S3 storage, optimizing size and quality
      * 
      * @param rawImageBytes The raw image bytes to process
      * @param bookIdForLog Book identifier for logging purposes
      * @return ProcessedImage containing the processed bytes or failure details
+     * 
+     * @implNote Processing workflow:
+     * 1. Validates input bytes are valid image data
+     * 2. Converts to standardized RGB color space
+     * 3. Checks if image meets minimum size requirements
+     * 4. Determines if resizing is needed based on configurable thresholds
+     * 5. Resizes if necessary while maintaining aspect ratio
+     * 6. Compresses to JPEG with optimized quality settings
+     * 7. Returns complete result object with metadata or error details
      */
+    @Async("imageProcessingExecutor") // Offload CPU-intensive work to dedicated executor
     public ProcessedImage processImageForS3(byte[] rawImageBytes, String bookIdForLog) {
         if (rawImageBytes == null || rawImageBytes.length == 0) {
             logger.warn("Book ID {}: Raw image bytes are null or empty. Cannot process.", bookIdForLog);
@@ -44,11 +64,17 @@ public class ImageProcessingService {
         }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
-            BufferedImage originalImage = ImageIO.read(bais);
-            if (originalImage == null) {
+            BufferedImage rawOriginalImage = ImageIO.read(bais);
+            if (rawOriginalImage == null) {
                 logger.warn("Book ID {}: Could not read raw bytes into a BufferedImage. Image format might be unsupported or corrupt.", bookIdForLog);
                 return ProcessedImage.failure("Unsupported or corrupt image format");
             }
+
+            // Convert to a standard RGB colorspace to avoid issues with JPEG writer
+            BufferedImage originalImage = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = originalImage.createGraphics();
+            g.drawImage(rawOriginalImage, 0, 0, null);
+            g.dispose();
 
             int originalWidth = originalImage.getWidth();
             int originalHeight = originalImage.getHeight();
@@ -57,6 +83,7 @@ public class ImageProcessingService {
                 logger.warn("Book ID {}: Original image dimensions ({}x{}) are below the minimum acceptable ({}x{}). Processing as is, but quality will be low.", 
                     bookIdForLog, originalWidth, originalHeight, MIN_ACCEPTABLE_DIMENSION, MIN_ACCEPTABLE_DIMENSION);
                 // Still attempt to compress it, but don't resize.
+                // Note: originalImage is already in TYPE_INT_RGB here
                 return compressOriginal(originalImage, bookIdForLog, originalWidth, originalHeight);
             }
 
@@ -151,4 +178,4 @@ public class ImageProcessingService {
             return ProcessedImage.success(processedBytes, ".jpg", "image/jpeg", finalWidth, finalHeight);
         }
     }
-} 
+}

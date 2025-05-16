@@ -11,6 +11,18 @@ import java.util.stream.Collectors;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+/**
+ * Service for generating book recommendations based on various similarity criteria
+ *
+ * @author William Callahan
+ *
+ * - Uses multi-faceted approach combining author, category, and text-based matching
+ * - Implements scoring algorithm to rank recommendations by relevance
+ * - Supports language-aware filtering to match source book language
+ * - Provides reactive API for non-blocking recommendation generation
+ * - Handles category normalization for better cross-book matching
+ * - Implements keyword extraction with stop word filtering
+ */
 @Service
 public class RecommendationService {
     private static final Logger logger = LoggerFactory.getLogger(RecommendationService.class);
@@ -25,6 +37,14 @@ public class RecommendationService {
     private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheService
     private final BookCacheService bookCacheService;
 
+    /**
+     * Constructs the RecommendationService with required dependencies
+     * 
+     * @param googleBooksService Service for searching books in Google Books API
+     * @param bookCacheService Service for retrieving cached book information
+     * 
+     * @implNote Uses both GoogleBooksService for searches and BookCacheService for book details
+     */
     @Autowired
     public RecommendationService(GoogleBooksService googleBooksService, BookCacheService bookCacheService) {
         this.googleBooksService = googleBooksService;
@@ -32,12 +52,15 @@ public class RecommendationService {
     }
 
     /**
-     * Get similar books recommendations based on the provided book ID
-     * Uses a multi-faceted approach to find similar books
+     * Generates recommendations for books similar to the specified book
      * 
-     * @param bookId The ID of the book to find recommendations for
-     * @param count The number of recommendations to return (default 6)
-     * @return List of recommended books
+     * @param bookId The Google Books ID to find recommendations for
+     * @param finalCount The number of recommendations to return (defaults to 6 if ≤ 0)
+     * @return Mono emitting list of recommended books in descending order of relevance
+     * 
+     * @implNote Combines three recommendation strategies (author, category, text matching)
+     * Scores and ranks results to provide the most relevant recommendations
+     * Filters by language to match the source book when language information is available
      */
     public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
         final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
@@ -86,14 +109,20 @@ public class RecommendationService {
                         return recommendations;
                     });
             })
-            .switchIfEmpty(Mono.defer(() -> {
+            .switchIfEmpty(Mono.<List<Book>>defer(() -> {
                 logger.warn("Source book with ID {} not found, returning empty recommendations.", bookId);
-                return Mono.just(Collections.emptyList());
+                return Mono.just(Collections.<Book>emptyList());
             }));
     }
     
     /**
-     * Find books by the same authors as the source book - Reactive
+     * Finds books by the same authors as the source book
+     * 
+     * @param sourceBook The source book to find author matches for
+     * @return Flux emitting scored books by the same authors
+     * 
+     * @implNote Assigns high score (4.0) to author matches as they are strong indicators
+     * Returns empty flux if source book has no authors
      */
     private Flux<ScoredBook> findBooksByAuthorsReactive(Book sourceBook) {
         if (sourceBook.getAuthors() == null || sourceBook.getAuthors().isEmpty()) {
@@ -113,7 +142,13 @@ public class RecommendationService {
     }
     
     /**
-     * Find books with the same categories as the source book - Reactive
+     * Finds books in the same categories as the source book
+     * 
+     * @param sourceBook The source book to find category matches for
+     * @return Flux emitting scored books in matching categories
+     * 
+     * @implNote Extracts main categories and builds optimized category search query
+     * Score varies based on category overlap calculation
      */
     private Flux<ScoredBook> findBooksByCategoriesReactive(Book sourceBook) {
         if (sourceBook.getCategories() == null || sourceBook.getCategories().isEmpty()) {
@@ -147,12 +182,19 @@ public class RecommendationService {
     }
     
     /**
-     * Calculate a score based on category overlap between two books
+     * Calculates similarity score based on category overlap between books
+     * 
+     * @param sourceBook The source book for comparison
+     * @param candidateBook The candidate book being evaluated
+     * @return Score between 1.0 and 3.0 reflecting category similarity
+     * 
+     * @implNote Uses normalized categories for more accurate matching
+     * Score is proportional to the percentage of overlapping categories
      */
     private double calculateCategoryOverlapScore(Book sourceBook, Book candidateBook) {
         if (sourceBook.getCategories() == null || candidateBook.getCategories() == null ||
             sourceBook.getCategories().isEmpty() || candidateBook.getCategories().isEmpty()) {
-            return 0.5; // Some basic score if we can't calculate
+            return 0.5; // Some basic score if it can't calculate
         }
         
         Set<String> sourceCategories = normalizeCategories(sourceBook.getCategories());
@@ -171,7 +213,13 @@ public class RecommendationService {
     }
     
     /**
-     * Normalize categories for better matching
+     * Normalizes book categories for consistent comparison
+     * 
+     * @param categories List of categories to normalize
+     * @return Set of normalized category strings
+     * 
+     * @implNote Splits compound categories on slashes
+     * Converts to lowercase and trims whitespace
      */
     private Set<String> normalizeCategories(List<String> categories) {
         Set<String> normalized = new HashSet<>();
@@ -185,7 +233,14 @@ public class RecommendationService {
     }
     
     /**
-     * Find books by title/description keyword similarity - Reactive
+     * Finds books with similar keywords in title and description
+     * 
+     * @param sourceBook The source book to find keyword matches for
+     * @return Flux emitting scored books with matching keywords
+     * 
+     * @implNote Extracts significant keywords from title and description
+     * Filters out common stop words and short tokens
+     * Score based on quantity of matching keywords
      */
     private Flux<ScoredBook> findBooksByTextReactive(Book sourceBook) {
         if ((sourceBook.getTitle() == null || sourceBook.getTitle().isEmpty()) &&
@@ -235,7 +290,11 @@ public class RecommendationService {
     }
 
     /**
-     * Helper class to track books with their similarity scores
+     * Helper class to track books with their calculated similarity scores
+     * 
+     * Encapsulates:  
+     * - Book object
+     * - Similarity score that can be accumulated from multiple sources
      */
     private static class ScoredBook {
         private final Book book;
