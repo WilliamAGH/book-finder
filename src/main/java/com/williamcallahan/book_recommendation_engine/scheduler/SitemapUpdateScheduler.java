@@ -22,7 +22,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class SitemapUpdateScheduler {
 
-    private static final Logger logger = LoggerFactory.getLogger(SitemapUpdateScheduler.class);
+    private final Logger logger = LoggerFactory.getLogger(SitemapUpdateScheduler.class); // Made non-static and non-final for testing
     private final BookSitemapService bookSitemapService;
 
     /**
@@ -55,4 +55,4 @@ public class SitemapUpdateScheduler {
             logger.error("Error during scheduled sitemap book ID update:", e);
         }
     }
-} 
+}

@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import reactor.core.publisher.Mono;
 
@@ -92,41 +91,44 @@ public class RecentlyViewedService {
      *
      * @return a list of recently viewed books or default books
      */
-    public List<Book> getRecentlyViewedBooks() {
+    public Mono<List<Book>> getRecentlyViewedBooksReactive() {
         // Optimistic check outside the lock
         if (recentlyViewedBooks.isEmpty()) {
-            List<Book> defaultBooks = Collections.emptyList();
-            try {
-                // This call blocks the current thread, but not while holding the recentlyViewedBooks lock
-                // The underlying fetchDefaultBooksAsync is now non-blocking until .toFuture().get()
-                logger.debug("Recently viewed is empty, attempting to fetch default books.");
-                defaultBooks = fetchDefaultBooksAsync().toFuture().get(); // Blocks here
-            } catch (InterruptedException e) {
-                logger.warn("Fetching default books was interrupted.", e);
-                Thread.currentThread().interrupt(); // Restore interruption status
-                return Collections.emptyList();
-            } catch (ExecutionException e) {
-                logger.error("Error executing default book fetch.", e.getCause());
-                return Collections.emptyList();
-            }
-
-            // After fetching, re-check under lock to handle concurrent additions
-            synchronized (recentlyViewedBooks) {
-                if (recentlyViewedBooks.isEmpty()) {
-                    logger.debug("Returning {} default books as recently viewed is still empty.", defaultBooks.size());
-                    return defaultBooks; // Return default books if still empty
-                }
-                // If another thread added books while we were fetching defaults, return the actual recently viewed books
-                logger.debug("Recently viewed was populated while fetching defaults. Returning actual list.");
-                return new ArrayList<>(recentlyViewedBooks);
-            }
+            return fetchDefaultBooksAsync()
+                .onErrorResume(e -> {
+                    if (e instanceof InterruptedException) {
+                        logger.warn("Fetching default books was interrupted.", e);
+                        Thread.currentThread().interrupt(); // Restore interruption status
+                    } else {
+                        logger.error("Error executing default book fetch.", e);
+                    }
+                    return Mono.just(Collections.emptyList());
+                })
+                .flatMap(defaultBooks -> {
+                    synchronized (recentlyViewedBooks) {
+                        if (recentlyViewedBooks.isEmpty()) {
+                            logger.debug("Returning {} default books as recently viewed is still empty.", defaultBooks.size());
+                            return Mono.just(defaultBooks); // Return default books if still empty
+                        }
+                        // If another thread added books while we were fetching defaults, return the actual recently viewed books
+                        logger.debug("Recently viewed was populated while fetching defaults. Returning actual list.");
+                        return Mono.just(new ArrayList<>(recentlyViewedBooks));
+                    }
+                });
         }
 
         // If not empty initially, return a copy under lock
         synchronized (recentlyViewedBooks) {
             logger.debug("Returning {} recently viewed books.", recentlyViewedBooks.size());
-            return new ArrayList<>(recentlyViewedBooks);
+            return Mono.just(new ArrayList<>(recentlyViewedBooks));
         }
+    }
+
+    /**
+     * Blocking version of getRecentlyViewedBooks for backward compatibility
+     */
+    public List<Book> getRecentlyViewedBooks() {
+        return getRecentlyViewedBooksReactive().block();
     }
 
     /**

@@ -1,6 +1,6 @@
-# UML Diagram for Book Recommendation Engine
+# UML Diagram for Book Finder
 
-This directory contains PlantUML files that define the UML diagrams for the Book Recommendation Engine project.
+This directory contains PlantUML files that define the UML diagrams for the Book Finder project.
 
 ## What is PlantUML?
 
@@ -40,11 +40,11 @@ There are several ways to generate UML diagrams from the PlantUML files:
 
 ## Available UML Diagrams
 
-- `book_recommendation_engine.puml`: Class diagram showing the main classes, their properties, methods, and relationships in the Book Recommendation Engine project.
+- `book_recommendation_engine.puml`: Class diagram showing the main classes, their properties, methods, and relationships in the Book Finder project.
 
 ## Understanding the UML Diagram
 
-The UML class diagram for the Book Recommendation Engine shows the following components:
+The UML class diagram for the Book Finder shows the following components:
 
 ### Model Classes
 - `Book`: Represents a book with properties like title, authors, description, etc.

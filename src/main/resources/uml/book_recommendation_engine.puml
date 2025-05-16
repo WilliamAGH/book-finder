@@ -1,4 +1,4 @@
-@startuml Book Recommendation Engine
+@startuml Book Finder
 top to bottom direction
 skinparam nodesep 10
 skinparam ranksep 250
@@ -13,7 +13,7 @@ package "com.williamcallahan.book_recommendation_engine" {
     skinparam packageStyle rectangle
 
     ' Title
-    title Book Recommendation Engine - UML Class Diagram
+    title Book Finder - UML Class Diagram
 
     ' Package for model classes
     package "model" {

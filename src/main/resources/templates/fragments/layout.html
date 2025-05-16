@@ -10,7 +10,7 @@
     <meta name="color-scheme" content="light dark">
 
     <!-- Page Title -->
-    <title th:text="${title ?: 'Book Recommendation Engine'} + (${title} ? ' - Book Recommendation Engine' : '')">Book Recommendation Engine</title>
+    <title th:text="(${title != null && !#strings.isEmpty(title)} ? ${title} + ' - Book Finder' : 'Book Finder')">Book Finder</title>
 
     <!-- SEO Meta Tags -->
     <meta name="description" th:content="${description ?: 'Discover your next favorite book with our recommendation engine. Search, explore, and find personalized book suggestions.'}">
@@ -19,19 +19,17 @@
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
     <meta property="og:url" th:content="${canonicalUrl}">
-    <meta property="og:title" th:content="${title ?: 'Book Recommendation Engine'}">
+    <meta property="og:title" th:content="(${title != null && !#strings.isEmpty(title)} ? ${title} + ' - Book Finder' : 'Book Finder')">
     <meta property="og:description" th:content="${description ?: 'Discover your next favorite book with our recommendation engine. Search, explore, and find personalized book suggestions.'}">
-    <meta property="og:image" th:if="${ogImage != null}" th:content="${ogImage}">
-    <meta property="og:image" th:if="${ogImage == null}" th:content="@{/images/og-logo.png}">
-    <meta property="og:site_name" content="Book Recommendation Engine">
+    <meta property="og:image" th:content="${ogImage}"> <!-- Controller will ensure ogImage is always set -->
+    <meta property="og:site_name" content="Book Finder">
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:url" th:content="${canonicalUrl}">
-    <meta property="twitter:title" th:content="${title ?: 'Book Recommendation Engine'}">
+    <meta property="twitter:title" th:content="(${title != null && !#strings.isEmpty(title)} ? ${title} + ' - Book Finder' : 'Book Finder')">
     <meta property="twitter:description" th:content="${description ?: 'Discover your next favorite book with our recommendation engine. Search, explore,and find personalized book suggestions.'}">
-    <meta property="twitter:image" th:if="${ogImage != null}" th:content="${ogImage}">
-    <meta property="twitter:image" th:if="${ogImage == null}" th:content="@{/images/og-logo.png}">
+    <meta property="twitter:image" th:content="${ogImage}"> <!-- Controller will ensure ogImage is always set -->
     <meta name="twitter:site" content="@williamcallahan">
 
     <meta name="keywords" th:content="${keywords ?: 'book recommendations, find books, book suggestions, reading, literature'}">

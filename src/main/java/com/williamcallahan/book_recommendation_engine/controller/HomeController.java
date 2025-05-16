@@ -29,7 +29,7 @@ import java.util.Random;
 import java.util.stream.Collectors;
 
 /**
- * Controller for handling user-facing web pages in the book recommendation engine
+ * Controller for handling user-facing web pages in the Book Finder
  *
  * @author William Callahan
  *
@@ -238,6 +238,8 @@ public class HomeController {
         model.addAttribute("title", "Book Details");
         model.addAttribute("description", "Detailed information about the selected book.");
         model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + id);
+        model.addAttribute("ogImage", "https://findmybook.net/images/og-logo.png"); // Default OG image
+        model.addAttribute("keywords", "book, literature, reading, book details"); // Default keywords
 
         // Use BookCacheService to get the main book
         Mono<Book> bookMonoWithCover = bookCacheService.getBookByIdReactive(id)
@@ -262,7 +264,13 @@ public class HomeController {
                         model.addAttribute("book", book);
                         model.addAttribute("title", book.getTitle() != null ? book.getTitle() : "Book Details");
                         model.addAttribute("description", SeoUtils.truncateDescription(book.getDescription(), 170));
-                        model.addAttribute("ogImage", effectiveCoverImageUrl);
+                        
+                        // Set ogImage: use specific book cover if not placeholder, else use site default
+                        String finalOgImage = (effectiveCoverImageUrl != null && !effectiveCoverImageUrl.contains("/images/placeholder-book-cover.svg")) 
+                                            ? effectiveCoverImageUrl 
+                                            : "https://findmybook.net/images/og-logo.png";
+                        model.addAttribute("ogImage", finalOgImage);
+                        
                         model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
                         model.addAttribute("keywords", generateKeywords(book));
 
@@ -285,7 +293,13 @@ public class HomeController {
                         // Set SEO attributes even on cover error
                         model.addAttribute("title", book.getTitle() != null ? book.getTitle() : "Book Details");
                         model.addAttribute("description", SeoUtils.truncateDescription(book.getDescription(), 170));
-                        model.addAttribute("ogImage", book.getCoverImageUrl());
+                        
+                        // Fallback ogImage logic on error
+                        String errorOgImage = (book.getCoverImageUrl() != null && !book.getCoverImageUrl().contains("/images/placeholder-book-cover.svg"))
+                                            ? book.getCoverImageUrl()
+                                            : "https://findmybook.net/images/og-logo.png";
+                        model.addAttribute("ogImage", errorOgImage);
+
                         model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
                         model.addAttribute("keywords", generateKeywords(book));
                         return Mono.just(book);
@@ -365,16 +379,16 @@ public class HomeController {
         }
         List<String> keywords = new ArrayList<>();
         if (book.getTitle() != null && !book.getTitle().isEmpty()) {
-            keywords.addAll(Arrays.asList(book.getTitle().toLowerCase().split("\\\\s+")));
+            keywords.addAll(Arrays.asList(book.getTitle().toLowerCase().split("\\s+")));
         }
         if (book.getAuthors() != null && !book.getAuthors().isEmpty()) {
             for (String author : book.getAuthors()) {
-                keywords.addAll(Arrays.asList(author.toLowerCase().split("\\\\s+")));
+                keywords.addAll(Arrays.asList(author.toLowerCase().split("\\s+")));
             }
         }
         if (book.getCategories() != null && !book.getCategories().isEmpty()) {
             for (String category : book.getCategories()) {
-                keywords.addAll(Arrays.asList(category.toLowerCase().split("\\\\s+")));
+                keywords.addAll(Arrays.asList(category.toLowerCase().split("\\s+")));
             }
         }
         // Add some generic terms

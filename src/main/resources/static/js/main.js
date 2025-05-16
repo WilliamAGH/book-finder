@@ -1,5 +1,5 @@
 /**
- * Book Recommendation Engine - Main JavaScript
+ * Book Finder - Main JavaScript
  * Contains common functionality used across the application
  */
 

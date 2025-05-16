@@ -1,4 +1,4 @@
-# Book Recommendation Engine
+# Book Finder
 
 **Live Demo:** [findmybook.net](https://findmybook.net)
 

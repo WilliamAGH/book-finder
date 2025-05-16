@@ -13,7 +13,7 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoCo
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 
 /**
- * Main application class for the Book Recommendation Engine
+ * Main application class for Book Finder
  *
  * @author William Callahan
  *

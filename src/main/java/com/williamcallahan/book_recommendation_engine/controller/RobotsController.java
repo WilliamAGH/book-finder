@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * Controller for serving the robots.txt file with dynamic content based on environment
@@ -23,6 +24,12 @@ public class RobotsController {
 
     private static final Logger logger = LoggerFactory.getLogger(RobotsController.class);
 
+    @Value("${coolify.url:}")
+    private String coolifyUrlProp;
+
+    @Value("${coolify.branch:}")
+    private String coolifyBranchProp;
+
     private static final String FINDMYBOOK_NET_URL = "https://findmybook.net";
     private static final String MAIN_BRANCH = "main";
 
@@ -31,12 +38,12 @@ public class RobotsController {
             "User-agent: *",
             "Allow: /",
             "Sitemap: https://findmybook.net/sitemap.xml"
-    );
+    ) + "\n";
 
     private static final String RESTRICTIVE_ROBOTS_TXT = String.join("\n",
             "User-agent: *",
             "Disallow: /"
-    );
+    ) + "\n";
 
     /**
      * Generates and serves the robots.txt file with environment-specific content
@@ -50,10 +57,10 @@ public class RobotsController {
     @GetMapping(value = "/robots.txt", produces = "text/plain")
     @ResponseBody
     public String getRobotsTxt() {
-        String coolifyUrl = System.getenv("COOLIFY_URL");
-        String coolifyBranch = System.getenv("COOLIFY_BRANCH");
+        String coolifyUrl = this.coolifyUrlProp;
+        String coolifyBranch = this.coolifyBranchProp;
 
-        logger.info("Generating robots.txt. COOLIFY_URL: '{}', COOLIFY_BRANCH: '{}'", coolifyUrl, coolifyBranch);
+        logger.info("Generating robots.txt. coolify.url: '{}', coolify.branch: '{}'", coolifyUrl, coolifyBranch);
 
         boolean isProductionDomain = coolifyUrl != null && coolifyUrl.contains(FINDMYBOOK_NET_URL);
         boolean isMainBranch = MAIN_BRANCH.equalsIgnoreCase(coolifyBranch);
@@ -66,4 +73,4 @@ public class RobotsController {
             return RESTRICTIVE_ROBOTS_TXT;
         }
     }
-} 
+}

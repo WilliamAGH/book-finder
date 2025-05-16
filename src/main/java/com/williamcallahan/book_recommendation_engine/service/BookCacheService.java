@@ -20,11 +20,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Flux;
-
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.time.Duration;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -120,13 +120,19 @@ public class BookCacheService {
         
         logger.info("Cache miss for book ID: {}, fetching from Google Books API", id);
         // Adapt CompletableFuture to blocking Optional for the synchronous method
-        Book book = googleBooksService.getBookById(id).handle((res, ex) -> {
-            if (ex != null) {
-                logger.error("Error fetching book by ID {} from GoogleBooksService: {}", id, ex.getMessage());
-                return null;
-            }
-            return res;
-        }).join(); // .join() to block and get the result
+        Book book = null;
+        try {
+            book = Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
+                .onErrorResume(ex -> {
+                    logger.error("Error fetching book by ID {} from GoogleBooksService: {}", id, ex.getMessage());
+                    return Mono.empty(); // Return empty Mono on error
+                })
+                .block(Duration.ofSeconds(5)); // Block with timeout
+        } catch (IllegalStateException e) { 
+             logger.error("Timeout or no item fetching book by ID {} from GoogleBooksService: {}", id, e.getMessage());
+        } catch (RuntimeException e) { 
+            logger.error("Error fetching book by ID {} from GoogleBooksService: {}", id, e.getMessage());
+        }
         
         if (book != null && cacheEnabled && cachedBookRepository != null) {
             // Asynchronously cache to database using the reactive method
@@ -263,13 +269,19 @@ public class BookCacheService {
         logger.info("No vector similarity data for book ID: {}, using GoogleBooksService category/author matching", bookId);
         // Need the Book object to call the new getSimilarBooks method
         // Adapt CompletableFuture to blocking Optional for the synchronous method
-        Book sourceBook = googleBooksService.getBookById(bookId).handle((res, ex) -> {
-            if (ex != null) {
-                logger.error("Error fetching source book by ID {} for similar search: {}", bookId, ex.getMessage());
-                return null;
-            }
-            return res;
-        }).join(); // .join() to block and get the result
+        Book sourceBook = null;
+        try {
+            sourceBook = Mono.fromCompletionStage(googleBooksService.getBookById(bookId)) // Convert CompletionStage to Mono
+                .onErrorResume(ex -> {
+                    logger.error("Error fetching source book by ID {} for similar search: {}", bookId, ex.getMessage());
+                    return Mono.empty();
+                })
+                .block(Duration.ofSeconds(5));
+        } catch (IllegalStateException e) {
+            logger.error("Timeout or no item fetching source book for similar search (ID {}): {}", bookId, e.getMessage());
+        } catch (RuntimeException e) {
+            logger.error("Error fetching source book for similar search (ID {}): {}", bookId, e.getMessage());
+        }
         if (sourceBook == null) {
             logger.warn("Source book for similar search not found (ID: {}), returning empty list.", bookId);
             return Collections.emptyList();
@@ -346,8 +358,8 @@ public class BookCacheService {
      */
     // Renamed from fetchFromGoogleAndCache to be more specific about updating caches
     private Mono<Book> fetchFromGoogleAndUpdateCaches(String id) {
-        // Convert CompletableFuture to Mono for reactive chain
-        return Mono.fromFuture(googleBooksService.getBookById(id))
+        // googleBooksService.getBookById(id) already returns Mono<Book>
+        return Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
             .flatMap(book -> {
                 if (book != null) {
                     bookDetailCache.put(id, book); // Populate in-memory cache
@@ -523,8 +535,8 @@ public class BookCacheService {
      */
     private Mono<List<Book>> fallbackToGoogleSimilarBooks(String bookId, int count) {
         logger.info("Falling back to GoogleBooksService for similar books for ID: {} (or vector search yielded no results/source not in DB cache)", bookId);
-        // Convert CompletableFuture to Mono for reactive chain
-        return Mono.fromFuture(googleBooksService.getBookById(bookId))
+        // googleBooksService.getBookById(bookId) already returns Mono<Book>
+        return Mono.fromCompletionStage(googleBooksService.getBookById(bookId)) // Convert CompletionStage to Mono
             .flatMap(sourceBook -> {
                 if (sourceBook == null) {
                     logger.warn("Source book for similar search (Google fallback) not found (ID: {}), returning empty list.", bookId);

@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * Basic application context load test for the book recommendation engine
+ * Basic application context load test for the Book Finder
  *
  * @author William Callahan
  *

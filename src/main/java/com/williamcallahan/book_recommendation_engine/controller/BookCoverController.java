@@ -14,9 +14,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import reactor.core.publisher.Mono;
+import reactor.core.Disposable;
 
 /**
  * Controller for book cover image operations and retrieval
@@ -72,23 +73,15 @@ public class BookCoverController {
         logger.info("Getting book cover for book ID: {} with source preference: {}", id, source);
         final CoverImageSource preferredSource = parsePreferredSource(source);
 
-        // Custom timeout for this specific operation (e.g., 120 seconds)
         long timeoutValue = 120_000L; // 120 seconds in milliseconds
         DeferredResult<ResponseEntity<Map<String, Object>>> deferredResult = 
             new DeferredResult<>(timeoutValue);
 
-        // Store the CompletableFuture to allow cancellation
-        CompletableFuture<ResponseEntity<Map<String, Object>>> future = googleBooksService.getBookById(id)
-            .thenCompose(book -> {
-                if (book == null) {
-                    CompletableFuture<ResponseEntity<Map<String, Object>>> notFoundFuture = new CompletableFuture<>();
-                    notFoundFuture.completeExceptionally(new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "Book not found with ID: " + id));
-                    return notFoundFuture;
-                }
-                return bookImageOrchestrationService
-                    .getBestCoverUrlAsync(book, preferredSource)
-                    .thenApply(updatedBook -> {
+        Mono<ResponseEntity<Map<String, Object>>> responseMono = Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
+            .flatMap(book -> {
+                // bookImageOrchestrationService.getBestCoverUrlAsync returns CompletableFuture<Book>
+                return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, preferredSource))
+                    .map(updatedBook -> {
                         Map<String, Object> response = new HashMap<>();
                         response.put("bookId", id);
                         response.put("coverUrl", updatedBook.getCoverImageUrl());
@@ -102,49 +95,72 @@ public class BookCoverController {
                         response.put("requestedSourcePreference", preferredSource.name());
                         return ResponseEntity.ok(response);
                     });
-            });
+            })
+            .switchIfEmpty(Mono.defer(new java.util.function.Supplier<Mono<ResponseEntity<Map<String, Object>>>>() {
+                @Override
+                public Mono<ResponseEntity<Map<String, Object>>> get() {
+                    logger.warn("Book not found with ID: {} when processing getBookCover.", id);
+                    return Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID: " + id));
+                }
+            }));
+
+        // Subscribe to the Mono and bridge to DeferredResult
+        Disposable subscription = responseMono.subscribe(
+            result -> {
+                if (!deferredResult.isSetOrExpired()) {
+                    deferredResult.setResult(result);
+                }
+            },
+            error -> {
+                if (deferredResult.isSetOrExpired()) return;
+                
+                Throwable cause = error;
+                // Check if cause is wrapped, e.g. in CompletionException if Mono.fromFuture passed it
+                if (error instanceof java.util.concurrent.CompletionException && error.getCause() != null) {
+                    cause = error.getCause();
+                }
+
+                if (cause instanceof ResponseStatusException rse) {
+                    deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
+                } else {
+                    logger.error("Error processing getBookCover reactive chain: {}", cause.getMessage(), cause);
+                    deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(createErrorMap("Error occurred while getting book cover")));
+                }
+            }
+        );
 
         deferredResult.onTimeout(() -> {
             if (deferredResult.isSetOrExpired()) return;
             Map<String, String> error = new HashMap<>();
             error.put("error", "Request timeout");
             error.put("message", "The request to get book cover took too long to process. Please try again later.");
-            deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error));
+            if (!deferredResult.isSetOrExpired()) {
+                deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error));
+            }
+            if (subscription != null && !subscription.isDisposed()) {
+                subscription.dispose();
+            }
         });
         
         deferredResult.onCompletion(() -> {
-            if (future != null && !future.isDone()) {
-                future.cancel(true); // Attempt to cancel the underlying async task
+            if (subscription != null && !subscription.isDisposed()) {
+                subscription.dispose();
             }
         });
 
+        // This onError handles errors in DeferredResult's own processing,
+        // or if an error is set via deferredResult.setErrorResult explicitly before the Mono completes.
         deferredResult.onError(ex -> {
              if (deferredResult.isSetOrExpired()) return;
              Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
                 ? ex.getCause() : ex;
             if (cause instanceof ResponseStatusException rse) {
-                 deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
+                 if (!deferredResult.isSetOrExpired()) deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
             } else {
-                logger.error("Error processing getBookCover: {}", cause.getMessage(), cause);
-                deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                logger.error("Error in DeferredResult for getBookCover: {}", cause.getMessage(), cause);
+                 if (!deferredResult.isSetOrExpired()) deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(createErrorMap("Error occurred while getting book cover")));
-            }
-        });
-
-        future.whenComplete((responseEntity, ex) -> {
-            if (deferredResult.isSetOrExpired()) return; // Check before setting result
-            if (ex != null) {
-                Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
-                    ? ex.getCause() : ex;
-                if (cause instanceof ResponseStatusException rse) {
-                    if (!deferredResult.isSetOrExpired()) deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
-                } else {
-                     logger.error("Error getting book cover: {}", cause.getMessage(), cause);
-                    if (!deferredResult.isSetOrExpired()) deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                        .body(createErrorMap("Error occurred while getting book cover")));
-                }
-            } else {
-                if (!deferredResult.isSetOrExpired()) deferredResult.setResult(responseEntity);
             }
         });
             

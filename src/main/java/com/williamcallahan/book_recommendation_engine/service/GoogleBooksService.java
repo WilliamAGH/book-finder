@@ -13,9 +13,10 @@ import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletableFuture;
 import java.time.Duration;
 import java.io.IOException;
-import java.util.concurrent.CompletableFuture; // Added import
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -92,11 +93,8 @@ public class GoogleBooksService {
                         return retrySignal.failure();
                     }))
                 .onErrorResume(e -> {
-                    if (e instanceof io.netty.handler.ssl.SslHandshakeTimeoutException) {
-                        logger.error("SSL Handshake Timeout for query '{}' at startIndex {} after retries. This often indicates network connectivity or firewall issues to www.googleapis.com:443. Error: {}", query, startIndex, e.getMessage());
-                    } else {
-                        logger.error("Error fetching page for query '{}' at startIndex {} after retries or due to non-retryable error: {}", query, startIndex, e.getMessage());
-                    }
+                    // This now catches errors after retries are exhausted or if the error wasn't retryable
+                    logger.error("Error fetching page for query '{}' at startIndex {} after retries or due to non-retryable error: {}", query, startIndex, e.getMessage());
                     return Mono.empty();
                 });
     }
@@ -180,8 +178,6 @@ public class GoogleBooksService {
      * Search books by author with language filtering
      * - Uses the 'inauthor:' Google Books API qualifier
      * - Allows restricting results to specific language
-     * - Executes search across Google Books catalog
-     * - Converts API responses to domain objects
      * 
      * @param author Author name to search for
      * @param langCode Optional language code to restrict results
@@ -238,7 +234,7 @@ public class GoogleBooksService {
      */
     @CircuitBreaker(name = "googleBooksService", fallbackMethod = "getBookByIdFallback")
     @TimeLimiter(name = "googleBooksService")
-    public CompletableFuture<Book> getBookById(String bookId) {
+    public CompletionStage<Book> getBookById(String bookId) {
         String url = String.format("%s/volumes/%s?key=%s", googleBooksApiUrl, bookId, googleBooksApiKey);
         return webClient.get()
                 .uri(url)
@@ -258,14 +254,9 @@ public class GoogleBooksService {
                     return null;
                 })
                 .onErrorResume(e -> {
-                    if (e instanceof io.netty.handler.ssl.SslHandshakeTimeoutException) {
-                        logger.error("SSL Handshake Timeout for book ID {} after retries. This often indicates network connectivity or firewall issues to www.googleapis.com:443. Error: {}", bookId, e.getMessage());
-                    } else {
-                        logger.error("Error fetching book by ID {} after retries or due to non-retryable error: {}", bookId, e.getMessage());
-                    }
+                    logger.error("Error fetching book by ID {} after retries or due to non-retryable error: {}", bookId, e.getMessage());
                     return Mono.empty(); // Return an empty Mono on error
-                })
-                .toFuture(); // Convert Mono to CompletableFuture
+                }).toFuture();
     }
 
     /**
@@ -634,14 +625,18 @@ public class GoogleBooksService {
         return Mono.empty(); // Return empty JsonNode or a default structure if appropriate
     }
 
-    public CompletableFuture<Book> getBookByIdFallback(String bookId, Throwable t) {
+    public CompletionStage<Book> getBookByIdFallback(String bookId, Throwable t) {
         logger.warn("GoogleBooksService.getBookById circuit breaker opened for bookId: {}. Error: {}", bookId, t.getMessage());
-        return CompletableFuture.completedFuture(null); // Return a completed CompletableFuture with null or an empty Book
+        return CompletableFuture.completedFuture(null); // Return empty Book
     }
 
-    /**
-     * Circuit breaker fallbacks for higher-level search methods
-     * - Root cause handled by searchBooks/getBookById fallbacks
-     * - No additional fallbacks required for derived methods
-     */
+    // Fallback for methods returning Mono<List<Book>>
+    // This can be a generic fallback if the signature matches, or specific ones can be created.
+    // For simplicity, if searchBooks/getBookById fallbacks handle the root cause, these might not be strictly needed
+    // unless we want different fallback behavior at this higher level.
+    // Example:
+    // public Mono<List<Book>> searchBooksAsyncReactiveFallback(String query, String langCode, Throwable t) {
+    //     logger.warn("GoogleBooksService.searchBooksAsyncReactive circuit breaker opened for query: '{}', langCode: {}. Error: {}", query, langCode, t.getMessage());
+    //     return Mono.just(Collections.emptyList());
+    // }
 }

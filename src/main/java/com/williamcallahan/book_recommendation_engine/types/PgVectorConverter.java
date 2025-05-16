@@ -2,6 +2,8 @@ package com.williamcallahan.book_recommendation_engine.types;
 
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * JPA converter for PostgreSQL vector type
@@ -13,6 +15,8 @@ import jakarta.persistence.Converter;
  */
 @Converter(autoApply = false)
 public class PgVectorConverter implements AttributeConverter<PgVector, String> {
+
+    private static final Logger logger = LoggerFactory.getLogger(PgVectorConverter.class);
 
     /**
      * Converts PgVector entity attribute to database column representation
@@ -43,7 +47,7 @@ public class PgVectorConverter implements AttributeConverter<PgVector, String> {
         try {
             return new PgVector(dbData);
         } catch (IllegalArgumentException e) {
-            System.err.println("Error converting database column to PgVector: " + dbData + " - " + e.getMessage());
+            logger.error("Error converting database column to PgVector: {} - {}", dbData, e.getMessage(), e);
             return null;
         }
     }

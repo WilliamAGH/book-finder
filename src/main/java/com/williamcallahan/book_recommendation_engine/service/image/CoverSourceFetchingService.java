@@ -391,8 +391,7 @@ public class CoverSourceFetchingService {
      */
     private CompletableFuture<ImageDetails> tryGoogleBooksApiByVolumeId(String googleVolumeId, String bookIdForLog, ImageProvenanceData provenanceData) {
         logger.debug("Attempting Google Books API by Volume ID {} (Book ID for log: {})", googleVolumeId, bookIdForLog);
-        return googleBooksService.getBookById(googleVolumeId) // This now returns CompletableFuture<Book>
-            // No .toFuture() needed here as it's already a CompletableFuture
+        return googleBooksService.getBookById(googleVolumeId) // This returns CompletionStage<Book>
             .thenComposeAsync(gBook -> {
                 if (gBook != null && gBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                     provenanceData.setGoogleBooksApiResponse(gBook.getRawJsonResponse());
@@ -407,6 +406,7 @@ public class CoverSourceFetchingService {
                 provenanceData.getAttemptedImageSources().add(gbAttempt);
                 return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-volid-no-image"));
             })
+            .toCompletableFuture() // Convert CompletionStage to CompletableFuture
             .exceptionally(ex -> {
                 logger.error("Exception trying Google Books API by Volume ID {} (Book ID for log: {}): {}", googleVolumeId, bookIdForLog, ex.getMessage(), ex);
                 ImageProvenanceData.AttemptedSourceInfo gbAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.GOOGLE_BOOKS, "volumeId:" + googleVolumeId, ImageAttemptStatus.FAILURE_GENERIC);

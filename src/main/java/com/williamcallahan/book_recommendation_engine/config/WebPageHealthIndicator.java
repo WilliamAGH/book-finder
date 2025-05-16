@@ -25,15 +25,27 @@ public class WebPageHealthIndicator {
     private final String path;
     private final boolean reportErrorsAsDown;
     private static final Duration PAGE_TIMEOUT = Duration.ofSeconds(5);
+    private final boolean isParentConfigured; // New field
 
-    public WebPageHealthIndicator(WebClient.Builder webClientBuilder, String baseUrl, String path, String healthCheckName, boolean reportErrorsAsDown) {
-        this.webClient = webClientBuilder.baseUrl(baseUrl).build();
+    public WebPageHealthIndicator(WebClient.Builder webClientBuilder, String baseUrl, String path, String healthCheckName, boolean reportErrorsAsDown, boolean isParentConfigured) {
+        this.isParentConfigured = isParentConfigured;
+        if (this.isParentConfigured && baseUrl != null) {
+            this.webClient = webClientBuilder.baseUrl(baseUrl).build();
+        } else {
+            this.webClient = null; // Or a dummy client if preferred, but null is fine if checkPage handles it
+        }
         this.path = path;
         this.healthCheckName = healthCheckName;
         this.reportErrorsAsDown = reportErrorsAsDown;
     }
 
     public Mono<Health> checkPage() {
+        if (!this.isParentConfigured || this.webClient == null) {
+            return Mono.just(Health.unknown()
+                    .withDetail(healthCheckName + "_status", "not_checked_due_to_missing_config")
+                    .withDetail("reason", "Base URL or port not available from parent indicator")
+                    .build());
+        }
         return webClient.get()
                 .uri(path)
                 .retrieve()
@@ -88,7 +100,8 @@ class HomepageHealthIndicator implements ReactiveHealthIndicator {
                                    @Value("${server.port:8081}") int serverPort,
                                    @Value("${healthcheck.report-errors-as-down:true}") boolean reportErrorsAsDown) {
         String baseUrl = "http://localhost:" + serverPort;
-        this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/", "homepage", reportErrorsAsDown);
+        // Assuming HomepageHealthIndicator is always configured as it gets port directly or defaults
+        this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/", "homepage", reportErrorsAsDown, true);
     }
 
     @Override
@@ -117,9 +130,10 @@ class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
         this.isConfigured = this.testBookId != null && !this.testBookId.trim().isEmpty();
         if (isConfigured) {
             String baseUrl = "http://localhost:" + serverPort;
-            this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/books/" + this.testBookId, "book_detail_page", reportErrorsAsDown);
+            // Assuming BookDetailPageHealthIndicator is configured if testBookId is present
+            this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/books/" + this.testBookId, "book_detail_page", reportErrorsAsDown, true);
         } else {
-            this.delegate = null;
+            this.delegate = null; // Delegate remains null if not configured
         }
     }
 
@@ -133,4 +147,4 @@ class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
         }
         return delegate.checkPage();
     }
-} 
+}
