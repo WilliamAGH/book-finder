@@ -18,14 +18,10 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
     // Calculate aspect ratio
     const aspectRatio = naturalWidth / naturalHeight;
     
-    // Just add the normalized-cover class and let CSS handle sizing
-    // This ensures consistent sizing across all images
-    imgElement.classList.add('normalized-cover');
-    
-    // Add high-res class for very large images
-    if (naturalWidth > 400 || naturalHeight > 600) {
-        imgElement.classList.add('high-res-cover');
-    }
+    // The image will now rely on its container and its own CSS rules
+    // (e.g., object-fit: contain and max-width/max-height: 100%)
+    // to size itself appropriately
+    // I removed the addition of 'normalized-cover' and 'high-res-cover' classes
 }
 
 /**
@@ -132,9 +128,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add a global function to help with debugging cover issues
     window.debugBookCovers = function() {
         const covers = document.querySelectorAll('img.book-cover');
-        console.log(`Found ${covers.length} book covers on page`);
+        console.log('Found ' + covers.length + ' book covers on page');
         covers.forEach((img, index) => {
-            console.log(`Cover ${index + 1}:`, {
+            console.log('Cover ' + (index + 1) + ':', {
                 alt: img.alt || 'No alt text',
                 originalSrc: img.getAttribute('data-original-src'),
                 currentSrc: img.src,
@@ -145,21 +141,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 usingPlaceholder: img.src.includes('/images/placeholder-book-cover.svg')
             });
         });
-        return `Logged ${covers.length} book covers to console`;
+        return 'Logged ' + covers.length + ' book covers to console';
     };
     
     // Add a global function to retry loading all book covers
     window.retryAllBookCovers = function() {
         const covers = document.querySelectorAll('img.book-cover[data-original-src]');
-        console.log(`Attempting to reload ${covers.length} book covers`);
+        console.log('Attempting to reload ' + covers.length + ' book covers');
         covers.forEach(img => {
             const originalSrc = img.getAttribute('data-original-src');
             if (originalSrc && originalSrc !== img.src) {
-                console.log(`Retrying cover: ${img.alt || 'Unknown book'}`);
+                console.log('Retrying cover: ' + (img.alt || 'Unknown book'));
                 img.src = originalSrc;
             }
         });
-        return `Attempted to reload ${covers.length} book covers`;
+        return 'Attempted to reload ' + covers.length + ' book covers';
     };
     
     // Add a global function to test and debug theme switching
@@ -176,13 +172,13 @@ document.addEventListener('DOMContentLoaded', function() {
         console.table(results);
         
         // Return a formatted string with the results
-        return `Theme Detection Status:
-- Current theme: ${results.documentTheme}
-- User preference in localStorage: ${results.localStorageTheme || 'Not set (using system)'}
-- System prefers dark mode: ${results.browserPrefersDark}
-- Using system preference: ${results.systemPreferenceActive}
-- Navbar classes: ${results.navbarClasses}
-- Theme icons: ${results.iconClasses}`;
+        return 'Theme Detection Status:\n' +
+               '- Current theme: ' + results.documentTheme + '\n' +
+               '- User preference in localStorage: ' + (results.localStorageTheme || 'Not set (using system)') + '\n' +
+               '- System prefers dark mode: ' + results.browserPrefersDark + '\n' +
+               '- Using system preference: ' + results.systemPreferenceActive + '\n' +
+               '- Navbar classes: ' + results.navbarClasses + '\n' +
+               '- Theme icons: ' + results.iconClasses;
     };
 
     // Dynamic text truncation for long descriptions
@@ -243,10 +239,10 @@ document.addEventListener('DOMContentLoaded', function() {
                             
                             // Set the source last, after all dimension adjustments are applied
                             img.src = payload.newCoverUrl;
-                            console.log(`WebSocket updated cover for book ${id} with normalized dimensions (${tempImg.naturalWidth}x${tempImg.naturalHeight})`);
+                            console.log('WebSocket updated cover for book ' + id + ' with normalized dimensions (' + tempImg.naturalWidth + 'x' + tempImg.naturalHeight + ')');
                         };
                         tempImg.onerror = function() {
-                            console.warn(`Failed to preload WebSocket updated cover for book ${id}`);
+                            console.warn('Failed to preload WebSocket updated cover for book ' + id);
                             // Still update the src on error, but without dimension normalization
                             img.src = payload.newCoverUrl;
                         };
@@ -270,68 +266,61 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Check for server-side/HTML data-theme attribute first
-    let initialHtmlTheme = document.documentElement.getAttribute('data-theme');
+    // NEW INITIALIZATION LOGIC
     let currentTheme;
-    
-    // Handle the server-side theme preference
-    if (initialHtmlTheme === '_auto_') {
-        // No server-side preference, try localStorage or fall back to system preference
-        const storedTheme = localStorage.getItem('theme');
-        if (storedTheme) {
-            // User has explicitly set a preference
-            currentTheme = storedTheme;
-        } else {
-            // Use system preference without storing in localStorage to allow auto-switching
-            currentTheme = getSystemThemePreference();
-        }
-    } else if (initialHtmlTheme === 'light' || initialHtmlTheme === 'dark') {
-        // Use server-side preference
-        currentTheme = initialHtmlTheme;
-        // Save to localStorage to maintain consistency
+    const storedUserPreference = localStorage.getItem('theme');
+    const serverSentTheme = document.documentElement.getAttribute('data-theme'); // Theme from cookie via server
+
+    if (storedUserPreference) {
+        // 1. User has an explicit preference in localStorage. This wins.
+        currentTheme = storedUserPreference;
+    } else if (serverSentTheme && serverSentTheme !== '_auto_') {
+        // 2. No localStorage preference, but server (via cookie) provided one. Use it.
+        currentTheme = serverSentTheme;
+        // Sync this to localStorage so it becomes the user's preference now.
         localStorage.setItem('theme', currentTheme);
     } else {
-        // Fallback if something unexpected
+        // 3. No localStorage, and server sent _auto_ (or nothing specific). Use system preference.
         currentTheme = getSystemThemePreference();
+        // We DO NOT set localStorage here if using system preference initially,
+        // to allow system theme changes to be reflected automatically if user hasn't made a choice.
     }
-    
-    // Set the theme attribute on the HTML element
+
     document.documentElement.setAttribute('data-theme', currentTheme);
+    // END NEW INITIALIZATION LOGIC
     
     // Listen for system theme changes
     if (window.matchMedia) {
         const colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
         
         // Define the handler function
-        const handleColorSchemeChange = (e) => {
-            // Only update if user hasn't set a preference
+        const handleSystemColorSchemeChange = (e) => { // Renamed for clarity
+            // Only update if user hasn't set a preference in localStorage
             if (!localStorage.getItem('theme')) {
-                currentTheme = e.matches ? 'dark' : 'light';
-                document.documentElement.setAttribute('data-theme', currentTheme);
-                updateAndReinitializeTooltip();
-                
-                // If we're using system preference, update server
-                updateServerThemePreference(null, true);
+                const newSystemTheme = e.matches ? 'dark' : 'light';
+                if (currentTheme !== newSystemTheme) { // Update only if it actually changed
+                    currentTheme = newSystemTheme;
+                    document.documentElement.setAttribute('data-theme', currentTheme);
+                    updateAndReinitializeTooltip(); // This ensures icons and navbar update
+                    
+                    // If we're using system preference, update server
+                    updateServerThemePreference(null, true);
+                }
             }
         };
         
         // Modern event listener
         try {
-            colorSchemeQuery.addEventListener('change', handleColorSchemeChange);
+            colorSchemeQuery.addEventListener('change', handleSystemColorSchemeChange);
         } catch (error) {
             // Fallback for older browsers
             try {
                 // Safari 13.1 and older support
-                colorSchemeQuery.addListener(handleColorSchemeChange);
+                colorSchemeQuery.addListener(handleSystemColorSchemeChange);
                 console.log('Using legacy matchMedia.addListener for system theme detection');
             } catch (fallbackError) {
                 console.error('Browser does not support system theme change detection:', fallbackError);
             }
-        }
-        
-        // Ensure the handler is called once on page load for system preference
-        if (!localStorage.getItem('theme')) {
-            handleColorSchemeChange(colorSchemeQuery);
         }
     }
 
@@ -349,7 +338,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             
-            // For non-hover state, we can indicate system theme with a special icon
+            // For non-hover state, I can indicate system theme with a special icon
             const isSystemPreference = !localStorage.getItem('theme');
             
             if (isSystemPreference) {
@@ -420,13 +409,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Attach event listeners to all toggle buttons
     if (themeToggleBtns.length) {
-        updateAndReinitializeTooltip();
+        updateAndReinitializeTooltip(); // Call this to set initial state of icons/tooltips
         themeToggleBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
+                e.preventDefault(); // Prevent default anchor behavior if it's a link
                 // Normal click toggles between light/dark
                 currentTheme = (currentTheme === 'light') ? 'dark' : 'light';
                 document.documentElement.setAttribute('data-theme', currentTheme);
-                localStorage.setItem('theme', currentTheme);
+                localStorage.setItem('theme', currentTheme); // Explicit user choice
                 updateAndReinitializeTooltip();
                 
                 // Send theme preference to server
@@ -434,8 +424,9 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             // Add right-click handler to reset to system preference
             btn.addEventListener('contextmenu', (e) => {
+                e.preventDefault(); // Prevent default context menu
                 // Reset to system preference on right-click
-                localStorage.removeItem('theme');
+                localStorage.removeItem('theme'); // User wants system preference
                 currentTheme = getSystemThemePreference();
                 document.documentElement.setAttribute('data-theme', currentTheme);
                 updateAndReinitializeTooltip();
@@ -443,8 +434,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Send system preference to server
                 updateServerThemePreference(null, true);
                 
-                e.preventDefault();
-                return false;
+                return false; // Also helps prevent context menu in some browsers
             });
             btn.addEventListener('mouseenter', () => {
                 const hoverTheme = (currentTheme === 'light') ? 'dark' : 'light';
@@ -467,7 +457,7 @@ function initializeBookCovers() {
         console.log("No book covers found to initialize.");
         return;
     }
-    console.log(`Initializing ${covers.length} book covers.`);
+    console.log('Initializing ' + covers.length + ' book covers.');
 
     const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
     const MAX_RETRIES = 1;
@@ -515,13 +505,13 @@ function initializeBookCovers() {
 
 
         if (preferredUrl && preferredUrl !== "null" && preferredUrl.trim() !== "") {
-            console.log(`[Cover ${index}] Attempting preferred URL: ${preferredUrl}`);
+            console.log('[Cover ' + index + '] Attempting preferred URL: ' + preferredUrl);
             cover.src = preferredUrl;
         } else if (fallbackUrl && fallbackUrl !== "null" && fallbackUrl.trim() !== "") {
-            console.log(`[Cover ${index}] No preferred URL, attempting fallback URL: ${fallbackUrl}`);
+            console.log('[Cover ' + index + '] No preferred URL, attempting fallback URL: ' + fallbackUrl);
             cover.src = fallbackUrl;
         } else {
-            console.log(`[Cover ${index}] No preferred or fallback URL, using ultimate fallback: ${ultimateFallback}`);
+            console.log('[Cover ' + index + '] No preferred or fallback URL, using ultimate fallback: ' + ultimateFallback);
             cover.src = ultimateFallback;
             // If it's already the placeholder, the load event might not fire consistently if src doesn't change
             // Manually trigger if it's already the placeholder and not loading
@@ -536,7 +526,7 @@ function initializeBookCovers() {
 function handleImageSuccess() {
     // 'this' is the image element
     const cover = this;
-    console.log(`[Cover Success] Loaded: ${cover.src}`);
+    console.log('[Cover Success] Loaded: ' + cover.src);
     
     const container = cover.closest('.book-cover-container, .book-cover-wrapper');
     const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
@@ -549,12 +539,12 @@ function handleImageSuccess() {
     cover.style.opacity = '1';
 
     if (cover.naturalWidth < 20 && cover.naturalHeight < 20 && !cover.src.includes(LOCAL_PLACEHOLDER)) {
-        console.warn(`[Cover Warning] Loaded image is tiny (${cover.naturalWidth}x${cover.naturalHeight}), treating as failure for: ${cover.src}`);
+        console.warn('[Cover Warning] Loaded image is tiny (' + cover.naturalWidth + 'x' + cover.naturalHeight + '), treating as failure for: ' + cover.src);
         handleImageFailure.call(cover); // Treat as error
     } else {
         // Apply consistent dimensions to normalize the appearance
         applyConsistentDimensions(cover, cover.naturalWidth, cover.naturalHeight);
-        console.log(`[Cover Success] Applied normalized dimensions to: ${cover.src} (${cover.naturalWidth}x${cover.naturalHeight})`);
+        console.log('[Cover Success] Applied normalized dimensions to: ' + cover.src + ' (' + cover.naturalWidth + 'x' + cover.naturalHeight + ')');
         
         // Successfully loaded a real image or the intended local placeholder
         cover.onerror = null; // Prevent future errors on this now successfully loaded image (e.g. if removed from DOM then re-added by mistake)
@@ -565,7 +555,7 @@ function handleImageFailure() {
     // 'this' is the image element
     const cover = this;
     const currentSrc = cover.src;
-    console.warn(`[Cover Failure] Failed to load: ${currentSrc}`);
+    console.warn('[Cover Failure] Failed to load: ' + currentSrc);
 
     const preferred = cover.getAttribute('data-preferred-url-internal');
     const fallback = cover.getAttribute('data-fallback-url-internal');
@@ -576,23 +566,23 @@ function handleImageFailure() {
     // Check if currentSrc matches preferred (even if currentSrc has cache-busting params)
     if (currentSrc.startsWith(preferred) && preferred !== "") { 
         if (fallback && fallback !== "" && fallback !== currentSrc) {
-            console.log(`[Cover Retry] Preferred failed, trying fallback: ${fallback}`);
+            console.log('[Cover Retry] Preferred failed, trying fallback: ' + fallback);
             nextSrc = fallback;
         } else if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
-            console.log(`[Cover Retry] Preferred failed, no fallback or fallback is same, trying ultimate: ${ultimate}`);
+            console.log('[Cover Retry] Preferred failed, no fallback or fallback is same, trying ultimate: ' + ultimate);
             nextSrc = ultimate;
         }
     } 
     // Check if currentSrc matches fallback
     else if (currentSrc.startsWith(fallback) && fallback !== "") {
         if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
-            console.log(`[Cover Retry] Fallback failed, trying ultimate: ${ultimate}`);
+            console.log('[Cover Retry] Fallback failed, trying ultimate: ' + ultimate);
             nextSrc = ultimate;
         }
     }
     // If it was some other URL (or already the ultimate fallback and it somehow errored)
     else if (ultimate && ultimate !== "" && currentSrc !== ultimate) {
-        console.log(`[Cover Retry] Current URL is not recognized or ultimate fallback itself failed previously, ensuring ultimate: ${ultimate}`);
+        console.log('[Cover Retry] Current URL is not recognized or ultimate fallback itself failed previously, ensuring ultimate: ' + ultimate);
         nextSrc = ultimate;
     }
 
@@ -603,7 +593,7 @@ function handleImageFailure() {
             // If we're falling back to the ultimate (local) placeholder,
             // it should ideally not error. If it does, stop trying.
             cover.onerror = function() {
-                console.error(`[Cover Final Failure] Ultimate fallback itself failed: ${this.src}`);
+                console.error('[Cover Final Failure] Ultimate fallback itself failed: ' + this.src);
                 const container = this.closest('.book-cover-container, .book-cover-wrapper');
                 const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
                 if (placeholderDiv) placeholderDiv.style.display = 'none';
@@ -613,7 +603,7 @@ function handleImageFailure() {
             };
         }
     } else {
-        console.error(`[Cover Final Failure] All fallbacks exhausted for initial src: ${cover.getAttribute('data-preferred-url-internal')}`);
+        console.error('[Cover Final Failure] All fallbacks exhausted for initial src: ' + cover.getAttribute('data-preferred-url-internal'));
         const container = cover.closest('.book-cover-container, .book-cover-wrapper');
         const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
         if (placeholderDiv) placeholderDiv.style.display = 'none';

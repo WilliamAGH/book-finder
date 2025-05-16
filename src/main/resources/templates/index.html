@@ -1,9 +1,17 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" lang="en">
-<head th:replace="~{fragments/layout :: head(title='Home')}">
+<html xmlns:th="http://www.thymeleaf.org" lang="en"
+      th:with="
+        homeTitle='Home',
+        homeDescription='Discover your next favorite book with our recommendation engine. Search, explore, and find personalized book suggestions.',
+        homeCanonicalUrl=${#httpServletRequest != null ? #httpServletRequest.requestURL.toString() : ''},
+        homeOgImage=@{/images/og-logo.png},
+        homeKeywords='book recommendations, find books, book suggestions, reading, literature'
+">
+<head th:replace="~{fragments/layout :: head(title=${homeTitle}, description=${homeDescription}, canonicalUrl=${homeCanonicalUrl}, ogImage=${homeOgImage}, keywords=${homeKeywords})}">
+    <!-- Static fallbacks for linters/SEO. These are replaced by the fragment. -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Home - Book Recommendation Engine</title>
+    <title>Home - Book Finder (findmybook.net)</title>
 </head>
 <body>
 
@@ -33,11 +41,11 @@
                     <div class="mt-4">
                         <p class="text-muted mb-2">Popular searches:</p>
                         <div class="d-flex flex-wrap justify-content-center gap-2">
-                            <a href="/search?query=fiction" class="badge bg-light text-decoration-none p-2">Fiction</a>
-                            <a href="/search?query=mystery" class="badge bg-light text-decoration-none p-2">Mystery</a>
-                            <a href="/search?query=sci-fi" class="badge bg-light text-decoration-none p-2">Science Fiction</a>
-                            <a href="/search?query=fantasy" class="badge bg-light text-decoration-none p-2">Fantasy</a>
-                            <a href="/search?query=biography" class="badge bg-light text-decoration-none p-2">Biography</a>
+                            <a href="/search?query=fiction" class="badge bg-light text-dark text-decoration-none p-2">Fiction</a>
+                            <a href="/search?query=mystery" class="badge bg-light text-dark text-decoration-none p-2">Mystery</a>
+                            <a href="/search?query=sci-fi" class="badge bg-light text-dark text-decoration-none p-2">Science Fiction</a>
+                            <a href="/search?query=fantasy" class="badge bg-light text-dark text-decoration-none p-2">Fantasy</a>
+                            <a href="/search?query=biography" class="badge bg-light text-dark text-decoration-none p-2">Biography</a>
                         </div>
                     </div>
                 </div>
@@ -69,6 +77,8 @@
                                 <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}"
                                      class="card-img-top book-cover"
                                      loading="lazy"
+                                     alt="Book cover" 
+                                     title="Book cover"
                                      th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:attr="data-book-id=${book.id}, 
@@ -104,6 +114,7 @@
 <th:block th:replace="~{fragments/layout :: scripts}"></th:block>
 
 <!-- Extra page-specific styles -->
+<!-- Styles moved to main.css for consistency
 <style>
     .hero-section {
         background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
@@ -150,13 +161,14 @@
         border-radius: 30px;
     }
     
-    /* Custom breakpoint for book cards */
+    /* Custom breakpoint for book cards * /
     @media (min-width: 576px) and (max-width: 991.98px) {
         .col-sm-6.col-md-4.col-lg-3 {
             width: 50%;
         }
     }
 </style>
+-->
 
 </body>
 </html>

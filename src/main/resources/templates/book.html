@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="en">
-<head th:replace="~{fragments/layout :: head(title=${book != null ? book.title : 'Book Details'})}">
+<head th:replace="~{fragments/layout :: head(title=${title}, description=${description}, canonicalUrl=${canonicalUrl}, ogImage=${ogImage}, keywords=${keywords})}">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Book Details - Book Recommendation Engine</title>
@@ -20,6 +20,80 @@
         max-width: 100%;
     }
 </style>
+
+<!-- Book Detail Specific Styles -->
+<!-- These styles were moved to main.css for better organization and to avoid duplication.
+     The .book-cover max-height is now consistently managed in main.css.
+<style>
+    .book-cover-section {
+        background-color: #f8f9fa;
+        border-radius: 0.375rem 0 0 0.375rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        min-height: 400px;
+    }
+    
+    .book-cover-wrapper {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100%;
+        width: 100%;
+    }
+    
+    .book-cover {
+        max-height: 400px;
+        width: auto;
+        max-width: 100%;
+        object-fit: contain;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        border-radius: 5px;
+    }
+    
+    .metadata-item {
+        margin-bottom: 0.5rem;
+    }
+    
+    .metadata-label {
+        font-size: 0.875rem;
+        color: #6c757d;
+        margin-bottom: 0.25rem;
+    }
+    
+    .metadata-value {
+        font-weight: 600;
+    }
+    
+    .description-text {
+        line-height: 1.7;
+        white-space: pre-wrap;
+    }
+    
+    .badge {
+        border-radius: 30px;
+        font-weight: 500;
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 767.98px) {
+        .book-cover-section {
+            border-radius: 0.375rem 0.375rem 0 0;
+            padding: 1.5rem;
+        }
+        
+        .book-cover {
+            max-height: 350px;
+        }
+    }
+    
+    /* Dark mode override for book cover background */
+    [data-theme="dark"] .book-cover-section {
+        background-color: transparent !important;
+    }
+</style>
+-->
 
 <!-- Accessibility fixes for images -->
 <script>
@@ -101,7 +175,7 @@
                                               data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
                                               data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                      class="img-fluid rounded-start book-cover"
-                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                                     title="Book cover" th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}">
 
                                 <!-- Google Books Rating Badge -->
@@ -295,7 +369,7 @@
                                                   data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
                                                   data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                          class="card-img-top book-cover"
-                                         loading="lazy"
+                                         title="Book cover" loading="lazy"
                                          th:alt="${rec.title != null ? rec.title + ' cover' : 'Book cover'}"
                                          th:title="${rec.title != null ? rec.title + ' cover' : 'Book cover'}">
                                 </a>
@@ -366,77 +440,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 /*]]>*/
 </script>
-
-<!-- Book Detail Specific Styles -->
-<style>
-    .book-cover-section {
-        background-color: #f8f9fa;
-        border-radius: 0.375rem 0 0 0.375rem;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 1.5rem;
-        min-height: 400px;
-    }
-    
-    .book-cover-wrapper {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100%;
-        width: 100%;
-    }
-    
-    .book-cover {
-        max-height: 400px;
-        width: auto;
-        max-width: 100%;
-        object-fit: contain;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.2);
-        border-radius: 5px;
-    }
-    
-    .metadata-item {
-        margin-bottom: 0.5rem;
-    }
-    
-    .metadata-label {
-        font-size: 0.875rem;
-        color: #6c757d;
-        margin-bottom: 0.25rem;
-    }
-    
-    .metadata-value {
-        font-weight: 600;
-    }
-    
-    .description-text {
-        line-height: 1.7;
-        white-space: pre-wrap;
-    }
-    
-    .badge {
-        border-radius: 30px;
-        font-weight: 500;
-    }
-    
-    /* Responsive adjustments */
-    @media (max-width: 767.98px) {
-        .book-cover-section {
-            border-radius: 0.375rem 0.375rem 0 0;
-            padding: 1.5rem;
-        }
-        
-        .book-cover {
-            max-height: 350px;
-        }
-    }
-    
-    /* Dark mode override for book cover background */
-    [data-theme="dark"] .book-cover-section {
-        background-color: transparent !important;
-    }
-</style>
 
 </body>
 </html>
