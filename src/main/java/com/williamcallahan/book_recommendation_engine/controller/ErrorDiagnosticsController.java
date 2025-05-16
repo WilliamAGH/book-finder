@@ -1,15 +1,3 @@
-/**
- * Controller for handling application errors and providing diagnostic information
- *
- * @author William Callahan
- *
- * Features:
- * - Implements Spring Boot's ErrorController interface
- * - Captures detailed error information including stack traces
- * - Renders user-friendly error diagnostic page
- * - Provides enhanced error details for debugging
- * - Extracts exception type information when available
- */
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +10,18 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.context.request.WebRequest;
 import java.util.Map;
 
+/**
+ * Controller for handling application errors and providing diagnostic information
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Implements Spring Boot's ErrorController interface
+ * - Captures detailed error information including stack traces
+ * - Renders user-friendly error diagnostic page
+ * - Provides enhanced error details for debugging
+ * - Extracts exception type information when available
+ */
 @Controller
 public class ErrorDiagnosticsController implements ErrorController {
 

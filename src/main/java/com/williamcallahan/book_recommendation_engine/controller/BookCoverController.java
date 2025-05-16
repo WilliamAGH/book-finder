@@ -16,7 +16,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-// import java.util.concurrent.TimeUnit; // Removed unused import
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 
 /**
@@ -78,27 +77,8 @@ public class BookCoverController {
         DeferredResult<ResponseEntity<Map<String, Object>>> deferredResult = 
             new DeferredResult<>(timeoutValue);
 
-        deferredResult.onTimeout(() -> {
-            Map<String, String> error = new HashMap<>();
-            error.put("error", "Request timeout");
-            error.put("message", "The request to get book cover took too long to process. Please try again later.");
-            deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error));
-        });
-        
-        deferredResult.onError(ex -> {
-             Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
-                ? ex.getCause() : ex;
-            if (cause instanceof ResponseStatusException rse) {
-                 deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
-            } else {
-                logger.error("Error processing getBookCover: {}", cause.getMessage(), cause);
-                deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorMap("Error occurred while getting book cover")));
-            }
-        });
-
-        googleBooksService.getBookById(id)
-            // .toFuture() // Removed as getBookById now directly returns CompletableFuture
+        // Store the CompletableFuture to allow cancellation
+        CompletableFuture<ResponseEntity<Map<String, Object>>> future = googleBooksService.getBookById(id)
             .thenCompose(book -> {
                 if (book == null) {
                     CompletableFuture<ResponseEntity<Map<String, Object>>> notFoundFuture = new CompletableFuture<>();
@@ -122,22 +102,51 @@ public class BookCoverController {
                         response.put("requestedSourcePreference", preferredSource.name());
                         return ResponseEntity.ok(response);
                     });
-            })
-            .whenComplete((responseEntity, ex) -> {
-                if (ex != null) {
-                    Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
-                        ? ex.getCause() : ex;
-                    if (cause instanceof ResponseStatusException rse) {
-                        deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
-                    } else {
-                         logger.error("Error getting book cover: {}", cause.getMessage(), cause);
-                        deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                            .body(createErrorMap("Error occurred while getting book cover")));
-                    }
-                } else {
-                    deferredResult.setResult(responseEntity);
-                }
             });
+
+        deferredResult.onTimeout(() -> {
+            if (deferredResult.isSetOrExpired()) return;
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Request timeout");
+            error.put("message", "The request to get book cover took too long to process. Please try again later.");
+            deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(error));
+        });
+        
+        deferredResult.onCompletion(() -> {
+            if (future != null && !future.isDone()) {
+                future.cancel(true); // Attempt to cancel the underlying async task
+            }
+        });
+
+        deferredResult.onError(ex -> {
+             if (deferredResult.isSetOrExpired()) return;
+             Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
+                ? ex.getCause() : ex;
+            if (cause instanceof ResponseStatusException rse) {
+                 deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
+            } else {
+                logger.error("Error processing getBookCover: {}", cause.getMessage(), cause);
+                deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorMap("Error occurred while getting book cover")));
+            }
+        });
+
+        future.whenComplete((responseEntity, ex) -> {
+            if (deferredResult.isSetOrExpired()) return; // Check before setting result
+            if (ex != null) {
+                Throwable cause = (ex instanceof CompletionException && ex.getCause() != null)
+                    ? ex.getCause() : ex;
+                if (cause instanceof ResponseStatusException rse) {
+                    if (!deferredResult.isSetOrExpired()) deferredResult.setErrorResult(ResponseEntity.status(rse.getStatusCode()).body(createErrorMap(rse.getReason())));
+                } else {
+                     logger.error("Error getting book cover: {}", cause.getMessage(), cause);
+                    if (!deferredResult.isSetOrExpired()) deferredResult.setErrorResult(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(createErrorMap("Error occurred while getting book cover")));
+                }
+            } else {
+                if (!deferredResult.isSetOrExpired()) deferredResult.setResult(responseEntity);
+            }
+        });
             
         return deferredResult;
     }

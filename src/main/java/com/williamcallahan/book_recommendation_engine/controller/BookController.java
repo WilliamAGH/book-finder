@@ -49,7 +49,7 @@ public class BookController {
     private final BookImageOrchestrationService bookImageOrchestrationService;
     
     /**
-     * Constructs the BookController with all required services.
+     * Constructs the BookController with all required services
      *
      * @param bookCacheService Service for caching and retrieving book data from various sources
      * @param recentlyViewedService Service for tracking and managing recently viewed books
@@ -68,7 +68,7 @@ public class BookController {
     }
     
     /**
-     * Search books by keyword with support for pagination, cover source preferences, and image resolution filtering.
+     * Search books by keyword with support for pagination, cover source preferences, and image resolution filtering
      * 
      * @param query Search query string to find matching books
      * @param startIndex Start index for pagination (optional, defaults to 0)
@@ -92,25 +92,13 @@ public class BookController {
             getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = 
             getImageResolutionPreferenceFromString(resolution);
-
-        // Use BookCacheService for searching books
-        // Note: BookCacheService.searchBooksReactive currently handles pagination internally based on startIndex and maxResults
-        // It fetches a larger set from GoogleBooksService and then paginates
-        // For accurate totalAvailableResults, BookCacheService.searchBooksReactive would need to be modified
-        // to return a structure containing both the paginated list and the total count from the initial Google fetch
-        // For now, totalAvailableResults will reflect the count of the paginated list from BookCacheService
         return bookCacheService.searchBooksReactive(query, startIndex, maxResults)
             .flatMap(paginatedBooks -> {
                 List<Book> currentPaginatedBooks = (paginatedBooks == null) ? Collections.emptyList() : paginatedBooks;
-                // This totalResults is the count of books returned by BookCacheService for the current page,
-                // not the grand total available for the query. This is a known simplification for now
                 int totalResultsInPage = currentPaginatedBooks.size(); 
 
                 if (currentPaginatedBooks.isEmpty()) {
                     Map<String, Object> response = new HashMap<>();
-                    // Since BookCacheService already paginates, if it's empty, it means no results for this page
-                    // Cannot accurately report totalAvailableResults for the entire query without modifying BookCacheService
-                    response.put("books", Collections.emptyList());
                     response.put("resultsInPage", 0);
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
@@ -172,8 +160,8 @@ public class BookController {
     }
     
     /**
-     * Converts a string representation of cover image source to the corresponding enum value.
-     * Safely handles invalid values by returning the default CoverImageSource.ANY.
+     * Converts a string representation of cover image source to the corresponding enum value
+     * Safely handles invalid values by returning the default CoverImageSource.ANY
      *
      * @param source String representation of a cover image source
      * @return The corresponding CoverImageSource enum value, or ANY if not valid
@@ -187,8 +175,8 @@ public class BookController {
     }
 
     /**
-     * Converts a string representation of image resolution preference to the corresponding enum value.
-     * Safely handles invalid values by returning the default ImageResolutionPreference.ANY.
+     * Converts a string representation of image resolution preference to the corresponding enum value
+     * Safely handles invalid values by returning the default ImageResolutionPreference.ANY
      *
      * @param resolution String representation of an image resolution preference
      * @return The corresponding ImageResolutionPreference enum value, or ANY if not valid
@@ -202,8 +190,8 @@ public class BookController {
     }
     
     /**
-     * Search books by title with support for cover source preferences and image resolution filtering.
-     * Uses "intitle:" advanced search operator to find books with matching titles.
+     * Search books by title with support for cover source preferences and image resolution filtering
+     * Uses "intitle:" advanced search operator to find books with matching titles
      * 
      * @param title Book title to search for
      * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
@@ -266,8 +254,8 @@ public class BookController {
     }
     
     /**
-     * Search books by author with support for cover source preferences and image resolution filtering.
-     * Uses "inauthor:" advanced search operator to find books by specified author.
+     * Search books by author with support for cover source preferences and image resolution filtering
+     * Uses "inauthor:" advanced search operator to find books by specified author
      * 
      * @param author Author name to search for
      * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
@@ -330,8 +318,8 @@ public class BookController {
     }
     
     /**
-     * Search books by ISBN with support for cover source preferences and image resolution filtering.
-     * Supports both ISBN-10 and ISBN-13 formats for precise book identification.
+     * Search books by ISBN with support for cover source preferences and image resolution filtering
+     * Supports both ISBN-10 and ISBN-13 formats for precise book identification
      * 
      * @param isbn Book ISBN number (can be ISBN-10 or ISBN-13 format)
      * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
@@ -394,8 +382,8 @@ public class BookController {
     }
     
     /**
-     * Get book details by ID with support for cover source preferences and image resolution filtering.
-     * Adds viewed book to recently viewed history for recommendation tracking.
+     * Get book details by ID with support for cover source preferences and image resolution filtering
+     * Adds viewed book to recently viewed history for recommendation tracking
      * 
      * @param id Book identifier to retrieve
      * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
@@ -445,8 +433,8 @@ public class BookController {
     }
     
     /**
-     * Handle validation errors for request parameters across all endpoints.
-     * Converts IllegalArgumentException to proper HTTP 400 Bad Request responses.
+     * Handle validation errors for request parameters across all endpoints
+     * Converts IllegalArgumentException to proper HTTP 400 Bad Request responses
      * 
      * @param ex The IllegalArgumentException thrown during request processing
      * @return ResponseEntity with error details and 400 status code
@@ -460,8 +448,8 @@ public class BookController {
     }
     
     /**
-     * Get similar books recommendations for a specific book with support for cover source and resolution preferences.
-     * Uses the recommendation engine to find books similar to the given book ID based on various criteria.
+     * Get similar books recommendations for a specific book with support for cover source and resolution preferences
+     * Uses the recommendation engine to find books similar to the given book ID based on various criteria
      * 
      * @param id Source book ID to find similar books for
      * @param count Number of recommendations to return (optional, defaults to 6)
@@ -481,9 +469,6 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // RecommendationService already uses BookCacheService for the source book, so this part is fine
-        // Ensure that the sourceBook for the recommendationService.getSimilarBooks call is fetched via BookCacheService if required.
-        // but since RecommendationService handles that internally, we only need to process the results
         return recommendationService.getSimilarBooks(id, count) 
             .flatMap(similarBooksList -> {
                 List<Book> currentSimilarBooks = (similarBooksList == null) ? Collections.emptyList() : similarBooksList;

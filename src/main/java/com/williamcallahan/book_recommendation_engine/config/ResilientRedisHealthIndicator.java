@@ -6,46 +6,65 @@ import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
-@Component("redisHealthIndicator") // Give it a specific name to distinguish from the default
+/**
+ * Health indicator for Redis that reports application as UP even when Redis is down
+ * 
+ * @author William Callahan
+ * 
+ * Provides resilience for applications using Redis by not reporting overall
+ * health as DOWN when Redis connectivity issues occur
+ */
+@Component("redisHealthIndicator")
 public class ResilientRedisHealthIndicator implements ReactiveHealthIndicator {
 
     private final ReactiveRedisConnectionFactory redisConnectionFactory;
 
+    /**
+     * Constructs health indicator with required Redis connection factory
+     *
+     * @param redisConnectionFactory Factory for creating Redis connections
+     */
     public ResilientRedisHealthIndicator(ReactiveRedisConnectionFactory redisConnectionFactory) {
         this.redisConnectionFactory = redisConnectionFactory;
     }
 
+    /**
+     * Checks Redis connection status without failing the overall health check
+     * - Attempts to connect and ping Redis
+     * - Reports UP with detailed status even when Redis is unavailable
+     * - Handles connection errors and timeouts gracefully
+     * - Sets appropriate status indicators for monitoring
+     *
+     * @return Mono containing Health status with Redis connection details
+     */
     @Override
     public Mono<Health> health() {
-        return Mono.fromCallable(() -> {
-            // This can throw if the factory has issues or cannot create a connection proxy
-            return redisConnectionFactory.getReactiveConnection();
-        })
-        .flatMap(connection -> connection.ping()) // If getReactiveConnection() succeeds, then ping
+        return Mono.usingWhen(
+            Mono.fromCallable(redisConnectionFactory::getReactiveConnection),
+            connection -> connection.ping(),
+            connection -> Mono.fromRunnable(connection::close),
+            (connection, err) -> Mono.fromRunnable(connection::close),
+            connection -> Mono.fromRunnable(connection::close)
+        )
         .map(response -> {
             if ("PONG".equalsIgnoreCase(response)) {
                 return Health.up().withDetail("redis_status", "available").withDetail("response", response).build();
             } else {
-                // This case should ideally not happen if ping() succeeds but is not "PONG"
                 return Health.up().withDetail("redis_status", "unknown_response").withDetail("response", response).build();
             }
         })
-        .onErrorResume(ex ->  // This should now catch exceptions from getReactiveConnection() or ping()
-            // If Redis is down, we still report overall UP, but detail the Redis issue.
-            // This allows the main application health check (e.g., for Docker) to pass.
+        .onErrorResume(ex -> 
             Mono.just(
-                Health.up() // Crucially, report UP for the application's resilience
+                Health.up()
                     .withDetail("redis_status", "unavailable")
                     .withDetail("error", ex.getClass().getName())
                     .withDetail("message", ex.getMessage())
                     .build()
             )
         )
-        // If the ping itself takes too long, we can also consider it unavailable for health check purposes
-        // but still keep the application UP.
         .timeout(java.time.Duration.ofSeconds(2),
-            Mono.just( // Simpler fallback for timeout, no need to defer Mono.just() itself here
-                Health.up() // Report overall UP
+            Mono.just(
+                Health.up()
                     .withDetail("redis_status", "timeout")
                     .withDetail("message", "Redis ping timed out after 2 seconds.")
                     .build()
