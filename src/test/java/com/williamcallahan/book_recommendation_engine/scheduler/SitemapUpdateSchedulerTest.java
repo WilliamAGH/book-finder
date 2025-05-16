@@ -13,6 +13,14 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Test class for SitemapUpdateScheduler
+ *
+ * @author William Callahan
+ *
+ * Verifies scheduler behavior for updating sitemap book IDs in S3
+ * Tests successful update and exception handling scenarios
+ */
 @ExtendWith(MockitoExtension.class)
 class SitemapUpdateSchedulerTest {
 

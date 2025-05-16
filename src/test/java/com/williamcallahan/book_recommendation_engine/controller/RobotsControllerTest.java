@@ -10,6 +10,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * Test class for RobotsController
+ *
+ * @author William Callahan
+ *
+ * Verifies robots.txt content generation under different environment conditions
+ */
 @WebMvcTest(RobotsController.class)
 @TestPropertySource(properties = {"coolify.url = https://findmybook.net", "coolify.branch = main"})
 class RobotsControllerTest {
@@ -18,7 +25,6 @@ class RobotsControllerTest {
     private MockMvc mockMvc;
 
     private static final String PERMISSIVE_ROBOTS_TXT = "User-agent: *\nAllow: /\n";
-    // private static final String RESTRICTIVE_ROBOTS_TXT = "User-agent: *\nDisallow: /\n"; // Commented out as unused
 
     @Test
     void shouldReturnPermissiveRobotsTxtWhenProductionDomainAndMainBranch() throws Exception {
