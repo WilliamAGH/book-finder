@@ -106,20 +106,32 @@ spring:
     activate:
       on-profile: dev
   # Dev-specific properties
+  datasource:
+    url: "" # Explicitly empty
+    driver-class-name: "" # Explicitly empty
+    # hikari:
+    #   maximum-pool-size: 1 # Default to 1 if absolutely needed, but aim for no init
+    #   minimum-idle: 1      # Default to 1 if absolutely needed
   jpa:
     show-sql: true # Show SQL in dev
     hibernate:
-      ddl-auto: update # More lenient ddl-auto for dev
-  datasource:
-    hikari:
-      maximum-pool-size: 5 # Slightly larger pool for dev if needed
+      ddl-auto: none # More lenient ddl-auto for dev
+    generate-ddl: false
+    # database-platform: "" # Optionally, we could clear this too, but empty URL/driver should suffice
 logging:
   level:
     com.williamcallahan.book_recommendation_engine: DEBUG # More verbose logging for dev
     org.springframework.web: DEBUG
+    org.hibernate: WARN # Reduce Hibernate noise if no DB
 app:
   environment:
     mode: development # Custom property for dev mode
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
 
 ---
 spring:
@@ -127,20 +139,27 @@ spring:
     activate:
       on-profile: prod
   # Prod-specific properties
+  datasource:
+    url: "" # Explicitly empty
+    driver-class-name: "" # Explicitly empty
+    # hikari:
+    #   maximum-pool-size: 1 # Default to 1 if absolutely needed
+    #   minimum-idle: 1      # Default to 1 if absolutely needed
+    # Consider more robust production settings for HikariCP
   jpa:
     show-sql: false
     hibernate:
-      ddl-auto: validate # Validate schema in prod, or 'none' if managed externally
-  datasource:
-    hikari:
-      maximum-pool-size: 20 # Example: larger pool for prod
-      # Consider more robust production settings for HikariCP
-      # connection-timeout: 30000
-      # idle-timeout: 600000
-      # max-lifetime: 1800000
+      ddl-auto: none # Validate schema in prod, or 'none' if managed externally
+    generate-ddl: false
 logging:
   level:
     com.williamcallahan.book_recommendation_engine: INFO # Standard INFO level for prod
 app:
   environment:
     mode: production # Custom property for prod mode
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
