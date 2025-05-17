@@ -94,8 +94,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of existsById that always returns false
-     * 
      * @param s Entity ID to check
      * @return Always false
      */
@@ -105,8 +103,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findAll that returns empty list
-     * 
      * @return Empty list of entities
      */
     @Override
@@ -115,8 +111,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findAllById that returns empty list
-     * 
      * @param strings Collection of IDs to find
      * @return Empty list of entities
      */
@@ -126,8 +120,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of count that always returns zero
-     * 
      * @return Always zero
      */
     @Override
@@ -136,8 +128,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of deleteById that does nothing
-     * 
      * @param s Entity ID to delete
      */
     @Override
@@ -145,8 +135,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of delete that does nothing
-     * 
      * @param entity Entity to delete
      */
     @Override

@@ -417,6 +417,14 @@ public class S3BookCoverService implements ExternalCoverService {
         }).subscribeOn(Schedulers.boundedElastic());
     }
  
+    /**
+     * Synchronous version of cover upload with explicit source
+     * 
+     * @param imageUrl URL of the image to upload
+     * @param bookId Book identifier
+     * @param source Source identifier
+     * @return ImageDetails for the uploaded cover
+     */
     public com.williamcallahan.book_recommendation_engine.types.ImageDetails uploadCoverToS3(String imageUrl, String bookId, String source) {
         try {
             return uploadCoverToS3Async(imageUrl, bookId, source).block(Duration.ofSeconds(15));
@@ -426,6 +434,9 @@ public class S3BookCoverService implements ExternalCoverService {
         }
     }
     
+    /**
+     * Convenience method that derives source from URL
+     */
     public com.williamcallahan.book_recommendation_engine.types.ImageDetails uploadCoverToS3(String imageUrl, String bookId) {
         String source = "google-books"; 
         if (imageUrl != null) {
@@ -435,15 +446,24 @@ public class S3BookCoverService implements ExternalCoverService {
         return uploadCoverToS3(imageUrl, bookId, source);
     }
 
+    /**
+     * Generates CDN URL for a book cover with known source
+     */
     public String getS3CoverUrl(String bookId, String fileExtension, String source) {
         String s3Key = generateS3Key(bookId, fileExtension, source);
         return (s3PublicCdnUrl != null && !s3PublicCdnUrl.isEmpty() ? s3PublicCdnUrl : s3CdnUrl) + "/" + s3Key;
     }
 
+    /**
+     * Finds existing cover URL by checking multiple sources
+     * 
+     * @param bookId Book identifier
+     * @param fileExtension File extension with leading dot
+     * @return CDN URL for the first found cover or null if none exists
+     */
     public String getS3CoverUrl(String bookId, String fileExtension) {
         String[] sourcesToTry = {"google-books", "open-library", "longitood", "local-cache", "unknown"};
         for (String source : sourcesToTry) {
-            // Uses the synchronous version for direct S3 access
             if (coverExistsInS3(bookId, fileExtension, source)) { 
                 return getS3CoverUrl(bookId, fileExtension, source);
             }
@@ -452,6 +472,12 @@ public class S3BookCoverService implements ExternalCoverService {
         return null; 
     }
 
+    /**
+     * Extracts file extension from URL
+     * 
+     * @param url Image URL to parse
+     * @return File extension with leading dot or default (.jpg) if none found
+     */
     public String getFileExtensionFromUrl(String url) {
         String extension = ".jpg"; 
         if (url != null && url.contains(".")) {
@@ -490,10 +516,26 @@ public class S3BookCoverService implements ExternalCoverService {
         }
     }
     
+    /**
+     * Overloaded version without provenance data
+     */
     public Mono<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key) {
         return uploadProcessedCoverToS3Async(processedImageBytes, fileExtension, mimeType, width, height, bookId, originalSourceForS3Key, null);
     }
 
+    /**
+     * Uploads pre-processed cover image to S3
+     * 
+     * @param processedImageBytes The processed image bytes
+     * @param fileExtension File extension with leading dot
+     * @param mimeType MIME type for content header
+     * @param width Image width
+     * @param height Image height
+     * @param bookId Book identifier
+     * @param originalSourceForS3Key Source identifier for S3 key
+     * @param provenanceData Optional image provenance data 
+     * @return Mono with ImageDetails for the uploaded cover
+     */
     public Mono<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key, ImageProvenanceData provenanceData) {
         if (!s3EnabledCheck || s3Client == null || processedImageBytes == null || processedImageBytes.length == 0 || bookId == null || bookId.isEmpty()) {
             logger.debug("S3 upload of processed cover skipped: S3 disabled/S3Client not available, or image bytes/bookId is null/empty. BookId: {}", bookId);

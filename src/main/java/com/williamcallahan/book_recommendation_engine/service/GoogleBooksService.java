@@ -166,25 +166,19 @@ public class GoogleBooksService {
     }
 
     /**
-     * Performs a comprehensive search across multiple Google Books API pages
-     * - Implements pagination across multiple results pages 
-     * - Processes each page concurrently using reactive streams
-     * - Converts API response items to Book domain objects
-     * - Enforces maximum result limits to prevent excessive API calls
+     * Overloaded version of searchBooksAsyncReactive with default values
      * 
      * @param query Search query string to send to the API
      * @param langCode Optional language code to restrict results (e.g., "en", "fr")
-     * @param desiredTotalResults The desired maximum number of total results to fetch
      * @return Mono containing a list of Book objects retrieved from the API
      */
     public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
-        // Calls the new private method with a default desiredTotalResults and orderBy newest
+        // Calls the method with default desiredTotalResults and orderBy newest
         return searchBooksAsyncReactive(query, langCode, 200, "newest"); 
     }
 
     /**
-     * Search books with default language setting
-     * - Convenience method that calls searchBooksAsyncReactive without language restriction
+     * Overloaded version of searchBooksAsyncReactive with no language filtering
      * 
      * @param query Search query string to send to the API
      * @return Mono containing a list of Book objects retrieved from the API
@@ -194,9 +188,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by title with language filtering
-     * - Uses the 'intitle:' Google Books API qualifier
-     * - Allows restricting results to specific language
+     * Searches books by title using the 'intitle:' Google Books API qualifier
      * 
      * @param title Book title to search for
      * @param langCode Optional language code to restrict results
@@ -207,8 +199,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by title with default language setting
-     * - Convenience method that calls searchBooksByTitle without language restriction
+     * Overloaded version without language filtering
      * 
      * @param title Book title to search for
      * @return Mono containing a list of Book objects matching the title
@@ -218,9 +209,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by author with language filtering
-     * - Uses the 'inauthor:' Google Books API qualifier
-     * - Allows restricting results to specific language
+     * Searches books by author using the 'inauthor:' Google Books API qualifier
      * 
      * @param author Author name to search for
      * @param langCode Optional language code to restrict results
@@ -231,8 +220,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by author with default language setting
-     * - Convenience method that calls searchBooksByAuthor without language restriction
+     * Overloaded version without language filtering
      * 
      * @param author Author name to search for
      * @return Mono containing a list of Book objects by the specified author
@@ -242,9 +230,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by ISBN with language filtering
-     * - Uses the 'isbn:' Google Books API qualifier for precise matching
-     * - Allows restricting results to specific language
+     * Searches books by ISBN using the 'isbn:' Google Books API qualifier 
      * 
      * @param isbn ISBN identifier to search for
      * @param langCode Optional language code to restrict results
@@ -255,8 +241,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by ISBN with default language setting
-     * - Convenience method that calls searchBooksByISBN without language restriction
+     * Overloaded version without language filtering
      * 
      * @param isbn ISBN identifier to search for
      * @return Mono containing a list of Book objects matching the ISBN
