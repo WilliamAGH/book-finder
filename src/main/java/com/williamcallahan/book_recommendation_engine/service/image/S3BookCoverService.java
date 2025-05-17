@@ -1,10 +1,22 @@
+/**
+ * Service for managing book cover images in S3 object storage
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Provides durable object storage for book cover images
+ * - Manages image uploading and URL generation
+ * - Implements in-memory caching for optimized performance
+ * - Supports multiple resolution variants of cover images
+ * - Handles image metadata and resolution preferences
+ * - Integrates with content delivery networks for fast global access
+ */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
-// Import the canonical ImageDetails
 import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
@@ -15,13 +27,10 @@ import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-// import org.springframework.beans.factory.annotation.Qualifier; // Removed unused import
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-// AwsBasicCredentials and StaticCredentialsProvider are no longer needed here if S3Client is injected
 import software.amazon.awssdk.core.sync.RequestBody;
-// import software.amazon.awssdk.regions.Region; // Removed unused import
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
@@ -29,9 +38,7 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 
-// import jakarta.annotation.PostConstruct; // Removed unused import
 import jakarta.annotation.PreDestroy;
-// import java.net.URI; // Removed unused import
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
@@ -42,25 +49,11 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.util.concurrent.CompletableFuture;
 import java.util.Optional;
-
-/**
- * Service for managing book cover images in S3 object storage
- *
- * @author William Callahan
- *
- * Features:
- * - Stores and retrieves book cover images from S3-compatible storage
- * - Generates and manages standardized S3 keys based on book identifiers
- * - Provides CDN-based URLs for optimized image delivery
- * - Caches object existence checks to reduce API calls
- * - Handles authentication and connection management with S3
- * - Supports image provenance tracking for debugging and analytics
- * - Provides both synchronous and reactive APIs for flexibility
- */
 @Service
 public class S3BookCoverService implements ExternalCoverService {
     private static final Logger logger = LoggerFactory.getLogger(S3BookCoverService.class);
-    private static final String BOOKS_DIRECTORY = "books/";
+    private static final String COVER_IMAGES_DIRECTORY = "images/book-covers/";
+    private static final String PROVENANCE_DATA_DIRECTORY = "images/provenance-data/";
     private static final String LARGE_SUFFIX = "-lg";
     
     @Value("${s3.bucket-name}")
@@ -79,7 +72,7 @@ public class S3BookCoverService implements ExternalCoverService {
     private String s3AccessKeyId;
     
     @Value("${s3.secret-access-key:}")
-    private String s3SecretAccessKey; // Keep for reference or conditional logic if needed, but not for client creation
+    private String s3SecretAccessKey;
     
     @Value("${s3.enabled:true}")
     private boolean s3EnabledCheck; // Renamed to avoid conflict if s3Enabled is used from injected client's state
@@ -99,14 +92,11 @@ public class S3BookCoverService implements ExternalCoverService {
     public S3BookCoverService(WebClient.Builder webClientBuilder,
                                ImageProcessingService imageProcessingService,
                                EnvironmentService environmentService,
-                               S3Client s3Client // Injected S3Client
-                               // Removed @Value("${s3.enabled:true}") boolean s3Enabled from parameters
-                               ) {
+                               S3Client s3Client) {
         this.webClient = webClientBuilder.build();
         this.imageProcessingService = imageProcessingService;
         this.environmentService = environmentService;
-        this.s3Client = s3Client; // Use injected client
-        // this.s3EnabledCheck = s3Enabled; // Removed assignment, s3EnabledCheck field is @Value injected
+        this.s3Client = s3Client;
         this.objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         this.objectExistsCache = Caffeine.newBuilder()
             .maximumSize(2000)
@@ -123,8 +113,6 @@ public class S3BookCoverService implements ExternalCoverService {
         }
     }
 
-    // @PostConstruct init() method that created S3Client is removed.
-    // The injected s3Client is managed by Spring (S3Config).
     
     /**
      * Cleanup method called during bean destruction
@@ -167,7 +155,7 @@ public class S3BookCoverService implements ExternalCoverService {
              fileExtension = ".jpg"; 
         }
         String normalizedSource = source != null ? source.toLowerCase().replaceAll("[^a-z0-9_-]", "-") : "unknown";
-        return BOOKS_DIRECTORY + bookId + LARGE_SUFFIX + "-" + normalizedSource + fileExtension;
+        return COVER_IMAGES_DIRECTORY + bookId + LARGE_SUFFIX + "-" + normalizedSource + fileExtension;
     }
 
     /**
@@ -562,11 +550,16 @@ public class S3BookCoverService implements ExternalCoverService {
             return;
         }
 
-        String provenanceS3Key = imageS3Key.replaceAll("\\.(jpg|jpeg|png|gif|webp|svg)$", ".txt");
-        if (provenanceS3Key.equals(imageS3Key)) { 
-            provenanceS3Key = imageS3Key + ".txt";
-            logger.warn("Image S3 key {} did not have a recognized image extension. Appending .txt for provenance: {}", imageS3Key, provenanceS3Key);
+        // Extract filename from the original imageS3Key
+        String filename = imageS3Key.substring(imageS3Key.lastIndexOf('/') + 1);
+        // Replace image extension with .txt for provenance file
+        String provenanceFilename = filename.replaceAll("\\\\.(jpg|jpeg|png|gif|webp|svg)$", ".txt");
+        if (provenanceFilename.equals(filename)) { 
+            provenanceFilename = filename + ".txt";
+            logger.warn("Image S3 key {} (filename: {}) did not have a recognized image extension. Appending .txt for provenance: {}", imageS3Key, filename, provenanceFilename);
         }
+        
+        String provenanceS3Key = PROVENANCE_DATA_DIRECTORY + provenanceFilename;
         
         try {
             String jsonProvenance = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(provenanceData);

@@ -1,20 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.service;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.S3Exception;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
-
-import java.io.InputStream;
-import java.util.concurrent.CompletableFuture;
-
 /**
  * Service for handling file storage operations in S3
  * - Provides asynchronous file upload capabilities
@@ -25,9 +8,34 @@ import java.util.concurrent.CompletableFuture;
  *
  * @author William Callahan
  */
+package com.williamcallahan.book_recommendation_engine.service;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import software.amazon.awssdk.core.ResponseBytes;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 @Service
 public class S3StorageService {
     private static final Logger logger = LoggerFactory.getLogger(S3StorageService.class);
+    private static final String GOOGLE_BOOKS_API_CACHE_DIRECTORY = "books/v1/";
+
 
     private final S3Client s3Client;
     private final String bucketName;
@@ -109,5 +117,75 @@ public class S3StorageService {
             return Mono.error(e); 
         })
         .toFuture(); // Convert the Mono to CompletableFuture
+    }
+
+    /**
+     * Asynchronously uploads a JSON string as a GZIP-compressed file to S3.
+     *
+     * @param volumeId The Google Books volume ID, used to construct the S3 key.
+     * @param jsonContent The JSON string to upload.
+     * @return A CompletableFuture<Void> that completes when the upload is finished or fails.
+     */
+    public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
+        if (s3Client == null) {
+            logger.warn("S3Client is null. Cannot upload JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
+            return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
+        }
+        return Mono.<Void>fromRunnable(() -> {
+            String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
+            try {
+                PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                        .bucket(bucketName)
+                        .key(keyName)
+                        .contentType("application/json")
+                        .build();
+
+                s3Client.putObject(putObjectRequest, RequestBody.fromString(jsonContent, StandardCharsets.UTF_8));
+                logger.info("Successfully uploaded JSON for volumeId {} to S3 key {}", volumeId, keyName);
+            } catch (Exception e) {
+                logger.error("Error uploading JSON for volumeId {} to S3: {}", volumeId, e.getMessage(), e);
+                throw new RuntimeException("Failed to upload JSON to S3 for volumeId " + volumeId, e);
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .toFuture();
+    }
+    
+    /**
+     * Asynchronously fetches and GZIP-decompresses a JSON file from S3.
+     *
+     * @param volumeId The Google Books volume ID, used to construct the S3 key.
+     * @return A CompletableFuture<Optional<String>> containing the decompressed JSON string if found,
+     *         or an empty Optional if not found or an error occurs.
+     */
+    public CompletableFuture<Optional<String>> fetchJsonAsync(String volumeId) {
+        if (s3Client == null) {
+            logger.warn("S3Client is null. Cannot fetch JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
+        
+        return Mono.<Optional<String>>fromCallable(() -> {
+            try {
+                GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                        .bucket(bucketName)
+                        .key(keyName)
+                        .build();
+
+                ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+                String jsonString = objectBytes.asUtf8String();
+
+                logger.debug("Successfully fetched JSON for volumeId {} from S3 key {}", volumeId, keyName);
+                return Optional.of(jsonString);
+            } catch (NoSuchKeyException e) {
+                logger.debug("JSON for volumeId {} not found in S3 at key {}.", volumeId, keyName);
+                return Optional.empty();
+            } catch (Exception e) {
+                logger.error("Error fetching JSON for volumeId {} from S3 key {}: {}", volumeId, keyName, e.getMessage(), e);
+                return Optional.empty(); // Return empty on other errors as well
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .toFuture();
     }
 }

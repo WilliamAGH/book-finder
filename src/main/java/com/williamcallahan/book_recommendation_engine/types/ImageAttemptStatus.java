@@ -6,8 +6,6 @@
  * - Supports detailed logging of image processing workflow
  * - Used for determining retry strategies
  * - Tracks outcomes of cover image retrieval operations
- * - Differentiates between error types for proper handling
- * - Used throughout image processing pipeline
  *
  * @author William Callahan
  */

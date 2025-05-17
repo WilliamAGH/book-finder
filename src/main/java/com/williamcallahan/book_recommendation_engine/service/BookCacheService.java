@@ -1,3 +1,18 @@
+/**
+ * Service for multi-level caching of book data with both synchronous and reactive APIs
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Implements multi-level caching strategy (in-memory, Spring Cache, database)
+ * - Provides reactive and traditional APIs for book data retrieval
+ * - Supports querying by Google Books ID, ISBN-10, and ISBN-13
+ * - Automatically caches book data fetched from Google Books API
+ * - Handles vector embeddings for book similarity recommendations
+ * - Manages cache invalidation for book cover updates
+ * - Includes scheduled cache cleanup for memory optimization
+ * - Provides fallback mechanisms when database is unavailable
+ */
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,22 +42,9 @@ import java.util.concurrent.CompletableFuture;
 import java.time.Duration;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
-
-/**
- * Service for multi-level caching of book data with both synchronous and reactive APIs
- *
- * @author William Callahan
- *
- * Features:
- * - Implements multi-level caching strategy (in-memory, Spring Cache, database)
- * - Provides reactive and traditional APIs for book data retrieval
- * - Supports querying by Google Books ID, ISBN-10, and ISBN-13
- * - Automatically caches book data fetched from Google Books API
- * - Handles vector embeddings for book similarity recommendations
- * - Manages cache invalidation for book cover updates
- * - Includes scheduled cache cleanup for memory optimization
- * - Provides fallback mechanisms when database is unavailable
- */
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.LinkedHashMap;
 @Service
 public class BookCacheService {
     private static final Logger logger = LoggerFactory.getLogger(BookCacheService.class);
@@ -53,6 +55,7 @@ public class BookCacheService {
     private final WebClient embeddingClient;
     private final ConcurrentHashMap<String, Book> bookDetailCache = new ConcurrentHashMap<>(); // In-memory cache for Book objects by ID
     private final CacheManager cacheManager;
+    private final DuplicateBookService duplicateBookService;
     
     @Value("${app.cache.enabled:true}")
     private boolean cacheEnabled; // This refers to the database/persistent cache primarily
@@ -68,6 +71,7 @@ public class BookCacheService {
      * @param webClientBuilder WebClient builder for embedding service communication
      * @param cacheManager Spring cache manager for managing in-memory caches
      * @param cachedBookRepository Repository for database-backed caching (optional)
+     * @param duplicateBookService Service for handling duplicate book detection and merging
      * 
      * @implNote Detects if database repository is available and adjusts caching behavior accordingly
      * Initializes embedding service client with fallback to localhost when URL not configured
@@ -78,15 +82,17 @@ public class BookCacheService {
             ObjectMapper objectMapper,
             WebClient.Builder webClientBuilder,
             CacheManager cacheManager,
-            @Autowired(required = false) CachedBookRepository cachedBookRepository) {
+            @Autowired(required = false) CachedBookRepository cachedBookRepository,
+            DuplicateBookService duplicateBookService) {
         this.googleBooksService = googleBooksService;
         this.cachedBookRepository = cachedBookRepository;
         this.objectMapper = objectMapper;
         this.embeddingClient = webClientBuilder.baseUrl(
                 embeddingServiceUrl != null ? embeddingServiceUrl : "http://localhost:8080/api/embedding"
         ).build();
-        this.cacheManager = cacheManager; // Initialize CacheManager
-        
+        this.cacheManager = cacheManager;
+        this.duplicateBookService = duplicateBookService;
+
         // Disable cache if repository is not available
         if (this.cachedBookRepository == null) {
             this.cacheEnabled = false;
@@ -119,7 +125,6 @@ public class BookCacheService {
         }
         
         logger.info("Cache miss for book ID: {}, fetching from Google Books API", id);
-        // Adapt CompletableFuture to blocking Optional for the synchronous method
         Book book = null;
         try {
             book = Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
@@ -356,7 +361,6 @@ public class BookCacheService {
      * @implNote Updates both in-memory and database caches asynchronously
      * Called when book is not found in any cache layer
      */
-    // Renamed from fetchFromGoogleAndCache to be more specific about updating caches
     private Mono<Book> fetchFromGoogleAndUpdateCaches(String id) {
         // googleBooksService.getBookById(id) already returns Mono<Book>
         return Mono.fromCompletionStage(googleBooksService.getBookById(id)) // Convert CompletionStage to Mono
@@ -451,32 +455,134 @@ public class BookCacheService {
      * Background caches results while returning immediately to client
      */
     public Mono<List<Book>> searchBooksReactive(String query, int startIndex, int maxResults) {
-        logger.info("BookCacheService searching books (reactive) with query: {}, startIndex: {}, maxResults: {}", query, startIndex, maxResults);
-        
-        return googleBooksService.searchBooksAsyncReactive(query) // This fetches up to a certain limit (e.g., 200) from GoogleBooksService
-            .map(fetchedBooks -> {
-                List<Book> allFetchedBooks = (fetchedBooks == null) ? Collections.emptyList() : fetchedBooks;
-                
-                List<Book> paginatedBooks;
-                if (startIndex >= allFetchedBooks.size()) {
-                    paginatedBooks = Collections.emptyList();
-                } else {
-                    int endIndex = Math.min(startIndex + maxResults, allFetchedBooks.size());
-                    paginatedBooks = allFetchedBooks.subList(startIndex, endIndex);
-                }
+        return searchBooksReactive(query, startIndex, maxResults, null);
+    }
+    
+    /**
+     * Searches for books with reactive API, result caching, and optional year filtering
+     * 
+     * @param query The search query string
+     * @param startIndex The pagination starting index (0-based)
+     * @param maxResults Maximum number of results to return
+     * @param publishedYear Optional filter for books published in specific year
+     * @return Mono emitting list of books matching criteria with pagination applied
+     */
+    public Mono<List<Book>> searchBooksReactive(String query, int startIndex, int maxResults, Integer publishedYear) {
+        logger.info("BookCacheService searching books (reactive) with query: {}, startIndex: {}, maxResults: {}, publishedYear: {}", query, startIndex, maxResults, publishedYear);
 
-                if (!paginatedBooks.isEmpty() && cacheEnabled && cachedBookRepository != null) {
-                    Flux.fromIterable(paginatedBooks)
-                        .flatMap(bookToCache -> cacheBookReactive(bookToCache)
-                            .onErrorResume(e -> {
-                                logger.error("Error during reactive background caching for book (query {}): {}. ID: {}", query, e.getMessage(), bookToCache.getId());
-                                return Mono.empty();
-                            }))
-                        .subscribe();
+        String finalQuery = query; 
+        if (publishedYear != null) {
+            logger.info("Year filter {} will be applied post-query to results for query: '{}'", publishedYear, query);
+        }
+        
+        int resultsToRequestFromGoogle;
+        String orderByGoogle = "newest"; // Default to newest for all searches from BookCacheService
+
+        if (publishedYear != null) {
+            resultsToRequestFromGoogle = 200; // Request more if year filtering
+            logger.info("Requesting {} initial results from GoogleBooksService, ordered by '{}', due to year filter.", resultsToRequestFromGoogle, orderByGoogle);
+        } else {
+            resultsToRequestFromGoogle = maxResults; // Standard request size if no year filter
+            logger.info("Requesting {} initial results from GoogleBooksService, ordered by '{}' (no year filter).", resultsToRequestFromGoogle, orderByGoogle);
+        }
+
+        return googleBooksService.searchBooksAsyncReactive(finalQuery, null, resultsToRequestFromGoogle, orderByGoogle)
+            .flatMap((List<Book> fetchedBooks) -> { // Explicitly type fetchedBooks
+                if (fetchedBooks == null || fetchedBooks.isEmpty()) {
+                    logger.info("No books found by GoogleBooksService for query: {}", query);
+                    return Mono.just(Collections.<Book>emptyList()); // Explicitly typed empty list
                 }
-                return paginatedBooks;
+                logger.info("GoogleBooksService returned {} books for query: {}", fetchedBooks.size(), query);
+
+                // Apply year filtering if needed
+                List<Book> yearFilteredBooks = fetchedBooks;
+                if (publishedYear != null) {
+                    logger.info("YEAR FILTER: Starting year filtering for {} books with year={}", fetchedBooks.size(), publishedYear);
+                    yearFilteredBooks = fetchedBooks.stream()
+                        .filter(book -> {
+                            if (book.getPublishedDate() != null) {
+                                java.util.Calendar cal = java.util.Calendar.getInstance();
+                                cal.setTime(book.getPublishedDate());
+                                int bookYear = cal.get(java.util.Calendar.YEAR);
+                                boolean matches = bookYear == publishedYear;
+                                
+                                // For debugging, log details about each book's year
+                                if (matches) {
+                                    logger.debug("YEAR FILTER: Book '{}' (ID: {}) MATCHES year {}", 
+                                            book.getTitle(), book.getId(), publishedYear);
+                                } else {
+                                    logger.debug("YEAR FILTER: Book '{}' (ID: {}) has year {} which does NOT match {}",
+                                            book.getTitle(), book.getId(), bookYear, publishedYear);
+                                }
+                                
+                                return matches;
+                            }
+                            logger.debug("YEAR FILTER: Book '{}' (ID: {}) has NO publish date, excluding",
+                                    book.getTitle(), book.getId());
+                            return false; // No published date means we can't verify year
+                        })
+                        .collect(Collectors.toList());
+                    logger.info("YEAR FILTER: Year filter {} reduced {} books to {}", 
+                            publishedYear, fetchedBooks.size(), yearFilteredBooks.size());
+                }
+                
+                // Deduplication step
+                Map<String, Book> canonicalBooksMap = new LinkedHashMap<>(); // Preserve order somewhat
+                
+                for (Book book : yearFilteredBooks) {
+                    if (book == null || book.getId() == null) {
+                        logger.debug("Skipping a null book or book with null ID in search results for query: {}", query);
+                        continue;
+                    }
+                
+                    Optional<CachedBook> canonicalCachedOpt = duplicateBookService.findPrimaryCanonicalBook(book);
+                    String representativeId;
+                
+                    if (canonicalCachedOpt.isPresent()) {
+                        CachedBook canonicalCached = canonicalCachedOpt.get();
+                        // Prefer GoogleBooksId if available as it's more universal, otherwise fallback to internal ID.
+                        representativeId = canonicalCached.getGoogleBooksId() != null ? canonicalCached.getGoogleBooksId() : canonicalCached.getId();
+                        // If the canonical book is found, we prefer to use its representation if it's the first time.
+                        // However, the current 'book' from 'fetchedBooks' might have fresher API data initially.
+                        // For now, we map to the canonical ID and take the first 'Book' object encountered for that ID.
+                        // If 'book' itself is the canonical or becomes the canonical, 'representativeId' will be 'book.getId()'.
+                    } else {
+                        representativeId = book.getId(); // Use its own ID if no existing canonical found
+                    }
+                
+                    if (!canonicalBooksMap.containsKey(representativeId)) {
+                        canonicalBooksMap.put(representativeId, book); 
+                    } else {
+                        // If already present, we could add merging logic here if 'book' is better.
+                        // For now, first-encountered for a canonical ID wins.
+                        logger.debug("Skipping duplicate book {} (maps to canonical ID {}) in search results for query: {}", book.getId(), representativeId, query);
+                    }
+                }
+                
+                List<Book> deduplicatedBooks = new ArrayList<>(canonicalBooksMap.values());
+                logger.info("Deduplicated {} fetched books down to {} unique canonical books for query: {}", fetchedBooks.size(), deduplicatedBooks.size(), query);
+
+                // Asynchronously cache all *original* fetched books that have an ID
+                // The caching logic itself handles merging into canonical entries in the DB.
+                Flux.fromIterable(fetchedBooks) // Still cache all raw books from original fetch
+                    .filter(b -> b != null && b.getId() != null) // Ensure book and ID are not null
+                    .flatMap(this::cacheBookReactive) // Using the reactive cache method
+                    .doOnError(e -> logger.error("Error during background DB caching for books from query '{}': {}", query, e.getMessage()))
+                    .subscribe(); // Subscribe to trigger the caching
+
+                // Apply pagination to the *deduplicated* list
+                int fromIndex = Math.min(startIndex, deduplicatedBooks.size());
+                int toIndex = Math.min(startIndex + maxResults, deduplicatedBooks.size());
+                
+                List<Book> paginatedBooks = deduplicatedBooks.subList(fromIndex, toIndex);
+                logger.info("Returning {} paginated books ({} to {}) for query: {}", paginatedBooks.size(), fromIndex, toIndex, query);
+                
+                return Mono.just(paginatedBooks);
             })
-            .defaultIfEmpty(Collections.emptyList());
+            .onErrorResume(e -> {
+                logger.error("Error in searchBooksReactive for query '{}': {}", query, e.getMessage(), e);
+                return Mono.just(new ArrayList<Book>()); // Return new empty ArrayList<Book> on error
+            });
     }
     
     /**
@@ -544,7 +650,6 @@ public class BookCacheService {
                 }
                 return googleBooksService.getSimilarBooks(sourceBook) // This returns Mono<List<Book>>
                     .map(list -> (List<Book>) list); // Explicit map to help compiler with type, though often not needed if signatures are clear.
-                                                     // Or ensure getSimilarBooks directly provides Mono<List<Book>> that satisfies the chain.
             })
             .switchIfEmpty(Mono.<List<Book>>defer(() -> {
                  logger.warn("GoogleBooksService.getBookById returned empty for ID {} during similar books fallback.", bookId);
@@ -633,41 +738,61 @@ public class BookCacheService {
             return Mono.empty();
         }
 
-        return Mono.defer(() ->
-            Mono.fromCallable(() -> cachedBookRepository.findByGoogleBooksId(book.getId()))
-                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                .flatMap(existingCachedBookOptional -> {
-                    if (existingCachedBookOptional.isPresent()) {
-                        logger.debug("Book already cached (checked reactively): {}", book.getId());
-                        return Mono.empty(); // Completes the Mono<Void> chain, meaning no further action
-                    }
-                    // Not in cache, proceed with embedding and saving
-                    return generateEmbeddingReactive(book)
-                        .flatMap(embedding -> {
-                            try {
-                                JsonNode rawData = objectMapper.valueToTree(book);
-                                CachedBook cachedBookToSave = CachedBook.fromBook(book, rawData, new PgVector(embedding));
-                                // Wrap the blocking save operation
-                                return Mono.fromRunnable(() -> {
-                                        if (cachedBookRepository != null) { // Final check before save
-                                            cachedBookRepository.save(cachedBookToSave);
-                                        }
-                                    })
-                                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
-                                    .doOnSuccess(v -> logger.info("Successfully cached book reactively: {}", book.getId()))
-                                    .then(); // ensure this flatMap returns Mono<Void>
-                            } catch (Exception e) {
-                                logger.error("Error preparing book for reactive caching {}: {}", book.getId(), e.getMessage(), e);
-                                return Mono.error(e); // Propagate error to be caught by outer onErrorResume
-                            }
-                        });
-                })
-                .onErrorResume(e -> {
-                    // This handles errors from findByGoogleBooksId or the subsequent embedding/saving chain
-                    logger.warn("Error during DB cache check or subsequent processing for book ID {} in reactive save: {}. Cache attempt aborted.", book.getId(), e.getMessage());
-                    return Mono.empty(); // Abort caching on error, completes the Mono<Void> chain
-                })
-        ).then(); // Ensure the overall method returns Mono<Void> and subscribes to the defer's Mono
+        // Attempt to find a primary/canonical book for the new book from API
+        Optional<CachedBook> primaryBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
+
+        if (primaryBookOpt.isPresent()) {
+            CachedBook primaryCachedBook = primaryBookOpt.get();
+            logger.info("Found existing primary book (ID: {}) for new book (Title: {}). Will not create new cache entry. May merge data.", 
+                        primaryCachedBook.getId(), book.getTitle());
+            
+            boolean updated = duplicateBookService.mergeDataIfBetter(primaryCachedBook, book);
+            if (updated) {
+                 return Mono.fromCallable(() -> cachedBookRepository.save(primaryCachedBook))
+                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                    .doOnSuccess(savedBook -> logger.info("Updated primary cached book ID: {} with data from new book.", savedBook.getId()))
+                    .doOnError(e -> logger.error("Error updating primary cached book ID {}: {}", primaryCachedBook.getId(), e.getMessage()))
+                    .then();
+            } else {
+                // No data merged, primary book remains as is. No save needed.
+                logger.debug("No data from new book was merged into primary book ID: {}.", primaryCachedBook.getId());
+                return Mono.empty(); // Nothing to save
+            }
+        } else {
+            // No primary book found, proceed to cache the new book as a new entry
+            logger.debug("No existing primary book found for new book (Title: {}). Caching as new entry.", book.getTitle());
+            return Mono.defer(() ->
+                Mono.fromCallable(() -> cachedBookRepository.findByGoogleBooksId(book.getId())) // Check if this specific ID already exists (e.g. race condition)
+                    .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                    .flatMap(existingOpt -> {
+                        if (existingOpt.isPresent()) {
+                            logger.warn("Book with Google ID {} already in cache. Skipping save for new book object.", book.getId());
+                            return Mono.empty(); // Already exists, do nothing
+                        }
+
+                        // Generate embedding for the book
+                        return generateEmbeddingReactive(book)
+                            .flatMap(embedding -> {
+                                try {
+                                    JsonNode rawJsonNode = objectMapper.readTree(book.getRawJsonResponse());
+                                    CachedBook cachedBookToSave = CachedBook.fromBook(book, rawJsonNode, new PgVector(embedding));
+                                    return Mono.fromCallable(() -> cachedBookRepository.save(cachedBookToSave))
+                                        .doOnSuccess(savedBook -> logger.info("Successfully cached new book ID: {} Title: {}", savedBook.getId(), savedBook.getTitle()))
+                                        .doOnError(e -> logger.error("Error saving book ID {} to cache: {}", book.getId(), e.getMessage()));
+                                } catch (Exception e) {
+                                    logger.error("Error processing raw JSON or creating CachedBook for ID {}: {}", book.getId(), e.getMessage());
+                                    return Mono.error(e);
+                                }
+                            })
+                            .onErrorResume(e -> {
+                                logger.error("Error generating embedding or during caching for book ID {}: {}", book.getId(), e.getMessage());
+                                // Decide if you want to cache without embedding or just log and complete
+                                return Mono.empty(); // Or Mono.error(e) if failure should propagate
+                            });
+                    })
+                    .then() // Converts the Mono<CachedBook> or Mono<Object> to Mono<Void>
+            );
+        }
     }
 
     /**

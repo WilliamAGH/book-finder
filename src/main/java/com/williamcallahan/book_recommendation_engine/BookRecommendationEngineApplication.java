@@ -1,33 +1,24 @@
-package com.williamcallahan.book_recommendation_engine;
-
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
-import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
-import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
-import org.springframework.cache.annotation.EnableCaching;
-import org.springframework.scheduling.annotation.EnableAsync;
-import org.springframework.scheduling.annotation.EnableScheduling;
-import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
-import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
-
 /**
  * Main application class for Book Finder
  *
  * @author William Callahan
  *
  * Features:
- * - Excludes default database auto-configurations to allow conditional DB setup
+ * - Excludes default database auto-configurations to allow conditional DB setup (Note: Some exclusions removed to fix bean issue)
  * - Enables caching for improved performance
  * - Supports asynchronous operations for non-blocking API calls
  * - Entry point for Spring Boot application
  */
+package com.williamcallahan.book_recommendation_engine;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 @SpringBootApplication(exclude = {
-    DataSourceAutoConfiguration.class,
-    DataSourceTransactionManagerAutoConfiguration.class,
-    HibernateJpaAutoConfiguration.class,
-    JpaRepositoriesAutoConfiguration.class,
     OpenAiAudioSpeechAutoConfiguration.class, 
     OpenAiAudioTranscriptionAutoConfiguration.class 
 })

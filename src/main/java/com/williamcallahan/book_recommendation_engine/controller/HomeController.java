@@ -1,3 +1,17 @@
+/**
+ * Controller for handling user-facing web pages in the Book Finder
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Renders home page with recently viewed and recommended books
+ * - Manages search page and search result display
+ * - Handles book detail pages with metadata and similar book recommendations
+ * - Processes ISBN lookups and redirects to canonical book URLs
+ * - Integrates with caching services for optimal performance
+ * - Applies SEO optimizations including metadata and keyword generation
+ * - Manages cover image resolution and source preferences
+ */
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -7,6 +21,7 @@ import com.williamcallahan.book_recommendation_engine.service.RecommendationServ
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
+import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -27,21 +42,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.stream.Collectors;
-
-/**
- * Controller for handling user-facing web pages in the Book Finder
- *
- * @author William Callahan
- *
- * Features:
- * - Renders home page with recently viewed and recommended books
- * - Manages search page and search result display
- * - Handles book detail pages with metadata and similar book recommendations
- * - Processes ISBN lookups and redirects to canonical book URLs
- * - Integrates with caching services for optimal performance
- * - Applies SEO optimizations including metadata and keyword generation
- * - Manages cover image resolution and source preferences
- */
 @Controller
 public class HomeController {
 
@@ -51,7 +51,9 @@ public class HomeController {
     private final RecommendationService recommendationService;
     private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
-    private static final int MIN_BOOKS_TO_DISPLAY = 5;
+    private final DuplicateBookService duplicateBookService;
+    private static final int MAX_RECENT_BOOKS = 8;
+    private static final int MAX_BESTSELLERS = 8;
     
     private static final List<String> EXPLORE_QUERIES = Arrays.asList(
             "Classic literature",
@@ -85,18 +87,21 @@ public class HomeController {
      * @param recommendationService Service for generating book recommendations
      * @param bookCoverManagementService Service for retrieving and caching book cover images
      * @param environmentService Service providing environment configuration information
+     * @param duplicateBookService Service for handling duplicate book editions
      */
     @Autowired
     public HomeController(BookCacheService bookCacheService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
                           BookCoverManagementService bookCoverManagementService,
-                          EnvironmentService environmentService) {
+                          EnvironmentService environmentService,
+                          DuplicateBookService duplicateBookService) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
+        this.duplicateBookService = duplicateBookService;
     }
 
     /**
@@ -119,73 +124,106 @@ public class HomeController {
         model.addAttribute("ogImage", "https://findmybook.net/images/default-social-image.png"); // Default OG image
         model.addAttribute("keywords", "book recommendations, find books, book suggestions, reading, literature, home");
 
+        // Fetch Current Bestsellers
+        Mono<List<Book>> bestsellersMono = bookCacheService.searchBooksReactive(
+                "new york times bestsellers", 0, MAX_BESTSELLERS, null
+        )
+        .flatMap(this::processBooksCovers)
+        .doOnSuccess(bestsellers -> model.addAttribute("currentBestsellers", bestsellers))
+        .doOnError(e -> {
+            logger.error("Error fetching current bestsellers: {}", e.getMessage());
+            model.addAttribute("currentBestsellers", Collections.emptyList());
+        })
+        .onErrorReturn(Collections.emptyList());
+
         // Add recently viewed books to the model
-        List<Book> recentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
-        model.addAttribute("activeTab", "home"); // Set early
-
+        List<Book> initialRecentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
+        
         Mono<List<Book>> recentBooksMono;
+        List<Book> trimmedRecentBooks = initialRecentBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
 
-        if (recentBooks.size() < MIN_BOOKS_TO_DISPLAY) {
-            // Use BookCacheService for searching default books
-            recentBooksMono = bookCacheService.searchBooksReactive("ag riddle", 0, MIN_BOOKS_TO_DISPLAY) 
+        if (trimmedRecentBooks.size() < MAX_RECENT_BOOKS) {
+            // If fewer than MAX_RECENT_BOOKS are viewed, fetch more to fill up to MAX_RECENT_BOOKS
+            int needed = MAX_RECENT_BOOKS - trimmedRecentBooks.size();
+            String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
+            logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
+            
+            recentBooksMono = bookCacheService.searchBooksReactive(randomQuery, 0, needed) 
                 .map(defaultBooks -> {
-                    List<Book> combinedBooks = new ArrayList<>(recentBooks);
+                    List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
                     for (Book defaultBook : booksToAdd) {
-                        if (combinedBooks.size() >= MIN_BOOKS_TO_DISPLAY) break;
-                        if (!combinedBooks.stream().anyMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
+                        if (combinedBooks.size() >= MAX_RECENT_BOOKS) break;
+                        // Ensure no duplicates by ID from already present recent books
+                        if (trimmedRecentBooks.stream().noneMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
                             combinedBooks.add(defaultBook);
                         }
                     }
-                    return combinedBooks;
+                    // If still not enough, just return what we have combined
+                    return combinedBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
                 })
-                .defaultIfEmpty(recentBooks); // If google books call fails or empty, use original recentBooks
+                .defaultIfEmpty(trimmedRecentBooks); // If google books call fails or empty, use original recentBooks
         } else {
-            recentBooksMono = Mono.just(recentBooks);
+            recentBooksMono = Mono.just(trimmedRecentBooks);
         }
 
-        return recentBooksMono.flatMap(finalRecentBooks ->
-            Flux.fromIterable(finalRecentBooks)
-                .concatMap(book -> { // concatMap preserves order and processes one by one
-                    if (book == null) {
-                        return Mono.justOrEmpty(null); // Or handle as an error / skip
-                    }
-                    return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
-                        .map(coverImagesResult -> {
-                            book.setCoverImages(coverImagesResult);
-                            if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
-                                book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
-                            } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                                book.setCoverImageUrl("/images/placeholder-book-cover.svg");
-                            }
-                            book.setCoverImageWidth(null);
-                            book.setCoverImageHeight(null);
-                            book.setIsCoverHighResolution(null);
-                            return book;
-                        })
-                        .onErrorResume(e -> {
-                            String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() :
-                                                     ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
-                            logger.warn("Error getting initial cover URL for book with identifier '{}' in home: {}", identifierForLog, e.getMessage());
-                            if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                               book.setCoverImageUrl("/images/placeholder-book-cover.svg");
-                            }
-                            // Ensure CoverImages is at least initialized to avoid NPEs in template
-                            if (book.getCoverImages() == null) {
-                                book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
-                                    book.getCoverImageUrl(), book.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
-                                ));
-                            }
-                            return Mono.just(book); // Return the book even if cover fetching failed
-                        });
-                })
-                .filter(java.util.Objects::nonNull) // Filter out any null books if handled that way
-                .collectList()
-                .map(processedBooks -> {
-                    model.addAttribute("recentBooks", processedBooks);
-                    return "index";
-                })
-        );
+        Mono<List<Book>> processedRecentBooksMono = recentBooksMono
+            .flatMap(this::processBooksCovers)
+            .doOnSuccess(recent -> model.addAttribute("recentBooks", recent))
+            .doOnError(e -> {
+                logger.error("Error fetching recent books: {}", e.getMessage());
+                model.addAttribute("recentBooks", Collections.emptyList());
+            })
+            .onErrorReturn(Collections.emptyList());
+
+        // Combine both operations and then return the view name
+        return Mono.zip(bestsellersMono, processedRecentBooksMono)
+            .map(tuple -> "index")
+            .onErrorReturn("index"); // Fallback to rendering index even if one stream fails
+    }
+    
+    // Helper method to process covers for a list of books
+    private Mono<List<Book>> processBooksCovers(List<Book> books) {
+        if (books == null || books.isEmpty()) {
+            return Mono.just(Collections.emptyList());
+        }
+        return Flux.fromIterable(books)
+            .concatMap(book -> { // concatMap preserves order and processes one by one
+                if (book == null) {
+                    return Mono.justOrEmpty(null); 
+                }
+                return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+                    .map(coverImagesResult -> {
+                        book.setCoverImages(coverImagesResult);
+                        if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
+                            book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
+                        } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        }
+                        // Clear these as they might not be relevant or consistently set by all sources
+                        book.setCoverImageWidth(null);
+                        book.setCoverImageHeight(null);
+                        book.setIsCoverHighResolution(null);
+                        return book;
+                    })
+                    .onErrorResume(e -> {
+                        String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() :
+                                                 ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
+                        logger.warn("Error getting initial cover URL for book with identifier '{}' in home: {}", identifierForLog, e.getMessage());
+                        if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
+                           book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        }
+                        // Ensure CoverImages is at least initialized to avoid NPEs in template
+                        if (book.getCoverImages() == null) {
+                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
+                                book.getCoverImageUrl(), book.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                            ));
+                        }
+                        return Mono.just(book); // Return the book even if cover fetching failed
+                    });
+            })
+            .filter(java.util.Objects::nonNull) // Filter out any null books if handled that way
+            .collectList();
     }
     
     /**
@@ -199,10 +237,44 @@ public class HomeController {
      * @return The name of the template to render (search.html)
      */
     @GetMapping("/search")
-    public String search(String query, Model model) {
+    public Object search(String query, 
+                       @RequestParam(required = false) Integer year,
+                       Model model) {
+        // Check if we need to redirect with extracted year
+        if (query != null && year == null) {
+            // Try to extract year from query
+            java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
+            java.util.regex.Matcher matcher = yearPattern.matcher(query);
+            
+            if (matcher.find()) {
+                // Extract the year
+                String yearStr = matcher.group(1);
+                try {
+                    int extractedYear = Integer.parseInt(yearStr);
+                    logger.info("Detected year {} in query text. Redirecting to use year parameter.", extractedYear);
+                    
+                    // Remove the year from the query
+                    String beforeYear = query.substring(0, matcher.start());
+                    String afterYear = query.substring(matcher.end());
+                    String processedQuery = (beforeYear + afterYear).trim().replaceAll("\\s+", " ");
+                    
+                    // Build the redirect URL with the year parameter
+                    String redirectUrl = "/search?query=" + URLEncoder.encode(processedQuery, StandardCharsets.UTF_8) 
+                                      + "&year=" + extractedYear;
+                    
+                    return new RedirectView(redirectUrl);
+                } catch (Exception e) {
+                    logger.warn("Failed to extract year from query: {}", e.getMessage());
+                    // Continue with normal rendering if year extraction fails
+                }
+            }
+        }
+        
+        // Normal rendering path
         model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
         model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
         model.addAttribute("query", query);
+        model.addAttribute("year", year); // Pass year parameter to the view
         model.addAttribute("activeTab", "search");
         model.addAttribute("title", "Search Books");
         model.addAttribute("description", "Search our extensive catalog of books by title, author, or ISBN. Find detailed information and recommendations.");
@@ -214,10 +286,20 @@ public class HomeController {
     
     /**
      * Handles requests to the book detail page
+     * - Retrieves detailed book information by ID
+     * - Manages cover image retrieval and background updates
+     * - Sets up SEO metadata for the book page
+     * - Populates model with book data for template rendering
+     * - Tracks recently viewed books for user history
+     * - Handles search context parameters for navigation
      *
-     * @param id the book id
-     * @param model the model for the view
-     * @return the name of the template to render
+     * @param id The book identifier to display details for
+     * @param query The search query that led to this book (for navigation context)
+     * @param page The search results page number (for return navigation)
+     * @param sort The sort method used in search results
+     * @param view The view type used in search results (grid/list)
+     * @param model The Spring model for view rendering
+     * @return Mono containing the template name for async rendering
      */
     @GetMapping("/book/{id}")
     public Mono<String> bookDetail(@PathVariable String id,
@@ -274,6 +356,9 @@ public class HomeController {
                         model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
                         model.addAttribute("keywords", generateKeywords(book));
 
+                        // Populate other editions/duplicates
+                        duplicateBookService.populateDuplicateEditions(book);
+
                         try {
                             recentlyViewedService.addToRecentlyViewed(book);
                         } catch (Exception e) {
@@ -302,6 +387,10 @@ public class HomeController {
 
                         model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
                         model.addAttribute("keywords", generateKeywords(book));
+                        
+                        // Populate other editions/duplicates even on cover error, if book object exists
+                        duplicateBookService.populateDuplicateEditions(book);
+
                         return Mono.just(book);
                     });
             })

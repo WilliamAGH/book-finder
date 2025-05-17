@@ -1,11 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.repository;
-
-import com.williamcallahan.book_recommendation_engine.model.CachedBook;
-import org.springframework.stereotype.Repository;
-
-import java.util.List;
-import java.util.Optional;
-
 /**
  * Repository interface for managing CachedBook entities in persistent storage
  * 
@@ -19,6 +11,13 @@ import java.util.Optional;
  * - Handles standard CRUD operations for cached book data
  * - Tracks unique Google Books IDs for deduplication
  */
+package com.williamcallahan.book_recommendation_engine.repository;
+
+import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
 @Repository
 public interface CachedBookRepository {
 
@@ -152,4 +151,13 @@ public interface CachedBookRepository {
      * @return Set of unique Google Books IDs for deduplication
      */
     java.util.Set<String> findAllDistinctGoogleBooksIds();
+
+    /**
+     * Retrieves cached books by title (case-insensitive) excluding a specific ID
+     *
+     * @param title The title to search for
+     * @param idToExclude The ID of the book to exclude from the results
+     * @return A list of cached books matching the criteria
+     */
+    List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude);
 }

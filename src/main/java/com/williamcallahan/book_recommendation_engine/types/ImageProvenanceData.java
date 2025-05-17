@@ -1,9 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.types;
-
-import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-
 /**
  * Data class for tracking the provenance of book cover images
  *
@@ -16,10 +10,15 @@ import java.util.Map;
  * - Includes timestamps for auditing image selection history
  * - Supports detailed failure tracking for each source
  */
+package com.williamcallahan.book_recommendation_engine.types;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 public class ImageProvenanceData {
 
-    private String bookId; // e.g., Google Books ID
-    private Object googleBooksApiResponse; // Can be String (raw JSON) or a Map/Object representation
+    private String bookId;
+    private Object googleBooksApiResponse;
     private List<AttemptedSourceInfo> attemptedImageSources;
     private SelectedImageInfo selectedImageInfo;
     private Instant timestamp;
@@ -128,11 +127,13 @@ public class ImageProvenanceData {
      * - Preserves metadata about the attempt for troubleshooting
      */
     public static class AttemptedSourceInfo {
-        private ImageSourceName sourceName;        // The source of the image (e.g., GOOGLE_BOOKS, OPEN_LIBRARY)
-        private String urlAttempted;               // The URL that was attempted to fetch
-        private ImageAttemptStatus status;         // The outcome of the attempt (success, failure, etc.)
-        private String failureReason;              // Optional: details if status is a failure type
-        private Map<String, String> metadata;      // Optional: e.g. resolution tried
+        private ImageSourceName sourceName;
+        private String urlAttempted;
+        private ImageAttemptStatus status;
+        private String failureReason;
+        private Map<String, String> metadata;
+        private String fetchedUrl;
+        private String dimensions;
 
         public AttemptedSourceInfo(ImageSourceName sourceName, String urlAttempted, ImageAttemptStatus status) {
             this.sourceName = sourceName;
@@ -229,6 +230,42 @@ public class ImageProvenanceData {
         public void setMetadata(Map<String, String> metadata) {
             this.metadata = metadata;
         }
+
+        /**
+         * Get the actual URL of the fetched image
+         * 
+         * @return URL of the fetched image which may differ from attempted URL
+         */
+        public String getFetchedUrl() {
+            return fetchedUrl;
+        }
+
+        /**
+         * Set the actual URL of the fetched image
+         * 
+         * @param fetchedUrl URL of the fetched image which may differ from attempted URL
+         */
+        public void setFetchedUrl(String fetchedUrl) {
+            this.fetchedUrl = fetchedUrl;
+        }
+
+        /**
+         * Get the dimensions of the image in WxH format
+         * 
+         * @return Image dimensions in WxH format
+         */
+        public String getDimensions() {
+            return dimensions;
+        }
+
+        /**
+         * Set the dimensions of the image in WxH format
+         * 
+         * @param dimensions Image dimensions in WxH format
+         */
+        public void setDimensions(String dimensions) {
+            this.dimensions = dimensions;
+        }
     }
 
     /**
@@ -241,11 +278,13 @@ public class ImageProvenanceData {
      * - Preserves S3-specific metadata when applicable
      */
     public static class SelectedImageInfo {
-        private ImageSourceName sourceName;      // The source that provided the final selected image
-        private String finalUrl;                 // The URL of the selected image
-        private String resolution;               // e.g., "large", "medium", "thumbnail", "ORIGINAL"
-        private String storageLocation;          // e.g., "S3", "LocalCache" 
-        private String s3Key;                    // If stored in S3, the S3 key
+        private ImageSourceName sourceName;
+        private String finalUrl;
+        private String resolution;
+        private String dimensions;
+        private String selectionReason;
+        private String storageLocation;
+        private String s3Key;
 
         /**
          * Get the source of the selected image
@@ -335,6 +374,42 @@ public class ImageProvenanceData {
          */
         public void setS3Key(String s3Key) {
             this.s3Key = s3Key;
+        }
+
+        /**
+         * Get the dimensions of the image in WxH format
+         * 
+         * @return Image dimensions in WxH format
+         */
+        public String getDimensions() {
+            return dimensions;
+        }
+
+        /**
+         * Set the dimensions of the image in WxH format
+         * 
+         * @param dimensions Image dimensions in WxH format
+         */
+        public void setDimensions(String dimensions) {
+            this.dimensions = dimensions;
+        }
+
+        /**
+         * Get the reason why this image was selected
+         * 
+         * @return Brief description of selection criteria
+         */
+        public String getSelectionReason() {
+            return selectionReason;
+        }
+
+        /**
+         * Set the reason why this image was selected
+         * 
+         * @param selectionReason Brief description of selection criteria
+         */
+        public void setSelectionReason(String selectionReason) {
+            this.selectionReason = selectionReason;
         }
     }
 }
