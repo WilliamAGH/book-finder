@@ -55,17 +55,24 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
         return Optional.empty();
     }
 
+    /**
+     * Returns an empty list, indicating no similar books are found for the given ID.
+     *
+     * @param id the identifier of the book to find similarities for
+     * @param limit the maximum number of similar books to return
+     * @return an empty list
+     */
     @Override
     public List<CachedBook> findSimilarBooksById(String id, int limit) {
         return Collections.emptyList();
     }
 
     /**
-     * Returns entity unchanged
-     * 
-     * @param entity Entity to save
-     * @param <S> Type extending CachedBook
-     * @return The input entity unchanged
+     * Returns the provided entity without performing any persistence.
+     *
+     * @param entity the entity to return
+     * @param <S> type extending CachedBook
+     * @return the input entity unchanged
      */
     @Override
     public <S extends CachedBook> S save(S entity) {
@@ -73,11 +80,11 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * Returns entities unchanged
-     * 
-     * @param entities Collection of entities to save
-     * @param <S> Type extending CachedBook
-     * @return The input entities unchanged
+     * Returns the provided entities without performing any persistence.
+     *
+     * @param entities the entities to be "saved"
+     * @param <S> type extending CachedBook
+     * @return the input entities unchanged
      */
     @Override
     public <S extends CachedBook> Iterable<S> saveAll(Iterable<S> entities) {
@@ -85,8 +92,10 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * @param s Entity ID to find
-     * @return Empty Optional
+     * Returns an empty Optional, indicating no CachedBook is found for the given ID.
+     *
+     * @param s the ID of the CachedBook to find
+     * @return an empty Optional
      */
     @Override
     public Optional<CachedBook> findById(String s) {
@@ -94,8 +103,10 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * @param s Entity ID to check
-     * @return Always false
+     * Indicates whether an entity with the given ID exists.
+     *
+     * @param s the entity ID to check
+     * @return always returns false
      */
     @Override
     public boolean existsById(String s) {
@@ -103,7 +114,9 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * @return Empty list of entities
+     * Returns an empty list of cached books.
+     *
+     * @return an empty list
      */
     @Override
     public Iterable<CachedBook> findAll() {
@@ -111,8 +124,10 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * @param strings Collection of IDs to find
-     * @return Empty list of entities
+     * Returns an empty list, indicating no entities are found for the given IDs.
+     *
+     * @param strings collection of IDs to search for
+     * @return an empty list
      */
     @Override
     public Iterable<CachedBook> findAllById(Iterable<String> strings) {
@@ -120,22 +135,28 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * @return Always zero
+     * Returns the total number of entities, always zero.
+     *
+     * @return zero, indicating no entities are present
      */
     @Override
     public long count() {
         return 0;
     }
 
-    /**
-     * @param s Entity ID to delete
+    /****
+     * Does nothing when called to delete an entity by its ID.
+     *
+     * @param s the ID of the entity to delete
      */
     @Override
     public void deleteById(String s) {
     }
 
-    /**
-     * @param entity Entity to delete
+    /****
+     * Does nothing when called; no entity is deleted.
+     *
+     * @param entity the entity to delete (ignored)
      */
     @Override
     public void delete(CachedBook entity) {
@@ -167,10 +188,9 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * Returns an empty set of Google Books IDs since no persistence is available
-     * 
-     * @return Empty set of Google Books IDs
-     * @implNote Logs debug message when called to help track repository usage patterns
+     * Returns an empty set, as no Google Books IDs are stored.
+     *
+     * @return an empty set of Google Books IDs
      */
     @Override
     public java.util.Set<String> findAllDistinctGoogleBooksIds() {
@@ -179,11 +199,11 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findByTitleIgnoreCaseAndIdNot
-     * 
-     * @param title Book title to match (case insensitive)
-     * @param idToExclude Book ID to exclude from results
-     * @return Empty list of cached books
+     * Returns an empty list, indicating no books found with the given title excluding the specified ID.
+     *
+     * @param title the book title to match, case-insensitive
+     * @param idToExclude the book ID to exclude from results
+     * @return an empty list
      */
     @Override
     public List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude) {

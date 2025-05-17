@@ -80,14 +80,7 @@ public class HomeController {
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
     /**
-     * Constructs the HomeController with required services
-     * 
-     * @param bookCacheService Service for retrieving and caching book information
-     * @param recentlyViewedService Service for tracking user book view history
-     * @param recommendationService Service for generating book recommendations
-     * @param bookCoverManagementService Service for retrieving and caching book cover images
-     * @param environmentService Service providing environment configuration information
-     * @param duplicateBookService Service for handling duplicate book editions
+     * Initializes the HomeController with all required services for book data, recommendations, cover management, environment configuration, and duplicate edition handling.
      */
     @Autowired
     public HomeController(BookCacheService bookCacheService,
@@ -105,13 +98,12 @@ public class HomeController {
     }
 
     /**
-     * Handles requests to the home page
-     * - Displays recently viewed books for returning users
-     * - Populates with default recommendations for new users
-     * - Optimizes cover images for display through caching service
+     * Renders the home page with current bestsellers and recently viewed books, optimizing cover images for display.
      *
-     * @param model The model for the view
-     * @return Mono containing the name of the template to render
+     * Populates the model with environment info, SEO metadata, and two book lists: current bestsellers (fetched reactively) and recently viewed books (supplemented with recommendations if needed). Cover images are processed and cached for optimal display. Handles errors gracefully by providing fallback data.
+     *
+     * @param model the model for view rendering
+     * @return a Mono emitting the name of the template to render ("index")
      */
     @GetMapping("/")
     public Mono<String> home(Model model) {
@@ -182,7 +174,16 @@ public class HomeController {
             .onErrorReturn("index"); // Fallback to rendering index even if one stream fails
     }
     
-    // Helper method to process covers for a list of books
+    /**
+     * Asynchronously processes a list of books to retrieve and set their cover images.
+     *
+     * For each book, attempts to fetch cover images and updates the book's cover image URL and metadata.
+     * If cover retrieval fails or no cover is found, assigns a placeholder image and initializes cover image data to prevent null references.
+     * Preserves the original order of books and filters out any null entries.
+     *
+     * @param books the list of books to process
+     * @return a Mono emitting the list of books with updated cover image information
+     */
     private Mono<List<Book>> processBooksCovers(List<Book> books) {
         if (books == null || books.isEmpty()) {
             return Mono.just(Collections.emptyList());
@@ -227,14 +228,14 @@ public class HomeController {
     }
     
     /**
-     * Handles requests to the search results page
-     * - Sets up model attributes for search view
-     * - Configures SEO metadata for search page
-     * - Prepares for client-side API calls
+     * Handles GET requests to the search page, optionally extracting a year from the query and redirecting if necessary.
      *
-     * @param query The search query string from user input
-     * @param model The model for the view
-     * @return The name of the template to render (search.html)
+     * If a 4-digit year is detected in the query string and not provided as a parameter, redirects to the search page with the year separated as a parameter and removed from the query. Otherwise, sets up model attributes for the search view, including SEO metadata and search parameters.
+     *
+     * @param query the user's search query
+     * @param year an optional year to filter search results
+     * @param model the view model for rendering
+     * @return a redirect to the search page with extracted year, or the name of the search template to render
      */
     @GetMapping("/search")
     public Object search(String query, 
@@ -285,21 +286,17 @@ public class HomeController {
     }
     
     /**
-     * Handles requests to the book detail page
-     * - Retrieves detailed book information by ID
-     * - Manages cover image retrieval and background updates
-     * - Sets up SEO metadata for the book page
-     * - Populates model with book data for template rendering
-     * - Tracks recently viewed books for user history
-     * - Handles search context parameters for navigation
+     * Renders the book detail page with comprehensive information, cover images, SEO metadata, duplicate editions, and similar book recommendations.
      *
-     * @param id The book identifier to display details for
-     * @param query The search query that led to this book (for navigation context)
-     * @param page The search results page number (for return navigation)
-     * @param sort The sort method used in search results
-     * @param view The view type used in search results (grid/list)
-     * @param model The Spring model for view rendering
-     * @return Mono containing the template name for async rendering
+     * Retrieves the book by its ID, manages cover image fetching and fallbacks, sets up SEO and navigation context, tracks recently viewed books, and populates the model with duplicate editions and similar books for template rendering. Handles errors gracefully by providing fallback data and always returns the "book" view.
+     *
+     * @param id the unique identifier of the book to display
+     * @param query the originating search query for navigation context (optional)
+     * @param page the search results page number for navigation context (optional, defaults to 0)
+     * @param sort the sort method used in search results (optional, defaults to "relevance")
+     * @param view the view type used in search results (optional, defaults to "grid")
+     * @param model the model for passing attributes to the view
+     * @return a Mono emitting the name of the template to render ("book")
      */
     @GetMapping("/book/{id}")
     public Mono<String> bookDetail(@PathVariable String id,

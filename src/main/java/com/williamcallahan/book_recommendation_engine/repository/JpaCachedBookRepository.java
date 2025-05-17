@@ -65,37 +65,29 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
     
     
     /**
-     * Find books with titles containing the specified query string
-     * - Case-insensitive partial match on book titles
-     * - Uses JPA query with LIKE operator
+     * Retrieves books whose titles contain the specified query string, ignoring case.
      *
-     * @param query Search string to match against book titles
-     * @return List of books with matching titles
+     * @param query the substring to search for within book titles
+     * @return a list of books with titles containing the query string, case-insensitive
      */
     @Query(value = "SELECT c FROM CachedBook c WHERE c.title ILIKE CONCAT('%', :query, '%')", nativeQuery = true)
     List<CachedBook> findByTitleContainingIgnoreCase(@Param("query") String query);
     
     /**
-     * Finds cached books by a specific author.
-     * The 'authors' field is stored as a JSONB array in the database.
-     * This query uses a native PostgreSQL JSONB operator (@>) to check if the provided author
-     * string is an element within the 'authors' JSON array.
+     * Retrieves all cached books where the specified author is present in the authors JSONB array.
      *
-     * @param author The author's name to search for.
-     * @return A list of CachedBook entities where the author is present in the authors list
+     * @param author the name of the author to search for within the authors list
+     * @return a list of CachedBook entities containing the specified author
      */
     @Query(value = "SELECT * FROM cached_books c WHERE c.authors @> CAST(CONCAT('[\"', :author, '\"]') AS jsonb)", nativeQuery = true)
     List<CachedBook> findByAuthor(@Param("author") String author);
 
     /**
-     * Find a cached book by ID and author
-     * - Combines ID lookup with author verification
-     * - Uses PostgreSQL JSONB operations for author matching
-     * - Returns single result or empty optional
+     * Retrieves a cached book by its ID, ensuring the specified author is present in the authors list.
      *
-     * @param id The book ID to find
-     * @param author The author name that must be present
-     * @return Optional containing the book if both conditions are met
+     * @param id the unique identifier of the book
+     * @param author the author name to match within the book's authors
+     * @return an Optional containing the matching CachedBook if found, or empty if no match exists
      */
     @Query(value = "SELECT * FROM cached_books c WHERE c.id = :id AND c.authors @> CAST(CONCAT('[\"', :author, '\"]') AS jsonb)", nativeQuery = true)
     Optional<CachedBook> findByIdAndAuthor(@Param("id") Long id, @Param("author") String author);
@@ -127,26 +119,31 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
     @Query(value = "SELECT c.* FROM cached_books c ORDER BY vector_similarity(c.embedding, :embedding) DESC LIMIT :limit", nativeQuery = true)
     List<CachedBook> findSimilarBooks(@Param("embedding") PgVector embedding, @Param("limit") int limit);
 
+    /**
+     * Retrieves all distinct non-null Google Books IDs from cached books.
+     *
+     * @return a set of unique Google Books IDs present in the repository
+     */
     @Override
     @Query("SELECT DISTINCT c.googleBooksId FROM CachedBook c WHERE c.googleBooksId IS NOT NULL")
     Set<String> findAllDistinctGoogleBooksIds();
 
     /**
-     * Internal implementation to find books by title with case insensitivity, excluding a specific ID
-     * - Used for duplicate detection in book collections
-     * - Performs exact title match ignoring case differences
-     * - Excludes a specific book ID from results
+     * Finds books with an exact title match ignoring case, excluding a specified book ID.
      *
-     * @param title The book title to search for (case insensitive)
-     * @param idToExclude The book ID to exclude from results
-     * @return List of books matching the title but not the excluded ID
+     * @param title the title to match, case-insensitive
+     * @param idToExclude the ID of the book to exclude from the results
+     * @return a list of books with the given title, excluding the specified ID
      */
     @Query("SELECT c FROM CachedBook c WHERE lower(c.title) = lower(:title) AND c.id != :idToExclude")
     List<CachedBook> findByTitleIgnoreCaseAndIdNotInternal(@Param("title") String title, @Param("idToExclude") String idToExclude);
 
     /**
-     * Implements interface method from CachedBookRepository
-     * Delegates to internal implementation method
+     * Finds books with an exact title match (case-insensitive), excluding a specific book ID.
+     *
+     * @param title the title to match, case-insensitive
+     * @param idToExclude the ID of the book to exclude from results
+     * @return a list of books matching the title, excluding the specified ID
      */
     @Override
     default List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude) {

@@ -66,13 +66,15 @@ public class S3StorageService {
     }
 
     /**
-     * Asynchronously uploads a file to the S3 bucket
+     * Asynchronously uploads a file to the configured S3 bucket and returns its public URL.
      *
-     * @param keyName The key (path/filename) under which to store the file in the bucket
-     * @param inputStream The InputStream of the file to upload
-     * @param contentLength The length of the content to be uploaded
-     * @param contentType The MIME type of the file
-     * @return A CompletableFuture<String> with the public URL of the uploaded file, or null if upload failed
+     * The file is stored under the specified key, and the resulting URL is constructed using the configured CDN, server URL, or the default S3 endpoint.
+     *
+     * @param keyName the S3 object key (path and filename) for storing the file
+     * @param inputStream the input stream containing the file data
+     * @param contentLength the size of the file in bytes
+     * @param contentType the MIME type of the file
+     * @return a CompletableFuture containing the public URL of the uploaded file, or null if the upload fails
      */
     public CompletableFuture<String> uploadFileAsync(String keyName, InputStream inputStream, long contentLength, String contentType) {
         return Mono.fromCallable(() -> {
@@ -120,11 +122,14 @@ public class S3StorageService {
     }
 
     /**
-     * Asynchronously uploads a JSON string as a GZIP-compressed file to S3.
+     * Asynchronously uploads a JSON string to S3 under a key based on the provided Google Books volume ID.
      *
-     * @param volumeId The Google Books volume ID, used to construct the S3 key.
-     * @param jsonContent The JSON string to upload.
-     * @return A CompletableFuture<Void> that completes when the upload is finished or fails.
+     * The JSON content is stored as a UTF-8 encoded file with content type "application/json" in the S3 bucket,
+     * using a key prefixed by a fixed directory and suffixed with the volume ID and ".json".
+     *
+     * @param volumeId the Google Books volume ID used to construct the S3 object key
+     * @param jsonContent the JSON string to upload
+     * @return a CompletableFuture that completes when the upload finishes or fails
      */
     public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
         if (s3Client == null) {
@@ -152,11 +157,10 @@ public class S3StorageService {
     }
     
     /**
-     * Asynchronously fetches and GZIP-decompresses a JSON file from S3.
+     * Asynchronously retrieves a JSON file from S3 for the specified Google Books volume ID.
      *
-     * @param volumeId The Google Books volume ID, used to construct the S3 key.
-     * @return A CompletableFuture<Optional<String>> containing the decompressed JSON string if found,
-     *         or an empty Optional if not found or an error occurs.
+     * @param volumeId the Google Books volume ID used to construct the S3 key
+     * @return a CompletableFuture containing an Optional with the JSON string if found, or empty if not found or on error
      */
     public CompletableFuture<Optional<String>> fetchJsonAsync(String volumeId) {
         if (s3Client == null) {

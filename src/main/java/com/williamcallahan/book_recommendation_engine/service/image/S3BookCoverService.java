@@ -88,6 +88,14 @@ public class S3BookCoverService implements ExternalCoverService {
 
     private final Cache<String, Boolean> objectExistsCache;
 
+    /**
+     * Constructs an instance of S3BookCoverService with required dependencies for managing book cover images in S3 storage.
+     *
+     * @param webClientBuilder builder for creating WebClient instances
+     * @param imageProcessingService service for processing images before upload
+     * @param environmentService service for accessing environment-specific configuration
+     * @param s3Client AWS S3 client for performing S3 operations
+     */
     @Autowired
     public S3BookCoverService(WebClient.Builder webClientBuilder,
                                ImageProcessingService imageProcessingService,
@@ -132,17 +140,18 @@ public class S3BookCoverService implements ExternalCoverService {
     }
     
     /**
-     * Generates the S3 object key for a book cover image
-     * - Creates standardized path structure for book cover images
-     * - Validates book ID for valid characters
-     * - Normalizes source identifier for S3 compatibility
-     * - Defaults to JPG extension if none provided
-     * 
-     * @param bookId Unique identifier for the book
-     * @param fileExtension File extension including the dot (e.g. ".jpg")
-     * @param source Origin source identifier (e.g. "google-books", "open-library")
-     * @return Constructed S3 key for the image
-     * @throws IllegalArgumentException if bookId is null, empty or contains invalid characters
+     * Constructs a standardized S3 object key for a book cover image using the book ID, file extension, and source identifier.
+     *
+     * The generated key follows the convention: cover images directory + book ID + size suffix + normalized source + file extension.
+     * The book ID must be non-null, non-empty, and contain only alphanumeric characters, hyphens, or underscores.
+     * The source identifier is normalized to lowercase and non-alphanumeric characters are replaced with hyphens; defaults to "unknown" if null.
+     * The file extension defaults to ".jpg" if missing or invalid.
+     *
+     * @param bookId the unique identifier for the book (alphanumeric, hyphens, or underscores)
+     * @param fileExtension the file extension including the dot (e.g., ".jpg"); defaults to ".jpg" if invalid
+     * @param source the origin source identifier for the image (e.g., "google-books", "open-library"); normalized for S3 compatibility
+     * @return the constructed S3 key for the book cover image
+     * @throws IllegalArgumentException if bookId is null, empty, or contains invalid characters
      */
     public String generateS3Key(String bookId, String fileExtension, String source) {
         if (bookId == null || bookId.isEmpty()) {
@@ -390,6 +399,21 @@ public class S3BookCoverService implements ExternalCoverService {
             });
     }
 
+    /**
+     * Uploads processed image bytes to S3 under the specified key and returns image details upon success.
+     *
+     * If provenance data is provided and debug mode is enabled, uploads provenance metadata to S3 as well.
+     *
+     * @param s3Key the S3 object key for storing the image
+     * @param imageBytesForS3 the processed image bytes to upload
+     * @param mimeTypeForS3 the MIME type of the image
+     * @param bookId the identifier of the book associated with the image
+     * @param fileExtensionForS3 the file extension for the image
+     * @param s3Source the source string used in S3 key generation
+     * @param processedImage the processed image object containing dimensions
+     * @param provenanceData optional provenance metadata to upload alongside the image
+     * @return a Mono emitting ImageDetails with CDN URL and image metadata after successful upload
+     */
     private Mono<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadToS3Internal(String s3Key, byte[] imageBytesForS3, String mimeTypeForS3, String bookId, String fileExtensionForS3, String s3Source, ProcessedImage processedImage, ImageProvenanceData provenanceData) {
         return Mono.fromCallable(() -> {
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()
@@ -417,13 +441,16 @@ public class S3BookCoverService implements ExternalCoverService {
         }).subscribeOn(Schedulers.boundedElastic());
     }
  
-    /**
-     * Synchronous version of cover upload with explicit source
-     * 
-     * @param imageUrl URL of the image to upload
-     * @param bookId Book identifier
-     * @param source Source identifier
-     * @return ImageDetails for the uploaded cover
+    /****
+     * Uploads a book cover image to S3 synchronously using the specified source.
+     *
+     * Attempts to upload the image at the given URL as the cover for the specified book and source, blocking until completion or timeout.
+     * Returns details of the uploaded image, or fallback details if an error or timeout occurs.
+     *
+     * @param imageUrl the URL of the image to upload
+     * @param bookId the unique identifier for the book
+     * @param source the source identifier for the image
+     * @return details of the uploaded cover image, or fallback details if upload fails
      */
     public com.williamcallahan.book_recommendation_engine.types.ImageDetails uploadCoverToS3(String imageUrl, String bookId, String source) {
         try {
@@ -435,7 +462,13 @@ public class S3BookCoverService implements ExternalCoverService {
     }
     
     /**
-     * Convenience method that derives source from URL
+     * Uploads a book cover image to S3, automatically determining the image source from the URL.
+     *
+     * If the URL contains "openlibrary.org" or "longitood.com", the source is set accordingly; otherwise, "google-books" is used as the default source.
+     *
+     * @param imageUrl the URL of the image to upload
+     * @param bookId the unique identifier for the book
+     * @return details about the uploaded image, including CDN URL and dimensions
      */
     public com.williamcallahan.book_recommendation_engine.types.ImageDetails uploadCoverToS3(String imageUrl, String bookId) {
         String source = "google-books"; 
@@ -447,7 +480,12 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     /**
-     * Generates CDN URL for a book cover with known source
+     * Returns the CDN URL for a book cover image stored in S3 for the specified book ID, file extension, and source.
+     *
+     * @param bookId the unique identifier for the book
+     * @param fileExtension the image file extension (e.g., ".jpg")
+     * @param source the source of the cover image
+     * @return the full CDN URL to access the book cover image
      */
     public String getS3CoverUrl(String bookId, String fileExtension, String source) {
         String s3Key = generateS3Key(bookId, fileExtension, source);
@@ -455,11 +493,11 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     /**
-     * Finds existing cover URL by checking multiple sources
-     * 
-     * @param bookId Book identifier
-     * @param fileExtension File extension with leading dot
-     * @return CDN URL for the first found cover or null if none exists
+     * Returns the CDN URL of the first available cover image for the given book ID and file extension by checking multiple known sources.
+     *
+     * @param bookId the unique identifier of the book
+     * @param fileExtension the image file extension, including the leading dot (e.g., ".jpg")
+     * @return the CDN URL of the found cover image, or null if no cover exists in any known source
      */
     public String getS3CoverUrl(String bookId, String fileExtension) {
         String[] sourcesToTry = {"google-books", "open-library", "longitood", "local-cache", "unknown"};
@@ -473,10 +511,12 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     /**
-     * Extracts file extension from URL
-     * 
-     * @param url Image URL to parse
-     * @return File extension with leading dot or default (.jpg) if none found
+     * Returns the file extension (with leading dot) from the given image URL, or ".jpg" if no valid extension is found.
+     *
+     * Recognizes common image extensions: .jpg, .jpeg, .png, .gif, .webp, .svg. Ignores query parameters in the URL.
+     *
+     * @param url the image URL to extract the extension from
+     * @return the file extension with leading dot, or ".jpg" if none is found or recognized
      */
     public String getFileExtensionFromUrl(String url) {
         String extension = ".jpg"; 
@@ -495,12 +535,10 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     /**
-     * Converts CoverImageSource enum to standardized string for S3 key generation
-     * - Maps enum values to consistent lowercase hyphenated strings
-     * - Returns "unknown" for null or unrecognized values
-     * 
-     * @param source CoverImageSource enum value to convert
-     * @return Standardized string representation of the source
+     * Returns a standardized lowercase hyphenated string representation of a CoverImageSource enum value for use in S3 key generation.
+     *
+     * @param source the CoverImageSource enum value
+     * @return the standardized string for the source, or "unknown" if the value is null or unrecognized
      */
     private String getSourceString(CoverImageSource source) {
         if (source == null) {
@@ -517,24 +555,35 @@ public class S3BookCoverService implements ExternalCoverService {
     }
     
     /**
-     * Overloaded version without provenance data
+     * Uploads a processed book cover image to S3 storage without provenance metadata.
+     *
+     * @param processedImageBytes the image data to upload
+     * @param fileExtension the file extension of the image (e.g., ".jpg")
+     * @param mimeType the MIME type of the image (e.g., "image/jpeg")
+     * @param width the width of the image in pixels
+     * @param height the height of the image in pixels
+     * @param bookId the unique identifier for the book
+     * @param originalSourceForS3Key the source string used for S3 key generation
+     * @return a Mono emitting the details of the uploaded image
      */
     public Mono<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key) {
         return uploadProcessedCoverToS3Async(processedImageBytes, fileExtension, mimeType, width, height, bookId, originalSourceForS3Key, null);
     }
 
     /**
-     * Uploads pre-processed cover image to S3
-     * 
-     * @param processedImageBytes The processed image bytes
-     * @param fileExtension File extension with leading dot
-     * @param mimeType MIME type for content header
-     * @param width Image width
-     * @param height Image height
-     * @param bookId Book identifier
-     * @param originalSourceForS3Key Source identifier for S3 key
-     * @param provenanceData Optional image provenance data 
-     * @return Mono with ImageDetails for the uploaded cover
+     * Asynchronously uploads a pre-processed book cover image to S3 storage, optionally attaching provenance metadata.
+     *
+     * If the image already exists in S3 with the same size, the upload is skipped. If the image exceeds the maximum allowed file size, the upload is not performed. Returns details about the uploaded or existing image, including its CDN URL and dimensions.
+     *
+     * @param processedImageBytes The processed image data to upload.
+     * @param fileExtension The file extension (with leading dot) for the image.
+     * @param mimeType The MIME type to set for the uploaded image.
+     * @param width The width of the image in pixels.
+     * @param height The height of the image in pixels.
+     * @param bookId The unique identifier for the book.
+     * @param originalSourceForS3Key The source identifier used in the S3 key.
+     * @param provenanceData Optional provenance metadata to store alongside the image.
+     * @return A Mono emitting ImageDetails for the uploaded or existing cover image.
      */
     public Mono<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadProcessedCoverToS3Async(byte[] processedImageBytes, String fileExtension, String mimeType, int width, int height, String bookId, String originalSourceForS3Key, ImageProvenanceData provenanceData) {
         if (!s3EnabledCheck || s3Client == null || processedImageBytes == null || processedImageBytes.length == 0 || bookId == null || bookId.isEmpty()) {
@@ -582,6 +631,13 @@ public class S3BookCoverService implements ExternalCoverService {
         }
     }
 
+    /**
+     * Uploads provenance metadata as a JSON file to S3 for a given image.
+     *
+     * The provenance file is stored in the provenance data directory with a filename derived from the image S3 key, replacing recognized image extensions with ".txt". If the image key does not have a recognized extension, ".txt" is appended.
+     *
+     * No action is taken if the S3 client is unavailable, S3 is disabled, or provenance data is null.
+     */
     private void uploadProvenanceData(String imageS3Key, ImageProvenanceData provenanceData) {
         if (s3Client == null || !s3EnabledCheck) {
             logger.warn("S3 client not available or S3 disabled. Skipping provenance data upload for image key: {}", imageS3Key);

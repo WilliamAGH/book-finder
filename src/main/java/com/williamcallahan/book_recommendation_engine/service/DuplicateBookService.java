@@ -36,9 +36,7 @@ public class DuplicateBookService {
     private final CachedBookRepository cachedBookRepository;
 
     /**
-     * Constructs a new DuplicateBookService
-     *
-     * @param cachedBookRepository Repository for querying cached book information
+     * Initializes the DuplicateBookService with a repository for cached book queries.
      */
     @Autowired
     public DuplicateBookService(CachedBookRepository cachedBookRepository) {
@@ -46,11 +44,11 @@ public class DuplicateBookService {
     }
 
     /**
-     * Finds existing cached books that are potential duplicates of the given book based on title and authors
+     * Finds cached books that are potential duplicates of the given book by matching title (case-insensitive) and exact author sets (case-insensitive), excluding a specified book ID.
      *
-     * @param book The book to check for duplicates
-     * @param excludeId The ID of the book itself, to exclude from duplicate search results
-     * @return A list of CachedBook entities that are considered duplicates
+     * @param book the book for which to search for duplicates
+     * @param excludeId the ID to exclude from the search results
+     * @return a list of cached books considered potential duplicates, or an empty list if none are found
      */
     public List<CachedBook> findPotentialDuplicates(Book book, String excludeId) {
         if (book == null || book.getTitle() == null || book.getAuthors() == null || book.getAuthors().isEmpty()) {
@@ -77,9 +75,11 @@ public class DuplicateBookService {
     }
 
     /**
-     * Populates the 'otherEditions' field of a primary book with information from its duplicates
+     * Populates the primary book's list of other editions with information from detected duplicate books that represent distinct editions.
      *
-     * @param primaryBook The main book object whose otherEditions will be populated
+     * For the given primary book, identifies duplicates with at least one unique identifier (Google Books ID, ISBN-10, or ISBN-13) differing from the primary, and adds their edition metadata to the `otherEditions` list. Ensures no duplicate or identical editions are included.
+     *
+     * @param primaryBook the main book whose `otherEditions` field will be updated with distinct edition information
      */
     public void populateDuplicateEditions(Book primaryBook) {
         if (primaryBook == null || primaryBook.getId() == null) {
@@ -220,10 +220,10 @@ public class DuplicateBookService {
     }
 
     /**
-     * Finds a "primary" or "canonical" existing CachedBook for a new book based on title and authors
+     * Finds the primary or canonical cached book matching a new book by title and authors.
      *
-     * @param newBook The new book (typically from an API) to find a canonical version for
-     * @return Optional containing the primary/canonical CachedBook if one exists, otherwise empty
+     * @param newBook the book to match against existing cached books
+     * @return an Optional containing the first matching CachedBook, or empty if none found
      */
     public Optional<CachedBook> findPrimaryCanonicalBook(Book newBook) {
         if (newBook == null || newBook.getTitle() == null || newBook.getAuthors() == null || newBook.getAuthors().isEmpty()) {
@@ -245,13 +245,13 @@ public class DuplicateBookService {
     }
 
     /**
-     * Merges data from a new book (source) into an existing primary cached book (target)
-     * This is a simple merge: fills null fields in target from source
-     * More sophisticated merging (e.g., preferring longer descriptions) could be added
+     * Updates a primary cached book by filling its null fields with available data from a new book.
      *
-     * @param primaryCachedBook The target book to update
-     * @param newBookFromApi The source book with potentially newer/better data
-     * @return True if the primaryCachedBook was modified, false otherwise
+     * Copies non-null values from the new book to the primary cached book for fields such as description, cover image URL, ISBN-10, ISBN-13, page count, publisher, and language, but only if those fields are currently null in the primary book.
+     *
+     * @param primaryCachedBook the cached book to update with additional data
+     * @param newBookFromApi the source book providing potentially missing information
+     * @return true if any field in the primary cached book was updated; false otherwise
      */
     public boolean mergeDataIfBetter(CachedBook primaryCachedBook, Book newBookFromApi) {
         boolean modified = false;

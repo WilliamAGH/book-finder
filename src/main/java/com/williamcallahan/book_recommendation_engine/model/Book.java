@@ -76,15 +76,15 @@ public class Book {
         public EditionInfo() {}
 
         /**
-         * Full constructor for EditionInfo
-         * 
+         * Constructs an EditionInfo instance with all edition-specific metadata.
+         *
          * @param googleBooksId Google Books identifier for this edition
-         * @param type Type of edition or identifier (ISBN_10, ISBN_13, etc)
-         * @param identifier Actual identifier value
-         * @param editionIsbn10 Specific ISBN-10 for this edition
-         * @param editionIsbn13 Specific ISBN-13 for this edition
-         * @param publishedDate Publication date for this edition
-         * @param coverImageUrl Cover image URL specific to this edition
+         * @param type Type of edition or identifier (e.g., ISBN_10, ISBN_13, ISSN)
+         * @param identifier Identifier value for this edition
+         * @param editionIsbn10 ISBN-10 specific to this edition
+         * @param editionIsbn13 ISBN-13 specific to this edition
+         * @param publishedDate Publication date of this edition
+         * @param coverImageUrl Cover image URL for this edition
          */
         public EditionInfo(String googleBooksId, String type, String identifier, String editionIsbn10, String editionIsbn13, Date publishedDate, String coverImageUrl) {
             this.googleBooksId = googleBooksId;
@@ -144,47 +144,46 @@ public class Book {
             return identifier;
         }
 
-        /**
-         * Set identifier value for this edition
-         * - Actual ISBN, ISSN, or other identifier number
-         * 
-         * @param identifier Edition identifier
+        /****
+         * Sets the identifier value for this edition, such as an ISBN, ISSN, or other unique identifier.
+         *
+         * @param identifier the edition's unique identifier value
          */
         public void setIdentifier(String identifier) {
             this.identifier = identifier;
         }
 
-        /**
-         * Get specific ISBN-10 for this edition
-         * 
-         * @return Specific ISBN-10
+        /****
+         * Returns the ISBN-10 specific to this edition of the book.
+         *
+         * @return the edition-specific ISBN-10, or null if not available
          */
         public String getEditionIsbn10() {
             return editionIsbn10;
         }
 
         /**
-         * Set specific ISBN-10 for this edition
-         * 
-         * @param editionIsbn10 Specific ISBN-10
+         * Sets the ISBN-10 identifier for this edition.
+         *
+         * @param editionIsbn10 the ISBN-10 value specific to this edition
          */
         public void setEditionIsbn10(String editionIsbn10) {
             this.editionIsbn10 = editionIsbn10;
         }
 
         /**
-         * Get specific ISBN-13 for this edition
-         * 
-         * @return Specific ISBN-13
+         * Returns the ISBN-13 specific to this edition of the book.
+         *
+         * @return the edition-specific ISBN-13, or null if not set
          */
         public String getEditionIsbn13() {
             return editionIsbn13;
         }
 
-        /**
-         * Set specific ISBN-13 for this edition
-         * 
-         * @param editionIsbn13 Specific ISBN-13
+        /****
+         * Sets the ISBN-13 identifier for this edition.
+         *
+         * @param editionIsbn13 the ISBN-13 value to assign to this edition
          */
         public void setEditionIsbn13(String editionIsbn13) {
             this.editionIsbn13 = editionIsbn13;
@@ -664,46 +663,46 @@ public class Book {
         return webReaderLink;
     }
 
-    /**
-     * Set link to web reader for the book
-     * 
-     * @param webReaderLink Web reader link URL
+    /****
+     * Sets the URL for the web reader associated with this book.
+     *
+     * @param webReaderLink the URL where the book can be read online
      */
     public void setWebReaderLink(String webReaderLink) {
         this.webReaderLink = webReaderLink;
     }
     
     /**
-     * Check if PDF format is available for this book
-     * 
-     * @return True if PDF is available, false otherwise
+     * Returns whether the PDF format is available for this book.
+     *
+     * @return true if a PDF version is available; false otherwise
      */
     public Boolean getPdfAvailable() {
         return pdfAvailable;
     }
     
     /**
-     * Set PDF availability for this book
-     * 
-     * @param pdfAvailable True if PDF is available, false otherwise
+     * Sets whether a PDF version of this book is available.
+     *
+     * @param pdfAvailable true if a PDF version is available; false otherwise
      */
     public void setPdfAvailable(Boolean pdfAvailable) {
         this.pdfAvailable = pdfAvailable;
     }
     
     /**
-     * Check if EPUB format is available for this book
-     * 
-     * @return True if EPUB is available, false otherwise
+     * Returns whether the EPUB format is available for this book.
+     *
+     * @return true if EPUB is available; false otherwise
      */
     public Boolean getEpubAvailable() {
         return epubAvailable;
     }
     
-    /**
-     * Set EPUB availability for this book
-     * 
-     * @param epubAvailable True if EPUB is available, false otherwise
+    /****
+     * Sets whether the EPUB format is available for this book.
+     *
+     * @param epubAvailable true if EPUB is available; false otherwise
      */
     public void setEpubAvailable(Boolean epubAvailable) {
         this.epubAvailable = epubAvailable;
