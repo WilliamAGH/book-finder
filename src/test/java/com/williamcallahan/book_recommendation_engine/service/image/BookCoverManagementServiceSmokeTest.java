@@ -1,11 +1,13 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.JpaCachedBookRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.mockito.Mock;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -18,7 +20,14 @@ import java.io.IOException;
 import java.time.Duration;
 
 /**
- * Integration test for the BookCoverCacheService
+ * Integration test for the {@link BookCoverManagementService}.
+ * This test verifies the core functionality of downloading, saving, and managing book cover images
+ *
+ * This test runs with the "test" Spring profile, which typically configures an H2 in-memory database
+ * using `src/test/resources/application-test.properties` and `src/test/resources/schema.sql`
+ * However, to ensure this service test is isolated from complex database interactions (especially those involving
+ * `pgvector` or other PostgreSQL-specific features not relevant to cover management), `JpaCachedBookRepository`
+ * is mocked using `@MockBean`. This allows the test to focus solely on the cover management logic
  *
  * @author William Callahan
  *
@@ -30,15 +39,18 @@ import java.time.Duration;
  * - Validates cache directory operations
  */
 @SpringBootTest
-@ActiveProfiles("test") // Using test profile for safer configurations
-public class BookCoverManagementServiceSmokeTest { // Renamed class
+@ActiveProfiles("test")
+public class BookCoverManagementServiceSmokeTest {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookCoverManagementServiceSmokeTest.class); // Renamed logger class
+    private static final Logger logger = LoggerFactory.getLogger(BookCoverManagementServiceSmokeTest.class);
 
     @Autowired
-    private BookCoverManagementService bookCoverManagementService; // Renamed service
+    private BookCoverManagementService bookCoverManagementService;
 
-    @Value("${app.cover-cache.dir:/tmp/book-covers}") // Ensure this matches your config
+    @Mock
+    private JpaCachedBookRepository jpaCachedBookRepository;
+
+    @Value("${app.cover-cache.dir:/tmp/book-covers}")
     private String cacheDirString;
 
     private Book book1_knownGood;
@@ -53,7 +65,6 @@ public class BookCoverManagementServiceSmokeTest { // Renamed class
     @BeforeEach
     void setUp() {
         // Clean the cache directory before each test for consistent results
-        // THIS IS DESTRUCTIVE - USE WITH CAUTION AND ENSURE IT'S A TEST-ONLY DIRECTORY
         try {
             Path cachePath = Paths.get(cacheDirString);
             if (Files.exists(cachePath)) {
@@ -75,26 +86,21 @@ public class BookCoverManagementServiceSmokeTest { // Renamed class
         }
 
 
-        // Replace with actual ISBNs/Google IDs from your system or for testing.
-
-        // Example Book 1: A popular book you expect to have a cover
         book1_knownGood = new Book();
-        book1_knownGood.setId("knownGoodGoogleId1"); // Google Books Volume ID
-        book1_knownGood.setIsbn13("9780553293357"); // Game of Thrones
+        book1_knownGood.setId("knownGoodGoogleId1");
+        book1_knownGood.setIsbn13("9780553293357");
         book1_knownGood.setTitle("Known Good Book (e.g., Game of Thrones)");
         book1_knownGood.setCoverImageUrl(null);
 
-        // Example Book 2: An obscure book
         book2_likelyPlaceholder = new Book();
         book2_likelyPlaceholder.setId("obscureGoogleId1");
-        book2_likelyPlaceholder.setIsbn13("9780000000001"); // fake ISBN
+        book2_likelyPlaceholder.setIsbn13("9780000000001");
         book2_likelyPlaceholder.setTitle("Obscure Book Likely Placeholder");
         book2_likelyPlaceholder.setCoverImageUrl(null);
 
-        // Example Book 3: Another book, new to the system
         book3_newToSystem = new Book();
         book3_newToSystem.setId("newToSystemGoogleId1");
-        book3_newToSystem.setIsbn10("0451524934"); // Example: 1984
+        book3_newToSystem.setIsbn10("0451524934");
         book3_newToSystem.setTitle("New To System Book (e.g., 1984)");
         book3_newToSystem.setCoverImageUrl(null);
         

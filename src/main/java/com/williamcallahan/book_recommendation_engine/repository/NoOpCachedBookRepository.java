@@ -61,7 +61,7 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of save that returns entity unchanged
+     * Returns entity unchanged
      * 
      * @param entity Entity to save
      * @param <S> Type extending CachedBook
@@ -73,7 +73,7 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of saveAll that returns entities unchanged
+     * Returns entities unchanged
      * 
      * @param entities Collection of entities to save
      * @param <S> Type extending CachedBook
@@ -85,8 +85,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findById that always returns empty
-     * 
      * @param s Entity ID to find
      * @return Empty Optional
      */
@@ -193,11 +191,8 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findByTitleIgnoreCaseAndIdNot that returns empty list
-     * - Finds books with matching title excluding a specific ID
-     * - Used for duplicate detection and book edition grouping
-     * - Logs debug information and returns empty list
-     *
+     * No-op implementation of findByTitleIgnoreCaseAndIdNot
+     * 
      * @param title Book title to match (case insensitive)
      * @param idToExclude Book ID to exclude from results
      * @return Empty list of cached books
