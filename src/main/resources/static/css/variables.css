@@ -1,0 +1,38 @@
+/*
+ * Global CSS Custom Properties (Variables)
+ * Define every CSS variable used across the application to avoid missing-variable warnings.
+ */
+:root {
+  /* Core brand colors */
+  --primary-color:       #4F46E5;
+  --primary-dark:        #4338CA;
+  --primary-rgb:         79, 70, 229;
+  --primary-glow-color:  rgba(var(--primary-rgb), 0.1);
+  --secondary-color:     #7C3AED;
+
+  /* Semantic colors */
+  --success-color:       #10B981;
+  --warning-color:       #FBBF24;
+  --danger-color:        #EF4444;
+  --info-color:          #3B82F6;
+
+  /* Greyscale */
+  --grey-100:            #F9FAFB;
+  --grey-200:            #E5E7EB;
+  --grey-300:            #D1D5DB;
+  --grey-400:            #9CA3AF;
+  --grey-500:            #6B7280;
+  --grey-700:            #374151;
+
+  /* Light / Dark theme backgrounds */
+  --light-color:         #F3F4F6;
+  --dark-color:          #1F2937;
+
+  /* UI “chrome” */
+  --text-color:          var(--dark-color);
+  --border-color:        var(--grey-200);
+  --card-bg:             #ffffff;
+  --input-bg:            #ffffff;
+  --dropdown-bg:         #ffffff;
+  --dropdown-hover:      var(--grey-100);
+}
