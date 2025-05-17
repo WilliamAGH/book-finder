@@ -16,12 +16,23 @@
         <!-- Search Header -->
         <div class="search-header bg-white p-4 rounded-3 shadow-sm mb-4">
             <form action="/search" method="get" class="mb-4">
-                <div class="input-group">
-                    <input type="text" id="searchInput" name="query" class="form-control" 
-                           th:value="${query}" placeholder="Search by title, author, or keyword..." required>
-                    <button class="btn btn-primary" type="submit">
-                        <i class="fas fa-search me-2"></i>Search
-                    </button>
+                <div class="row g-2">
+                    <div class="col-md-10">
+                        <div class="input-group">
+                            <input type="text" id="searchInput" name="query" class="form-control" 
+                                   th:value="${query}" placeholder="Search by title, author, or keyword..." required>
+                            <button class="btn btn-primary" type="submit">
+                                <i class="fas fa-search me-2"></i>Search
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fas fa-calendar-alt"></i></span>
+                            <input type="number" id="yearInput" name="year" class="form-control no-spinner" 
+                                   th:value="${year}" placeholder="Year" min="1800" max="2099">
+                        </div>
+                    </div>
                 </div>
             </form>
             
@@ -104,7 +115,7 @@
         </div>
         
         <!-- Pagination -->
-        <nav aria-label="Search results pages" class="d-flex justify-content-center mt-4 mb-4">
+        <nav aria-label="Search results pages" class="d-flex justify-content-center mt-4 mb-4 d-none" id="paginationNav">
             <ul class="pagination" id="pagination">
                 <!-- Pagination will be added via JavaScript -->
             </ul>
@@ -195,23 +206,35 @@
     document.addEventListener('DOMContentLoaded', function() {
         const query = /*[[${query}]]*/ null;
         const isDevelopmentMode = /*[[${isDevelopmentMode}]]*/ false; // Make dev mode status available to JS
+        const initialYear = /*[[${year}]]*/ null; // Year parameter from server
         const resultsContainer = document.getElementById('searchResults');
-        const paginationContainer = document.getElementById('pagination');
+        const paginationContainer = document.getElementById('pagination'); // This is the UL
+        const paginationNav = document.getElementById('paginationNav'); // This is the NAV container
         const loadingIndicator = document.getElementById('loadingIndicator');
         
         // Current search state
         let currentPage = 0;
-        let currentSort = 'relevance';
+        let currentSort = 'newest'; // Default sort to newest
         let currentView = 'grid';
         let currentMaxResults = 12;
         let currentCoverSource = 'ANY';
         let currentResolution = 'HIGH_FIRST'; // Default to HIGH_FIRST
+        let publishedYear = initialYear; // Published year filter from server or URL params
         
         // Initialize search if query exists
         if (query) {
             // Get page from URL if present
             const urlParams = new URLSearchParams(window.location.search);
             const urlPage = urlParams.get('page');
+            
+            // Get published year from URL if present
+            const urlYear = urlParams.get('year');
+            if (urlYear) {
+                const yearNum = parseInt(urlYear);
+                if (!isNaN(yearNum)) {
+                    publishedYear = yearNum;
+                }
+            }
             if (urlPage) {
                 // URL parameter is 1-indexed, but our internal currentPage is 0-indexed
                 currentPage = parseInt(urlPage) - 1;
@@ -222,14 +245,37 @@
                 }
             }
             
-            // Get sort from URL if present
+            // Get sort from URL if present, otherwise use currentSort (defaulted to 'newest')
             const urlSort = urlParams.get('sort');
             if (urlSort) {
                 currentSort = urlSort;
-                document.getElementById('sortDropdown').innerHTML =
-                    `<i class="fas fa-sort me-1"></i> Sort: ${urlSort.charAt(0).toUpperCase() + urlSort.slice(1)}`;
             }
+            // Update sort dropdown text and active state based on currentSort
+            let sortDropdownText = currentSort.charAt(0).toUpperCase() + currentSort.slice(1);
+            if (currentSort === 'newest') sortDropdownText = 'Newest First'; // Display text for 'newest'
+            document.getElementById('sortDropdown').innerHTML =
+                `<i class="fas fa-sort me-1"></i> Sort: ${sortDropdownText}`;
+            document.querySelectorAll('.sort-option').forEach(opt => {
+                if (opt.getAttribute('data-sort') === currentSort) {
+                    opt.classList.add('active');
+                } else {
+                    opt.classList.remove('active');
+                }
+            });
             
+            // Get view from URL if present
+            const urlView = urlParams.get('view');
+            if (urlView) {
+                currentView = urlView;
+                document.querySelectorAll('.view-option').forEach(opt => {
+                    if (opt.getAttribute('data-view') === currentView) {
+                        opt.classList.add('active');
+                    } else {
+                        opt.classList.remove('active');
+                    }
+                });
+            }
+
             // Get cover source from URL if present
             const urlCoverSource = urlParams.get('coverSource');
             if (urlCoverSource) {
@@ -285,12 +331,12 @@
                     // Check if the bold span exists and its text content matches the current query
                     if (boldQuerySpan && boldQuerySpan.textContent === query) {
                         el.innerHTML = `Exploring: <span class="fw-bold">${query}</span> <i class="fas fa-compass ms-1 text-primary"></i>`;
-                        document.title = `Exploring: ${query} - Book Recommendation Engine`;
+                        document.title = `Exploring: ${query} - Book Finder`;
                     }
                 });
             }
             
-            performSearch(query, currentPage * currentMaxResults, currentSort, currentCoverSource, currentResolution);
+            performSearch(query, currentPage * currentMaxResults, currentSort, currentCoverSource, currentResolution, publishedYear);
         }
         
         // View toggle handlers
@@ -304,6 +350,11 @@
                 this.classList.add('active');
                 
                 currentView = view;
+
+                // Update URL without reloading
+                const url = new URL(window.location.href);
+                url.searchParams.set('view', view);
+                window.history.pushState({}, '', url);
                 
                 // If it has search results, re-render them
                 if (query) {
@@ -319,14 +370,27 @@
                 const sortBy = this.getAttribute('data-sort');
                 
                 // Update dropdown button text
+                let sortButtonText = sortBy.charAt(0).toUpperCase() + sortBy.slice(1);
+                if (sortBy === 'newest') sortButtonText = 'Newest First';
                 document.getElementById('sortDropdown').innerHTML =
-                    `<i class="fas fa-sort me-1"></i> Sort: ${sortBy.charAt(0).toUpperCase() + sortBy.slice(1)}`;
+                    `<i class="fas fa-sort me-1"></i> Sort: ${sortButtonText}`;
                 
                 currentSort = sortBy;
+
+                // Update URL without reloading
+                const url = new URL(window.location.href);
+                url.searchParams.set('sort', sortBy);
+                window.history.pushState({}, '', url);
+
+                // Mark as active
+                document.querySelectorAll('.sort-option').forEach(opt => {
+                    opt.classList.remove('active');
+                });
+                this.classList.add('active');
                 
                 // If it has search results, re-sort and re-render them
                 if (query) {
-                    performSearch(query, 0, sortBy, currentCoverSource, currentResolution);
+                    performSearch(query, 0, sortBy, currentCoverSource, currentResolution, publishedYear);
                 }
             });
         });
@@ -360,7 +424,7 @@
                 
                 // Reload search results
                 currentPage = 0;
-                performSearch(query, 0, currentSort, currentCoverSource, currentResolution);
+                performSearch(query, 0, currentSort, currentCoverSource, currentResolution, publishedYear);
             });
         });
         
@@ -395,11 +459,45 @@
                 
                 // Reload search results
                 currentPage = 0;
-                performSearch(query, 0, currentSort, currentCoverSource, currentResolution);
+                performSearch(query, 0, currentSort, currentCoverSource, currentResolution, publishedYear);
             });
         });
         
-        function performSearch(query, startIndex, sortBy, coverSource, resolution) {
+        // Add event listener for the year input field
+        const yearInput = document.getElementById('yearInput');
+        if (yearInput) {
+            // Handle blur (focus lost) to apply year filter
+            yearInput.addEventListener('blur', function() {
+                const yearValue = this.value ? parseInt(this.value) : null;
+                if (yearValue !== publishedYear) {
+                    console.log("Year input changed to:", yearValue);
+                    publishedYear = yearValue;
+                    
+                    // Update URL
+                    const url = new URL(window.location.href);
+                    if (yearValue) {
+                        url.searchParams.set('year', yearValue);
+                    } else {
+                        url.searchParams.delete('year');
+                    }
+                    window.history.pushState({}, '', url);
+                    
+                    // Reload search results
+                    currentPage = 0;
+                    performSearch(query, 0, currentSort, currentCoverSource, currentResolution, publishedYear);
+                }
+            });
+            
+            // Handle Enter key press
+            yearInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Prevent form submission
+                    this.blur(); // Trigger the blur event
+                }
+            });
+        }
+        
+        function performSearch(query, startIndex, sortBy, coverSource, resolution, year) {
             if (!query) return;
             
             // Show loading indicator and completely hide results container
@@ -408,9 +506,10 @@
             loadingIndicator.classList.remove('d-none');
             
             // Reset pagination container at the start of each search
+            if (paginationNav) paginationNav.classList.add('d-none'); // Hide nav by default
             paginationContainer.innerHTML = '';
-            paginationContainer.style.display = 'flex';
-            paginationContainer.style.border = 'none';
+            // paginationContainer.style.display = 'flex'; // Controlled by paginationNav's d-none
+            // paginationContainer.style.border = 'none'; // Styling can be done in CSS
             
             // Build the URL
             let apiUrl = `/api/books/search?query=${encodeURIComponent(query)}&startIndex=${startIndex}&maxResults=${currentMaxResults}`;
@@ -430,6 +529,23 @@
                 apiUrl += `&coverSource=${coverSource}`;
             }
             
+            // Add published year parameter if provided
+            if (year) {
+                apiUrl += `&publishedYear=${year}`;
+                
+                // Also update the URL to include the year parameter for sharing/bookmarking
+                const url = new URL(window.location.href);
+                url.searchParams.set('year', year);
+                window.history.pushState({}, '', url);
+                
+                // Set the year input field value
+                const yearInput = document.getElementById('yearInput');
+                if (yearInput && yearInput.value !== year) {
+                    yearInput.value = year;
+                    console.log("Set year input field to", year);
+                }
+            }
+            
             fetch(apiUrl)
                 .then(response => {
                     if (!response.ok) {
@@ -441,6 +557,21 @@
                     loadingIndicator.classList.add('d-none');
                     resultsContainer.style.display = 'block'; // Show results container again
                     window.lastSearchResults = data;
+                    
+                    // Display detected year if applicable
+                    if (year) {
+                        const resultsText = document.querySelector('.search-header .text-muted');
+                        if (resultsText) {
+                            // Show that we're filtering by year
+                            resultsText.innerHTML = `Results for: <span class="fw-bold">${query}</span> <span class="badge bg-info ms-2">Published in ${year} <i class="fas fa-calendar-alt ms-1"></i></span>`;
+                            
+                            // Also set the year input field
+                            const yearInput = document.getElementById('yearInput');
+                            if (yearInput) {
+                                yearInput.value = year;
+                            }
+                        }
+                    }
                     
                     console.log("Search results data:", data);
                     console.log("Total available results:", data.totalAvailableResults);
@@ -475,10 +606,14 @@
                         );
                         console.log("Setting up pagination with estimated total:", estimatedTotal);
                         setupPagination(currentPage, estimatedTotal, currentMaxResults);
+                        if (paginationContainer.innerHTML.trim() !== '' && paginationNav) {
+                            paginationNav.classList.remove('d-none'); // Show nav if pagination was populated
+                        }
                         console.log("Pagination container HTML after setup:", paginationContainer.innerHTML);
                     } else {
                         console.log("Not setting up pagination. No data suggesting more pages.");
                         paginationContainer.innerHTML = '';
+                        if (paginationNav) paginationNav.classList.add('d-none'); // Ensure nav is hidden
                     }
                 })
                 .catch(error => {
@@ -486,6 +621,7 @@
                     resultsContainer.style.display = 'block'; // Show results container on error
                     resultsContainer.innerHTML = `<div class="alert alert-danger">Error fetching search results. Please try again later.</div>`;
                     loadingIndicator.classList.add('d-none');
+                    if (paginationNav) paginationNav.classList.add('d-none'); // Hide pagination on error
                     console.error('Search error:', error);
                 });
         }
@@ -529,7 +665,8 @@
             const template = document.getElementById('bookCardTemplate');
             const card = template.content.cloneNode(true);
             
-            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}`;
+            const yearParam = publishedYear ? `&year=${publishedYear}` : '';
+            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForCard = card.querySelector('.book-cover');
             const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
@@ -629,7 +766,8 @@
             const template = document.getElementById('bookListItemTemplate');
             const listItem = template.content.cloneNode(true);
             
-            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}`;
+            const yearParam = publishedYear ? `&year=${publishedYear}` : '';
+            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
             const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
@@ -779,10 +917,12 @@
             
             if (!totalItems || totalItems <= itemsPerPage) {
                 console.log("No pagination needed - total items <= items per page", totalItems, itemsPerPage);
+                if (paginationNav) paginationNav.classList.add('d-none'); // Ensure nav is hidden
                 return; // No pagination needed if total items fit on one page or no items
             }
 
             const totalPages = Math.ceil(totalItems / itemsPerPage);
+            if (paginationNav) paginationNav.classList.remove('d-none'); // Show nav as we are adding items
             console.log("Calculated total pages:", totalPages);
             
             const ul = document.createElement('ul');
@@ -846,17 +986,23 @@
             paginationContainer.appendChild(ul);
             console.log("Pagination added to DOM:", paginationContainer.innerHTML.length > 0);
             
-            // Force repaint of the container with inline styles to ensure visibility
-            paginationContainer.style.display = 'none';
-            setTimeout(() => {
-                paginationContainer.style.display = 'flex';
-                paginationContainer.style.border = '2px solid var(--primary-color)';
-                paginationContainer.style.padding = '10px';
-                paginationContainer.style.margin = '20px 0';
-                paginationContainer.style.position = 'relative';
-                paginationContainer.style.zIndex = '100';
-                console.log("Forced repaint of pagination container with enhanced visibility");
-            }, 10);
+            // Force repaint of the container with inline styles to ensure visibility - now applies to paginationNav
+            if (paginationNav) {
+                paginationNav.style.display = 'none'; // Hide then show to trigger repaint
+                setTimeout(() => {
+                    if (paginationContainer.innerHTML.trim() !== '') { // Only show if it has content
+                        paginationNav.style.display = 'flex';
+                        // paginationNav.style.border = '2px solid var(--primary-color)'; // Optional: for debugging visibility
+                        // paginationNav.style.padding = '10px';
+                        // paginationNav.style.margin = '20px 0';
+                        // paginationNav.style.position = 'relative';
+                        // paginationNav.style.zIndex = '100';
+                        console.log("Forced repaint of paginationNav container with enhanced visibility");
+                    } else {
+                         paginationNav.classList.add('d-none'); // Keep hidden if no content
+                    }
+                }, 10);
+            }
         }
     });
 </script>
@@ -931,6 +1077,11 @@
         border-radius: 30px;
     }
     
+    .badge.bg-info {
+        background-color: #0dcaf0;
+        color: #212529;
+    }
+    
     .dropdown-menu {
         box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
         border: none;
@@ -945,6 +1096,16 @@
         .col-sm-6.col-md-4.col-lg-3 {
             width: 50%;
         }
+    }
+    
+    /* Hide spinner on number inputs */
+    .no-spinner::-webkit-inner-spin-button, 
+    .no-spinner::-webkit-outer-spin-button { 
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    .no-spinner {
+        -moz-appearance: textfield;
     }
 </style>
 

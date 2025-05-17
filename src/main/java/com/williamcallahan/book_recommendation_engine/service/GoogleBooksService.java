@@ -1,9 +1,23 @@
+/**
+ * Service for interacting with the Google Books API
+ * - Provides reactive interfaces for searching and retrieving book information
+ * - Handles API communication with retry logic and error handling
+ * - Converts Google Books API responses to Book domain objects
+ * - Implements search by title, author, ISBN and similarity
+ * - Manages cover image URL transformations for optimal quality
+ * - Caches Google Books API responses in S3
+ *
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -16,29 +30,24 @@ import reactor.util.retry.Retry;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.io.IOException;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
-
-/**
- * Service for interacting with the Google Books API
- * - Provides reactive interfaces for searching and retrieving book information
- * - Handles API communication with retry logic and error handling
- * - Converts Google Books API responses to Book domain objects
- * - Implements search by title, author, ISBN and similarity
- * - Manages cover image URL transformations for optimal quality
- *
- * @author William Callahan
- */
 @Service
 public class GoogleBooksService {
 
     private static final Logger logger = LoggerFactory.getLogger(GoogleBooksService.class);
 
     private final WebClient webClient;
+    private final S3StorageService s3StorageService;
+    private final ObjectMapper objectMapper;
 
     @Value("${googlebooks.api.url}")
     private String googleBooksApiUrl;
@@ -47,13 +56,20 @@ public class GoogleBooksService {
     private String googleBooksApiKey;
 
     /**
-     * Constructs a GoogleBooksService with configured WebClient
+     * Constructs a GoogleBooksService with configured WebClient, S3StorageService, and ObjectMapper
      * - Initializes reactive HTTP client for API communication
+     * - Initializes S3 storage service for caching API responses
+     * - Initializes ObjectMapper for JSON processing
      * 
      * @param webClientBuilder Spring WebClient builder for constructing the client
+     * @param s3StorageService Service for S3 interaction
+     * @param objectMapper Jackson ObjectMapper for JSON parsing
      */
-    public GoogleBooksService(WebClient.Builder webClientBuilder) {
+    @Autowired
+    public GoogleBooksService(WebClient.Builder webClientBuilder, S3StorageService s3StorageService, ObjectMapper objectMapper) {
         this.webClient = webClientBuilder.build();
+        this.s3StorageService = s3StorageService;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -72,15 +88,22 @@ public class GoogleBooksService {
     @CircuitBreaker(name = "googleBooksService", fallbackMethod = "searchBooksFallback")
     @TimeLimiter(name = "googleBooksService")
     public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
-        String url = String.format("%s/volumes?q=%s&startIndex=%d&maxResults=40&key=%s",
-                googleBooksApiUrl, query, startIndex, googleBooksApiKey);
+        StringBuilder urlBuilder = new StringBuilder(String.format("%s/volumes?q=%s&startIndex=%d&maxResults=40", 
+                googleBooksApiUrl, query, startIndex));
+        
+        if (googleBooksApiKey != null && !googleBooksApiKey.isEmpty()) {
+            urlBuilder.append("&key=").append(googleBooksApiKey);
+        }
+        
         if (orderBy != null && !orderBy.isEmpty()) {
-            url += "&orderBy=" + orderBy;
+            urlBuilder.append("&orderBy=").append(orderBy);
         }
         if (langCode != null && !langCode.isEmpty()) {
-            url += "&langRestrict=" + langCode;
+            urlBuilder.append("&langRestrict=").append(langCode);
             logger.debug("Google Books API call with langRestrict: {}", langCode);
         }
+        
+        String url = urlBuilder.toString();
         return webClient.get()
                 .uri(url)
                 .retrieve()
@@ -108,16 +131,19 @@ public class GoogleBooksService {
      * 
      * @param query Search query string to send to the API
      * @param langCode Optional language code to restrict results (e.g., "en", "fr")
+     * @param desiredTotalResults The desired maximum number of total results to fetch
+     * @param orderBy The order to sort results by (e.g., "relevance", "newest")
      * @return Mono containing a list of Book objects retrieved from the API
      */
-    public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
+    public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode, int desiredTotalResults, String orderBy) {
         final int maxResultsPerPage = 40;
-        final int maxTotalResults = 200;
+        final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200; // Default to 200 if invalid
+        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest"; // Default to newest
 
-        return Flux.range(0, (maxTotalResults + maxResultsPerPage - 1) / maxResultsPerPage)
+        return Flux.range(0, (maxTotalResultsToFetch + maxResultsPerPage - 1) / maxResultsPerPage)
             .map(page -> page * maxResultsPerPage)
             .concatMap(startIndex -> 
-                searchBooks(query, startIndex, "newest", langCode)
+                searchBooks(query, startIndex, effectiveOrderBy, langCode) 
                     .flatMapMany(response -> {
                         if (response != null && response.has("items") && response.get("items").isArray()) {
                             List<JsonNode> items = new ArrayList<>();
@@ -127,33 +153,42 @@ public class GoogleBooksService {
                         return Flux.empty();
                     })
             )
-            .takeUntil(jsonNode -> !jsonNode.has("kind") )
+            .takeUntil(jsonNode -> !jsonNode.has("kind") ) // This condition might need review if it prematurely stops fetching
             .map(this::convertGroupToBook)
             .filter(Objects::nonNull)
             .collectList()
             .map(books -> {
-                if (books.size() > maxTotalResults) {
-                    return books.subList(0, maxTotalResults);
+                if (books.size() > maxTotalResultsToFetch) {
+                    return books.subList(0, maxTotalResultsToFetch);
                 }
                 return books;
             });
     }
 
     /**
-     * Search books with default language setting
-     * - Convenience method that calls searchBooksAsyncReactive without language restriction
+     * Overloaded version of searchBooksAsyncReactive with default values
+     * 
+     * @param query Search query string to send to the API
+     * @param langCode Optional language code to restrict results (e.g., "en", "fr")
+     * @return Mono containing a list of Book objects retrieved from the API
+     */
+    public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
+        // Calls the method with default desiredTotalResults and orderBy newest
+        return searchBooksAsyncReactive(query, langCode, 200, "newest"); 
+    }
+
+    /**
+     * Overloaded version of searchBooksAsyncReactive with no language filtering
      * 
      * @param query Search query string to send to the API
      * @return Mono containing a list of Book objects retrieved from the API
      */
     public Mono<List<Book>> searchBooksAsyncReactive(String query) {
-        return searchBooksAsyncReactive(query, null);
+        return searchBooksAsyncReactive(query, null, 200, "newest");
     }
 
     /**
-     * Search books by title with language filtering
-     * - Uses the 'intitle:' Google Books API qualifier
-     * - Allows restricting results to specific language
+     * Searches books by title using the 'intitle:' Google Books API qualifier
      * 
      * @param title Book title to search for
      * @param langCode Optional language code to restrict results
@@ -164,8 +199,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by title with default language setting
-     * - Convenience method that calls searchBooksByTitle without language restriction
+     * Overloaded version without language filtering
      * 
      * @param title Book title to search for
      * @return Mono containing a list of Book objects matching the title
@@ -175,9 +209,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by author with language filtering
-     * - Uses the 'inauthor:' Google Books API qualifier
-     * - Allows restricting results to specific language
+     * Searches books by author using the 'inauthor:' Google Books API qualifier
      * 
      * @param author Author name to search for
      * @param langCode Optional language code to restrict results
@@ -188,8 +220,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by author with default language setting
-     * - Convenience method that calls searchBooksByAuthor without language restriction
+     * Overloaded version without language filtering
      * 
      * @param author Author name to search for
      * @return Mono containing a list of Book objects by the specified author
@@ -199,9 +230,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by ISBN with language filtering
-     * - Uses the 'isbn:' Google Books API qualifier for precise matching
-     * - Allows restricting results to specific language
+     * Searches books by ISBN using the 'isbn:' Google Books API qualifier 
      * 
      * @param isbn ISBN identifier to search for
      * @param langCode Optional language code to restrict results
@@ -212,8 +241,7 @@ public class GoogleBooksService {
     }
 
     /**
-     * Search books by ISBN with default language setting
-     * - Convenience method that calls searchBooksByISBN without language restriction
+     * Overloaded version without language filtering
      * 
      * @param isbn ISBN identifier to search for
      * @return Mono containing a list of Book objects matching the ISBN
@@ -235,28 +263,119 @@ public class GoogleBooksService {
     @CircuitBreaker(name = "googleBooksService", fallbackMethod = "getBookByIdFallback")
     @TimeLimiter(name = "googleBooksService")
     public CompletionStage<Book> getBookById(String bookId) {
-        String url = String.format("%s/volumes/%s?key=%s", googleBooksApiUrl, bookId, googleBooksApiKey);
+        // Step 1: Try to fetch from S3 cache first
+        return s3StorageService.fetchJsonAsync(bookId) // This returns CompletableFuture<Optional<String>>
+            .thenComposeAsync(optionalJsonString -> {
+                if (optionalJsonString.isPresent()) {
+                    String jsonString = optionalJsonString.get();
+                    try {
+                        // Assuming the JSON in S3 is the same structure that convertSingleItemToBook expects
+                        // (i.e., the raw item from Google Books API, possibly enriched with _metadata)
+                        JsonNode s3JsonNode = objectMapper.readTree(jsonString);
+                        Book bookFromS3 = convertSingleItemToBook(s3JsonNode); // This will set rawJsonResponse
+
+                        if (bookFromS3 != null && bookFromS3.getId() != null) { // Basic validation
+                            logger.info("Successfully retrieved book {} from S3 cache.", bookId);
+                            return CompletableFuture.completedFuture(bookFromS3);
+                        } else {
+                            // This case handles if S3 JSON is present but malformed or doesn't convert to a valid book
+                            logger.warn("S3 cache for {} contained JSON, but it parsed to a null/invalid book. Falling back to API.", bookId);
+                        }
+                    } catch (IOException e) {
+                        // This case handles if S3 JSON is present but fails to parse as JSON tree
+                        logger.warn("Failed to parse book JSON from S3 cache for bookId {}: {}. Falling back to API.", bookId, e.getMessage());
+                    }
+                } else {
+                    // This case handles S3 miss (NoSuchKey in fetchJsonAsync) or S3 fetch error (as fetchJsonAsync returns Optional.empty for errors)
+                    logger.info("Book {} not found in S3 cache (or S3 error occurred during fetch). Fetching from API.", bookId);
+                }
+
+                // If S3 miss, S3 error, S3 JSON parsing error, or S3 JSON parsed to invalid book, then fetch from API.
+                // The circuit breaker on getBookById will handle failures from fetchFromGoogleBooksApiAndCache.
+                return fetchFromGoogleBooksApiAndCache(bookId);
+            });
+    }
+
+    private CompletionStage<Book> fetchFromGoogleBooksApiAndCache(String bookId) {
+        StringBuilder urlBuilder = new StringBuilder(String.format("%s/volumes/%s", googleBooksApiUrl, bookId));
+        
+        if (googleBooksApiKey != null && !googleBooksApiKey.isEmpty()) {
+            urlBuilder.append("?key=").append(googleBooksApiKey);
+        }
+        
+        String url = urlBuilder.toString();
         return webClient.get()
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .retryWhen(Retry.backoff(3, Duration.ofSeconds(1))
                     .filter(throwable -> throwable instanceof IOException || throwable instanceof WebClientRequestException)
-                    .doBeforeRetry(retrySignal -> logger.warn("Retrying API call for book ID {}. Attempt #{}. Error: {}", bookId, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage()))
+                    .doBeforeRetry(retrySignal -> logger.warn("Retrying API call for bookId {}. Attempt #{}. Error: {}", bookId, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage()))
                     .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                        logger.error("All retries failed for book ID {}. Final error: {}", bookId, retrySignal.failure().getMessage());
+                        logger.error("All retries failed for bookId {}. Final error: {}", bookId, retrySignal.failure().getMessage());
                         return retrySignal.failure();
                     }))
-                .map(item -> {
-                    if (item != null) {
-                        return convertSingleItemToBook(item);
+                .map(originalJsonNode -> {
+                    JsonNode finalNodeForBookAndS3; // This node will be used for Book object and for S3 caching
+                    boolean metadataWasAdded = false;
+
+                    if (originalJsonNode.isObject()) {
+                        ObjectNode enrichedNode = objectMapper.createObjectNode();
+                        enrichedNode.setAll((ObjectNode) originalJsonNode); // Copy original content
+
+                        // Add _metadata
+                        ObjectNode metadataNode = objectMapper.createObjectNode();
+                        Instant nowUtc = Instant.now();
+                        ZoneId pacificTimeZone = ZoneId.of("America/Los_Angeles");
+                        ZonedDateTime pacificTime = nowUtc.atZone(pacificTimeZone);
+                        String pacificTimestampString = pacificTime.format(DateTimeFormatter.ISO_ZONED_DATE_TIME);
+                        metadataNode.put("fetchedAt", pacificTimestampString);
+                        enrichedNode.set("_metadata", metadataNode);
+
+                        finalNodeForBookAndS3 = enrichedNode;
+                        metadataWasAdded = true;
+                    } else {
+                        logger.warn("Original JSON node for bookId {} is not an ObjectNode. Book data and S3 cache will use the original structure without added _metadata.", bookId);
+                        finalNodeForBookAndS3 = originalJsonNode; // Use original as-is
                     }
-                    return null;
+
+                    Book book = convertSingleItemToBook(finalNodeForBookAndS3); // This sets book.rawJsonResponse to finalNodeForBookAndS3.toString()
+
+                    if (book != null) {
+                        // For S3, we want pretty-printed JSON.
+                        // The book.getRawJsonResponse() will remain compact as per current convertSingleItemToBook logic.
+                        String jsonForS3Cache;
+                        try {
+                            jsonForS3Cache = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(finalNodeForBookAndS3);
+                        } catch (IOException e) {
+                            logger.error("Error pretty-printing JSON for S3 cache, bookId {}: {}. Will attempt to cache compact JSON.", bookId, e.getMessage());
+                            jsonForS3Cache = finalNodeForBookAndS3.toString(); // Fallback to compact string if pretty-printing fails
+                        }
+                        
+                        final String finalJsonForS3Cache = jsonForS3Cache; // Effectively final for lambda
+                        if (finalJsonForS3Cache != null && !finalJsonForS3Cache.isEmpty()) {
+                            boolean finalMetadataWasAdded = metadataWasAdded; // effectively final for lambda
+                            s3StorageService.uploadJsonAsync(bookId, finalJsonForS3Cache)
+                                .thenRun(() -> logger.info("Successfully cached book {} JSON in S3. Metadata added: {}. Pretty-printed: {}", 
+                                                            bookId, finalMetadataWasAdded, (finalJsonForS3Cache.contains("\n"))))
+                                .exceptionally(ex -> {
+                                    logger.error("Failed to cache book {} JSON in S3: {}", bookId, ex.getMessage());
+                                    return null;
+                                });
+                        } else {
+                            logger.warn("jsonForS3Cache is null or empty for bookId {}. S3 upload will be skipped.", bookId);
+                        }
+                    } else {
+                         logger.warn("Book object is null after conversion for bookId {}. S3 upload will be skipped.", bookId);
+                    }
+                    return book;
                 })
-                .onErrorResume(e -> {
-                    logger.error("Error fetching book by ID {} after retries or due to non-retryable error: {}", bookId, e.getMessage());
-                    return Mono.empty(); // Return an empty Mono on error
-                }).toFuture();
+                .toFuture()
+                .thenApply(book -> book) 
+                .exceptionally(e -> {
+                    logger.error("Error fetching book {} from Google Books API: {}", bookId, e.getMessage());
+                    return null;
+                });
     }
 
     /**
@@ -332,8 +451,20 @@ public class GoogleBooksService {
 
         if (volumeInfo.has("industryIdentifiers")) {
             List<Book.EditionInfo> otherEditions = new ArrayList<>();
-            for (JsonNode identifier : volumeInfo.get("industryIdentifiers")) {
-                extractEditionInfoFromItem(identifier, otherEditions);
+            for (JsonNode identifierNode : volumeInfo.get("industryIdentifiers")) {
+                extractEditionInfoFromItem(identifierNode, otherEditions);
+
+                // Populate the main book's ISBN-10 and ISBN-13 fields
+                String type = identifierNode.has("type") ? identifierNode.get("type").asText() : null;
+                String idValue = identifierNode.has("identifier") ? identifierNode.get("identifier").asText() : null;
+
+                if (idValue != null && !idValue.isEmpty()) {
+                    if ("ISBN_10".equals(type) && book.getIsbn10() == null) {
+                        book.setIsbn10(idValue);
+                    } else if ("ISBN_13".equals(type) && book.getIsbn13() == null) {
+                        book.setIsbn13(idValue);
+                    }
+                }
             }
             book.setOtherEditions(otherEditions);
         }
@@ -369,6 +500,12 @@ public class GoogleBooksService {
         if (volumeInfo.has("imageLinks")) {
             JsonNode imageLinks = volumeInfo.get("imageLinks");
             String coverUrl = null;
+
+            // Log all available raw image links for debugging
+            if (logger.isDebugEnabled()) {
+                String bookTitleForLog = volumeInfo.has("title") ? volumeInfo.get("title").asText() : "Unknown Title";
+                logger.debug("Raw Google Books imageLinks for '{}': {}", bookTitleForLog, imageLinks.toString());
+            }
             
             // Try to get the best available image, prioritizing larger ones
             if (imageLinks.has("extraLarge")) {
@@ -521,6 +658,7 @@ public class GoogleBooksService {
      * Sets web reader and access links for the book
      * - Extracts links from the accessInfo section
      * - Sets web reader URL for browser-based reading
+     * - Extracts PDF and EPUB availability information
      * 
      * @param item JsonNode containing book data
      * @param book Book object to populate with extracted links
@@ -528,8 +666,26 @@ public class GoogleBooksService {
     private void setLinks(JsonNode item, Book book) {
         if (item.has("accessInfo")) {
             JsonNode accessInfo = item.get("accessInfo");
+            
+            // Extract web reader link
             if (accessInfo.has("webReaderLink")) {
                 book.setWebReaderLink(accessInfo.get("webReaderLink").asText());
+            }
+            
+            // Extract PDF availability information
+            if (accessInfo.has("pdf")) {
+                JsonNode pdfInfo = accessInfo.get("pdf");
+                if (pdfInfo.has("isAvailable")) {
+                    book.setPdfAvailable(pdfInfo.get("isAvailable").asBoolean());
+                }
+            }
+            
+            // Extract EPUB availability information
+            if (accessInfo.has("epub")) {
+                JsonNode epubInfo = accessInfo.get("epub");
+                if (epubInfo.has("isAvailable")) {
+                    book.setEpubAvailable(epubInfo.get("isAvailable").asBoolean());
+                }
             }
         }
     }
@@ -619,24 +775,37 @@ public class GoogleBooksService {
             );
     }
 
-    // Fallback methods
+    /**
+     * Fallback method for searchBooks when circuit breaker is triggered
+     * - Provides graceful degradation when Google Books API is unavailable
+     * - Logs warning with detailed error information
+     * - Returns empty Mono to allow for proper error handling in downstream components
+     *
+     * @param query Search query that triggered the circuit breaker
+     * @param startIndex Pagination index being accessed
+     * @param orderBy Sort order requested
+     * @param langCode Language filter if any
+     * @param t The throwable that triggered the circuit breaker
+     * @return Empty Mono to indicate no results available
+     */
     public Mono<JsonNode> searchBooksFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
         logger.warn("GoogleBooksService.searchBooks circuit breaker opened for query: '{}', startIndex: {}. Error: {}", query, startIndex, t.getMessage());
         return Mono.empty(); // Return empty JsonNode or a default structure if appropriate
     }
 
+    /**
+     * Fallback method for getBookById when circuit breaker is triggered
+     * - Provides graceful degradation when Google Books API is unavailable
+     * - Logs warning with detailed error information
+     * - Returns empty CompletionStage to allow for proper error handling
+     *
+     * @param bookId The book ID that triggered the circuit breaker
+     * @param t The throwable that triggered the circuit breaker
+     * @return CompletedFuture with null value to indicate no book available
+     */
     public CompletionStage<Book> getBookByIdFallback(String bookId, Throwable t) {
         logger.warn("GoogleBooksService.getBookById circuit breaker opened for bookId: {}. Error: {}", bookId, t.getMessage());
         return CompletableFuture.completedFuture(null); // Return empty Book
     }
 
-    // Fallback for methods returning Mono<List<Book>>
-    // This can be a generic fallback if the signature matches, or specific ones can be created.
-    // For simplicity, if searchBooks/getBookById fallbacks handle the root cause, these might not be strictly needed
-    // unless we want different fallback behavior at this higher level.
-    // Example:
-    // public Mono<List<Book>> searchBooksAsyncReactiveFallback(String query, String langCode, Throwable t) {
-    //     logger.warn("GoogleBooksService.searchBooksAsyncReactive circuit breaker opened for query: '{}', langCode: {}. Error: {}", query, langCode, t.getMessage());
-    //     return Mono.just(Collections.emptyList());
-    // }
 }

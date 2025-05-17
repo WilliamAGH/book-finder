@@ -83,16 +83,61 @@ public class BookController {
             @RequestParam(required = false, defaultValue = "0") int startIndex,
             @RequestParam(required = false, defaultValue = "10") int maxResults,
             @RequestParam(required = false, defaultValue = "ANY") String coverSource,
-            @RequestParam(required = false, defaultValue = "ANY") String resolution) {
+            @RequestParam(required = false, defaultValue = "ANY") String resolution,
+            @RequestParam(required = false) Integer publishedYear) {
         
-        logger.info("Searching books with query: {}, startIndex: {}, maxResults: {}, coverSource: {}, resolution: {}", 
-                query, startIndex, maxResults, coverSource, resolution);
+        logger.info("Searching books with query: {}, startIndex: {}, maxResults: {}, coverSource: {}, resolution: {}, publishedYear: {}", 
+                query, startIndex, maxResults, coverSource, resolution, publishedYear);
         
         final CoverImageSource effectivelyFinalPreferredSource = 
             getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = 
             getImageResolutionPreferenceFromString(resolution);
-        return bookCacheService.searchBooksReactive(query, startIndex, maxResults)
+            
+        // Parse query for year if publishedYear parameter is not explicitly provided
+        String processedQuery = query;
+        logger.info("YEAR DETECTION: Starting year detection. Original query='{}', publishedYear={}", query, publishedYear);
+        
+        if (publishedYear == null && query != null) {
+            // Check if query contains a year pattern
+            java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
+            java.util.regex.Matcher matcher = yearPattern.matcher(query);
+            
+            if (matcher.find()) {
+                // Extract the year
+                String yearStr = matcher.group(1);
+                logger.info("YEAR DETECTION: Found year pattern in query: '{}' at position {}-{}", 
+                        yearStr, matcher.start(), matcher.end());
+                
+                try {
+                    publishedYear = Integer.parseInt(yearStr);
+                    // Remove the year from the query - be careful with the replacement
+                    String beforeYear = query.substring(0, matcher.start());
+                    String afterYear = query.substring(matcher.end());
+                    processedQuery = beforeYear + afterYear;
+                    processedQuery = processedQuery.trim();
+                    
+                    // Remove extra spaces that might result from the removal
+                    processedQuery = processedQuery.replaceAll("\\s+", " ");
+                    logger.info("YEAR DETECTION: Detected year {} in query. Transformed query to: '{}'", 
+                            publishedYear, processedQuery);
+                } catch (NumberFormatException e) {
+                    logger.warn("YEAR DETECTION: Failed to parse detected year from query: {}", e.getMessage());
+                }
+            } else {
+                logger.info("YEAR DETECTION: No year pattern found in query");
+            }
+        } else {
+            logger.info("YEAR DETECTION: Skipped detection - publishedYear already provided or query is null");
+        }
+        
+        // If processedQuery is empty after removing the year, use a wildcard search
+        if (processedQuery == null || processedQuery.isEmpty()) {
+            processedQuery = "*";
+            logger.info("YEAR DETECTION: Query was empty after year extraction, using wildcard search");
+        }
+        
+        return bookCacheService.searchBooksReactive(processedQuery, startIndex, maxResults, publishedYear)
             .flatMap(paginatedBooks -> {
                 List<Book> currentPaginatedBooks = (paginatedBooks == null) ? Collections.emptyList() : paginatedBooks;
                 int totalResultsInPage = currentPaginatedBooks.size(); 

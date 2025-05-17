@@ -1,16 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.repository;
-
-import com.williamcallahan.book_recommendation_engine.model.CachedBook;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Repository;
-
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
-
 /**
  * No-operation implementation of CachedBookRepository for database-free execution
  *
@@ -24,6 +11,18 @@ import java.util.Optional;
  * - Enables development and testing without database dependencies
  * - Logs diagnostic information about repository activation
  */
+package com.williamcallahan.book_recommendation_engine.repository;
+
+import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.context.annotation.Primary;
+import org.springframework.stereotype.Repository;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
 @Repository
 @Primary
 @ConditionalOnExpression("'${spring.datasource.url:}'.length() == 0")
@@ -62,7 +61,7 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of save that returns entity unchanged
+     * Returns entity unchanged
      * 
      * @param entity Entity to save
      * @param <S> Type extending CachedBook
@@ -74,7 +73,7 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of saveAll that returns entities unchanged
+     * Returns entities unchanged
      * 
      * @param entities Collection of entities to save
      * @param <S> Type extending CachedBook
@@ -86,8 +85,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findById that always returns empty
-     * 
      * @param s Entity ID to find
      * @return Empty Optional
      */
@@ -97,8 +94,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of existsById that always returns false
-     * 
      * @param s Entity ID to check
      * @return Always false
      */
@@ -108,8 +103,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findAll that returns empty list
-     * 
      * @return Empty list of entities
      */
     @Override
@@ -118,8 +111,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of findAllById that returns empty list
-     * 
      * @param strings Collection of IDs to find
      * @return Empty list of entities
      */
@@ -129,8 +120,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of count that always returns zero
-     * 
      * @return Always zero
      */
     @Override
@@ -139,8 +128,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of deleteById that does nothing
-     * 
      * @param s Entity ID to delete
      */
     @Override
@@ -148,8 +135,6 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     }
 
     /**
-     * No-op implementation of delete that does nothing
-     * 
      * @param entity Entity to delete
      */
     @Override
@@ -191,5 +176,18 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     public java.util.Set<String> findAllDistinctGoogleBooksIds() {
         logger.debug("NoOpCachedBookRepository: findAllDistinctGoogleBooksIds() called, returning empty set.");
         return Collections.emptySet();
+    }
+
+    /**
+     * No-op implementation of findByTitleIgnoreCaseAndIdNot
+     * 
+     * @param title Book title to match (case insensitive)
+     * @param idToExclude Book ID to exclude from results
+     * @return Empty list of cached books
+     */
+    @Override
+    public List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude) {
+        logger.debug("NoOp: findByTitleIgnoreCaseAndIdNot called with title '{}' and excludeId '{}', returning empty list.", title, idToExclude);
+        return Collections.emptyList();
     }
 }

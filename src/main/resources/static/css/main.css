@@ -588,6 +588,34 @@ color: var(--dark-color);
     color: var(--text-color); /* Added to ensure text is light */
 }
 
+/* Fix text visibility in card headings and small text for dark mode */
+[data-theme="dark"] .metadata-item .metadata-label,
+[data-theme="dark"] .card-subtitle.text-muted,
+[data-theme="dark"] .tab-content .text-muted,
+[data-theme="dark"] .card .text-muted {
+    color: var(--grey-400) !important; /* Lighter color for better visibility in dark mode */
+}
+
+/* Fix other edition cards in dark mode */
+[data-theme="dark"] .other-editions-section .card-title {
+    color: var(--text-color); /* Light text color for headings */
+}
+
+[data-theme="dark"] .other-editions-section .list-unstyled {
+    color: var(--grey-400); /* Lighter color for text content */
+}
+
+/* Make the currently viewing button more visible in dark mode */
+[data-theme="dark"] .btn-success {
+    background-color: #10B981; /* Bright green in dark mode */
+    color: #111827;  /* Dark text for better contrast */
+    border-color: #059669;
+}
+
+[data-theme="dark"] .list-unstyled strong {
+    color: var(--grey-300); /* Make strong text more visible */
+}
+
 [data-theme="dark"] .card-footer.bg-white {
     background-color: var(--card-bg) !important;
 }
@@ -816,4 +844,30 @@ color: var(--dark-color);
 [data-theme="dark"] .book-cover-section {
     background-color: transparent !important;
     /* border: 1px solid var(--grey-500); */ /* Optional: if a border is desired */
+}
+
+/* Fix tab styling in dark mode */
+[data-theme="dark"] .nav-tabs {
+    border-bottom-color: var(--grey-400);
+}
+
+[data-theme="dark"] .nav-tabs .nav-link {
+    color: var(--grey-400);
+}
+
+[data-theme="dark"] .nav-tabs .nav-link.active {
+    background-color: transparent;
+    border-color: var(--grey-400) var(--grey-400) transparent;
+    color: var(--primary-color);
+}
+
+[data-theme="dark"] .nav-tabs .nav-link:hover:not(.active) {
+    border-color: var(--grey-300) var(--grey-300) var(--grey-400);
+    color: var(--grey-300);
+}
+
+/* Fix book details headings */
+[data-theme="dark"] .book-metadata .metadata-label,
+[data-theme="dark"] .tab-content h5 {
+    color: var(--grey-300) !important;
 }
