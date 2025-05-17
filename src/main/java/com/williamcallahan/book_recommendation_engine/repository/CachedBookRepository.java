@@ -146,18 +146,18 @@ public interface CachedBookRepository {
     void deleteAll();
 
     /**
-     * Retrieves all unique Google Books identifiers present in the cache
-     * 
-     * @return Set of unique Google Books IDs for deduplication
-     */
+ * Returns a set of all unique Google Books IDs stored in the cache.
+ *
+ * @return a set containing each distinct Google Books identifier present in the cache
+ */
     java.util.Set<String> findAllDistinctGoogleBooksIds();
 
-    /**
-     * Retrieves cached books by title (case-insensitive) excluding a specific ID
-     *
-     * @param title The title to search for
-     * @param idToExclude The ID of the book to exclude from the results
-     * @return A list of cached books matching the criteria
-     */
+    /****
+ * Returns cached books with a case-insensitive title match, excluding the specified book ID.
+ *
+ * @param title the title to match, case-insensitive
+ * @param idToExclude the ID of the book to exclude from the results
+ * @return a list of cached books matching the title, excluding the specified ID
+ */
     List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude);
 }

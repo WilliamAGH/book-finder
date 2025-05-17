@@ -45,14 +45,8 @@ public class CoverSourceFetchingService {
     private static final Pattern GOOGLE_PRINTSEC_FRONTCOVER_PATTERN = Pattern.compile("[?&](printsec=frontcover|pt=frontcover)");
     private static final Pattern GOOGLE_EDGE_CURL_PATTERN = Pattern.compile("[?&]edge=curl");
 
-    /**
-     * Constructs the CoverSourceFetchingService
-     * @param localDiskCoverCacheService Service for local disk caching
-     * @param s3BookCoverService Service for S3 interactions
-     * @param openLibraryService Service for OpenLibrary covers
-     * @param longitoodService Service for Longitood covers
-     * @param googleBooksService Service for Google Books API
-     * @param coverCacheManager Manager for in-memory caches
+    /****
+     * Initializes the CoverSourceFetchingService with dependencies for local caching, S3 storage, external cover sources, and cache management.
      */
     @Autowired
     public CoverSourceFetchingService(
@@ -71,13 +65,14 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Asynchronously retrieves the best available cover image for a book.
-     * It processes a provisional URL hint, then tries S3, then other external sources,
-     * and finally selects the best image from all gathered candidates.
-     * @param book The book to find the cover image for
-     * @param provisionalUrlHint A hint URL that might contain a usable cover image
-     * @param provenanceData Container for tracking image source details and attempts
-     * @return CompletableFuture containing ImageDetails of the best found image, or a placeholder
+     * Asynchronously fetches and selects the best available cover image for the given book.
+     *
+     * This method processes a provisional URL hint (if provided), then attempts to retrieve a cover image from S3 storage, and finally queries external sources such as Google Books, OpenLibrary, and Longitood. All candidate images are evaluated, and the best one is selected based on quality and source preference. Detailed provenance of all attempts and the final selection is tracked in the provided provenance data. If no valid image is found or a catastrophic error occurs, a placeholder image is returned.
+     *
+     * @param book the book for which to retrieve a cover image
+     * @param provisionalUrlHint an optional URL that may point to a potential cover image
+     * @param provenanceData object for recording the provenance and details of all image fetch attempts
+     * @return a CompletableFuture containing the ImageDetails of the best available cover image, or a placeholder if none are found
      */
     public CompletableFuture<ImageDetails> getBestCoverImageUrlAsync(Book book, String provisionalUrlHint, ImageProvenanceData provenanceData) {
         String bookIdForLog = ImageCacheUtils.getIdentifierKey(book) != null ? ImageCacheUtils.getIdentifierKey(book) : "unknown_book_id";
@@ -101,8 +96,11 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Processes the provisional URL hint asynchronously.
-     * @return A CompletableFuture yielding a list of ImageDetails candidates from the hint.
+     * Asynchronously processes a provisional cover image URL hint and returns valid image candidates.
+     *
+     * Determines the likely source of the hint (Google Books, OpenLibrary, Longitood, or generic), applies source-specific validation and enhancement, and attempts to download and locally cache the image(s). For Google Books hints, both the original and a zoom=0 variant are considered if heuristically likely to be cover images. For non-Google hints, only images meeting minimum dimension requirements are accepted. Returns an empty list if no valid candidates are found or on error.
+     *
+     * @return a CompletableFuture yielding a list of valid ImageDetails candidates derived from the provisional hint
      */
     private CompletableFuture<List<ImageDetails>> processProvisionalHintAsync(Book book, String provisionalUrlHint, String bookIdForLog, ImageProvenanceData provenanceData) {
         if (provisionalUrlHint == null || provisionalUrlHint.isEmpty() ||
@@ -187,12 +185,15 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Fetches from S3 and then proceeds to fetch from remaining external sources.
-     * @param book The book object
-     * @param bookIdForLog Identifier for logging
-     * @param provenanceData Container for tracking attempts
-     * @param existingCandidates Candidates gathered from prior steps (e.g., hints)
-     * @return CompletableFuture with the best ImageDetails found
+     * Attempts to fetch a book cover image from S3, then continues to query remaining external sources, accumulating all valid image candidates.
+     *
+     * Initiates an asynchronous fetch from S3 for the given book. If a valid image is found, it is added to the candidate list. Regardless of S3 success or failure, proceeds to fetch from other external sources (such as Google Books, OpenLibrary, and Longitood), combining all valid candidates to determine the best available cover image.
+     *
+     * @param book the book for which to fetch a cover image
+     * @param bookIdForLog identifier used for logging and provenance tracking
+     * @param provenanceData provenance tracking container for all image fetch attempts
+     * @param existingCandidates list of image candidates gathered from prior steps (e.g., provisional hints)
+     * @return a CompletableFuture resolving to the best available ImageDetails, or a placeholder if none are found
      */
     private CompletableFuture<ImageDetails> fetchFromS3AndThenRemainingSources(Book book, String bookIdForLog, ImageProvenanceData provenanceData, List<ImageDetails> existingCandidates) {
         List<ImageDetails> candidatesSoFar = new ArrayList<>(existingCandidates);
@@ -216,6 +217,22 @@ public class CoverSourceFetchingService {
             });
     }
 
+    /**
+     * Enhances a Google Books image URL by enforcing HTTPS, removing unwanted parameters, and optionally setting the zoom level.
+     *
+     * Specifically, this method:
+     * <ul>
+     *   <li>Converts HTTP URLs to HTTPS.</li>
+     *   <li>Removes <code>fife</code> parameters that control image size.</li>
+     *   <li>Removes <code>edge=curl</code> to prefer flat cover images.</li>
+     *   <li>Adds or replaces the <code>zoom</code> parameter if provided.</li>
+     *   <li>Cleans up any trailing <code>&</code> or <code>?</code> characters.</li>
+     * </ul>
+     *
+     * @param baseUrl   the original Google Books image URL
+     * @param zoomParam the zoom parameter to set (e.g., "zoom=0"), or null to leave unchanged
+     * @return the enhanced image URL, or null if the input URL is null
+     */
     private String enhanceGoogleImageUrl(String baseUrl, String zoomParam) {
         if (baseUrl == null) return null;
         String enhancedUrl = baseUrl;
@@ -260,13 +277,15 @@ public class CoverSourceFetchingService {
     }
     
     /**
-     * Fetches images from remaining external sources (Google API, OpenLibrary, Longitood).
-     * This method is called after hints and S3 have been processed.
-     * @param book The book object
-     * @param bookIdForLog Identifier for logging
-     * @param provenanceData Container for tracking attempts
-     * @param existingCandidates Candidates gathered from prior steps (hints, S3)
-     * @return CompletableFuture with the best ImageDetails found from all sources
+     * Asynchronously fetches cover images for a book from external sources (Google Books API, OpenLibrary, Longitood) after prior candidates and S3 have been processed.
+     *
+     * If no external sources are available or all fetch attempts fail, returns the best existing candidate or a placeholder image.
+     *
+     * @param book The book for which to fetch cover images.
+     * @param bookIdForLog Identifier used for logging.
+     * @param provenanceData Tracks provenance and attempt details for image fetching.
+     * @param existingCandidates List of image candidates gathered from previous steps.
+     * @return A CompletableFuture resolving to the best available ImageDetails from all sources, or a placeholder if none are found.
      */
     private CompletableFuture<ImageDetails> fetchFromRemainingExternalSources(Book book, String bookIdForLog, ImageProvenanceData provenanceData, List<ImageDetails> existingCandidates) {
         List<CompletableFuture<ImageDetails>> sourceFutures = new ArrayList<>();
@@ -325,6 +344,16 @@ public class CoverSourceFetchingService {
             });
     }
     
+    /**
+     * Selects the best cover image from a list of candidates based on source preference and image dimensions.
+     *
+     * Filters out invalid candidates, prioritizes S3 cache images with sufficient size, then selects by largest area and preferred source order. Updates provenance data with the selection.
+     *
+     * @param candidates list of image candidates to consider
+     * @param bookIdForLog identifier for logging context
+     * @param provenanceData provenance tracking object to update with selection details
+     * @return the selected best {@code ImageDetails}, or a placeholder if no valid candidates exist
+     */
     private ImageDetails selectBestImageDetails(List<ImageDetails> candidates, String bookIdForLog, ImageProvenanceData provenanceData) {
         if (candidates == null || candidates.isEmpty()) {
             logger.warn("Book ID {}: selectBestImageDetails called with no candidates.", bookIdForLog);
@@ -387,9 +416,10 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Checks if ImageDetails represents a valid, non-placeholder image
-     * @param imageDetails The ImageDetails to check
-     * @return True if valid, false otherwise
+     * Determines whether the provided ImageDetails represents a valid, non-placeholder image with meaningful dimensions.
+     *
+     * @param imageDetails the image details to validate
+     * @return true if the image is non-null, not a placeholder, and has width and height greater than 1; false otherwise
      */
     private boolean isValidImageDetails(ImageDetails imageDetails) {
         return imageDetails != null &&
@@ -400,11 +430,14 @@ public class CoverSourceFetchingService {
     }
     
     /**
-     * Updates the SelectedImageInfo in ImageProvenanceData if not already set or if new one is better.
-     * @param provenanceData The ImageProvenanceData object
-     * @param sourceName The source from which the image was selected
-     * @param imageDetails The details of the selected image
-     * @param selectionReason Reason for this selection
+     * Updates the selected image information in the provenance data with details of the chosen image.
+     *
+     * Replaces any existing selection with the provided image details, including source, URL, resolution, dimensions, selection reason, and storage location.
+     *
+     * @param provenanceData the provenance data object to update
+     * @param sourceName the source from which the image was selected
+     * @param imageDetails the details of the selected image
+     * @param selectionReason the reason this image was selected
      */
     private void updateSelectedImageInfo(ImageProvenanceData provenanceData, ImageSourceName sourceName, ImageDetails imageDetails, String selectionReason) {
         if (provenanceData == null || imageDetails == null || !isValidImageDetails(imageDetails)) {
@@ -434,6 +467,16 @@ public class CoverSourceFetchingService {
                 sourceName, selectedInfo.getStorageLocation(), selectedInfo.getFinalUrl(), imageDetails.getWidth(), imageDetails.getHeight(), selectionReason);
     }
     
+    /**
+     * Records an attempted image fetch in the provenance data, including source, URL, status, failure reason, and image details if successful.
+     *
+     * @param provenanceData the provenance data object to update
+     * @param sourceName the name of the image source attempted
+     * @param urlAttempted the URL that was attempted to fetch
+     * @param status the result status of the attempt
+     * @param failureReason the reason for failure, if applicable
+     * @param detailsIfSuccess the image details if the attempt was successful
+     */
     private void addAttemptToProvenance(ImageProvenanceData provenanceData, ImageSourceName sourceName, String urlAttempted, ImageAttemptStatus status, String failureReason, ImageDetails detailsIfSuccess) {
         if (provenanceData == null) return;
         if (provenanceData.getAttemptedImageSources() == null) {
@@ -452,11 +495,15 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Attempts to fetch cover from S3
-     * @param book The book object
-     * @param bookIdForLog Identifier for logging
-     * @param provenanceData Container for tracking attempts
-     * @return CompletableFuture with ImageDetails from S3, or placeholder
+     * Asynchronously attempts to fetch a book cover image from S3 storage.
+     *
+     * If a valid S3 cover image is found, returns its details and records a successful provenance attempt.
+     * If the image is missing or invalid, or an error occurs, returns a placeholder image and records the failure in provenance.
+     *
+     * @param book the book for which to fetch the cover image
+     * @param bookIdForLog identifier used for logging
+     * @param provenanceData provenance tracking container for this fetch attempt
+     * @return a CompletableFuture containing the S3 cover image details if found and valid, or a placeholder image otherwise
      */
     private CompletableFuture<ImageDetails> tryS3(Book book, String bookIdForLog, ImageProvenanceData provenanceData) {
         logger.debug("Attempting S3 for Book ID {}", bookIdForLog);
@@ -488,12 +535,15 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Attempts to fetch cover from OpenLibrary
-     * @param isbn The ISBN of the book
-     * @param bookIdForLog Identifier for logging
-     * @param sizeSuffix Size suffix for OpenLibrary URL (L, M, S)
-     * @param provenanceData Container for tracking attempts
-     * @return CompletableFuture with ImageDetails from OpenLibrary, or placeholder
+     * Asynchronously attempts to fetch a book cover image from OpenLibrary using the provided ISBN and size.
+     *
+     * If the ISBN is known to be invalid for OpenLibrary, immediately returns a placeholder image and records the skipped attempt in provenance data. Otherwise, fetches cover details from OpenLibrary, downloads and caches the image locally if available, and updates provenance tracking for all outcomes. If no valid image is found or an error occurs, marks the ISBN as bad and returns a placeholder image.
+     *
+     * @param isbn the ISBN of the book to fetch the cover for
+     * @param bookIdForLog identifier used for logging and cache naming
+     * @param sizeSuffix the desired OpenLibrary image size ("L", "M", or "S")
+     * @param provenanceData container for tracking image fetch attempts and results
+     * @return a CompletableFuture containing the fetched ImageDetails, or a placeholder if unavailable
      */
     private CompletableFuture<ImageDetails> tryOpenLibrary(String isbn, String bookIdForLog, String sizeSuffix, ImageProvenanceData provenanceData) {
         if (coverCacheManager.isKnownBadOpenLibraryIsbn(isbn)) {
@@ -542,11 +592,16 @@ public class CoverSourceFetchingService {
     }
     
     /**
-     * Attempts to fetch cover from Google Books API by ISBN
-     * @param isbn The ISBN of the book
-     * @param bookIdForLog Identifier for logging
-     * @param provenanceData Container for tracking attempts
-     * @return CompletableFuture with ImageDetails from Google, or placeholder
+     * Asynchronously fetches a book cover image from the Google Books API using the provided ISBN.
+     *
+     * If a valid cover image URL is found and passes heuristic checks, downloads and caches the image locally.
+     * Updates provenance data with the raw API response and details of the attempt.
+     * Returns a placeholder image if no usable cover is found or if an error occurs.
+     *
+     * @param isbn the ISBN of the book to search for
+     * @param bookIdForLog identifier used for logging and provenance tracking
+     * @param provenanceData container for tracking the details and outcomes of image fetch attempts
+     * @return a CompletableFuture containing the fetched ImageDetails, or a placeholder if unavailable
      */
     private CompletableFuture<ImageDetails> tryGoogleBooksApiByIsbn(String isbn, String bookIdForLog, ImageProvenanceData provenanceData) {
         logger.debug("Attempting Google Books API by ISBN {} (Book ID for log: {})", isbn, bookIdForLog);
@@ -590,11 +645,16 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Attempts to fetch cover from Google Books API by Volume ID
-     * @param googleVolumeId The Google Books Volume ID
-     * @param bookIdForLog Identifier for logging
-     * @param provenanceData Container for tracking attempts
-     * @return CompletableFuture with ImageDetails from Google, or placeholder
+     * Asynchronously attempts to fetch a book cover image from the Google Books API using the provided volume ID.
+     *
+     * If a valid cover image URL is found and passes heuristic checks, downloads and caches the image locally.
+     * Updates provenance data with API responses and details of each attempt.
+     * Returns a placeholder image if no usable cover is found or on error.
+     *
+     * @param googleVolumeId the Google Books Volume ID to query
+     * @param bookIdForLog identifier used for logging and provenance tracking
+     * @param provenanceData container for tracking provenance of image fetch attempts
+     * @return a CompletableFuture containing the fetched ImageDetails or a placeholder if unavailable
      */
     private CompletableFuture<ImageDetails> tryGoogleBooksApiByVolumeId(String googleVolumeId, String bookIdForLog, ImageProvenanceData provenanceData) {
         logger.debug("Attempting Google Books API by Volume ID {} (Book ID for log: {})", googleVolumeId, bookIdForLog);
@@ -632,11 +692,16 @@ public class CoverSourceFetchingService {
     }
     
     /**
-     * Attempts to fetch cover from Longitood
-     * @param book The book object
-     * @param bookIdForLog Identifier for logging
-     * @param provenanceData Container for tracking attempts
-     * @return CompletableFuture with ImageDetails from Longitood, or placeholder
+     * Asynchronously attempts to fetch a book cover image from Longitood using the book's ISBN.
+     *
+     * If the ISBN is missing or known to be invalid for Longitood, returns a placeholder image.
+     * On a successful fetch, downloads and caches the image locally, validating its details.
+     * Updates provenance data with the outcome of each attempt, including failures and exceptions.
+     *
+     * @param book the book for which to fetch the cover image
+     * @param bookIdForLog identifier used for logging and cache naming
+     * @param provenanceData container for tracking image fetch attempts and results
+     * @return a CompletableFuture containing the fetched ImageDetails, or a placeholder if unavailable
      */
     private CompletableFuture<ImageDetails> tryLongitood(Book book, String bookIdForLog, ImageProvenanceData provenanceData) {
         String isbn = ImageCacheUtils.getIdentifierKey(book); // Prefer ISBN for Longitood
@@ -688,15 +753,16 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Validates if a Google Books image URL is likely to be a cover.
-     * - Prefers URLs with "printsec=frontcover" or "pt=frontcover".
-     * - Penalizes URLs with "edge=curl".
-     * - Penalizes URLs with "pg=" followed by typical page identifiers (e.g., PA5, PT10).
+     * Determines whether a Google Books image URL is likely to represent a book cover based on URL parameters.
      *
-     * @param url The Google Books image URL to validate.
-     * @param bookIdForLog Identifier for logging.
-     * @param contextHint A hint for logging about where this check is being performed (e.g., "ProvisionalHint", "GoogleAPI-ISBN").
-     * @return True if the URL is likely a cover, false otherwise.
+     * The method returns false if the URL contains a `pg=` parameter (indicating a specific page) or `edge=curl` (indicating a curled page preview).
+     * It returns true if the URL contains `printsec=frontcover` or `pt=frontcover`, which are strong indicators of a cover image.
+     * If none of these indicators are present, the URL is accepted as a potential cover with lower confidence.
+     *
+     * @param url the Google Books image URL to evaluate
+     * @param bookIdForLog identifier used for logging context
+     * @param contextHint a string describing the context of the check (e.g., "ProvisionalHint", "GoogleAPI-ISBN")
+     * @return true if the URL is likely a cover image, false otherwise
      */
     private boolean isLikelyGoogleCoverUrl(String url, String bookIdForLog, String contextHint) {
         if (url == null || url.isEmpty()) {

@@ -68,14 +68,19 @@ public class BookController {
     }
     
     /**
-     * Search books by keyword with support for pagination, cover source preferences, and image resolution filtering
-     * 
-     * @param query Search query string to find matching books
-     * @param startIndex Start index for pagination (optional, defaults to 0)
-     * @param maxResults Maximum number of results to return (optional, defaults to 10)
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @return Mono containing ResponseEntity with map of search results including pagination details
+     * Searches for books matching the provided query, with optional pagination, cover image source and resolution preferences, and published year filtering.
+     *
+     * If the `publishedYear` parameter is not specified, the method attempts to extract a four-digit year from the query string and uses it as the published year filter, removing it from the query. If the query becomes empty after year extraction, a wildcard search is performed.
+     *
+     * The search results include cover images processed according to the specified source and resolution preferences. Results can be filtered or sorted based on image resolution preference.
+     *
+     * @param query the search query string
+     * @param startIndex the starting index for pagination (default is 0)
+     * @param maxResults the maximum number of results to return (default is 10)
+     * @param coverSource the preferred source for book cover images (default is ANY)
+     * @param resolution the preferred resolution for book cover images (default is ANY)
+     * @param publishedYear the year of publication to filter results (optional)
+     * @return a Mono emitting a ResponseEntity containing a map with search results and pagination metadata
      */
     @GetMapping("/search")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooks(

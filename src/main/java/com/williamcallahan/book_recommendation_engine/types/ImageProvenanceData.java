@@ -135,6 +135,13 @@ public class ImageProvenanceData {
         private String fetchedUrl;
         private String dimensions;
 
+        /**
+         * Constructs an AttemptedSourceInfo instance with the specified image source, attempted URL, and attempt status.
+         *
+         * @param sourceName the name or identifier of the image source
+         * @param urlAttempted the URL that was attempted to fetch the image from
+         * @param status the status of the image fetch attempt
+         */
         public AttemptedSourceInfo(ImageSourceName sourceName, String urlAttempted, ImageAttemptStatus status) {
             this.sourceName = sourceName;
             this.urlAttempted = urlAttempted;
@@ -223,45 +230,45 @@ public class ImageProvenanceData {
         }
 
         /**
-         * Set additional metadata about this attempt
-         * 
-         * @param metadata Map of additional metadata key-value pairs
+         * Sets additional metadata key-value pairs for this image source attempt.
+         *
+         * @param metadata a map containing supplementary information related to the attempt
          */
         public void setMetadata(Map<String, String> metadata) {
             this.metadata = metadata;
         }
 
         /**
-         * Get the actual URL of the fetched image
-         * 
-         * @return URL of the fetched image which may differ from attempted URL
+         * Returns the actual URL from which the image was fetched, which may differ from the originally attempted URL.
+         *
+         * @return the fetched image URL, or null if not available
          */
         public String getFetchedUrl() {
             return fetchedUrl;
         }
 
         /**
-         * Set the actual URL of the fetched image
-         * 
-         * @param fetchedUrl URL of the fetched image which may differ from attempted URL
+         * Sets the actual URL of the image that was fetched, which may differ from the originally attempted URL.
+         *
+         * @param fetchedUrl the actual URL of the fetched image
          */
         public void setFetchedUrl(String fetchedUrl) {
             this.fetchedUrl = fetchedUrl;
         }
 
-        /**
-         * Get the dimensions of the image in WxH format
-         * 
-         * @return Image dimensions in WxH format
+        /****
+         * Returns the dimensions of the image in "WxH" format.
+         *
+         * @return the image dimensions as a string in "width x height" format
          */
         public String getDimensions() {
             return dimensions;
         }
 
-        /**
-         * Set the dimensions of the image in WxH format
-         * 
-         * @param dimensions Image dimensions in WxH format
+        /****
+         * Sets the dimensions of the image in "WxH" format.
+         *
+         * @param dimensions the image dimensions, formatted as width x height (e.g., "640x480")
          */
         public void setDimensions(String dimensions) {
             this.dimensions = dimensions;
@@ -368,45 +375,45 @@ public class ImageProvenanceData {
         }
 
         /**
-         * Set the S3 key if applicable
-         * 
-         * @param s3Key S3 key for this image
+         * Sets the S3 key associated with the selected image, if stored in Amazon S3.
+         *
+         * @param s3Key the S3 key for this image
          */
         public void setS3Key(String s3Key) {
             this.s3Key = s3Key;
         }
 
         /**
-         * Get the dimensions of the image in WxH format
-         * 
-         * @return Image dimensions in WxH format
+         * Returns the dimensions of the image in "WxH" format.
+         *
+         * @return the image dimensions as a string in "width x height" format
          */
         public String getDimensions() {
             return dimensions;
         }
 
         /**
-         * Set the dimensions of the image in WxH format
-         * 
-         * @param dimensions Image dimensions in WxH format
+         * Sets the image dimensions in "WxH" format.
+         *
+         * @param dimensions the dimensions of the image (e.g., "800x600")
          */
         public void setDimensions(String dimensions) {
             this.dimensions = dimensions;
         }
 
-        /**
-         * Get the reason why this image was selected
-         * 
-         * @return Brief description of selection criteria
+        /****
+         * Returns the reason for selecting this image.
+         *
+         * @return a brief description explaining why this image was chosen
          */
         public String getSelectionReason() {
             return selectionReason;
         }
 
-        /**
-         * Set the reason why this image was selected
-         * 
-         * @param selectionReason Brief description of selection criteria
+        /****
+         * Sets the reason for selecting this image.
+         *
+         * @param selectionReason a brief description explaining why this image was chosen
          */
         public void setSelectionReason(String selectionReason) {
             this.selectionReason = selectionReason;
