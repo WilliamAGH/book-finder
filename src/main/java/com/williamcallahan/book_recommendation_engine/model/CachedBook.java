@@ -1,5 +1,9 @@
 /**
- * Entity model for caching book information in database
+ * Persistent entity for storing book data in database
+ * - Extends book model with caching metadata
+ * - Tracks access patterns and embedding vectors for similarity search
+ * - Contains conversion methods between Book and CachedBook
+ * - Used for reducing API calls and improving performance
  * 
  * @author William Callahan
  */
@@ -12,19 +16,12 @@ import com.williamcallahan.book_recommendation_engine.types.PgVector;
 import com.williamcallahan.book_recommendation_engine.types.PgVectorConverter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import org.hibernate.annotations.CreationTimestamp;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
-
-/**
- * Persistent entity for storing book data in database
- * - Extends book model with caching metadata
- * - Tracks access patterns and embedding vectors for similarity search
- * - Contains conversion methods between Book and CachedBook
- * - Used for reducing API calls and improving performance
- */
 @Entity
 @Table(name = "cached_books")
 @Data
@@ -59,8 +56,9 @@ public class CachedBook {
     @Column(name = "published_date")
     private LocalDateTime publishedDate;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "cached_book_categories", joinColumns = @JoinColumn(name = "book_id"))
+    @Column(name = "category", columnDefinition = "text") // Keep for explicit text array if needed, or remove if default is fine
     private List<String> categories;
 
     @Column(name = "average_rating")
@@ -87,15 +85,23 @@ public class CachedBook {
     @Column(name = "purchase_link")
     private String purchaseLink;
 
-    @Column(columnDefinition = "vector(384)") // The actual DB type is 'vector'. Converter handles Java to DB string.
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private JsonNode rawData;
+
+    /**
+     * Vector embedding for semantic similarity searches
+     * 
+     * - Custom PgVector type wraps float arrays for the embedding
+     * - Stored in PostgreSQL vector column in production
+     * - Stored as TEXT in H2 for testing compatibility
+     * - Used with vector_similarity functions for recommendations
+     */
     @Convert(converter = PgVectorConverter.class)
     private PgVector embedding;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "raw_data", columnDefinition = "jsonb", nullable = false)
-    private JsonNode rawData;
-
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @CreationTimestamp
+    @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "last_accessed", nullable = false)

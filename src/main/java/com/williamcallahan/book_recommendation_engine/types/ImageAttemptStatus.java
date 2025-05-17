@@ -1,23 +1,17 @@
 /**
  * Status codes for image fetch and processing attempts
- *
- * @author William Callahan
- *
- * Features:
  * - Categorizes image retrieval results
  * - Distinguishes between different error types
  * - Enables targeted error handling and recovery
  * - Supports detailed logging of image processing workflow
  * - Used for determining retry strategies
- */
-package com.williamcallahan.book_recommendation_engine.types;
-
-/**
- * Status codes for image fetch and processing attempts
  * - Tracks outcomes of cover image retrieval operations
  * - Differentiates between error types for proper handling
  * - Used throughout image processing pipeline
+ *
+ * @author William Callahan
  */
+package com.williamcallahan.book_recommendation_engine.types;
 public enum ImageAttemptStatus {
     /**
      * Image successfully retrieved and processed
@@ -28,6 +22,12 @@ public enum ImageAttemptStatus {
      * Image not found at source (HTTP 404)
      */
     FAILURE_404,
+
+    /**
+     * Generic "not found" status, e.g. when a service indicates an item doesn't exist without a specific HTTP 404.
+     * Could be S3 NoSuchKeyException, or an API response indicating no data.
+     */
+    FAILURE_NOT_FOUND,
     
     /**
      * Request timed out while fetching image
@@ -52,7 +52,7 @@ public enum ImageAttemptStatus {
     /**
      * Image fetched but processing failed (e.g. hashing error, metadata extraction error)
      */
-    FAILURE_PROCESSING, // Renamed from PROCESSING_FAILED for consistency, or add as new if distinct
+    FAILURE_PROCESSING,
 
     /**
      * Download resulted in empty or null content
@@ -82,5 +82,17 @@ public enum ImageAttemptStatus {
     /**
      * Image fetch attempt is currently pending or in progress
      */
-    PENDING
+    PENDING,
+
+    /**
+     * Service responded, but the details returned were not valid or usable (e.g. S3 object metadata not matching expectations)
+     */
+    FAILURE_INVALID_DETAILS,
+
+    /**
+     * Service responded, but the expected data (e.g. a URL) was missing from the response.
+     */
+    FAILURE_NO_URL_IN_RESPONSE,
+
+
 }

@@ -1,5 +1,9 @@
 /**
- * Model representing a book with all metadata and cover image details
+ * Core book entity model containing all book metadata and cover image information
+ * - Represents books fetched from external sources like Google Books API
+ * - Stores comprehensive book details including bibliographic data
+ * - Tracks cover image metadata including resolution information
+ * - Contains edition information for related formats of the same book
  * 
  * @author William Callahan
  */
@@ -11,14 +15,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.ArrayList;
-
-/**
- * Core book entity model containing all book metadata and cover image information
- * - Represents books fetched from external sources like Google Books API
- * - Stores comprehensive book details including bibliographic data
- * - Tracks cover image metadata including resolution information
- * - Contains edition information for related formats of the same book
- */
 public class Book {
     private String id;
     private String title;
@@ -44,6 +40,9 @@ public class Book {
     private Double listPrice;
     private String currencyCode;
     private String webReaderLink;
+    
+    private Boolean pdfAvailable;
+    private Boolean epubAvailable;
 
     private Integer coverImageWidth;
     private Integer coverImageHeight;
@@ -66,6 +65,8 @@ public class Book {
         private String googleBooksId;
         private String type;
         private String identifier;
+        private String editionIsbn10;
+        private String editionIsbn13;
         private Date publishedDate;
         private String coverImageUrl;
 
@@ -80,13 +81,17 @@ public class Book {
          * @param googleBooksId Google Books identifier for this edition
          * @param type Type of edition or identifier (ISBN_10, ISBN_13, etc)
          * @param identifier Actual identifier value
+         * @param editionIsbn10 Specific ISBN-10 for this edition
+         * @param editionIsbn13 Specific ISBN-13 for this edition
          * @param publishedDate Publication date for this edition
          * @param coverImageUrl Cover image URL specific to this edition
          */
-        public EditionInfo(String googleBooksId, String type, String identifier, Date publishedDate, String coverImageUrl) {
+        public EditionInfo(String googleBooksId, String type, String identifier, String editionIsbn10, String editionIsbn13, Date publishedDate, String coverImageUrl) {
             this.googleBooksId = googleBooksId;
             this.type = type;
             this.identifier = identifier;
+            this.editionIsbn10 = editionIsbn10;
+            this.editionIsbn13 = editionIsbn13;
             this.publishedDate = publishedDate;
             this.coverImageUrl = coverImageUrl;
         }
@@ -147,6 +152,42 @@ public class Book {
          */
         public void setIdentifier(String identifier) {
             this.identifier = identifier;
+        }
+
+        /**
+         * Get specific ISBN-10 for this edition
+         * 
+         * @return Specific ISBN-10
+         */
+        public String getEditionIsbn10() {
+            return editionIsbn10;
+        }
+
+        /**
+         * Set specific ISBN-10 for this edition
+         * 
+         * @param editionIsbn10 Specific ISBN-10
+         */
+        public void setEditionIsbn10(String editionIsbn10) {
+            this.editionIsbn10 = editionIsbn10;
+        }
+
+        /**
+         * Get specific ISBN-13 for this edition
+         * 
+         * @return Specific ISBN-13
+         */
+        public String getEditionIsbn13() {
+            return editionIsbn13;
+        }
+
+        /**
+         * Set specific ISBN-13 for this edition
+         * 
+         * @param editionIsbn13 Specific ISBN-13
+         */
+        public void setEditionIsbn13(String editionIsbn13) {
+            this.editionIsbn13 = editionIsbn13;
         }
 
         /**
@@ -630,6 +671,42 @@ public class Book {
      */
     public void setWebReaderLink(String webReaderLink) {
         this.webReaderLink = webReaderLink;
+    }
+    
+    /**
+     * Check if PDF format is available for this book
+     * 
+     * @return True if PDF is available, false otherwise
+     */
+    public Boolean getPdfAvailable() {
+        return pdfAvailable;
+    }
+    
+    /**
+     * Set PDF availability for this book
+     * 
+     * @param pdfAvailable True if PDF is available, false otherwise
+     */
+    public void setPdfAvailable(Boolean pdfAvailable) {
+        this.pdfAvailable = pdfAvailable;
+    }
+    
+    /**
+     * Check if EPUB format is available for this book
+     * 
+     * @return True if EPUB is available, false otherwise
+     */
+    public Boolean getEpubAvailable() {
+        return epubAvailable;
+    }
+    
+    /**
+     * Set EPUB availability for this book
+     * 
+     * @param epubAvailable True if EPUB is available, false otherwise
+     */
+    public void setEpubAvailable(Boolean epubAvailable) {
+        this.epubAvailable = epubAvailable;
     }
 
     /**

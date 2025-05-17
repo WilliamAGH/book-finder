@@ -1,3 +1,11 @@
+/**
+ * Service for fetching book cover images from various sources
+ * - Implements a strategy to try multiple sources in a defined order
+ * - Coordinates with local disk caching and S3 services
+ * - Tracks provenance of image fetching attempts
+ *
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -15,16 +23,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
-
-/**
- * Service for fetching book cover images from various sources
- * - Implements a strategy to try multiple sources in a defined order
- * - Coordinates with local disk caching and S3 services
- * - Tracks provenance of image fetching attempts
- *
- * @author William Callahan
- */
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 @Service
 public class CoverSourceFetchingService {
 
@@ -36,6 +40,10 @@ public class CoverSourceFetchingService {
     private final LongitoodServiceImpl longitoodService;
     private final GoogleBooksService googleBooksService;
     private final CoverCacheManager coverCacheManager;
+
+    private static final Pattern GOOGLE_PG_PATTERN = Pattern.compile("[?&]pg=([A-Z]+[0-9]+)");
+    private static final Pattern GOOGLE_PRINTSEC_FRONTCOVER_PATTERN = Pattern.compile("[?&](printsec=frontcover|pt=frontcover)");
+    private static final Pattern GOOGLE_EDGE_CURL_PATTERN = Pattern.compile("[?&]edge=curl");
 
     /**
      * Constructs the CoverSourceFetchingService
@@ -63,10 +71,9 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Asynchronously retrieves the best available cover image for a book, trying multiple sources
-     * - Uses a provisional URL hint if provided and valid
-     * - Falls back to a systematic search through S3, Google Books, OpenLibrary, and Longitood
-     * - Populates ImageProvenanceData with details of all attempts
+     * Asynchronously retrieves the best available cover image for a book.
+     * It processes a provisional URL hint, then tries S3, then other external sources,
+     * and finally selects the best image from all gathered candidates.
      * @param book The book to find the cover image for
      * @param provisionalUrlHint A hint URL that might contain a usable cover image
      * @param provenanceData Container for tracking image source details and attempts
@@ -81,140 +88,302 @@ public class CoverSourceFetchingService {
             provenanceData.setAttemptedImageSources(new ArrayList<>());
         }
 
+        CompletableFuture<List<ImageDetails>> hintProcessingChain = processProvisionalHintAsync(book, provisionalUrlHint, bookIdForLog, provenanceData);
 
-        // Try provisional URL hint first if it's a valid external URL
-        if (provisionalUrlHint != null && !provisionalUrlHint.isEmpty() &&
-            !provisionalUrlHint.equals(localDiskCoverCacheService.getLocalPlaceholderPath()) &&
-            !provisionalUrlHint.startsWith("/" + localDiskCoverCacheService.getCacheDirName())) {
-
-            ImageSourceName hintSourceName = ImageCacheUtils.mapStringToImageSourceName("ProvisionalHint"); // Default
-            if (provisionalUrlHint.contains("googleapis.com/books") || provisionalUrlHint.contains("books.google.com/books")) {
-                hintSourceName = ImageSourceName.GOOGLE_BOOKS;
-            } else if (provisionalUrlHint.contains("openlibrary.org")) {
-                hintSourceName = ImageSourceName.OPEN_LIBRARY;
-            } else if (provisionalUrlHint.contains("longitood.com")) {
-                hintSourceName = ImageSourceName.LONGITOOD;
-            }
-            // S3 hints are handled by direct CDN URL patterns
-
-            final ImageSourceName finalHintSourceName = hintSourceName;
-            final int MIN_ACCEPTABLE_DIMENSION = 200; // Minimum width or height for a provisional image
-
-            String urlToDownload = provisionalUrlHint;
-            // Optimize Google Books URL if it's the hint
-            if (finalHintSourceName == ImageSourceName.GOOGLE_BOOKS) {
-                logger.debug("Provisional hint is from Google Books. Ensuring URL parameters are optimal: {}", urlToDownload);
-                if (urlToDownload.contains("zoom=")) urlToDownload = urlToDownload.replaceAll("zoom=\\d+", "zoom=0");
-                if (urlToDownload.contains("&fife=")) urlToDownload = urlToDownload.replaceAll("&fife=w\\d+", "");
-                else if (urlToDownload.contains("?fife=")) {
-                    urlToDownload = urlToDownload.replaceAll("\\?fife=w\\d+", "?");
-                    if (urlToDownload.endsWith("?")) urlToDownload = urlToDownload.substring(0, urlToDownload.length() -1);
-                }
-                if (urlToDownload.endsWith("&")) urlToDownload = urlToDownload.substring(0, urlToDownload.length() - 1);
-                logger.debug("Optimized Google Books URL for download: {}", urlToDownload);
-            }
-            
-            return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(urlToDownload, bookIdForLog, provenanceData, finalHintSourceName.name())
-                .thenCompose(cachedFromHintDetails -> {
-                    boolean isGoodQualityProvisional = cachedFromHintDetails.getWidth() != null && cachedFromHintDetails.getHeight() != null &&
-                                                       cachedFromHintDetails.getWidth() >= MIN_ACCEPTABLE_DIMENSION &&
-                                                       cachedFromHintDetails.getHeight() >= MIN_ACCEPTABLE_DIMENSION &&
-                                                       !cachedFromHintDetails.getUrlOrPath().equals(localDiskCoverCacheService.getLocalPlaceholderPath());
-
-                    // If hint is NOT Google Books AND it's good quality, take early exit
-                    if (finalHintSourceName != ImageSourceName.GOOGLE_BOOKS && isGoodQualityProvisional) {
-                        updateSelectedImageInfo(provenanceData, finalHintSourceName, cachedFromHintDetails);
-                        return CompletableFuture.completedFuture(cachedFromHintDetails);
-                    }
-                    // Otherwise (Google hint OR not good quality), proceed to full source scan
-                    logger.debug("Provisional URL hint {} (Source: {}) for Book ID {} was either from Google or not good enough ({}x{}). Proceeding to full source scan.",
-                            provisionalUrlHint, finalHintSourceName, bookIdForLog, cachedFromHintDetails.getWidth(), cachedFromHintDetails.getHeight());
-                    return processCoverSourcesSequentially(book, bookIdForLog, provenanceData);
-                })
-                .exceptionallyCompose(ex -> {
-                    logger.error("Exception processing provisionalUrlHint {} for Book ID {}. Falling back. Error: {}", provisionalUrlHint, bookIdForLog, ex.getMessage());
-                    return processCoverSourcesSequentially(book, bookIdForLog, provenanceData); // Return the CF directly
-                });
-        }
-        // No valid provisional hint, or hint was local cache path, proceed to full scan
-        return processCoverSourcesSequentially(book, bookIdForLog, provenanceData);
+        return hintProcessingChain
+            .thenCompose(hintCandidates ->
+                fetchFromS3AndThenRemainingSources(book, bookIdForLog, provenanceData, hintCandidates)
+            )
+            .exceptionally(overallEx -> { // Catch-all for catastrophic failure in the chain
+                logger.error("Overall catastrophic exception in getBestCoverImageUrlAsync for Book ID {}: {}. Returning placeholder.", bookIdForLog, overallEx.getMessage(), overallEx);
+                return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "overall-fetch-exception");
+            });
     }
 
     /**
-     * Systematically tries multiple cover sources in a defined order
-     * - S3 Cache
-     * - Google Books API (by ISBN, then by Volume ID)
-     * - OpenLibrary (L, M, S sizes)
-     * - Longitood
+     * Processes the provisional URL hint asynchronously.
+     * @return A CompletableFuture yielding a list of ImageDetails candidates from the hint.
+     */
+    private CompletableFuture<List<ImageDetails>> processProvisionalHintAsync(Book book, String provisionalUrlHint, String bookIdForLog, ImageProvenanceData provenanceData) {
+        if (provisionalUrlHint == null || provisionalUrlHint.isEmpty() ||
+            provisionalUrlHint.equals(localDiskCoverCacheService.getLocalPlaceholderPath()) ||
+            provisionalUrlHint.startsWith("/" + localDiskCoverCacheService.getCacheDirName())) {
+            logger.debug("Book ID {}: No valid provisional hint provided or hint is local cache/placeholder.", bookIdForLog);
+            return CompletableFuture.completedFuture(new ArrayList<>());
+        }
+
+        ImageSourceName hintSourceName = ImageCacheUtils.mapStringToImageSourceName("ProvisionalHint"); // Default
+        if (provisionalUrlHint.contains("googleapis.com/books") || provisionalUrlHint.contains("books.google.com/books")) {
+            hintSourceName = ImageSourceName.GOOGLE_BOOKS;
+        } else if (provisionalUrlHint.contains("openlibrary.org")) {
+            hintSourceName = ImageSourceName.OPEN_LIBRARY;
+        } else if (provisionalUrlHint.contains("longitood.com")) {
+            hintSourceName = ImageSourceName.LONGITOOD;
+        }
+        // S3 hints are typically direct CDN URLs and will be validated if encountered or picked up by S3 specific logic later.
+
+        final ImageSourceName finalHintSourceName = hintSourceName;
+        final int MIN_ACCEPTABLE_DIMENSION_NON_GOOGLE = 200;
+
+        if (finalHintSourceName == ImageSourceName.GOOGLE_BOOKS) {
+            List<CompletableFuture<ImageDetails>> googleHintFutures = new ArrayList<>();
+            
+            String originalHintEnhanced = enhanceGoogleImageUrl(provisionalUrlHint, null); // Enhance but keep original zoom if present or add default
+            if (isLikelyGoogleCoverUrl(originalHintEnhanced, bookIdForLog, "ProvisionalHint-Original")) {
+                logger.debug("Book ID {}: Processing Google hint (enhanced as-is): {}", bookIdForLog, originalHintEnhanced);
+                googleHintFutures.add(
+                    localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(originalHintEnhanced, bookIdForLog, provenanceData, "GoogleHint-AsIs")
+                );
+            } else {
+                 logger.debug("Book ID {}: Google hint (enhanced as-is) {} was deemed unlikely to be a cover. Skipping.", bookIdForLog, originalHintEnhanced);
+            }
+
+            String urlZoom0 = enhanceGoogleImageUrl(provisionalUrlHint, "zoom=0");
+            if (urlZoom0 != null && !urlZoom0.equals(originalHintEnhanced) && isLikelyGoogleCoverUrl(urlZoom0, bookIdForLog, "ProvisionalHint-Zoom0")) {
+                logger.debug("Book ID {}: Processing Google hint (zoom=0 variant): {}", bookIdForLog, urlZoom0);
+                googleHintFutures.add(
+                    localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(urlZoom0, bookIdForLog, provenanceData, "GoogleHint-Zoom0")
+                );
+            } else if (urlZoom0 != null && !urlZoom0.equals(originalHintEnhanced)) {
+                 logger.debug("Book ID {}: Google hint (zoom=0 variant) {} was deemed unlikely to be a cover. Skipping.", bookIdForLog, urlZoom0);
+            }
+            
+            if (googleHintFutures.isEmpty()) {
+                logger.debug("Book ID {}: No suitable Google hints to process after likelihood check.", bookIdForLog);
+                return CompletableFuture.completedFuture(new ArrayList<>());
+            }
+
+            return CompletableFuture.allOf(googleHintFutures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> googleHintFutures.stream()
+                    .map(CompletableFuture::join) // .join() is safe here after allOf
+                    .filter(this::isValidImageDetails)
+                    .collect(Collectors.toList()))
+                .exceptionally(ex -> {
+                     logger.error("Exception processing Google provisionalUrlHint variations for Book ID {}. Error: {}", bookIdForLog, ex.getMessage(), ex);
+                     return new ArrayList<>(); // Return empty list on failure
+                });
+
+        } else { // Non-Google Hint
+            return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(provisionalUrlHint, bookIdForLog, provenanceData, finalHintSourceName.name())
+                .thenApply(cachedFromHintDetails -> {
+                    if (isValidImageDetails(cachedFromHintDetails)) {
+                        boolean isGoodQualityProvisional = cachedFromHintDetails.getWidth() != null && cachedFromHintDetails.getHeight() != null &&
+                                                           cachedFromHintDetails.getWidth() >= MIN_ACCEPTABLE_DIMENSION_NON_GOOGLE &&
+                                                           cachedFromHintDetails.getHeight() >= MIN_ACCEPTABLE_DIMENSION_NON_GOOGLE;
+                        if (isGoodQualityProvisional) {
+                            logger.debug("Book ID {}: Non-Google provisional hint {} processed successfully as a candidate.", bookIdForLog, provisionalUrlHint);
+                            return List.of(cachedFromHintDetails);
+                        }
+                        logger.debug("Non-Google provisional URL hint {} for Book ID {} was not good enough ({}x{}). Discarding as initial candidate.",
+                                provisionalUrlHint, bookIdForLog, cachedFromHintDetails.getWidth(), cachedFromHintDetails.getHeight());
+                    }
+                    return new ArrayList<ImageDetails>();
+                })
+                .exceptionally(ex -> {
+                    logger.error("Exception processing non-Google provisionalUrlHint {} for Book ID {}. Error: {}", provisionalUrlHint, bookIdForLog, ex.getMessage());
+                    return new ArrayList<>(); // Return empty list on failure
+                });
+        }
+    }
+
+    /**
+     * Fetches from S3 and then proceeds to fetch from remaining external sources.
      * @param book The book object
      * @param bookIdForLog Identifier for logging
      * @param provenanceData Container for tracking attempts
-     * @return CompletableFuture with ImageDetails of the best found image, or placeholder
+     * @param existingCandidates Candidates gathered from prior steps (e.g., hints)
+     * @return CompletableFuture with the best ImageDetails found
      */
-    private CompletableFuture<ImageDetails> processCoverSourcesSequentially(Book book, String bookIdForLog, ImageProvenanceData provenanceData) {
+    private CompletableFuture<ImageDetails> fetchFromS3AndThenRemainingSources(Book book, String bookIdForLog, ImageProvenanceData provenanceData, List<ImageDetails> existingCandidates) {
+        List<ImageDetails> candidatesSoFar = new ArrayList<>(existingCandidates);
+
         return tryS3(book, bookIdForLog, provenanceData)
-            .thenCompose(detailsS3 -> {
-                if (isValidImageDetails(detailsS3)) {
-                    updateSelectedImageInfo(provenanceData, ImageSourceName.S3_CACHE, detailsS3);
-                    return CompletableFuture.completedFuture(detailsS3);
-                }
-                String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
-                if (isbn != null && !isbn.isEmpty()) {
-                    return tryGoogleBooksApiByIsbn(isbn, bookIdForLog, provenanceData)
-                        .thenCompose(detailsGoogleIsbn -> {
-                            if (isValidImageDetails(detailsGoogleIsbn)) {
-                                updateSelectedImageInfo(provenanceData, ImageSourceName.GOOGLE_BOOKS, detailsGoogleIsbn);
-                                return CompletableFuture.completedFuture(detailsGoogleIsbn);
-                            }
-                            return tryOpenLibrary(isbn, bookIdForLog, "L", provenanceData);
-                        })
-                        .thenCompose(detailsL -> {
-                            if (isValidImageDetails(detailsL)) {
-                                updateSelectedImageInfo(provenanceData, ImageSourceName.OPEN_LIBRARY, detailsL);
-                                return CompletableFuture.completedFuture(detailsL);
-                            }
-                            return tryOpenLibrary(isbn, bookIdForLog, "M", provenanceData);
-                        })
-                        .thenCompose(detailsM -> {
-                            if (isValidImageDetails(detailsM)) {
-                                updateSelectedImageInfo(provenanceData, ImageSourceName.OPEN_LIBRARY, detailsM);
-                                return CompletableFuture.completedFuture(detailsM);
-                            }
-                            return tryOpenLibrary(isbn, bookIdForLog, "S", provenanceData);
-                        })
-                        .thenCompose(detailsS -> {
-                            if (isValidImageDetails(detailsS)) {
-                                updateSelectedImageInfo(provenanceData, ImageSourceName.OPEN_LIBRARY, detailsS);
-                                return CompletableFuture.completedFuture(detailsS);
-                            }
-                            return tryLongitood(book, bookIdForLog, provenanceData);
-                        })
-                        .thenCompose(detailsLongitood -> {
-                             if (isValidImageDetails(detailsLongitood)) {
-                                 updateSelectedImageInfo(provenanceData, ImageSourceName.LONGITOOD, detailsLongitood);
-                                 return CompletableFuture.completedFuture(detailsLongitood);
-                             }
-                             // Final fallback if ISBN present but all failed
-                             return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "all-isbn-sources-failed"));
-                        });
-                } else if (book.getId() != null && !book.getId().isEmpty()) { // Google Volume ID
-                    return tryGoogleBooksApiByVolumeId(book.getId(), bookIdForLog, provenanceData)
-                        .thenCompose(detailsGoogleId -> {
-                            if (isValidImageDetails(detailsGoogleId)) {
-                                updateSelectedImageInfo(provenanceData, ImageSourceName.GOOGLE_BOOKS, detailsGoogleId);
-                                return CompletableFuture.completedFuture(detailsGoogleId);
-                            }
-                            return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-volid-failed"));
-                        });
+            .thenCompose(s3Details -> {
+                if (isValidImageDetails(s3Details)) {
+                    logger.debug("Book ID {}: S3 provided valid image details. Adding to candidates.", bookIdForLog);
+                    candidatesSoFar.add(s3Details);
                 } else {
-                    logger.warn("No usable identifier (ISBN or Google Volume ID) for Book ID {}. Returning placeholder.", bookIdForLog);
-                    return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "no-identifier"));
+                    logger.debug("Book ID {}: S3 did not provide valid image details or returned placeholder. Not adding to candidates from S3.", bookIdForLog);
                 }
+                // Provenance for S3 attempt is handled within tryS3.
+                return fetchFromRemainingExternalSources(book, bookIdForLog, provenanceData, candidatesSoFar);
+            })
+            .exceptionallyCompose(s3Ex -> { // Exception from tryS3 or its chain
+                logger.error("Exception during S3 fetch for Book ID {}: {}. Proceeding to other external sources.", bookIdForLog, s3Ex.getMessage(), s3Ex);
+                // S3 attempt provenance should have been added in tryS3 (if it reached that part).
+                // Pass existingCandidates (which are from hints) to the next stage.
+                return fetchFromRemainingExternalSources(book, bookIdForLog, provenanceData, candidatesSoFar);
+            });
+    }
+
+    private String enhanceGoogleImageUrl(String baseUrl, String zoomParam) {
+        if (baseUrl == null) return null;
+        String enhancedUrl = baseUrl;
+
+        // Ensure HTTPS
+        if (enhancedUrl.startsWith("http://")) {
+            enhancedUrl = "https://" + enhancedUrl.substring(7);
+        }
+
+        // Remove fife
+        if (enhancedUrl.contains("&fife=")) {
+            enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+(-h\\d+)?", "");
+        } else if (enhancedUrl.contains("?fife=")) {
+            enhancedUrl = enhancedUrl.replaceAll("\\?fife=w\\d+(-h\\d+)?", "?");
+            if (enhancedUrl.endsWith("?")) {
+                enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+            }
+        }
+        
+        // Remove edge=curl if present, as we prefer flat covers.
+        // This might be re-evaluated if specific edge cases need it, but generally, non-curled is better.
+        enhancedUrl = enhancedUrl.replaceAll("[?&]edge=curl", "");
+
+
+        if (enhancedUrl.endsWith("&")) {
+            enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+        }
+        if (enhancedUrl.endsWith("?")) { // If trailing '?' after removals
+            enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+        }
+
+
+        // Set or replace zoom if zoomParam is provided
+        if (zoomParam != null && !zoomParam.isEmpty()) {
+            if (enhancedUrl.contains("zoom=")) {
+                enhancedUrl = enhancedUrl.replaceAll("zoom=\\d+", zoomParam);
+            } else {
+                enhancedUrl += (enhancedUrl.contains("?") ? "&" : "?") + zoomParam;
+            }
+        }
+        return enhancedUrl;
+    }
+    
+    /**
+     * Fetches images from remaining external sources (Google API, OpenLibrary, Longitood).
+     * This method is called after hints and S3 have been processed.
+     * @param book The book object
+     * @param bookIdForLog Identifier for logging
+     * @param provenanceData Container for tracking attempts
+     * @param existingCandidates Candidates gathered from prior steps (hints, S3)
+     * @return CompletableFuture with the best ImageDetails found from all sources
+     */
+    private CompletableFuture<ImageDetails> fetchFromRemainingExternalSources(Book book, String bookIdForLog, ImageProvenanceData provenanceData, List<ImageDetails> existingCandidates) {
+        List<CompletableFuture<ImageDetails>> sourceFutures = new ArrayList<>();
+        
+        // S3 is handled by fetchFromS3AndThenRemainingSources before this method.
+        
+        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
+        if (isbn != null && !isbn.isEmpty()) {
+            sourceFutures.add(tryGoogleBooksApiByIsbn(isbn, bookIdForLog, provenanceData));
+            sourceFutures.add(tryOpenLibrary(isbn, bookIdForLog, "L", provenanceData));
+            sourceFutures.add(tryOpenLibrary(isbn, bookIdForLog, "M", provenanceData));
+            sourceFutures.add(tryOpenLibrary(isbn, bookIdForLog, "S", provenanceData));
+            sourceFutures.add(tryLongitood(book, bookIdForLog, provenanceData));
+        } else if (book.getId() != null && !book.getId().isEmpty()) { // Google Volume ID
+            sourceFutures.add(tryGoogleBooksApiByVolumeId(book.getId(), bookIdForLog, provenanceData));
+        }
+
+        if (sourceFutures.isEmpty()) {
+            if (existingCandidates.isEmpty()) {
+                logger.warn("Book ID {}: No external sources to try and no prior candidates. Returning placeholder.", bookIdForLog);
+                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "no-sources-or-candidates"));
+            } else {
+                logger.debug("Book ID {}: No further external APIs to query. Selecting from {} existing candidates.", bookIdForLog, existingCandidates.size());
+                return CompletableFuture.completedFuture(selectBestImageDetails(existingCandidates, bookIdForLog, provenanceData));
+            }
+        }
+
+        return CompletableFuture.allOf(sourceFutures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> {
+                List<ImageDetails> allFetchedCandidates = new ArrayList<>(existingCandidates);
+                for (CompletableFuture<ImageDetails> future : sourceFutures) {
+                    try {
+                        ImageDetails details = future.join(); // join is safe after allOf
+                        if (isValidImageDetails(details)) {
+                            allFetchedCandidates.add(details);
+                        }
+                    } catch (Exception e) {
+                        logger.warn("Book ID {}: Exception joining future in fetchFromRemainingExternalSources: {}", bookIdForLog, e.getMessage());
+                    }
+                }
+                
+                if (allFetchedCandidates.isEmpty()) {
+                    logger.warn("Book ID {}: No valid images found from any source (including prior candidates). Returning placeholder.", bookIdForLog);
+                    return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "all-sources-failed-or-empty");
+                }
+                
+                return selectBestImageDetails(allFetchedCandidates, bookIdForLog, provenanceData);
             })
             .exceptionally(ex -> {
-                logger.error("Overall exception in processCoverSourcesSequentially for Book ID {}: {}", bookIdForLog, ex.getMessage(), ex);
-                return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "process-sources-exception");
+                logger.error("Overall exception in fetchFromRemainingExternalSources for Book ID {}: {}. Selecting from prior or returning placeholder.", bookIdForLog, ex.getMessage(), ex);
+                if (!existingCandidates.isEmpty()) {
+                    logger.warn("Book ID {}: Falling back to selecting from {} existing candidates due to exception in remaining sources.", bookIdForLog, existingCandidates.size());
+                    return selectBestImageDetails(existingCandidates, bookIdForLog, provenanceData);
+                }
+                return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "process-remaining-sources-exception");
             });
+    }
+    
+    private ImageDetails selectBestImageDetails(List<ImageDetails> candidates, String bookIdForLog, ImageProvenanceData provenanceData) {
+        if (candidates == null || candidates.isEmpty()) {
+            logger.warn("Book ID {}: selectBestImageDetails called with no candidates.", bookIdForLog);
+            return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "no-candidates-for-selection");
+        }
+
+        // Filter out nulls or invalid details (though isValidImageDetails should have caught most)
+        List<ImageDetails> validCandidates = candidates.stream()
+            .filter(this::isValidImageDetails)
+            .collect(Collectors.toList());
+
+        if (validCandidates.isEmpty()) {
+            logger.warn("Book ID {}: No valid candidates after filtering for selection.", bookIdForLog);
+            return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "no-valid-candidates-for-selection");
+        }
+
+        // Comparator:
+        // 1. Prefer S3_CACHE if dimensions are reasonable (e.g., > 150x150 to avoid tiny S3 placeholders if any)
+        // 2. Then by largest area (width * height)
+        // 3. Then by a source preference (e.g. Google, OpenLibrary, Longitood)
+        // 4. Fallback to first valid if all else equal
+        Comparator<ImageDetails> comparator = Comparator
+            .<ImageDetails>comparingInt(details -> { // Prefer S3 if decent size
+                if (details.getCoverImageSource() == CoverImageSource.S3_CACHE &&
+                    details.getWidth() != null && details.getWidth() > 150 &&
+                    details.getHeight() != null && details.getHeight() > 150) {
+                    return 0; // Highest preference
+                }
+                return 1; // Lower preference
+            })
+            .thenComparing(Comparator.comparingLong((ImageDetails details) -> { // Then by area, descending
+                if (details.getWidth() == null || details.getHeight() == null) return 0L;
+                return (long)details.getWidth() * details.getHeight();
+            }).reversed())
+            .thenComparingInt(details -> { // Then by source preference
+                CoverImageSource src = details.getCoverImageSource();
+                if (src == CoverImageSource.S3_CACHE) return 0; // Already handled by the first comparator if decent size
+                if (src == CoverImageSource.GOOGLE_BOOKS) return 1;
+                if (src == CoverImageSource.OPEN_LIBRARY) return 2;
+                if (src == CoverImageSource.LONGITOOD) return 3;
+                if (src == CoverImageSource.LOCAL_CACHE && details.getUrlOrPath() != null && !details.getUrlOrPath().equals(localDiskCoverCacheService.getLocalPlaceholderPath())) return 4; // Non-placeholder local cache
+                return 5; // Others (like ANY, UNDEFINED, or placeholder local cache)
+            });
+
+        ImageDetails bestImage = java.util.Collections.min(validCandidates, comparator); // min because lower numbers are better in comparator
+
+        logger.info("Book ID {}: Selected best image from {} candidates. URL/Path: {}, Source: {}, Dimensions: {}x{}",
+            bookIdForLog, validCandidates.size(), bestImage.getUrlOrPath(), bestImage.getCoverImageSource(), bestImage.getWidth(), bestImage.getHeight());
+        
+        // Log all candidates considered for easier debugging
+        if (logger.isDebugEnabled()) {
+            validCandidates.forEach(candidate -> 
+                logger.debug("Book ID {}: Candidate for selection - URL/Path: {}, Source: {}, Dimensions: {}x{}", 
+                    bookIdForLog, candidate.getUrlOrPath(), candidate.getCoverImageSource(), candidate.getWidth(), candidate.getHeight())
+            );
+        }
+
+        updateSelectedImageInfo(provenanceData, ImageCacheUtils.mapCoverImageSourceToImageSourceName(bestImage.getCoverImageSource()), bestImage, "Selected by dimension and source preference");
+        return bestImage;
     }
 
     /**
@@ -226,29 +395,60 @@ public class CoverSourceFetchingService {
         return imageDetails != null &&
                imageDetails.getUrlOrPath() != null &&
                !imageDetails.getUrlOrPath().equals(localDiskCoverCacheService.getLocalPlaceholderPath()) &&
-               imageDetails.getWidth() != null && imageDetails.getWidth() > 0 && // Assuming 0 width means placeholder or error
-               imageDetails.getHeight() != null && imageDetails.getHeight() > 0;
+               imageDetails.getWidth() != null && imageDetails.getWidth() > 1 && // Ensure width is greater than 1 (not just >0)
+               imageDetails.getHeight() != null && imageDetails.getHeight() > 1; // Ensure height is greater than 1
     }
     
     /**
-     * Updates the SelectedImageInfo in ImageProvenanceData if not already set
+     * Updates the SelectedImageInfo in ImageProvenanceData if not already set or if new one is better.
      * @param provenanceData The ImageProvenanceData object
      * @param sourceName The source from which the image was selected
      * @param imageDetails The details of the selected image
+     * @param selectionReason Reason for this selection
      */
-    private void updateSelectedImageInfo(ImageProvenanceData provenanceData, ImageSourceName sourceName, ImageDetails imageDetails) {
-        if (provenanceData != null && provenanceData.getSelectedImageInfo() == null && imageDetails != null) {
-            ImageProvenanceData.SelectedImageInfo selectedInfo = new ImageProvenanceData.SelectedImageInfo();
-            selectedInfo.setSourceName(sourceName);
-            selectedInfo.setFinalUrl(imageDetails.getUrlOrPath());
-            selectedInfo.setResolution(imageDetails.getResolutionPreference() != null ? imageDetails.getResolutionPreference().name() : "ORIGINAL");
-            selectedInfo.setStorageLocation(imageDetails.getUrlOrPath().startsWith("/" + localDiskCoverCacheService.getCacheDirName()) ? "LocalCache" : "Remote");
-            if (imageDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                selectedInfo.setStorageLocation("S3");
-                selectedInfo.setS3Key(imageDetails.getSourceSystemId());
-            }
-            provenanceData.setSelectedImageInfo(selectedInfo);
+    private void updateSelectedImageInfo(ImageProvenanceData provenanceData, ImageSourceName sourceName, ImageDetails imageDetails, String selectionReason) {
+        if (provenanceData == null || imageDetails == null || !isValidImageDetails(imageDetails)) {
+            return;
         }
+        // This method is now called only by selectBestImageDetails, which has already chosen the best.
+        // So, we can directly set it.
+        ImageProvenanceData.SelectedImageInfo selectedInfo = new ImageProvenanceData.SelectedImageInfo();
+        selectedInfo.setSourceName(sourceName);
+        selectedInfo.setFinalUrl(imageDetails.getUrlOrPath());
+        selectedInfo.setResolution(imageDetails.getResolutionPreference() != null ? imageDetails.getResolutionPreference().name() : "ORIGINAL");
+        // Use the new setDimensions and setSelectionReason methods
+        selectedInfo.setDimensions( (imageDetails.getWidth() != null ? imageDetails.getWidth() : "N/A") + "x" + (imageDetails.getHeight() != null ? imageDetails.getHeight() : "N/A") );
+        selectedInfo.setSelectionReason(selectionReason);
+
+        if (imageDetails.getUrlOrPath().startsWith("/" + localDiskCoverCacheService.getCacheDirName())) {
+            selectedInfo.setStorageLocation("LocalCache");
+        } else if (imageDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
+            selectedInfo.setStorageLocation("S3");
+            selectedInfo.setS3Key(imageDetails.getSourceSystemId());
+        } else {
+            selectedInfo.setStorageLocation("Remote");
+        }
+        
+        provenanceData.setSelectedImageInfo(selectedInfo);
+        logger.debug("Provenance updated: Selected image from {} ({}), URL: {}, Dimensions: {}x{}, Reason: {}",
+                sourceName, selectedInfo.getStorageLocation(), selectedInfo.getFinalUrl(), imageDetails.getWidth(), imageDetails.getHeight(), selectionReason);
+    }
+    
+    private void addAttemptToProvenance(ImageProvenanceData provenanceData, ImageSourceName sourceName, String urlAttempted, ImageAttemptStatus status, String failureReason, ImageDetails detailsIfSuccess) {
+        if (provenanceData == null) return;
+        if (provenanceData.getAttemptedImageSources() == null) {
+            provenanceData.setAttemptedImageSources(new ArrayList<>());
+        }
+        ImageProvenanceData.AttemptedSourceInfo attemptInfo = new ImageProvenanceData.AttemptedSourceInfo(sourceName, urlAttempted, status);
+        if (failureReason != null) {
+            attemptInfo.setFailureReason(failureReason);
+        }
+        if (detailsIfSuccess != null && status == ImageAttemptStatus.SUCCESS) {
+            // Use the new setFetchedUrl and setDimensions methods
+            attemptInfo.setFetchedUrl(detailsIfSuccess.getUrlOrPath());
+            attemptInfo.setDimensions( (detailsIfSuccess.getWidth() != null ? detailsIfSuccess.getWidth() : "N/A") + "x" + (detailsIfSuccess.getHeight() != null ? detailsIfSuccess.getHeight() : "N/A") );
+        }
+        provenanceData.getAttemptedImageSources().add(attemptInfo);
     }
 
     /**
@@ -263,28 +463,26 @@ public class CoverSourceFetchingService {
         // Direct S3 check through HEAD request
         // Returns S3 URL without downloading content
         return s3BookCoverService.fetchCover(book) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
-            .thenCompose(s3RemoteDetailsOptional -> { // s3RemoteDetailsOptional is Optional<ImageDetails>
+            .thenApply(s3RemoteDetailsOptional -> { // Changed from thenCompose to thenApply for direct ImageDetails or placeholder
                 if (s3RemoteDetailsOptional.isPresent()) {
                     ImageDetails s3RemoteDetails = s3RemoteDetailsOptional.get();
                     if (isValidImageDetails(s3RemoteDetails) && s3RemoteDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                        // S3 URL directly usable without local caching
                         logger.info("S3 provided valid image for Book ID {}: {}", bookIdForLog, s3RemoteDetails.getUrlOrPath());
-                        return CompletableFuture.completedFuture(s3RemoteDetails);
+                        addAttemptToProvenance(provenanceData, ImageSourceName.S3_CACHE, "S3 Direct Fetch", ImageAttemptStatus.SUCCESS, null, s3RemoteDetails);
+                        return s3RemoteDetails;
                     }
+                    String s3UrlAttempted = s3RemoteDetails.getSourceSystemId() != null ? s3RemoteDetails.getSourceSystemId() : "S3 Direct Fetch";
+                    addAttemptToProvenance(provenanceData, ImageSourceName.S3_CACHE, s3UrlAttempted, ImageAttemptStatus.FAILURE_INVALID_DETAILS, "S3 details not valid or not S3_CACHE source", s3RemoteDetails);
                     logger.debug("S3 provided Optional<ImageDetails> but it was not valid or not from S3_CACHE for Book ID {}. Details: {}", bookIdForLog, s3RemoteDetails);
                 } else {
+                    addAttemptToProvenance(provenanceData, ImageSourceName.S3_CACHE, "S3 Direct Fetch", ImageAttemptStatus.FAILURE_NOT_FOUND, "No details from S3 fetchCover", null);
                     logger.debug("S3 did not provide Optional<ImageDetails> for Book ID {}.", bookIdForLog);
                 }
-                return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "s3-failed-or-not-s3-or-empty-optional"));
+                return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "s3-miss-or-invalid");
             })
             .exceptionally(ex -> {
                 logger.error("Exception trying S3 for Book ID {}: {}", bookIdForLog, ex.getMessage());
-                // Add S3 attempt to provenance if not already handled by S3BookCoverService
-                if (provenanceData.getAttemptedImageSources().stream().noneMatch(a -> a.getSourceName() == ImageSourceName.S3_CACHE)) {
-                     ImageProvenanceData.AttemptedSourceInfo s3Attempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.S3_CACHE, "S3 Direct Fetch for " + bookIdForLog, ImageAttemptStatus.FAILURE_GENERIC);
-                     s3Attempt.setFailureReason(ex.getMessage());
-                     provenanceData.getAttemptedImageSources().add(s3Attempt);
-                }
+                addAttemptToProvenance(provenanceData, ImageSourceName.S3_CACHE, "S3 Direct Fetch", ImageAttemptStatus.FAILURE_GENERIC, ex.getMessage(), null); // Use FAILURE_GENERIC
                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "s3-exception");
             });
     }
@@ -309,35 +507,36 @@ public class CoverSourceFetchingService {
         final String finalIsbn = isbn; // For use in lambda
 
         return openLibraryService.fetchOpenLibraryCoverDetails(isbn, sizeSuffix) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
-            .thenCompose(remoteImageDetailsOptional -> { // remoteImageDetailsOptional is Optional<ImageDetails>
+            .thenCompose(remoteImageDetailsOptional -> {
+                String olUrlAttempted = "OpenLibrary ISBN: " + finalIsbn + ", size: " + sizeSuffix;
                 if (remoteImageDetailsOptional.isPresent()) {
                     ImageDetails remoteImageDetails = remoteImageDetailsOptional.get();
                     if (remoteImageDetails.getUrlOrPath() != null && !remoteImageDetails.getUrlOrPath().isEmpty()) {
+                        // Provenance for the successful fetch of URL from OL will be handled by downloadAndStoreImageLocallyAsync
                         return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "OpenLibrary-" + sizeSuffix)
-                            .thenApply(cachedDetails -> { // Ensure we return the details of the *cached* version
+                            .thenApply(cachedDetails -> {
                                  if (isValidImageDetails(cachedDetails)) return cachedDetails;
-                                 coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn); // Mark as bad if download/cache failed
+                                 // If download/cache failed for a valid URL, downloadAndStoreImageLocallyAsync handles its own provenance for that specific download attempt.
+                                 // We might still mark the ISBN as bad here.
+                                 coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn);
                                  return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-dl-fail");
                             });
-                    } else {
-                        // Optional was present, but ImageDetails inside had no URL
-                         logger.warn("OpenLibraryService provided ImageDetails but no URL for ISBN {} size {}.", finalIsbn, sizeSuffix);
+                    } else { // Optional was present, but ImageDetails inside had no URL
+                         logger.warn("OpenLibraryService provided ImageDetails but no URL for {}.", olUrlAttempted);
+                         addAttemptToProvenance(provenanceData, ImageSourceName.OPEN_LIBRARY, olUrlAttempted, ImageAttemptStatus.FAILURE_NO_URL_IN_RESPONSE, "OL response had no URL", null);
                     }
-                } else {
-                     // Optional was empty
-                    logger.warn("OpenLibraryService did not provide ImageDetails for ISBN {} size {}.", finalIsbn, sizeSuffix);
+                } else { // Optional was empty
+                    logger.warn("OpenLibraryService did not provide ImageDetails for {}.", olUrlAttempted);
+                    addAttemptToProvenance(provenanceData, ImageSourceName.OPEN_LIBRARY, olUrlAttempted, ImageAttemptStatus.FAILURE_NOT_FOUND, "No ImageDetails from OL service", null);
                 }
-                // Common failure path if not returned earlier
-                ImageProvenanceData.AttemptedSourceInfo olAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.OPEN_LIBRARY, "isbn:" + finalIsbn + ", size:" + sizeSuffix, ImageAttemptStatus.FAILURE_404);
-                provenanceData.getAttemptedImageSources().add(olAttempt);
+                coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn); // Mark as bad if no URL or empty optional
                 return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-no-url-or-empty"));
             })
             .exceptionally(ex -> {
-                logger.error("Exception trying OpenLibrary for ISBN {}, size {}: {}", finalIsbn, sizeSuffix, ex.getMessage());
+                String olUrlAttempted = "OpenLibrary ISBN: " + finalIsbn + ", size: " + sizeSuffix;
+                logger.error("Exception trying OpenLibrary for {}: {}", olUrlAttempted, ex.getMessage());
                 coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn);
-                ImageProvenanceData.AttemptedSourceInfo olAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.OPEN_LIBRARY, "isbn:" + isbn + ", size:" + sizeSuffix, ImageAttemptStatus.FAILURE_GENERIC);
-                olAttempt.setFailureReason(ex.getMessage());
-                provenanceData.getAttemptedImageSources().add(olAttempt);
+                addAttemptToProvenance(provenanceData, ImageSourceName.OPEN_LIBRARY, olUrlAttempted, ImageAttemptStatus.FAILURE_GENERIC, ex.getMessage(), null); // Use FAILURE_GENERIC
                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-exception");
             });
     }
@@ -358,26 +557,34 @@ public class CoverSourceFetchingService {
             .toFuture()
             .thenComposeAsync(books -> {
                 if (books != null && !books.isEmpty()) {
-                    Book gBook = books.get(0); // Take the first result
+                    Book gBook = books.get(0);
                     if (gBook != null && gBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                         provenanceData.setGoogleBooksApiResponse(gBook.getRawJsonResponse());
                     }
-                    if (gBook != null && gBook.getCoverImageUrl() != null && !gBook.getCoverImageUrl().isEmpty() &&
-                        !coverCacheManager.isKnownBadImageUrl(gBook.getCoverImageUrl()) &&
-                        !gBook.getCoverImageUrl().contains("image-not-available.png")) {
-                        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(gBook.getCoverImageUrl(), bookIdForLog, provenanceData, "GoogleBooksAPI-ISBN");
+                    String googleUrl = gBook != null ? gBook.getCoverImageUrl() : null;
+                    if (googleUrl != null && !googleUrl.isEmpty() &&
+                        !coverCacheManager.isKnownBadImageUrl(googleUrl) &&
+                        !googleUrl.contains("image-not-available.png")) {
+                        
+                        String enhancedGoogleUrl = enhanceGoogleImageUrl(googleUrl, "zoom=0"); // Always try to get best zoom
+                        if (isLikelyGoogleCoverUrl(enhancedGoogleUrl, bookIdForLog, "GoogleAPI-ISBN")) {
+                            // Provenance for this specific download attempt will be handled by downloadAndStoreImageLocallyAsync
+                            return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(enhancedGoogleUrl, bookIdForLog, provenanceData, "GoogleBooksAPI-ISBN");
+                        } else {
+                            logger.warn("Google Books API (by ISBN) URL {} (enhanced: {}) deemed unlikely to be a cover for {}.", googleUrl, enhancedGoogleUrl, bookIdForLog);
+                            addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, enhancedGoogleUrl, ImageAttemptStatus.FAILURE_INVALID_DETAILS, "URL deemed not a cover by isLikelyGoogleCoverUrl", null);
+                        }
                     }
                 }
-                logger.warn("Google Books API (by ISBN) did not yield a usable image for ISBN {} (Book ID for log: {})", isbn, bookIdForLog);
-                ImageProvenanceData.AttemptedSourceInfo gbAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.GOOGLE_BOOKS, "isbn:" + isbn, ImageAttemptStatus.FAILURE_404);
-                provenanceData.getAttemptedImageSources().add(gbAttempt);
+                String urlAttempted = "Google ISBN: " + isbn;
+                logger.warn("Google Books API (by ISBN) did not yield a usable image for {}.", urlAttempted);
+                addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, urlAttempted, ImageAttemptStatus.FAILURE_NOT_FOUND, "No usable image from Google/ISBN search", null);
                 return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-isbn-no-image"));
             })
             .exceptionally(ex -> {
-                logger.error("Exception trying Google Books API by ISBN {} (Book ID for log: {}): {}", isbn, bookIdForLog, ex.getMessage(), ex);
-                ImageProvenanceData.AttemptedSourceInfo gbAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.GOOGLE_BOOKS, "isbn:" + isbn, ImageAttemptStatus.FAILURE_GENERIC);
-                gbAttempt.setFailureReason(ex.getMessage());
-                provenanceData.getAttemptedImageSources().add(gbAttempt);
+                String urlAttempted = "Google ISBN: " + isbn;
+                logger.error("Exception trying Google Books API for {}: {}", urlAttempted, ex.getMessage(), ex);
+                addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, urlAttempted, ImageAttemptStatus.FAILURE_GENERIC, ex.getMessage(), null); // Use FAILURE_GENERIC
                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-isbn-exception");
             });
     }
@@ -396,22 +603,30 @@ public class CoverSourceFetchingService {
                 if (gBook != null && gBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                     provenanceData.setGoogleBooksApiResponse(gBook.getRawJsonResponse());
                 }
-                if (gBook != null && gBook.getCoverImageUrl() != null && !gBook.getCoverImageUrl().isEmpty() &&
-                    !coverCacheManager.isKnownBadImageUrl(gBook.getCoverImageUrl()) &&
-                    !gBook.getCoverImageUrl().contains("image-not-available.png")) {
-                    return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(gBook.getCoverImageUrl(), bookIdForLog, provenanceData, "GoogleBooksAPI-VolumeID");
+                String googleUrl = gBook != null ? gBook.getCoverImageUrl() : null;
+                if (googleUrl != null && !googleUrl.isEmpty() &&
+                    !coverCacheManager.isKnownBadImageUrl(googleUrl) &&
+                    !googleUrl.contains("image-not-available.png")) {
+                    
+                    String enhancedGoogleUrl = enhanceGoogleImageUrl(googleUrl, "zoom=0"); // Always try to get best zoom
+                    if (isLikelyGoogleCoverUrl(enhancedGoogleUrl, bookIdForLog, "GoogleAPI-VolumeID")) {
+                        // Provenance for this specific download attempt will be handled by downloadAndStoreImageLocallyAsync
+                        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(enhancedGoogleUrl, bookIdForLog, provenanceData, "GoogleBooksAPI-VolumeID");
+                    } else {
+                        logger.warn("Google Books API (by VolumeID) URL {} (enhanced: {}) deemed unlikely to be a cover for {}.", googleUrl, enhancedGoogleUrl, bookIdForLog);
+                        addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, enhancedGoogleUrl, ImageAttemptStatus.FAILURE_INVALID_DETAILS, "URL deemed not a cover by isLikelyGoogleCoverUrl", null);
+                    }
                 }
-                logger.warn("Google Books API (by Volume ID) did not yield a usable image for Volume ID {} (Book ID for log: {})", googleVolumeId, bookIdForLog);
-                ImageProvenanceData.AttemptedSourceInfo gbAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.GOOGLE_BOOKS, "volumeId:" + googleVolumeId, ImageAttemptStatus.FAILURE_404);
-                provenanceData.getAttemptedImageSources().add(gbAttempt);
+                String urlAttempted = "Google VolumeID: " + googleVolumeId;
+                logger.warn("Google Books API (by Volume ID) did not yield a usable image for {}.", urlAttempted);
+                addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, urlAttempted, ImageAttemptStatus.FAILURE_NOT_FOUND, "No usable image from Google/VolumeID search", null);
                 return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-volid-no-image"));
             })
-            .toCompletableFuture() // Convert CompletionStage to CompletableFuture
+            .toCompletableFuture()
             .exceptionally(ex -> {
-                logger.error("Exception trying Google Books API by Volume ID {} (Book ID for log: {}): {}", googleVolumeId, bookIdForLog, ex.getMessage(), ex);
-                ImageProvenanceData.AttemptedSourceInfo gbAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.GOOGLE_BOOKS, "volumeId:" + googleVolumeId, ImageAttemptStatus.FAILURE_GENERIC);
-                gbAttempt.setFailureReason(ex.getMessage());
-                provenanceData.getAttemptedImageSources().add(gbAttempt);
+                String urlAttempted = "Google VolumeID: " + googleVolumeId;
+                logger.error("Exception trying Google Books API for {}: {}", urlAttempted, ex.getMessage(), ex);
+                addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, urlAttempted, ImageAttemptStatus.FAILURE_GENERIC, ex.getMessage(), null); // Use FAILURE_GENERIC
                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-volid-exception");
             });
     }
@@ -439,44 +654,88 @@ public class CoverSourceFetchingService {
 
         final String finalIsbn = isbn; // For use in lambda
 
-        return longitoodService.fetchCover(book) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
-            // .toFuture() // Removed redundant .toFuture()
-            .thenCompose(remoteImageDetailsOptional -> { // remoteImageDetailsOptional is Optional<ImageDetails>
+        return longitoodService.fetchCover(book)
+            .thenCompose(remoteImageDetailsOptional -> {
+                String ltUrlAttempted = "Longitood ISBN: " + finalIsbn;
                 if (remoteImageDetailsOptional.isPresent()) {
                     ImageDetails remoteImageDetails = remoteImageDetailsOptional.get();
                     if (remoteImageDetails.getUrlOrPath() != null && !remoteImageDetails.getUrlOrPath().isEmpty()) {
+                        // Provenance for this specific download attempt will be handled by downloadAndStoreImageLocallyAsync
                         return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "Longitood")
                              .thenApply(cachedDetails -> {
-                                 if (isValidImageDetails(cachedDetails)) {
-                                     return cachedDetails;
-                                 }
-                                 // Download or caching failed for a valid URL
-                                 coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn); 
+                                 if (isValidImageDetails(cachedDetails)) return cachedDetails;
+                                 coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
                                  return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-dl-fail");
                              });
-                    } else {
-                        // Optional was present, but ImageDetails inside had no URL
-                        logger.warn("LongitoodService provided ImageDetails but no URL for ISBN {}.", finalIsbn);
-                        coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
+                    } else { // Optional was present, but ImageDetails inside had no URL
+                        logger.warn("LongitoodService provided ImageDetails but no URL for {}.", ltUrlAttempted);
+                        addAttemptToProvenance(provenanceData, ImageSourceName.LONGITOOD, ltUrlAttempted, ImageAttemptStatus.FAILURE_NO_URL_IN_RESPONSE, "Longitood response had no URL", null);
                     }
-                } else {
-                    // Optional was empty
-                    logger.warn("LongitoodService did not provide ImageDetails for ISBN {}.", finalIsbn);
-                    coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
+                } else { // Optional was empty
+                    logger.warn("LongitoodService did not provide ImageDetails for {}.", ltUrlAttempted);
+                    addAttemptToProvenance(provenanceData, ImageSourceName.LONGITOOD, ltUrlAttempted, ImageAttemptStatus.FAILURE_NOT_FOUND, "No ImageDetails from Longitood service", null);
                 }
-                
-                // Common failure path if not returned earlier
-                ImageProvenanceData.AttemptedSourceInfo ltAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.LONGITOOD, "isbn:" + finalIsbn, ImageAttemptStatus.FAILURE_404);
-                provenanceData.getAttemptedImageSources().add(ltAttempt);
+                coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn); // Mark as bad if no URL or empty optional
                 return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-no-url-or-empty"));
             })
             .exceptionally(ex -> {
-                logger.error("Exception trying Longitood for ISBN {}: {}", finalIsbn, ex.getMessage());
+                String ltUrlAttempted = "Longitood ISBN: " + finalIsbn;
+                logger.error("Exception trying Longitood for {}: {}", ltUrlAttempted, ex.getMessage());
                 coverCacheManager.addKnownBadLongitoodIsbn(finalIsbn);
-                ImageProvenanceData.AttemptedSourceInfo ltAttempt = new ImageProvenanceData.AttemptedSourceInfo(ImageSourceName.LONGITOOD, "isbn:" + finalIsbn, ImageAttemptStatus.FAILURE_GENERIC);
-                ltAttempt.setFailureReason(ex.getMessage());
-                provenanceData.getAttemptedImageSources().add(ltAttempt);
+                addAttemptToProvenance(provenanceData, ImageSourceName.LONGITOOD, ltUrlAttempted, ImageAttemptStatus.FAILURE_GENERIC, ex.getMessage(), null); // Use FAILURE_GENERIC
                 return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "longitood-exception");
             });
+    }
+
+    /**
+     * Validates if a Google Books image URL is likely to be a cover.
+     * - Prefers URLs with "printsec=frontcover" or "pt=frontcover".
+     * - Penalizes URLs with "edge=curl".
+     * - Penalizes URLs with "pg=" followed by typical page identifiers (e.g., PA5, PT10).
+     *
+     * @param url The Google Books image URL to validate.
+     * @param bookIdForLog Identifier for logging.
+     * @param contextHint A hint for logging about where this check is being performed (e.g., "ProvisionalHint", "GoogleAPI-ISBN").
+     * @return True if the URL is likely a cover, false otherwise.
+     */
+    private boolean isLikelyGoogleCoverUrl(String url, String bookIdForLog, String contextHint) {
+        if (url == null || url.isEmpty()) {
+            logger.warn("Book ID {}: isLikelyGoogleCoverUrl called with null or empty URL. Context: {}", bookIdForLog, contextHint);
+            return false;
+        }
+
+        Matcher pgMatcher = GOOGLE_PG_PATTERN.matcher(url);
+        boolean hasPageParam = pgMatcher.find();
+        if (hasPageParam) {
+            String pageId = pgMatcher.group(1);
+            // Allow specific 'pg' parameters if they are known to be cover-related, e.g. "PP1" (often first page of a book, sometimes cover)
+            // For now, any 'pg=' is a strong indicator it's NOT a generic cover image.
+            // This could be refined if specific 'pg=' values are confirmed to be reliable for covers.
+            // Example: !pageId.startsWith("PP") might be too restrictive if PP1 is sometimes the cover.
+            // Current logic: if any pg= found, it's not a preferred cover.
+            logger.debug("Book ID {}: URL {} has 'pg={}' parameter. Context: {}. Considered not a primary cover.", bookIdForLog, url, pageId, contextHint);
+            return false; // Strict: any 'pg=' parameter makes it unlikely to be the best cover.
+        }
+
+        Matcher edgeCurlMatcher = GOOGLE_EDGE_CURL_PATTERN.matcher(url);
+        if (edgeCurlMatcher.find()) {
+            logger.debug("Book ID {}: URL {} has 'edge=curl' parameter. Context: {}. Considered not a primary cover.", bookIdForLog, url, contextHint);
+            return false; // 'edge=curl' usually means it's a page preview with curled effect.
+        }
+        
+        Matcher frontcoverMatcher = GOOGLE_PRINTSEC_FRONTCOVER_PATTERN.matcher(url);
+        if (frontcoverMatcher.find()) {
+            logger.debug("Book ID {}: URL {} has 'printsec=frontcover' or 'pt=frontcover'. Context: {}. Considered a likely cover.", bookIdForLog, url, contextHint);
+            return true; // Strong positive indicator.
+        }
+
+        // If no strong negative indicators (pg, edge=curl) and no strong positive (frontcover),
+        // we might accept it, but with lower confidence.
+        // The existing `enhanceGoogleImageUrl` already tries to add `zoom=0` which is good.
+        // For now, if it doesn't have 'pg' or 'edge=curl', let it pass,
+        // as sometimes Google API might not include `printsec=frontcover` in all cover links.
+        // The dimension checks later will still apply.
+        logger.debug("Book ID {}: URL {} passed heuristic checks (no 'pg', no 'edge=curl'). Context: {}. Considered a potential cover.", bookIdForLog, url, contextHint);
+        return true;
     }
 }
