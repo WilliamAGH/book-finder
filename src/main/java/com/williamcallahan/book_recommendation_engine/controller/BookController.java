@@ -17,6 +17,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
@@ -24,19 +25,24 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.stream.Collectors;
+import java.util.Calendar;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/api/books")
@@ -47,6 +53,7 @@ public class BookController {
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
     private final BookImageOrchestrationService bookImageOrchestrationService;
+    private final S3RetryService s3RetryService;
     
     /**
      * Constructs the BookController with all required services
@@ -55,16 +62,19 @@ public class BookController {
      * @param recentlyViewedService Service for tracking and managing recently viewed books
      * @param recommendationService Service for generating book recommendations based on various criteria
      * @param bookImageOrchestrationService Service for orchestrating book cover image retrieval and processing
+     * @param s3RetryService Service for S3 operations with retries
      */
     @Autowired
     public BookController(BookCacheService bookCacheService, 
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
-                          BookImageOrchestrationService bookImageOrchestrationService) {
+                          BookImageOrchestrationService bookImageOrchestrationService,
+                          S3RetryService s3RetryService) {
         this.bookCacheService = bookCacheService; 
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookImageOrchestrationService = bookImageOrchestrationService;
+        this.s3RetryService = s3RetryService;
     }
     
     /**
@@ -75,6 +85,7 @@ public class BookController {
      * @param maxResults Maximum number of results to return (optional, defaults to 10)
      * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
      * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
+     * @param publishedYear Filter results by publication year (optional)
      * @return Mono containing ResponseEntity with map of search results including pagination details
      */
     @GetMapping("/search")
@@ -93,54 +104,45 @@ public class BookController {
             getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = 
             getImageResolutionPreferenceFromString(resolution);
-            
-        // Parse query for year if publishedYear parameter is not explicitly provided
-        String processedQuery = query;
-        logger.info("YEAR DETECTION: Starting year detection. Original query='{}', publishedYear={}", query, publishedYear);
         
-        if (publishedYear == null && query != null) {
-            // Check if query contains a year pattern
-            java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
-            java.util.regex.Matcher matcher = yearPattern.matcher(query);
-            
-            if (matcher.find()) {
-                // Extract the year
-                String yearStr = matcher.group(1);
-                logger.info("YEAR DETECTION: Found year pattern in query: '{}' at position {}-{}", 
-                        yearStr, matcher.start(), matcher.end());
-                
+        String queryForProcessing = query;
+        Integer yearFromQuery = null;
+        
+        // Parse out year if it's in the query like "books from 1984" or "2022 releases"
+        if (query.matches(".*\\b(19|20)\\d{2}\\b.*")) {
+            Matcher yearMatcher = Pattern.compile("\\b(19|20)\\d{2}\\b").matcher(query);
+            if (yearMatcher.find()) {
+                String yearStr = yearMatcher.group();
                 try {
-                    publishedYear = Integer.parseInt(yearStr);
-                    // Remove the year from the query - be careful with the replacement
-                    String beforeYear = query.substring(0, matcher.start());
-                    String afterYear = query.substring(matcher.end());
-                    processedQuery = beforeYear + afterYear;
-                    processedQuery = processedQuery.trim();
-                    
-                    // Remove extra spaces that might result from the removal
-                    processedQuery = processedQuery.replaceAll("\\s+", " ");
-                    logger.info("YEAR DETECTION: Detected year {} in query. Transformed query to: '{}'", 
-                            publishedYear, processedQuery);
+                    yearFromQuery = Integer.parseInt(yearStr);
+                    if (yearFromQuery != null) {
+                        queryForProcessing = query.replaceAll("\\b" + yearStr + "\\b", "").trim();
+                        logger.info("Extracted year {} from query. Modified query: '{}'", yearFromQuery, queryForProcessing);
+                    }
                 } catch (NumberFormatException e) {
-                    logger.warn("YEAR DETECTION: Failed to parse detected year from query: {}", e.getMessage());
+                    logger.warn("Failed to parse year from query: {}", query);
                 }
-            } else {
-                logger.info("YEAR DETECTION: No year pattern found in query");
             }
-        } else {
-            logger.info("YEAR DETECTION: Skipped detection - publishedYear already provided or query is null");
         }
         
-        // If processedQuery is empty after removing the year, use a wildcard search
-        if (processedQuery == null || processedQuery.isEmpty()) {
-            processedQuery = "*";
-            logger.info("YEAR DETECTION: Query was empty after year extraction, using wildcard search");
+        // Use provided year parameter first, fall back to year extracted from query if available
+        final Integer effectivePublishedYear = (publishedYear != null) ? publishedYear : yearFromQuery;
+        
+        if (effectivePublishedYear != null) {
+            logger.info("Searching with effective published year filter: {}", effectivePublishedYear);
         }
         
-        return bookCacheService.searchBooksReactive(processedQuery, startIndex, maxResults, publishedYear)
+        // If queryForProcessing is empty after potential year extraction, use a wildcard search
+        if (queryForProcessing == null || queryForProcessing.isEmpty()) {
+            queryForProcessing = "*";
+            logger.info("Query was empty after year processing, using wildcard search '*' for API call.");
+        }
+        
+        // Pass null for langCode and orderBy, BookCacheService/GoogleBooksService will handle defaults
+        // Use effectivePublishedYear and queryForProcessing
+        return bookCacheService.searchBooksReactive(queryForProcessing, startIndex, maxResults, effectivePublishedYear, null, null)
             .flatMap(paginatedBooks -> {
                 List<Book> currentPaginatedBooks = (paginatedBooks == null) ? Collections.emptyList() : paginatedBooks;
-                int totalResultsInPage = currentPaginatedBooks.size(); 
 
                 if (currentPaginatedBooks.isEmpty()) {
                     Map<String, Object> response = new HashMap<>();
@@ -149,7 +151,7 @@ public class BookController {
                     response.put("count", 0);
                     response.put("startIndex", startIndex);
                     response.put("query", query);
-                    return Mono.just(ResponseEntity.ok(response));
+                    return Mono.just(ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response));
                 }
 
                 return Flux.fromIterable(currentPaginatedBooks)
@@ -173,26 +175,87 @@ public class BookController {
                     })
                     .collectList()
                     .map(processedBooks -> {
-                        List<Book> finalBooksToReturn = processedBooks;
-                        if (effectivelyFinalResolutionPreference == ImageResolutionPreference.HIGH_ONLY) {
-                            finalBooksToReturn = processedBooks.stream()
-                                .filter(b -> b != null && b.getIsCoverHighResolution() != null && b.getIsCoverHighResolution())
-                                .collect(Collectors.toList());
-                            logger.info("Filtered paginated list for HIGH_ONLY, new count: {}", finalBooksToReturn.size());
-                        } else if (effectivelyFinalResolutionPreference == ImageResolutionPreference.HIGH_FIRST) {
-                            List<Book> sortableBooks = new ArrayList<>(processedBooks.stream().filter(java.util.Objects::nonNull).toList());
-                            sortableBooks.sort(Comparator.comparing((Book b) -> b.getIsCoverHighResolution() != null && b.getIsCoverHighResolution(), Comparator.reverseOrder()));
-                            finalBooksToReturn = sortableBooks;
-                            logger.info("Sorted paginated list for HIGH_FIRST");
+                        // Filter the books by published year on the client side if necessary, since this filtering
+                        // isn't available through the Google Books API directly
+                        List<Book> filteredBooks = effectivePublishedYear != null ?
+                            processedBooks.stream()
+                                .filter(book -> {
+                                    if (book.getPublishedDate() != null) {
+                                        Calendar calendar = Calendar.getInstance();
+                                        calendar.setTime(book.getPublishedDate());
+                                        int bookYear = calendar.get(Calendar.YEAR);
+                                        return bookYear == effectivePublishedYear;
+                                    }
+                                    return false;
+                                })
+                                .collect(Collectors.toList()) : processedBooks;
+                                
+                        // Include query-specific metadata for search results
+                        for (Book book : filteredBooks) {
+                            boolean qualifiersUpdated = false;
+                            
+                            if (book.getQualifiers() != null && book.hasQualifier("searchQuery")) {
+                                // Book already has query information stored
+                                // We could potentially add visual markers or badges in UI based on qualifiers
+                                logger.debug("Book {} has stored query qualifiers: {}", book.getId(), 
+                                    book.getQualifiers().keySet());
+                            } else {
+                                // If no qualifiers yet (maybe from a previous cache), add the current query
+                                book.addQualifier("searchQuery", query);
+                                qualifiersUpdated = true;
+                            }
+                            
+                            // Extract potential qualifiers from current query
+                            if (query.toLowerCase().contains("new york times bestseller") || 
+                                query.toLowerCase().contains("nyt bestseller")) {
+                                if (!book.hasQualifier("nytBestseller")) {
+                                    book.addQualifier("nytBestseller", true);
+                                    qualifiersUpdated = true;
+                                }
+                            }
+                            
+                            // More qualifier extractions could be added here
+                            
+                            // If qualifiers were updated, persist them to S3
+                            if (qualifiersUpdated) {
+                                // Update S3 asynchronously - we don't wait for the result
+                                // This avoids slowing down the response
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        s3RetryService.updateBookJsonWithRetry(book)
+                                            .whenComplete((result, ex) -> {
+                                                if (ex != null) {
+                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
+                                                        book.getId(), ex.getMessage());
+                                                } else {
+                                                    logger.info("Successfully updated S3 with new qualifiers for book {}", 
+                                                        book.getId());
+                                                }
+                                            });
+                                    } catch (Exception e) {
+                                        logger.error("Error scheduling S3 update for book {}: {}", 
+                                            book.getId(), e.getMessage());
+                                    }
+                                });
+                            }
                         }
 
+                        // Create response with metadata
                         Map<String, Object> response = new HashMap<>();
-                        response.put("resultsInPage", totalResultsInPage); 
-                        response.put("results", finalBooksToReturn);
-                        response.put("count", finalBooksToReturn.size());
-                        response.put("startIndex", startIndex);
                         response.put("query", query);
-                        return ResponseEntity.ok(response);
+                        response.put("resultsInPage", filteredBooks.size());
+                        response.put("results", filteredBooks);
+                        response.put("count", filteredBooks.size());
+                        response.put("totalAvailableResults", filteredBooks.size()); // This is an estimate for client pagination
+                        
+                        // Save any query-related metadata we parsed
+                        Map<String, Object> metadata = new HashMap<>();
+                        if (effectivePublishedYear != null) {
+                            metadata.put("publishedYear", effectivePublishedYear);
+                        }
+                        response.put("metadata", metadata);
+                        
+                        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
                     });
             })
             .onErrorResume(e -> {
@@ -254,7 +317,7 @@ public class BookController {
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookCacheService for searching books by title
-        return bookCacheService.searchBooksReactive("intitle:" + title, 0, 40) // Assuming max 40 for title search, adjust as needed
+        return bookCacheService.searchBooksReactive("intitle:" + title, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -262,7 +325,7 @@ public class BookController {
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
                     response.put("title", title);
-                    return Mono.just(ResponseEntity.ok(response));
+                    return Mono.just(ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response));
                 }
 
                 return Flux.fromIterable(currentBooks)
@@ -284,11 +347,43 @@ public class BookController {
                     })
                     .collectList()
                     .map(processedBooks -> {
+                        // Process books for qualifiers and update S3 if needed
+                        for (Book book : processedBooks) {
+                            boolean qualifiersUpdated = false;
+                            
+                            // Add search query qualifier if not present
+                            if (!book.hasQualifier("searchQuery")) {
+                                book.addQualifier("searchQuery", "intitle:" + title);
+                                qualifiersUpdated = true;
+                            }
+                            
+                            // Update S3 if we added qualifiers
+                            if (qualifiersUpdated) {
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        s3RetryService.updateBookJsonWithRetry(book)
+                                            .whenComplete((result, ex) -> {
+                                                if (ex != null) {
+                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
+                                                        book.getId(), ex.getMessage());
+                                                } else {
+                                                    logger.debug("Successfully updated S3 with title search qualifiers for book {}", 
+                                                        book.getId());
+                                                }
+                                            });
+                                    } catch (Exception e) {
+                                        logger.error("Error scheduling S3 update for book {}: {}", 
+                                            book.getId(), e.getMessage());
+                                    }
+                                });
+                            }
+                        }
+                        
                         Map<String, Object> response = new HashMap<>();
                         response.put("results", processedBooks);
                         response.put("count", processedBooks.size());
                         response.put("title", title);
-                        return ResponseEntity.ok(response);
+                        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
                     });
             })
             .onErrorResume(e -> {
@@ -318,7 +413,7 @@ public class BookController {
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookCacheService for searching books by author
-        return bookCacheService.searchBooksReactive("inauthor:" + author, 0, 40) // Assuming max 40 for author search
+        return bookCacheService.searchBooksReactive("inauthor:" + author, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -326,7 +421,7 @@ public class BookController {
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
                     response.put("author", author);
-                    return Mono.just(ResponseEntity.ok(response));
+                    return Mono.just(ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response));
                 }
 
                 return Flux.fromIterable(currentBooks)
@@ -348,11 +443,43 @@ public class BookController {
                     })
                     .collectList()
                     .map(processedBooks -> {
+                        // Process books for qualifiers and update S3 if needed
+                        for (Book book : processedBooks) {
+                            boolean qualifiersUpdated = false;
+                            
+                            // Add search query qualifier if not present
+                            if (!book.hasQualifier("searchQuery")) {
+                                book.addQualifier("searchQuery", "inauthor:" + author);
+                                qualifiersUpdated = true;
+                            }
+                            
+                            // Update S3 if we added qualifiers
+                            if (qualifiersUpdated) {
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        s3RetryService.updateBookJsonWithRetry(book)
+                                            .whenComplete((result, ex) -> {
+                                                if (ex != null) {
+                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
+                                                        book.getId(), ex.getMessage());
+                                                } else {
+                                                    logger.debug("Successfully updated S3 with author search qualifiers for book {}", 
+                                                        book.getId());
+                                                }
+                                            });
+                                    } catch (Exception e) {
+                                        logger.error("Error scheduling S3 update for book {}: {}", 
+                                            book.getId(), e.getMessage());
+                                    }
+                                });
+                            }
+                        }
+                        
                         Map<String, Object> response = new HashMap<>();
                         response.put("results", processedBooks);
                         response.put("count", processedBooks.size());
                         response.put("author", author);
-                        return ResponseEntity.ok(response);
+                        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
                     });
             })
             .onErrorResume(e -> {
@@ -390,7 +517,7 @@ public class BookController {
                     response.put("results", Collections.emptyList());
                     response.put("count", 0);
                     response.put("isbn", isbn);
-                    return Mono.just(ResponseEntity.ok(response));
+                    return Mono.just(ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response));
                 }
 
                 return Flux.fromIterable(currentBooks)
@@ -412,11 +539,43 @@ public class BookController {
                     })
                     .collectList()
                     .map(processedBooks -> {
+                        // Process books for qualifiers and update S3 if needed
+                        for (Book book : processedBooks) {
+                            boolean qualifiersUpdated = false;
+                            
+                            // Add search query qualifier if not present
+                            if (!book.hasQualifier("searchQuery")) {
+                                book.addQualifier("searchQuery", "isbn:" + isbn);
+                                qualifiersUpdated = true;
+                            }
+                            
+                            // Update S3 if we added qualifiers
+                            if (qualifiersUpdated) {
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        s3RetryService.updateBookJsonWithRetry(book)
+                                            .whenComplete((result, ex) -> {
+                                                if (ex != null) {
+                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
+                                                        book.getId(), ex.getMessage());
+                                                } else {
+                                                    logger.debug("Successfully updated S3 with ISBN search qualifiers for book {}", 
+                                                        book.getId());
+                                                }
+                                            });
+                                    } catch (Exception e) {
+                                        logger.error("Error scheduling S3 update for book {}: {}", 
+                                            book.getId(), e.getMessage());
+                                    }
+                                });
+                            }
+                        }
+                        
                         Map<String, Object> response = new HashMap<>();
                         response.put("results", processedBooks);
                         response.put("count", processedBooks.size());
                         response.put("isbn", isbn);
-                        return ResponseEntity.ok(response);
+                        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
                     });
             })
             .onErrorResume(e -> {
@@ -468,8 +627,14 @@ public class BookController {
             .doOnSuccess(b -> {
                 if (b != null) recentlyViewedService.addToRecentlyViewed(b);
             })
-            .map(ResponseEntity::ok)
-            .switchIfEmpty(Mono.just(ResponseEntity.notFound().build()))
+            .flatMap(book -> { // Keep flatMap to handle the book object
+                if (book == null) {
+                    return Mono.<ResponseEntity<Book>>empty(); // Explicitly type Mono.empty()
+                }
+                // This inner Mono will contain the processed book.
+                return Mono.just(ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(book));
+            })
+            .switchIfEmpty(Mono.just(ResponseEntity.notFound().build())) // Handles case where bookCacheService.getBookByIdReactive was empty OR flatMap resulted in empty
             .onErrorResume(e -> {
                 logger.error("Error getting book by ID '{}': {}", id, e.getMessage(), e);
                 if (e instanceof ResponseStatusException rse) return Mono.error(rse);
@@ -522,7 +687,7 @@ public class BookController {
                             response.put("results", Collections.emptyList());
                             response.put("count", 0);
                             response.put("sourceBookId", id);
-                            return Mono.just(ResponseEntity.ok(response));
+                            return Mono.just(ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response));
                         }
 
                         return Flux.fromIterable(currentSimilarBooks)
@@ -548,7 +713,7 @@ public class BookController {
                                 response.put("results", processedSimilarBooks);
                                 response.put("count", processedSimilarBooks.size());
                                 response.put("sourceBookId", id);
-                                return ResponseEntity.ok(response);
+                                return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
                             });
                     })
             .onErrorResume(e -> {
@@ -556,5 +721,42 @@ public class BookController {
                 if (e instanceof ResponseStatusException rse) return Mono.error(rse);
                 return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error occurred while getting similar books", e));
             });
+    }
+
+    /**
+     * Creates a new book resource
+     *
+     * @param book The book object to create, from the request body
+     * @return Mono containing ResponseEntity with the created book and 201 status, or an error status
+     */
+    @PostMapping
+    public Mono<ResponseEntity<Book>> createBook(@RequestBody Book book) {
+        logger.info("Attempting to create book: {}", book.getTitle());
+        return Mono.defer(() -> {
+            bookCacheService.cacheBook(book); // This call can throw IllegalArgumentException
+            // Assuming book.getId() is populated by cacheBook or by the service call.
+            // If not, the URI creation will be problematic.
+            if (book.getId() == null) {
+                logger.warn("Book ID is null after caching. Cannot build Location URI properly. This might indicate an issue with ID assignment in the service layer or test setup.");
+                // Consider returning an error or a default response if ID is crucial and not set.
+                // For now, we proceed, but this is a potential point of failure if ID isn't set.
+            }
+            URI location = ServletUriComponentsBuilder
+                    .fromCurrentRequest()
+                    .path("/{id}")
+                    // Use a placeholder if ID is null to avoid NullPointerException in buildAndExpand,
+                    // though ideally, ID should always be present for a created resource.
+                    .buildAndExpand(book.getId() != null ? book.getId() : "unknown-id")
+                    .toUri();
+            return Mono.just(ResponseEntity.created(location).body(book));
+        })
+        .onErrorResume(IllegalArgumentException.class, e -> {
+            logger.error("Validation error creating book with title '{}': {}", book.getTitle(), e.getMessage());
+            return Mono.just(ResponseEntity.badRequest().build());
+        })
+        .onErrorResume(e -> { // Catch other, non-IllegalArgumentException errors
+            logger.error("Generic error creating book with title '{}': {}", book.getTitle(), e.getMessage(), e);
+            return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+        });
     }
 }
