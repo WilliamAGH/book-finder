@@ -92,5 +92,9 @@ public enum ImageAttemptStatus {
      */
     FAILURE_NO_URL_IN_RESPONSE,
 
+    /**
+     * Image fetched but rejected due to content analysis (e.g., predominantly white, too simple).
+     */
+    FAILURE_CONTENT_REJECTED,
 
 }
