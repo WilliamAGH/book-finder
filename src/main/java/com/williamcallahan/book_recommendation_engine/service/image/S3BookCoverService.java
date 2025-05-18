@@ -331,58 +331,58 @@ public class S3BookCoverService implements ExternalCoverService {
         return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
             .timeout(Duration.ofSeconds(10))
             .flatMap(rawImageBytes -> {
-                try {
-                    logger.debug("Book ID {}: Downloaded {} bytes from {}. Starting image processing.", bookId, rawImageBytes.length, imageUrl);
-                    ProcessedImage processedImage = imageProcessingService.processImageForS3(rawImageBytes, bookId);
+                logger.debug("Book ID {}: Downloaded {} bytes from {}. Starting image processing.", bookId, rawImageBytes.length, imageUrl);
+                // Convert CompletableFuture to Mono and continue reactive chain
+                return Mono.fromFuture(imageProcessingService.processImageForS3(rawImageBytes, bookId))
+                    .flatMap(processedImage -> {
+                        if (!processedImage.isProcessingSuccessful()) {
+                            logger.warn("Book ID {}: Image processing failed. Reason: {}. Will not upload to S3.", bookId, processedImage.getProcessingError());
+                            return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(imageUrl, source, "processing-failed-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                        }
+                        logger.debug("Book ID {}: Image processing successful. New size: {}x{}, Extension: {}, MimeType: {}.",
+                                     bookId, processedImage.getWidth(), processedImage.getHeight(), processedImage.getNewFileExtension(), processedImage.getNewMimeType());
 
-                    if (!processedImage.isProcessingSuccessful()) {
-                        logger.warn("Book ID {}: Image processing failed. Reason: {}. Will not upload to S3.", bookId, processedImage.getProcessingError());
-                        return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(imageUrl, source, "processing-failed-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
-                    }
-                    logger.debug("Book ID {}: Image processing successful. New size: {}x{}, Extension: {}, MimeType: {}.", 
-                                 bookId, processedImage.getWidth(), processedImage.getHeight(), processedImage.getNewFileExtension(), processedImage.getNewMimeType());
+                        byte[] imageBytesForS3 = processedImage.getProcessedBytes();
+                        String fileExtensionForS3 = processedImage.getNewFileExtension();
+                        String mimeTypeForS3 = processedImage.getNewMimeType();
 
-                    byte[] imageBytesForS3 = processedImage.getProcessedBytes(); 
-                    String fileExtensionForS3 = processedImage.getNewFileExtension();
-                    String mimeTypeForS3 = processedImage.getNewMimeType();
+                        if (imageBytesForS3.length > this.maxFileSizeBytes) {
+                            logger.warn("Book ID {}: Processed image too large (size: {} bytes, max: {} bytes). URL: {}. Will not upload to S3.",
+                                        bookId, imageBytesForS3.length, this.maxFileSizeBytes, imageUrl);
+                            return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(imageUrl, source, "processed-image-too-large-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                        }
 
-                    if (imageBytesForS3.length > this.maxFileSizeBytes) {
-                        logger.warn("Book ID {}: Processed image too large (size: {} bytes, max: {} bytes). URL: {}. Will not upload to S3.", 
-                                    bookId, imageBytesForS3.length, this.maxFileSizeBytes, imageUrl);
-                        return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(imageUrl, source, "processed-image-too-large-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
-                    }
+                        String s3Key = generateS3Key(bookId, fileExtensionForS3, s3Source);
 
-                    String s3Key = generateS3Key(bookId, fileExtensionForS3, s3Source);
-
-                    // Asynchronous check for existing object
-                    return coverExistsInS3Async(bookId, fileExtensionForS3, s3Source)
-                        .flatMap(exists -> {
-                            if (exists) {
-                                // Check content length if it exists
-                                return Mono.fromCallable(() -> s3Client.headObject(HeadObjectRequest.builder().bucket(s3BucketName).key(s3Key).build()))
-                                    .subscribeOn(Schedulers.boundedElastic())
-                                    .flatMap(headResponse -> {
-                                        if (headResponse.contentLength() == imageBytesForS3.length) {
-                                            logger.info("Processed cover for book {} already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Key);
-                                            String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
-                                            return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
-                                        }
-                                        return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
-                                    })
-                                    .onErrorResume(NoSuchKeyException.class, e -> uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData))
-                                    .onErrorResume(e -> {
-                                         logger.warn("Error checking existing S3 object for book {}: {}. Proceeding with upload.", bookId, e.getMessage());
-                                         return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
-                                    });
-                            } else {
-                                return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
-                            }
-                        });
-                
-                } catch (Exception e) { // Catch synchronous exceptions from imageProcessingService
-                    logger.error("Unexpected exception during S3 upload (image processing) for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
-                    return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(imageUrl, source, "upload-process-exception-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
-                }
+                        // Asynchronous check for existing object
+                        return coverExistsInS3Async(bookId, fileExtensionForS3, s3Source)
+                            .flatMap(exists -> {
+                                if (exists) {
+                                    // Check content length if it exists
+                                    return Mono.fromCallable(() -> s3Client.headObject(HeadObjectRequest.builder().bucket(s3BucketName).key(s3Key).build()))
+                                        .subscribeOn(Schedulers.boundedElastic())
+                                        .flatMap(headResponse -> {
+                                            if (headResponse.contentLength() == imageBytesForS3.length) {
+                                                logger.info("Processed cover for book {} already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Key);
+                                                String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
+                                                return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
+                                            }
+                                            return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
+                                        })
+                                        .onErrorResume(NoSuchKeyException.class, e -> uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData))
+                                        .onErrorResume(e -> {
+                                             logger.warn("Error checking existing S3 object for book {}: {}. Proceeding with upload.", bookId, e.getMessage());
+                                             return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
+                                        });
+                                } else {
+                                    return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
+                                }
+                            });
+                    })
+                    .onErrorResume(e -> { // Catches exceptions from imageProcessingService.processImageForS3 or subsequent reactive chain
+                        logger.error("Unexpected exception during S3 upload (image processing or subsequent steps) for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);
+                        return Mono.just(new com.williamcallahan.book_recommendation_engine.types.ImageDetails(imageUrl, source, "upload-process-exception-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+                    });
             })
             .onErrorResume(e -> {
                 logger.error("Error downloading image for S3 upload for book {}: {}. URL: {}", bookId, e.getMessage(), imageUrl, e);

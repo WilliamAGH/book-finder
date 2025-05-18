@@ -16,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Service for processing and optimizing book cover images
@@ -40,6 +41,11 @@ public class ImageProcessingService {
     private static final int MIN_ACCEPTABLE_DIMENSION = 50; // Reject if smaller than this
     private static final int NO_UPSCALE_THRESHOLD_WIDTH = 300; // Don't upscale if original is smaller than this
 
+    // Constants for dominant color check
+    private static final int DOMINANT_COLOR_SAMPLE_STEP = 5; // Sample every 5th pixel
+    private static final double DOMINANT_COLOR_THRESHOLD_PERCENTAGE = 0.80; // Adjusted from 0.90 to 0.80 (80%)
+    private static final int WHITE_THRESHOLD_RGB = 240; // RGB components > 240 are considered "white"
+
     /**
      * Processes an image for S3 storage, optimizing size and quality
      * 
@@ -57,20 +63,20 @@ public class ImageProcessingService {
      * 7. Returns complete result object with metadata or error details
      */
     @Async("imageProcessingExecutor") // Offload CPU-intensive work to dedicated executor
-    public ProcessedImage processImageForS3(byte[] rawImageBytes, String bookIdForLog) {
+    public CompletableFuture<ProcessedImage> processImageForS3(byte[] rawImageBytes, String bookIdForLog) {
         if (rawImageBytes == null || rawImageBytes.length == 0) {
             logger.warn("Book ID {}: Raw image bytes are null or empty. Cannot process.", bookIdForLog);
-            return ProcessedImage.failure("Raw image bytes null or empty");
+            return CompletableFuture.completedFuture(ProcessedImage.failure("Raw image bytes null or empty"));
         }
 
         try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
             BufferedImage rawOriginalImage = ImageIO.read(bais);
             if (rawOriginalImage == null) {
                 logger.warn("Book ID {}: Could not read raw bytes into a BufferedImage. Image format might be unsupported or corrupt.", bookIdForLog);
-                return ProcessedImage.failure("Unsupported or corrupt image format");
+                return CompletableFuture.completedFuture(ProcessedImage.failure("Unsupported or corrupt image format"));
             }
 
-            // Convert to a standard RGB colorspace to avoid issues with JPEG writer
+            // Convert to a standard RGB colorspace to avoid issues with JPEG writer and for consistent analysis
             BufferedImage originalImage = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
             Graphics2D g = originalImage.createGraphics();
             g.drawImage(rawOriginalImage, 0, 0, null);
@@ -79,12 +85,18 @@ public class ImageProcessingService {
             int originalWidth = originalImage.getWidth();
             int originalHeight = originalImage.getHeight();
 
+            // Perform dominant color check
+            if (isDominantlyWhite(originalImage, bookIdForLog)) {
+                logger.warn("Book ID {}: Image is predominantly white. Flagged as likely not a cover.", bookIdForLog);
+                return CompletableFuture.completedFuture(ProcessedImage.failure("LikelyNotACover_DominantColor"));
+            }
+
             if (originalWidth < MIN_ACCEPTABLE_DIMENSION || originalHeight < MIN_ACCEPTABLE_DIMENSION) {
                 logger.warn("Book ID {}: Original image dimensions ({}x{}) are below the minimum acceptable ({}x{}). Processing as is, but quality will be low.", 
                     bookIdForLog, originalWidth, originalHeight, MIN_ACCEPTABLE_DIMENSION, MIN_ACCEPTABLE_DIMENSION);
                 // Still attempt to compress it, but don't resize.
                 // Note: originalImage is already in TYPE_INT_RGB here
-                return compressOriginal(originalImage, bookIdForLog, originalWidth, originalHeight);
+                return CompletableFuture.completedFuture(compressOriginal(originalImage, bookIdForLog, originalWidth, originalHeight));
             }
 
             int newWidth;
@@ -118,14 +130,14 @@ public class ImageProcessingService {
                  g2d.dispose();
             }
 
-            return compressImageToJpeg(outputImage, bookIdForLog, newWidth, newHeight);
+            return CompletableFuture.completedFuture(compressImageToJpeg(outputImage, bookIdForLog, newWidth, newHeight));
 
         } catch (IOException e) {
             logger.error("Book ID {}: IOException during image processing: {}", bookIdForLog, e.getMessage(), e);
-            return ProcessedImage.failure("IOException during image processing: " + e.getMessage());
+            return CompletableFuture.completedFuture(ProcessedImage.failure("IOException during image processing: " + e.getMessage()));
         } catch (Exception e) {
             logger.error("Book ID {}: Unexpected exception during image processing: {}", bookIdForLog, e.getMessage(), e);
-            return ProcessedImage.failure("Unexpected error during image processing: " + e.getMessage());
+            return CompletableFuture.completedFuture(ProcessedImage.failure("Unexpected error during image processing: " + e.getMessage()));
         }
     }
 
@@ -176,6 +188,93 @@ public class ImageProcessingService {
             logger.info("Book ID {}: Successfully processed image to JPEG. Original size (approx if read): N/A, Processed size: {} bytes, Dimensions: {}x{}", 
                 bookIdForLog, processedBytes.length, finalWidth, finalHeight);
             return ProcessedImage.success(processedBytes, ".jpg", "image/jpeg", finalWidth, finalHeight);
+        }
+    }
+
+    /**
+     * Checks if the given image is predominantly white.
+     *
+     * @param image The image to check
+     * @param bookIdForLog Book identifier for logging
+     * @return True if the image is predominantly white, false otherwise
+     */
+    private boolean isDominantlyWhite(BufferedImage image, String bookIdForLog) {
+        if (image == null) {
+            return false;
+        }
+
+        int width = image.getWidth();
+        int height = image.getHeight();
+        long whitePixelCount = 0;
+        long sampledPixelCount = 0;
+
+        for (int y = 0; y < height; y += DOMINANT_COLOR_SAMPLE_STEP) {
+            for (int x = 0; x < width; x += DOMINANT_COLOR_SAMPLE_STEP) {
+                int rgb = image.getRGB(x, y);
+                int r = (rgb >> 16) & 0xFF;
+                int g = (rgb >> 8) & 0xFF;
+                int b = rgb & 0xFF;
+
+                if (r >= WHITE_THRESHOLD_RGB && g >= WHITE_THRESHOLD_RGB && b >= WHITE_THRESHOLD_RGB) {
+                    whitePixelCount++;
+                }
+                sampledPixelCount++;
+            }
+        }
+
+        if (sampledPixelCount == 0) {
+            logger.debug("Book ID {}: No pixels sampled for dominant white check (image might be too small for step).", bookIdForLog);
+            return false; // Avoid division by zero for very small images or step > dimensions
+        }
+
+        double whitePercentage = (double) whitePixelCount / sampledPixelCount;
+        boolean isDominant = whitePercentage >= DOMINANT_COLOR_THRESHOLD_PERCENTAGE;
+
+        if (isDominant) {
+            logger.info("Book ID {}: Dominant white check: {}% white pixels ({} / {} sampled). Threshold: {}%. Result: LIKELY NOT A COVER.",
+                bookIdForLog, String.format("%.2f", whitePercentage * 100), whitePixelCount, sampledPixelCount, DOMINANT_COLOR_THRESHOLD_PERCENTAGE * 100);
+        } else {
+            logger.debug("Book ID {}: Dominant white check: {}% white pixels ({} / {} sampled). Threshold: {}%. Result: LIKELY A COVER.",
+                bookIdForLog, String.format("%.2f", whitePercentage * 100), whitePixelCount, sampledPixelCount, DOMINANT_COLOR_THRESHOLD_PERCENTAGE * 100);
+        }
+        return isDominant;
+    }
+
+    /**
+     * Public method to check if an image from raw bytes is predominantly white.
+     * This is a convenience method for services that only need this check without full processing.
+     *
+     * @param rawImageBytes The raw image bytes to check
+     * @param imageIdForLog Identifier for logging (e.g., S3 key or book ID)
+     * @return True if the image is predominantly white, false otherwise. Returns false if image can't be read.
+     */
+    public boolean isDominantlyWhite(byte[] rawImageBytes, String imageIdForLog) {
+        if (rawImageBytes == null || rawImageBytes.length == 0) {
+            logger.warn("Image ID {}: Raw image bytes are null or empty for dominant white check.", imageIdForLog);
+            return false; // Or throw an IllegalArgumentException, depending on desired strictness
+        }
+
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
+            BufferedImage rawOriginalImage = ImageIO.read(bais);
+            if (rawOriginalImage == null) {
+                logger.warn("Image ID {}: Could not read raw bytes into a BufferedImage for dominant white check. Image format might be unsupported or corrupt.", imageIdForLog);
+                return false; // Consider this not dominantly white, or handle as an error
+            }
+
+            // Convert to a standard RGB colorspace for consistent analysis
+            BufferedImage imageInRGB = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = imageInRGB.createGraphics();
+            g.drawImage(rawOriginalImage, 0, 0, null);
+            g.dispose();
+
+            return isDominantlyWhite(imageInRGB, imageIdForLog);
+
+        } catch (IOException e) {
+            logger.error("Image ID {}: IOException during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
+            return false; // Treat as not dominantly white in case of error, or rethrow
+        } catch (Exception e) {
+            logger.error("Image ID {}: Unexpected exception during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
+            return false; // Treat as not dominantly white, or rethrow
         }
     }
 }

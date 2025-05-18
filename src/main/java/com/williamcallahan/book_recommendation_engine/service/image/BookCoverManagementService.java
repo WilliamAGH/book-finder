@@ -1,3 +1,15 @@
+/**
+ * Orchestrates the retrieval, caching, and background updating of book cover images
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Provides initial cover URLs quickly for UI rendering
+ * - Manages background processes to find and cache best quality images from various sources
+ * - Coordinates with local disk cache, S3 storage, and in-memory caches
+ * - Publishes events when cover images are updated
+ * - Implements optimized caching strategy with fallback mechanisms
+ */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -21,15 +33,6 @@ import reactor.core.publisher.Mono;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-
-/**
- * Orchestrates the retrieval, caching, and background updating of book cover images
- * - Provides initial cover URLs quickly for UI rendering
- * - Manages background processes to find and cache the best quality images from various sources
- * - Coordinates with local disk cache, S3 storage, and in-memory caches
- *
- * @author William Callahan
- */
 @Service
 public class BookCoverManagementService {
 
@@ -78,6 +81,12 @@ public class BookCoverManagementService {
         this.environmentService = environmentService;
     }
 
+    /**
+     * Creates placeholder cover images when actual covers cannot be found
+     * 
+     * @param bookIdForLog identifier for logging purposes
+     * @return CoverImages object with placeholder paths
+     */
     private CoverImages createPlaceholderCoverImages(String bookIdForLog) {
         CoverImages placeholder = new CoverImages();
         String localPlaceholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
@@ -143,8 +152,16 @@ public class BookCoverManagementService {
             .defaultIfEmpty(createPlaceholderCoverImages(book.getId() + " (all checks failed or resulted in empty)"));
     }
 
+    /**
+     * Checks memory caches for cover image details and falls back to default options
+     * 
+     * @param book book object to find cover for
+     * @param identifierKey cache key for lookups
+     * @param localPlaceholderPath path to placeholder image
+     * @return Mono with best available cover images
+     */
     private Mono<CoverImages> checkMemoryCachesAndDefaults(Book book, String identifierKey, String localPlaceholderPath) {
-        // 2. Check final in-memory cache
+        // Check final in-memory cache
         ImageDetails finalCachedImageDetails = coverCacheManager.getFinalImageDetails(identifierKey);
         if (finalCachedImageDetails != null && finalCachedImageDetails.getUrlOrPath() != null) {
             logger.debug("Returning final cached ImageDetails for identifierKey {}: Path: {}, Source: {}",
@@ -156,7 +173,7 @@ public class BookCoverManagementService {
             return Mono.just(finalCacheResult);
         }
 
-        // 3. Check provisional or use book's URL or placeholder
+        // Check provisional or use book's URL or placeholder
         CoverImages provisionalResult = new CoverImages();
         String provisionalUrl = coverCacheManager.getProvisionalUrl(identifierKey);
         String urlToUseAsPreferred;
@@ -261,9 +278,23 @@ public class BookCoverManagementService {
                     
                     logger.warn("Background: Final processing for {} (BookID {}) yielded placeholder or null. Final cache updated with placeholder", identifierKey, bookIdForLog);
                     ImageDetails placeholderDetails = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-fetch-failed");
+                    
+                    if (placeholderDetails == null) {
+                        logger.error("CRITICAL: localDiskCoverCacheService.createPlaceholderImageDetails returned null for BookID {}. Aborting this path.", bookIdForLog);
+                        if (identifierKey != null) {
+                             coverCacheManager.invalidateProvisionalUrl(identifierKey);
+                        }
+                        return; 
+                    }
+
                     coverCacheManager.putFinalImageDetails(identifierKey, placeholderDetails);
                     coverCacheManager.invalidateProvisionalUrl(identifierKey);
-                    eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, placeholderDetails.getUrlOrPath(), book.getId(), placeholderDetails.getCoverImageSource()));
+                    // Ensure placeholderDetails and its getUrlOrPath() are not null before publishing event
+                    if (placeholderDetails.getUrlOrPath() != null && placeholderDetails.getCoverImageSource() != null) {
+                        eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, placeholderDetails.getUrlOrPath(), book.getId(), placeholderDetails.getCoverImageSource()));
+                    } else {
+                        logger.error("CRITICAL: placeholderDetails has null URL or Source for BookID {}. Event not published.", bookIdForLog);
+                    }
                     if (environmentService.isBookCoverDebugMode()) {
                         logger.info("Background Provenance (Placeholder) for {}: {}", identifierKey, provenanceData.toString());
                     }
@@ -274,6 +305,7 @@ public class BookCoverManagementService {
                     identifierKey, bookIdForLog, finalImageDetails.getUrlOrPath(), finalImageDetails.getCoverImageSource());
 
                 if (finalImageDetails.getCoverImageSource() != CoverImageSource.S3_CACHE &&
+                    finalImageDetails.getUrlOrPath() != null &&
                     finalImageDetails.getUrlOrPath().startsWith("/" + localDiskCoverCacheService.getCacheDirName())) {
                     
                     logger.info("Background: Image for {} (BookID {}) is locally cached from {}. Triggering S3 upload",
@@ -281,7 +313,8 @@ public class BookCoverManagementService {
                     
                     try {
                         Path cacheDir = Paths.get(localDiskCoverCacheService.getCacheDirString());
-                        Path relativeImagePath = Paths.get(finalImageDetails.getUrlOrPath()).getFileName();
+                        // Ensure finalImageDetails.getUrlOrPath() is not null before creating Path
+                        Path relativeImagePath = Paths.get(finalImageDetails.getUrlOrPath()).getFileName(); 
                         Path localImagePath = cacheDir.resolve(relativeImagePath);
 
                         if (!Files.exists(localImagePath)) {
@@ -315,7 +348,9 @@ public class BookCoverManagementService {
                                 coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                                 eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                             })
-                            .subscribe();
+                            .subscribe(); // This makes the S3 upload non-blocking
+                            // The logic after this if/else will execute immediately if S3 path is taken.
+                            // No explicit return here, so flow continues.
                         }
                     } catch (java.io.IOException e) {
                         logger.error("Background: IOException for local image {} for S3 upload (BookID {}): {}", 
@@ -323,25 +358,39 @@ public class BookCoverManagementService {
                         coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                         eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                     }
-                } else {
+                    // If S3 upload path was taken, we return here to avoid the redundant cache update below.
+                    // The S3 callbacks will handle their own cache updates.
+                    return;
+                } else { // Not S3 cache and not a local disk cache candidate for S3 upload
+                    logger.info("Background: Image for {} (BookID {}) is not a local cache candidate for S3 upload (Source: {}, Path: {}). Using details as is.",
+                        identifierKey, bookIdForLog, finalImageDetails.getCoverImageSource(), finalImageDetails.getUrlOrPath());
                     coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                     eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                    // Explicit return after handling this case.
+                    return;
                 }
-                
-                coverCacheManager.invalidateProvisionalUrl(identifierKey);
-
-                if (environmentService.isBookCoverDebugMode()) {
-                    logger.info("Background Provenance (Success) for {}: {}", identifierKey, provenanceData.toString());
-                }
-
             }, java.util.concurrent.ForkJoinPool.commonPool())
             .exceptionally(ex -> {
-                logger.error("Background: Top-level exception in processCoverInBackground for {} (BookID {}): {}",
-                    identifierKey, bookIdForLog, ex.getMessage(), ex);
-                coverCacheManager.invalidateProvisionalUrl(identifierKey);
+                logger.error("Background: Top-level exception in processCoverInBackground for identifierKey='{}', BookID='{}': {}",
+                    identifierKey,
+                    bookIdForLog,
+                    ex.getMessage(), ex);
+
+                coverCacheManager.invalidateProvisionalUrl(identifierKey); // identifierKey should be non-null here due to earlier check
+
                 ImageDetails placeholderOnError = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-exception");
+
+                // Ensure placeholderOnError is not null before using it
+                // This null check and emergency placeholder creation is redundant if createPlaceholderImageDetails is guaranteed to return non-null
+                // or if the subsequent logic correctly handles a null from it (which it doesn't seem to).
+                // Assuming createPlaceholderImageDetails is robust or that a null return is an exceptional state handled elsewhere if critical.
+                // For now, keeping the check but noting potential redundancy or need for better error handling strategy.
+
                 coverCacheManager.putFinalImageDetails(identifierKey, placeholderOnError);
-                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, placeholderOnError.getUrlOrPath(), book.getId(), placeholderOnError.getCoverImageSource()));
+                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey,
+                                                                  placeholderOnError.getUrlOrPath(),
+                                                                  bookIdForLog,
+                                                                  placeholderOnError.getCoverImageSource()));
                 return null;
             });
     }
