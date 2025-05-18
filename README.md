@@ -17,6 +17,18 @@ A Spring Boot application for book lookup and recommendations using Spring AI wi
 - OpenAI API Key (optional, for AI features)
 - Google Books API Key (optional, for enhanced book data)
 
+### Maven Commands
+
+Use standard `mvn` commands when Maven is installed. If Maven is not installed, use the included wrapper:
+```bash
+# With Maven installed (preferred):
+mvn clean install
+
+# Without Maven:
+./mvnw clean install  # macOS/Linux
+mvnw.cmd clean install  # Windows
+```
+
 ## Configuration
 
 Use a `.env` file for local setup (copy from `.env.example` and update values). Key variables:
@@ -32,24 +44,24 @@ Spring Profiles: `prod` (default), `dev`.
 
 **Development Mode (with `dev` profile):**
 ```bash
-./mvnw spring-boot:run -Dspring.profiles.active=dev
+mvn spring-boot:run -Dspring.profiles.active=dev
 ```
 Hot reload:
 ```bash
-./mvnw spring-boot:run -Dspring.profiles.active=dev -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
+mvn spring-boot:run -Dspring.profiles.active=dev -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
 ```
 App typically at `http://localhost:8081` (or `SERVER_PORT`).
 
 **Production Mode (default or explicit `prod` profile):**
 ```bash
-./mvnw spring-boot:run -Dspring.profiles.active=prod
+mvn spring-boot:run -Dspring.profiles.active=prod
 ```
 
 ## Building and Deployment
 
 **Build JAR:**
 ```bash
-./mvnw clean package
+mvn clean package
 ```
 
 **Run JAR:**
@@ -60,7 +72,7 @@ java -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar
 ```
 
 **Docker:**
-1. Build image: `./mvnw spring-boot:build-image`
+1. Build image: `mvn spring-boot:build-image`
 2. Run container (example using port 8081, adjust if `SERVER_PORT` differs):
 ```bash
 docker run -p 8081:8081 --env-file .env book_recommendation_engine:0.0.1-SNAPSHOT
@@ -92,9 +104,64 @@ Incoming HTTP requests are logged. Configure levels in `application.properties` 
 
 ## Testing
 
+To run tests:
 ```bash
-./mvnw test
+mvn test
 ```
+
+### Silencing JVM Warnings During Maven Execution
+
+During Maven execution (e.g., with `mvn spring-boot:run`, `mvn clean package`, `mvn test`, etc.), you might encounter JVM warnings such as:
+- `WARNING: A Java agent has been loaded dynamically...`
+- `Java HotSpot(TM) 64-Bit Server VM warning: Sharing is only supported for boot loader classes...`
+
+These warnings typically arise when Maven plugins (like `wro4j-maven-plugin` or others that use Java agents) run within the main Maven JVM. To silence them, set the `MAVEN_OPTS` environment variable before executing your Maven command. This applies universally to the Maven JVM, regardless of any Spring profiles (`dev`, `prod`) activated for your application.
+
+**Recommended `MAVEN_OPTS`:**
+```bash
+export MAVEN_OPTS="-XX:+EnableDynamicAgentLoading -Xshare:off"
+```
+
+**Usage Examples:**
+
+*   **For the current terminal session:**
+    Set the variable, then run your Maven commands.
+    ```bash
+    export MAVEN_OPTS="-XX:+EnableDynamicAgentLoading -Xshare:off"
+    mvn clean install
+    mvn spring-boot:run -Dspring.profiles.active=dev
+    ```
+
+*   **For a single command:**
+    Prepend the variable assignment to the Maven command.
+    ```bash
+    MAVEN_OPTS="-XX:+EnableDynamicAgentLoading -Xshare:off" mvn test
+    ```
+
+*   **For permanent configuration:**
+    Add the `export MAVEN_OPTS="..."` line to your shell's startup file (e.g., `~/.bashrc`, `~/.zshrc` for Linux/macOS, or set it as a system environment variable on Windows).
+
+**Note:** JVM arguments specified within plugin configurations in your `pom.xml` (e.g., for `spring-boot-maven-plugin` or `maven-surefire-plugin`) apply to new JVMs *forked by those specific plugins*. `MAVEN_OPTS` is for configuring the main Maven JVM itself.
+
+## Debugging Overrides
+
+For development and troubleshooting, certain default behaviors can be overridden using Spring Boot properties (e.g., in your `.env` file or as command-line arguments):
+
+- **Bypass Caches:** To bypass all caching layers (in-memory, S3, etc.) for book lookups and go directly to the Google Books API:
+  ```properties
+  googlebooks.api.override.bypass-caches=true
+  ```
+  When this is true, `GoogleBooksCachingStrategy` will skip cache checks.
+
+- **Bypass Rate Limiter:** To effectively bypass the Google Books API rate limiter for the `googleBooksServiceRateLimiter` instance, you can make its configuration very permissive by setting the following properties:
+  ```properties
+  resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.limitForPeriod=2147483647
+  resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.limitRefreshPeriod=1ms
+  resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.timeoutDuration=0ms
+  ```
+  This allows a very high number of requests in a very short period, effectively disabling the limit for debugging purposes.
+
+These overrides should be used with caution, especially the rate limiter bypass, as they can lead to exceeding actual API quotas if used against production services.
 
 ## Troubleshooting
 
