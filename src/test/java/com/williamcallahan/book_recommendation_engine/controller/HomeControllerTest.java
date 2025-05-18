@@ -1,66 +1,207 @@
+/**
+ * Test suite for HomeController web endpoints
+ * 
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookRecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
+import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
+import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService; // Added import
+import com.williamcallahan.book_recommendation_engine.types.CoverImages;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.test.web.servlet.MockMvc;
-
+import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.http.MediaType;
 import java.util.List;
-
-import static java.util.Collections.emptyList;
-import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.hasSize;
+import java.util.ArrayList;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-
-@WebMvcTest(HomeController.class)
+import static org.mockito.ArgumentMatchers.anyString; // For mocking getSimilarBooks
+import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBooks
+import static org.mockito.ArgumentMatchers.any; // For mocking any objectlarBooks
+import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
+import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
+import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
+import reactor.core.publisher.Mono; // For mocking reactive service
+@WebFluxTest(HomeController.class)
 class HomeControllerTest {
-
+    /**
+     * WebTestClient for controller integration testing
+     */
     @Autowired
-    private MockMvc mockMvc;
+    private WebTestClient webTestClient;
+    /**
+     * Mock for RecommendationService dependency
+     */
+    @MockitoBean
+    private RecommendationService recommendationService;
+    
+    @MockitoBean
+    private BookCacheService bookCacheService;
+    
+    @MockitoBean
+    private RecentlyViewedService recentlyViewedService;
+    
+    @MockitoBean
+    private BookImageOrchestrationService bookImageOrchestrationService;
+    
+    @MockitoBean
+    private BookCoverManagementService bookCoverManagementService;
 
-    @MockBean
-    private BookRecommendationService recommendationService;
+    @MockitoBean
+    private LocalDiskCoverCacheService localDiskCoverCacheService;
+    
+    @MockitoBean
+    private com.williamcallahan.book_recommendation_engine.service.EnvironmentService environmentService;
+    
+    @MockitoBean
+    private com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService;
+    /**
+     * Sets up common test fixtures
+     * Configures mock services with default behaviors
+     */
+    @BeforeEach
+    void setUp() {
+        // Configure BookCacheService to return empty results by default
+        when(bookCacheService.searchBooksReactive(anyString(), anyInt(), anyInt(), isNull(), isNull(), isNull()))
+            .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
-    @Test
-    void shouldReturnHomeViewWithRecommendationsWhenServiceSucceeds() throws Exception {
-        // Arrange
-        var books = List.of(new Book("Effective Java", "Joshua Bloch"));
-        when(recommendationService.getRecommendations()).thenReturn(books);
+        // Configure BookCoverManagementService with mock cover generation
+        when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class)))
+            .thenAnswer(invocation -> {
+                Book book = invocation.getArgument(0);
+                String mockCoverUrl = "http://example.com/mockcover/" + book.getId() + ".jpg";
+                CoverImages coverImages = new CoverImages(
+                    mockCoverUrl,
+                    mockCoverUrl,
+                    com.williamcallahan.book_recommendation_engine.types.CoverImageSource.S3_CACHE
+                );
+                book.setCoverImages(coverImages);
+                book.setCoverImageUrl(mockCoverUrl);
+                return Mono.just(coverImages);
+            });
 
-        // Act & Assert
-        mockMvc.perform(get("/"))
-            .andExpect(status().isOk())
-            .andExpect(view().name("home"))
-            .andExpect(model().attributeExists("recommendations"))
-            .andExpect(model().attribute("recommendations", hasSize(1)))
-            .andExpect(model().attribute("recommendations", contains(books.get(0))));
+        // Mock LocalDiskCoverCacheService if needed for specific interactions,
+        // for now, a basic mock is enough to satisfy dependency injection.
+        // Example: when(localDiskCoverCacheService.someMethod(anyString())).thenReturn("mockValue");
+        // For the current error, just having the bean present is the key.
+        // Let's add a default behavior for getLocalPlaceholderPath as it's used in HomeController
+        when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
+    
+        // Configure RecentlyViewedService with empty view history
+        when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
     }
-
-    @Test
-    void shouldShowEmptyRecommendationsWhenServiceReturnsEmptyList() throws Exception {
-        // Arrange
-        when(recommendationService.getRecommendations()).thenReturn(emptyList());
-
-        // Act & Assert
-        mockMvc.perform(get("/"))
-            .andExpect(status().isOk())
-            .andExpect(view().name("home"))
-            .andExpect(model().attribute("recommendations", hasSize(0)));
+    /**
+     * Helper method to create test Book instances
+     * 
+     * @param id Book identifier
+     * @param title Book title
+     * @param author Book authorer
+     * @return Populated Book instance for testing
+     */
+    private Book createTestBook(String id, String title, String author) {
+        Book book = new Book();
+        book.setId(id);
+        book.setTitle(title);
+        book.setAuthors(List.of(author));
+        book.setDescription("Test description for " + title);
+        String coverUrl = "http://example.com/cover/" + (id != null ? id : "new") + ".jpg";
+        book.setCoverImageUrl(coverUrl);
+        book.setImageUrl("http://example.com/image/" + (id != null ? id : "new") + ".jpg");
+        
+        CoverImages coverImages = new CoverImages(
+            coverUrl,
+            coverUrl,
+            com.williamcallahan.book_recommendation_engine.types.CoverImageSource.S3_CACHE 
+        );
+        book.setCoverImages(coverImages);
+        return book;
     }
-
+    /**
+     * Tests home page with successful recommendations
+     */
     @Test
-    void shouldReturnServerErrorWhenServiceThrowsException() throws Exception {
+    void shouldReturnHomeViewWithBestsellersAndRecentBooks() {
         // Arrange
-        when(recommendationService.getRecommendations())
-            .thenThrow(new RuntimeException("simulated failure"));
+        Book bestsellerBook = createTestBook("bestseller1", "NYT Bestseller", "Author A");
+        List<Book> bestsellers = List.of(bestsellerBook);
+        Book recentBook = createTestBook("recent1", "Recent Read", "Author B");
+        List<Book> additionalRecentBooks = List.of(recentBook);
+        // Mock for bestsellers - updated signature
+        when(bookCacheService.searchBooksReactive(eq("new york times bestsellers"), eq(0), eq(8), isNull(Integer.class), isNull(String.class), isNull(String.class)))
+            .thenReturn(Mono.just(bestsellers));
+        when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
+        // Mock for the "additional books" call (triggered because recentlyViewed is empty and needs 8 books) - updated signature
+        // Make this mock more specific to avoid clashing with the bestsellers mock.
+        // It should match any string EXCEPT "new york times bestsellers" for the query.
+        when(bookCacheService.searchBooksReactive(
+                argThat((String query) -> query != null && !query.equals("new york times bestsellers")), 
+                eq(0), 
+                eq(8), 
+                isNull(Integer.class), 
+                isNull(String.class), 
+                isNull(String.class)))
+            .thenReturn(Mono.just(additionalRecentBooks));
+        // Act & Assert
+        webTestClient.get().uri("/")
+            .accept(MediaType.TEXT_HTML)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(String.class)
+            .value(body -> {
+                try {
+                    assert body.contains("NYT Bestseller") : "Response body did not contain 'NYT Bestseller'.\nBody:\n" + body;
+                    assert body.contains("Recent Read") : "Response body did not contain 'Recent Read'.\nBody:\n" + body;
+                } catch (AssertionError e) {
+                    System.out.println("\n\n==== DEBUG: Response Body ====");
+                    System.out.println(body);
+                    System.out.println("==== END RESPONSE BODY ====");
+                    throw e;
+                }
+            });
+    }
+    /**
+     * Tests home page with empty recommendations
+     */
+    @Test
+    void shouldShowEmptyHomePageWhenServicesReturnEmptyLists() {
+        // Default setUp mocks already return empty lists
 
         // Act & Assert
-        mockMvc.perform(get("/"))
-            .andExpect(status().is5xxServerError());
+        webTestClient.get().uri("/")
+            .accept(MediaType.TEXT_HTML)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(String.class)
+            .value(body -> {
+                assert !body.contains("NYT Bestseller");
+                assert !body.contains("Recent Read");
+            });
+    }
+    /**
+     * Tests home page when recommendation service fails
+     */
+    @Test
+    void shouldShowEmptyHomePageWhenServiceThrowsException() {
+        // Arrange - updated signature
+        when(bookCacheService.searchBooksReactive(eq("new york times bestsellers"), eq(0), eq(8), isNull(Integer.class), isNull(String.class), isNull(String.class)))
+            .thenReturn(Mono.error(new RuntimeException("simulated bestseller fetch failure")));
+        // Act & Assert
+        webTestClient.get().uri("/")
+            .accept(MediaType.TEXT_HTML)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(String.class)
+            .value(body -> {
+                assert !body.contains("NYT Bestseller");
+                assert !body.contains("Recent Read");
+            });
     }
 }
