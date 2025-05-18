@@ -1,59 +1,83 @@
+/**
+ * Health indicator for checking search page availability
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Verifies search functionality is operational by checking search page
+ * - Uses a predefined query term for consistent health checks
+ * - Dynamically configures itself when application server starts
+ * - Reports search page status to Spring Boot Actuator health endpoint
+ */
 package com.williamcallahan.book_recommendation_engine.config;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.ReactiveHealthIndicator;
-import org.springframework.boot.web.reactive.context.ReactiveWebServerApplicationContext;
-import org.springframework.context.ApplicationContext;
-import org.springframework.core.env.Environment;
+import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.springframework.context.ApplicationListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
-/**
- * Health indicator for checking search page availability
- *
- * @author William Callahan
- * 
- * Verifies the search functionality is operational by checking the search page
- * with a predefined query term
- */
 @Component("searchPageHealthIndicator")
-class SearchPageHealthIndicator implements ReactiveHealthIndicator {
-    private final WebPageHealthIndicator delegate;
-    private static final String HEALTHCHECK_QUERY = "healthcheck"; // Fixed query for the health check
-    private boolean isConfigured = true;
+class SearchPageHealthIndicator implements ReactiveHealthIndicator, ApplicationListener<WebServerInitializedEvent> {
+    private WebPageHealthIndicator delegate;
+    private final WebClient.Builder webClientBuilder;
+    private final boolean reportErrorsAsDown;
+    private static final String HEALTHCHECK_QUERY = "healthcheck";
+    private boolean isConfigured = false;
     private static final Logger logger = LoggerFactory.getLogger(SearchPageHealthIndicator.class);
 
-
-    public SearchPageHealthIndicator(WebClient.Builder webClientBuilder, ApplicationContext ctx, Environment environment,
+    /**
+     * Constructs SearchPageHealthIndicator with configurable error handling
+     *
+     * @param webClientBuilder builder for creating WebClient instances
+     * @param reportErrorsAsDown whether to report errors as DOWN instead of UNKNOWN
+     */
+    public SearchPageHealthIndicator(WebClient.Builder webClientBuilder,
                                    @Value("${healthcheck.report-errors-as-down:true}") boolean reportErrorsAsDown) {
-        Integer port = environment.getProperty("local.server.port", Integer.class);
-        if (port == null && ctx instanceof ReactiveWebServerApplicationContext) {
-            try {
-                port = ((ReactiveWebServerApplicationContext) ctx).getWebServer().getPort();
-            } catch (Exception e) {
-                logger.warn("Could not get port from ReactiveWebServerApplicationContext: {}", e.getMessage());
-            }
-        }
+        this.webClientBuilder = webClientBuilder;
+        this.reportErrorsAsDown = reportErrorsAsDown;
+    }
 
-        if (port == null) {
-            logger.warn("Server port could not be determined for SearchPageHealthIndicator. Health check will be disabled or report UNKNOWN.");
-            this.isConfigured = false;
-            // Initialize delegate with null or placeholder values that WebPageHealthIndicator can handle
-            this.delegate = new WebPageHealthIndicator(webClientBuilder, null, "/search?query=" + HEALTHCHECK_QUERY, "search_page", reportErrorsAsDown, false);
-        } else {
+    /**
+     * Configures health indicator when web server initializes
+     * 
+     * @param event web server initialization event containing server port
+     */
+    @Override
+    public void onApplicationEvent(@NonNull WebServerInitializedEvent event) {
+        try {
+            int port = event.getWebServer().getPort();
+            if (port <= 0) {
+                logger.warn("WebServerInitializedEvent reported an invalid port: {}. SearchPageHealthIndicator will remain unconfigured.", port);
+                this.isConfigured = false;
+                this.delegate = new WebPageHealthIndicator(this.webClientBuilder, null, "/search?query=" + HEALTHCHECK_QUERY, "search_page", this.reportErrorsAsDown, false);
+                return;
+            }
             String baseUrl = "http://localhost:" + port;
-            this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/search?query=" + HEALTHCHECK_QUERY, "search_page", reportErrorsAsDown, true);
+            this.delegate = new WebPageHealthIndicator(this.webClientBuilder, baseUrl, "/search?query=" + HEALTHCHECK_QUERY, "search_page", this.reportErrorsAsDown, true);
+            this.isConfigured = true;
+            logger.info("SearchPageHealthIndicator configured with port: {}", port);
+        } catch (Exception e) {
+            logger.error("Error configuring SearchPageHealthIndicator from WebServerInitializedEvent: {}", e.getMessage(), e);
+            this.isConfigured = false;
+             this.delegate = new WebPageHealthIndicator(this.webClientBuilder, null, "/search?query=" + HEALTHCHECK_QUERY, "search_page", this.reportErrorsAsDown, false);
         }
     }
 
+    /**
+     * Checks search page health status
+     * 
+     * @return health status with details about search page availability
+     */
     @Override
     public Mono<Health> health() {
-        if (!isConfigured) {
-            return Mono.just(Health.unknown().withDetail("reason", "Server port not available for health check").build());
+        if (!isConfigured || this.delegate == null) {
+            return Mono.just(Health.unknown().withDetail("reason", "Server port not available or health indicator not fully configured for health check").build());
         }
         return delegate.checkPage();
     }
