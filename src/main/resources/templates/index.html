@@ -21,33 +21,28 @@
 <!-- Main Content -->
 <main class="main-content">
     <!-- Hero Section with Search Bar -->
-    <section class="hero-section py-5 mb-4 text-center">
+    <section class="hero-section py-5 mb-4 text-center modern-hero">
         <div class="container">
-            <div class="row justify-content-center">
-                <div class="col-lg-8">
-                    <h1 class="display-4 mb-4">Find Your Next Great Read</h1>
-                    <p class="lead mb-5">Discover books that match your interests, from classics to new releases.</p>
-                    
-                    <form action="/search" method="get" class="search-form">
-                        <div class="input-group mb-3 shadow">
-                            <input type="text" id="searchInput" name="query" class="form-control form-control-lg py-3" 
-                                   placeholder="Search by title, author, or keyword..." aria-label="Search books" required>
-                            <button class="btn btn-primary px-4" type="submit">
-                                <i class="fas fa-search me-2"></i><span class="search-text">Search</span>
-                            </button>
-                        </div>
-                    </form>
-                    
-                    <div class="mt-4">
-                        <p class="text-muted mb-2">Popular searches:</p>
-                        <div class="d-flex flex-wrap justify-content-center gap-2">
-                            <a href="/search?query=fiction" class="badge bg-light text-dark text-decoration-none p-2">Fiction</a>
-                            <a href="/search?query=mystery" class="badge bg-light text-dark text-decoration-none p-2">Mystery</a>
-                            <a href="/search?query=sci-fi" class="badge bg-light text-dark text-decoration-none p-2">Science Fiction</a>
-                            <a href="/search?query=fantasy" class="badge bg-light text-dark text-decoration-none p-2">Fantasy</a>
-                            <a href="/search?query=biography" class="badge bg-light text-dark text-decoration-none p-2">Biography</a>
-                        </div>
-                    </div>
+            <h1 class="display-3 fw-bold mb-3">Discover, Read, Repeat</h1>
+            <p class="lead mb-4">FindMyBook, your personal gateway to millions of books. Search now and get tailored recommendations.</p>
+
+            <form action="/search" method="get" class="search-form modern-search-form d-flex justify-content-center mb-4">
+                <div class="input-group input-group-lg shadow-lg" style="max-width:800px; width:100%;">
+                    <input type="text" name="query" class="form-control py-3" placeholder="Search by title, author, or keyword..." aria-label="Search books" required>
+                    <button class="btn btn-primary px-3" type="submit" aria-label="Search">
+                        <i class="fas fa-search"></i>
+                    </button>
+                </div>
+            </form>
+
+            <div class="mt-4">
+                <p class="text-white mb-2">Popular searches:</p>
+                <div class="d-flex flex-wrap justify-content-center gap-2">
+                    <a href="/search?query=fiction" class="badge popular-search-tag">Fiction</a>
+                    <a href="/search?query=mystery" class="badge popular-search-tag">Mystery</a>
+                    <a href="/search?query=sci-fi" class="badge popular-search-tag">Science Fiction</a>
+                    <a href="/search?query=fantasy" class="badge popular-search-tag">Fantasy</a>
+                    <a href="/search?query=biography" class="badge popular-search-tag">Biography</a>
                 </div>
             </div>
         </div>
@@ -58,7 +53,7 @@
         <div class="container">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Current Bestsellers</h2>
-                <a th:href="@{/search(query='new york times', year=${T(java.time.Year).now().getValue()})}" class="btn btn-outline-primary">View All</a>
+                <a th:href="@{/search(query='new york times', year=${T(java.time.Year).now().getValue()})}" class="btn btn-view-all btn-outlined btn-outline-primary">View All</a>
             </div>
             
             <div class="row g-4">
@@ -111,7 +106,7 @@
         <div class="container">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Recent Views</h2>
-                <a href="/search?query=explore" class="btn btn-outline-primary">Explore More</a>
+                <a href="/search?query=explore" class="btn btn-view-all btn-outlined btn-outline-primary">Explore More</a>
             </div>
             
             <div class="row g-4">

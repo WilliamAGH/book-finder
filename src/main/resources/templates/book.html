@@ -235,20 +235,6 @@
                                                 <div class="metadata-value" th:text="${#strings.toUpperCase(book.language)}">EN</div>
                                             </div>
                                         </div>
-                                        
-                                        <div class="col-6 col-md-4" th:if="${book.isbn13 != null}">
-                                            <div class="metadata-item">
-                                                <div class="metadata-label"><i class="fas fa-barcode me-2"></i>ISBN-13</div>
-                                                <div class="metadata-value" th:text="${book.isbn13}">9781234567890</div>
-                                            </div>
-                                        </div>
-                                        
-                                        <div class="col-6 col-md-4" th:if="${book.isbn10 != null}">
-                                            <div class="metadata-item">
-                                                <div class="metadata-label"><i class="fas fa-barcode me-2"></i>ISBN-10</div>
-                                                <div class="metadata-value" th:text="${book.isbn10}">1234567890</div>
-                                            </div>
-                                        </div>
                                     </div>
                                 </div>
                                 

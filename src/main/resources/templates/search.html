@@ -26,7 +26,7 @@
                             </button>
                         </div>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-md-2" th:if="${isYearFilteringEnabled}">
                         <div class="input-group">
                             <span class="input-group-text"><i class="fas fa-calendar-alt"></i></span>
                             <input type="number" id="yearInput" name="year" class="form-control no-spinner" 
@@ -143,6 +143,9 @@
                     <i class="fas fa-star me-1"></i>
                     <span class="rating-value">4.5</span>
                 </div>
+                <div class="position-absolute bottom-0 start-0 m-2 d-flex flex-column qualifier-badges">
+                    <!-- Will be populated with badges if qualifiers exist -->
+                </div>
             </div>
             <div class="card-body">
                 <h5 class="card-title text-truncate book-title">Book Title</h5>
@@ -173,6 +176,9 @@
                             <i class="fas fa-star me-1"></i>
                             <span class="rating-value">4.5</span>
                         </div>
+                        <div class="position-absolute bottom-0 start-0 m-2 d-flex flex-column qualifier-badges">
+                            <!-- Will be populated with badges if qualifiers exist -->
+                        </div>
                     </div>
                 </div>
                 <div class="col-md-10">
@@ -187,6 +193,9 @@
                         <p class="card-text book-description">Book description will be displayed here...</p>
                         <div class="d-flex flex-wrap gap-1 mt-2 book-categories">
                             <!-- Categories will be added here -->
+                        </div>
+                        <div class="d-flex flex-wrap gap-1 mt-2 list-view-qualifier-badges">
+                            <!-- Will be populated with badges if qualifiers exist -->
                         </div>
                     </div>
                 </div>
@@ -759,6 +768,12 @@
             
             // Rating is now handled during image container creation
             
+            // Add qualifier badges if they exist
+            const qualifierBadgesContainer = card.querySelector('.qualifier-badges');
+            if (qualifierBadgesContainer && book.qualifiers) {
+                addQualifierBadges(qualifierBadgesContainer, book.qualifiers);
+            }
+            
             return card.querySelector('.col-sm-6');
         }
         
@@ -877,6 +892,22 @@
                 });
             } else {
                 categoriesContainer.style.display = 'none';
+            }
+            
+            // Add qualifier badges if they exist
+            const qualifierBadgesContainer = listItem.querySelector('.qualifier-badges');
+            const listViewQualifierBadgesContainer = listItem.querySelector('.list-view-qualifier-badges');
+            
+            if (book.qualifiers) {
+                // Add to thumbnail qualifier container
+                if (qualifierBadgesContainer) {
+                    addQualifierBadges(qualifierBadgesContainer, book.qualifiers);
+                }
+                
+                // Add to list view horizontal qualifier container
+                if (listViewQualifierBadgesContainer) {
+                    addQualifierBadges(listViewQualifierBadgesContainer, book.qualifiers, true);
+                }
             }
             
             return listItem.querySelector('.col-12');
@@ -1004,6 +1035,70 @@
                 }, 10);
             }
         }
+        
+        /**
+         * Add qualifier badges to container element
+         * 
+         * @param {HTMLElement} container - The container element to add badges to
+         * @param {Object} qualifiers - The qualifiers object from the book
+         * @param {boolean} horizontal - Whether to use horizontal layout (for list view)
+         */
+        function addQualifierBadges(container, qualifiers, horizontal = false) {
+            if (!qualifiers) return;
+            
+            // Clear any existing badges
+            container.innerHTML = '';
+            
+            // New York Times Bestseller badge
+            if (qualifiers.nytBestseller) {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-info text-dark mb-1 qualifier-badge';
+                badge.innerHTML = '<i class="fas fa-award me-1"></i> NYT Bestseller';
+                container.appendChild(badge);
+            }
+            
+            // Award Winner badge
+            if (qualifiers.awardWinner) {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-success text-white mb-1 qualifier-badge';
+                badge.innerHTML = '<i class="fas fa-trophy me-1"></i> Award Winner';
+                container.appendChild(badge);
+            }
+            
+            // Pulitzer Prize specific badge
+            if (qualifiers.pulitzerPrize) {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-primary text-white mb-1 qualifier-badge';
+                badge.innerHTML = '<i class="fas fa-medal me-1"></i> Pulitzer Prize';
+                container.appendChild(badge);
+            }
+            
+            // Nobel Prize specific badge
+            if (qualifiers.nobelPrize) {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-danger text-white mb-1 qualifier-badge';
+                badge.innerHTML = '<i class="fas fa-medal me-1"></i> Nobel Prize';
+                container.appendChild(badge);
+            }
+            
+            // Recommended/Best Books badge
+            if (qualifiers.recommendedList) {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-secondary text-white mb-1 qualifier-badge';
+                badge.innerHTML = '<i class="fas fa-thumbs-up me-1"></i> Recommended';
+                container.appendChild(badge);
+            }
+            
+            // Apply special styling for horizontal layout
+            if (horizontal) {
+                container.classList.add('horizontal-badges');
+                const badges = container.querySelectorAll('.qualifier-badge');
+                badges.forEach(badge => {
+                    badge.classList.remove('mb-1');
+                    badge.classList.add('me-1');
+                });
+            }
+        }
     });
 </script>
 
@@ -1106,6 +1201,29 @@
     }
     .no-spinner {
         -moz-appearance: textfield;
+    }
+    
+    /* Qualifier badge styling */
+    .qualifier-badge {
+        font-size: 0.7rem;
+        max-width: 125px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .qualifier-badges {
+        z-index: 5;
+        max-width: 80%;
+    }
+    
+    .horizontal-badges {
+        flex-direction: row !important;
+        flex-wrap: wrap;
+    }
+    
+    .list-view-qualifier-badges {
+        margin-top: 5px;
     }
 </style>
 
