@@ -29,8 +29,16 @@ import reactor.core.scheduler.Schedulers;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+
 @Service
 public class S3StorageService {
     private static final Logger logger = LoggerFactory.getLogger(S3StorageService.class);
@@ -155,17 +163,16 @@ public class S3StorageService {
      * Asynchronously fetches and GZIP-decompresses a JSON file from S3.
      *
      * @param volumeId The Google Books volume ID, used to construct the S3 key.
-     * @return A CompletableFuture<Optional<String>> containing the decompressed JSON string if found,
-     *         or an empty Optional if not found or an error occurs.
+     * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found
      */
-    public CompletableFuture<Optional<String>> fetchJsonAsync(String volumeId) {
+    public CompletableFuture<S3FetchResult<String>> fetchJsonAsync(String volumeId) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot fetch JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
-            return CompletableFuture.completedFuture(Optional.empty());
+            return CompletableFuture.completedFuture(S3FetchResult.disabled());
         }
         String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
         
-        return Mono.<Optional<String>>fromCallable(() -> {
+        return Mono.<S3FetchResult<String>>fromCallable(() -> {
             try {
                 GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                         .bucket(bucketName)
@@ -176,16 +183,165 @@ public class S3StorageService {
                 String jsonString = objectBytes.asUtf8String();
 
                 logger.debug("Successfully fetched JSON for volumeId {} from S3 key {}", volumeId, keyName);
-                return Optional.of(jsonString);
+                return S3FetchResult.success(jsonString);
             } catch (NoSuchKeyException e) {
                 logger.debug("JSON for volumeId {} not found in S3 at key {}.", volumeId, keyName);
-                return Optional.empty();
+                return S3FetchResult.notFound();
+            } catch (S3Exception e) {
+                logger.error("S3 service error fetching JSON for volumeId {} from S3 key {}: {}", 
+                    volumeId, keyName, e.awsErrorDetails().errorMessage(), e);
+                return S3FetchResult.serviceError("S3 service error: " + e.awsErrorDetails().errorMessage());
             } catch (Exception e) {
-                logger.error("Error fetching JSON for volumeId {} from S3 key {}: {}", volumeId, keyName, e.getMessage(), e);
-                return Optional.empty(); // Return empty on other errors as well
+                logger.error("Unexpected error fetching JSON for volumeId {} from S3 key {}: {}", volumeId, keyName, e.getMessage(), e);
+                return S3FetchResult.serviceError("Unexpected error: " + e.getMessage());
             }
         })
         .subscribeOn(Schedulers.boundedElastic())
         .toFuture();
+    }
+
+    /**
+     * Gets the configured S3 bucket name.
+     * @return The S3 bucket name.
+     */
+    public String getBucketName() {
+        return bucketName;
+    }
+
+    /**
+     * Lists objects in the S3 bucket, handling pagination.
+     *
+     * @param prefix The prefix to filter objects by (e.g., "covers/"). Can be empty or null.
+     * @return A list of S3Object summaries.
+     */
+    public List<S3Object> listObjects(String prefix) {
+        if (s3Client == null) {
+            logger.warn("S3Client is null. Cannot list objects. S3 may be disabled or misconfigured.");
+            return new ArrayList<>();
+        }
+        logger.info("Listing objects in bucket {} with prefix '{}'", bucketName, prefix);
+        List<S3Object> allObjects = new ArrayList<>();
+        String continuationToken = null;
+
+        try {
+            do {
+                ListObjectsV2Request.Builder requestBuilder = ListObjectsV2Request.builder()
+                        .bucket(bucketName)
+                        .continuationToken(continuationToken);
+
+                if (prefix != null && !prefix.isEmpty()) {
+                    requestBuilder.prefix(prefix);
+                }
+
+                ListObjectsV2Response response = s3Client.listObjectsV2(requestBuilder.build());
+                int fetchedThisPage = response.contents().size();
+                allObjects.addAll(response.contents());
+                continuationToken = response.nextContinuationToken();
+                logger.debug("Fetched a page of {} S3 object(s). More pages to fetch: {}", fetchedThisPage, (continuationToken != null));
+            } while (continuationToken != null);
+
+            logger.info("Finished listing all S3 objects for prefix. Total objects found: {}", allObjects.size());
+        } catch (S3Exception e) {
+            logger.error("Error listing objects in S3 bucket {}: {}", bucketName, e.awsErrorDetails().errorMessage(), e);
+            // Depending on requirements, might rethrow or return empty/partial list
+        } catch (Exception e) {
+            logger.error("Unexpected error listing objects in S3 bucket {}: {}", bucketName, e.getMessage(), e);
+        }
+        return allObjects;
+    }
+
+    /**
+     * Downloads a file from S3 as a byte array.
+     *
+     * @param key The key of the object to download.
+     * @return A byte array containing the file data, or null if an error occurs or file not found.
+     */
+    public byte[] downloadFileAsBytes(String key) {
+        if (s3Client == null) {
+            logger.warn("S3Client is null. Cannot download file {}. S3 may be disabled or misconfigured.", key);
+            return null;
+        }
+        logger.debug("Attempting to download file {} from bucket {}", key, bucketName);
+        try {
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(key)
+                    .build();
+            ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+            logger.info("Successfully downloaded file {} from bucket {}", key, bucketName);
+            return objectBytes.asByteArray();
+        } catch (NoSuchKeyException e) {
+            logger.warn("File not found in S3: bucket={}, key={}", bucketName, key);
+            return null;
+        } catch (S3Exception e) {
+            logger.error("S3 error downloading file {} from bucket {}: {}", key, bucketName, e.awsErrorDetails().errorMessage(), e);
+            return null;
+        } catch (Exception e) {
+            logger.error("Unexpected error downloading file {} from bucket {}: {}", key, bucketName, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Copies an object within the S3 bucket.
+     *
+     * @param sourceKey      The key of the source object.
+     * @param destinationKey The key of the destination object.
+     * @return true if successful, false otherwise.
+     */
+    public boolean copyObject(String sourceKey, String destinationKey) {
+        if (s3Client == null) {
+            logger.warn("S3Client is null. Cannot copy object from {} to {}. S3 may be disabled or misconfigured.", sourceKey, destinationKey);
+            return false;
+        }
+        logger.info("Attempting to copy object in bucket {} from key {} to key {}", bucketName, sourceKey, destinationKey);
+        try {
+            CopyObjectRequest copyReq = CopyObjectRequest.builder()
+                    .sourceBucket(bucketName)
+                    .sourceKey(sourceKey)
+                    .destinationBucket(bucketName)
+                    .destinationKey(destinationKey)
+                    .build();
+
+            s3Client.copyObject(copyReq);
+            logger.info("Successfully copied object from {} to {}", sourceKey, destinationKey);
+            return true;
+        } catch (S3Exception e) {
+            logger.error("S3 error copying object from {} to {}: {}", sourceKey, destinationKey, e.awsErrorDetails().errorMessage(), e);
+            return false;
+        } catch (Exception e) {
+            logger.error("Unexpected error copying object from {} to {}: {}", sourceKey, destinationKey, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Deletes an object from the S3 bucket.
+     *
+     * @param key The key of the object to delete.
+     * @return true if successful, false otherwise.
+     */
+    public boolean deleteObject(String key) {
+        if (s3Client == null) {
+            logger.warn("S3Client is null. Cannot delete object {}. S3 may be disabled or misconfigured.", key);
+            return false;
+        }
+        logger.info("Attempting to delete object {} from bucket {}", key, bucketName);
+        try {
+            DeleteObjectRequest deleteReq = DeleteObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(key)
+                    .build();
+
+            s3Client.deleteObject(deleteReq);
+            logger.info("Successfully deleted object {}", key);
+            return true;
+        } catch (S3Exception e) {
+            logger.error("S3 error deleting object {}: {}", key, e.awsErrorDetails().errorMessage(), e);
+            return false;
+        } catch (Exception e) {
+            logger.error("Unexpected error deleting object {}: {}", key, e.getMessage(), e);
+            return false;
+        }
     }
 }

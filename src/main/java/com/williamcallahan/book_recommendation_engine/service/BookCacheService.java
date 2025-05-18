@@ -42,12 +42,11 @@ import java.util.concurrent.CompletableFuture;
 import java.time.Duration;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.LinkedHashMap;
+import java.util.Objects;
 @Service
 public class BookCacheService {
     private static final Logger logger = LoggerFactory.getLogger(BookCacheService.class);
+    private static final String BOOK_SEARCH_RESULTS_CACHE_NAME = "bookSearchResults";
     
     private final GoogleBooksService googleBooksService;
     private final CachedBookRepository cachedBookRepository;
@@ -444,144 +443,117 @@ public class BookCacheService {
     }
 
     /**
-     * Searches for books with reactive API and result caching
+     * Searches for books with reactive API and result caching, including language and order parameters.
      * 
      * @param query The search query string
      * @param startIndex The pagination starting index (0-based)
      * @param maxResults Maximum number of results to return
+     * @param publishedYear Optional filter for the published year
+     * @param langCode Optional language code (e.g., "en", "fr")
+     * @param orderBy Optional sort order (e.g., "relevance", "newest")
      * @return Mono emitting list of books matching the query with pagination applied
-     * 
-     * @implNote Applies client-side pagination after retrieving full result set
-     * Background caches results while returning immediately to client
      */
-    public Mono<List<Book>> searchBooksReactive(String query, int startIndex, int maxResults) {
-        return searchBooksReactive(query, startIndex, maxResults, null);
-    }
-    
-    /**
-     * Searches for books with reactive API, result caching, and optional year filtering
-     * 
-     * @param query The search query string
-     * @param startIndex The pagination starting index (0-based)
-     * @param maxResults Maximum number of results to return
-     * @param publishedYear Optional filter for books published in specific year
-     * @return Mono emitting list of books matching criteria with pagination applied
-     */
-    public Mono<List<Book>> searchBooksReactive(String query, int startIndex, int maxResults, Integer publishedYear) {
-        logger.info("BookCacheService searching books (reactive) with query: {}, startIndex: {}, maxResults: {}, publishedYear: {}", query, startIndex, maxResults, publishedYear);
+    public Mono<List<Book>> searchBooksReactive(String query, int startIndex, int maxResults, Integer publishedYear, String langCode, String orderBy) {
+        String cacheKey = generateSearchCacheKey(query, startIndex, maxResults, publishedYear, langCode, orderBy);
+        org.springframework.cache.Cache searchCache = this.cacheManager.getCache(BOOK_SEARCH_RESULTS_CACHE_NAME);
 
-        String finalQuery = query; 
-        if (publishedYear != null) {
-            logger.info("Year filter {} will be applied post-query to results for query: '{}'", publishedYear, query);
-        }
-        
-        int resultsToRequestFromGoogle;
-        String orderByGoogle = "newest"; // Default to newest for all searches from BookCacheService
-
-        if (publishedYear != null) {
-            resultsToRequestFromGoogle = 200; // Request more if year filtering
-            logger.info("Requesting {} initial results from GoogleBooksService, ordered by '{}', due to year filter.", resultsToRequestFromGoogle, orderByGoogle);
-        } else {
-            resultsToRequestFromGoogle = maxResults; // Standard request size if no year filter
-            logger.info("Requesting {} initial results from GoogleBooksService, ordered by '{}' (no year filter).", resultsToRequestFromGoogle, orderByGoogle);
-        }
-
-        return googleBooksService.searchBooksAsyncReactive(finalQuery, null, resultsToRequestFromGoogle, orderByGoogle)
-            .flatMap((List<Book> fetchedBooks) -> { // Explicitly type fetchedBooks
-                if (fetchedBooks == null || fetchedBooks.isEmpty()) {
-                    logger.info("No books found by GoogleBooksService for query: {}", query);
-                    return Mono.just(Collections.<Book>emptyList()); // Explicitly typed empty list
+        if (searchCache != null) {
+            @SuppressWarnings("unchecked")
+            List<String> cachedBookIds = searchCache.get(cacheKey, List.class);
+            if (cachedBookIds != null) {
+                logger.info("Search cache HIT for key: {}", cacheKey);
+                if (cachedBookIds.isEmpty()) {
+                    return Mono.just(Collections.emptyList());
                 }
-                logger.info("GoogleBooksService returned {} books for query: {}", fetchedBooks.size(), query);
+                return Flux.fromIterable(cachedBookIds)
+                           .flatMap(this::getBookByIdReactive)
+                           .filter(Objects::nonNull)
+                           .collectList();
+            }
+        }
 
-                // Apply year filtering if needed
-                List<Book> yearFilteredBooks = fetchedBooks;
+        logger.info("Search cache MISS for key: {}. Fetching from Google Books API.", cacheKey);
+        
+        // Determine how many books to request from GoogleBooksService
+        int numToFetchFromGoogle;
+        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "relevance"; // Default to relevance if not specified
+
+        if (publishedYear != null) {
+            numToFetchFromGoogle = 200; // Fetch more if client-side year filtering will occur
+            logger.info("Requesting {} initial results from Google for query '{}' due to year filter {}. Order: {}, Lang: {}.", numToFetchFromGoogle, query, publishedYear, effectiveOrderBy, langCode);
+        } else {
+            numToFetchFromGoogle = Math.max(20, startIndex + maxResults); // Ensure at least a decent number, cover current page
+            numToFetchFromGoogle = Math.min(numToFetchFromGoogle, 200); // Cap to avoid overly large requests
+            logger.info("Requesting {} initial results from Google for query '{}'. Order: {}, Lang: {}.", numToFetchFromGoogle, query, effectiveOrderBy, langCode);
+        }
+
+        return this.googleBooksService.searchBooksAsyncReactive(query, langCode, numToFetchFromGoogle, effectiveOrderBy)
+            .flatMap(fetchedBooksGlobalList -> {
+                List<Book> booksToProcess = (fetchedBooksGlobalList == null) ? Collections.emptyList() : fetchedBooksGlobalList;
+                logger.debug("Fetched {} books from GoogleBooksService for query '{}' (lang: {}, order: {}) before any local filtering/pagination.", booksToProcess.size(), query, langCode, effectiveOrderBy);
+
+                // 1. Perform client-side year filtering if publishedYear is provided
+                List<Book> yearFilteredBooks = booksToProcess;
                 if (publishedYear != null) {
-                    logger.info("YEAR FILTER: Starting year filtering for {} books with year={}", fetchedBooks.size(), publishedYear);
-                    yearFilteredBooks = fetchedBooks.stream()
+                    yearFilteredBooks = booksToProcess.stream()
                         .filter(book -> {
-                            if (book.getPublishedDate() != null) {
+                            if (book != null && book.getPublishedDate() != null) {
                                 java.util.Calendar cal = java.util.Calendar.getInstance();
                                 cal.setTime(book.getPublishedDate());
-                                int bookYear = cal.get(java.util.Calendar.YEAR);
-                                boolean matches = bookYear == publishedYear;
-                                
-                                // For debugging, log details about each book's year
-                                if (matches) {
-                                    logger.debug("YEAR FILTER: Book '{}' (ID: {}) MATCHES year {}", 
-                                            book.getTitle(), book.getId(), publishedYear);
-                                } else {
-                                    logger.debug("YEAR FILTER: Book '{}' (ID: {}) has year {} which does NOT match {}",
-                                            book.getTitle(), book.getId(), bookYear, publishedYear);
-                                }
-                                
-                                return matches;
+                                return cal.get(java.util.Calendar.YEAR) == publishedYear;
                             }
-                            logger.debug("YEAR FILTER: Book '{}' (ID: {}) has NO publish date, excluding",
-                                    book.getTitle(), book.getId());
-                            return false; // No published date means we can't verify year
+                            return false;
                         })
                         .collect(Collectors.toList());
-                    logger.info("YEAR FILTER: Year filter {} reduced {} books to {}", 
-                            publishedYear, fetchedBooks.size(), yearFilteredBooks.size());
+                    logger.debug("Filtered by year {}: {} books remaining from initial {}.", publishedYear, yearFilteredBooks.size(), booksToProcess.size());
                 }
-                
-                // Deduplication step
-                Map<String, Book> canonicalBooksMap = new LinkedHashMap<>(); // Preserve order somewhat
-                
-                for (Book book : yearFilteredBooks) {
-                    if (book == null || book.getId() == null) {
-                        logger.debug("Skipping a null book or book with null ID in search results for query: {}", query);
-                        continue;
-                    }
-                
-                    Optional<CachedBook> canonicalCachedOpt = duplicateBookService.findPrimaryCanonicalBook(book);
-                    String representativeId;
-                
-                    if (canonicalCachedOpt.isPresent()) {
-                        CachedBook canonicalCached = canonicalCachedOpt.get();
-                        // Prefer GoogleBooksId if available as it's more universal, otherwise fallback to internal ID.
-                        representativeId = canonicalCached.getGoogleBooksId() != null ? canonicalCached.getGoogleBooksId() : canonicalCached.getId();
-                        // If the canonical book is found, we prefer to use its representation if it's the first time.
-                        // However, the current 'book' from 'fetchedBooks' might have fresher API data initially.
-                        // For now, we map to the canonical ID and take the first 'Book' object encountered for that ID.
-                        // If 'book' itself is the canonical or becomes the canonical, 'representativeId' will be 'book.getId()'.
+
+                // 2. Apply BookCacheService's own pagination (startIndex, maxResults) to the (potentially year-filtered) list
+                List<Book> finalPaginatedBooks;
+                if (yearFilteredBooks.isEmpty()) {
+                    finalPaginatedBooks = Collections.emptyList();
+                } else {
+                    int from = Math.min(startIndex, yearFilteredBooks.size());
+                    int to = Math.min(startIndex + maxResults, yearFilteredBooks.size());
+                    if (from >= to) { 
+                        finalPaginatedBooks = Collections.emptyList();
                     } else {
-                        representativeId = book.getId(); // Use its own ID if no existing canonical found
-                    }
-                
-                    if (!canonicalBooksMap.containsKey(representativeId)) {
-                        canonicalBooksMap.put(representativeId, book); 
-                    } else {
-                        // If already present, we could add merging logic here if 'book' is better.
-                        // For now, first-encountered for a canonical ID wins.
-                        logger.debug("Skipping duplicate book {} (maps to canonical ID {}) in search results for query: {}", book.getId(), representativeId, query);
+                        finalPaginatedBooks = yearFilteredBooks.subList(from, to);
                     }
                 }
-                
-                List<Book> deduplicatedBooks = new ArrayList<>(canonicalBooksMap.values());
-                logger.info("Deduplicated {} fetched books down to {} unique canonical books for query: {}", fetchedBooks.size(), deduplicatedBooks.size(), query);
+                logger.debug("Paginated to {} books for query '{}' (startIndex {}, maxResults {}).", finalPaginatedBooks.size(), query, startIndex, maxResults);
 
-                // Asynchronously cache all *original* fetched books that have an ID
-                // The caching logic itself handles merging into canonical entries in the DB.
-                Flux.fromIterable(fetchedBooks) // Still cache all raw books from original fetch
-                    .filter(b -> b != null && b.getId() != null) // Ensure book and ID are not null
-                    .flatMap(this::cacheBookReactive) // Using the reactive cache method
-                    .doOnError(e -> logger.error("Error during background DB caching for books from query '{}': {}", query, e.getMessage()))
-                    .subscribe(); // Subscribe to trigger the caching
-
-                // Apply pagination to the *deduplicated* list
-                int fromIndex = Math.min(startIndex, deduplicatedBooks.size());
-                int toIndex = Math.min(startIndex + maxResults, deduplicatedBooks.size());
+                // 3. Extract IDs for the *finalPaginatedBooks* to cache for this specific searchCacheKey
+                List<String> bookIdsToCacheForThisSearch = finalPaginatedBooks.stream()
+                                                              .map(Book::getId)
+                                                              .filter(Objects::nonNull)
+                                                              .collect(Collectors.toList());
                 
-                List<Book> paginatedBooks = deduplicatedBooks.subList(fromIndex, toIndex);
-                logger.info("Returning {} paginated books ({} to {}) for query: {}", paginatedBooks.size(), fromIndex, toIndex, query);
+                if (searchCache != null && this.cacheEnabled) {
+                    searchCache.put(cacheKey, bookIdsToCacheForThisSearch);
+                    logger.info("Cached search key '{}' with {} book IDs.", cacheKey, bookIdsToCacheForThisSearch.size());
+                }
                 
-                return Mono.just(paginatedBooks);
+                // 4. Ensure all unique books from the original fetch (booksToProcess) are individually cached
+                Mono<Void> cacheIndividualBooksMono;
+                if (booksToProcess.isEmpty()) {
+                    cacheIndividualBooksMono = Mono.empty();
+                } else {
+                    cacheIndividualBooksMono = Flux.fromIterable(booksToProcess)
+                        .filter(book -> book != null && book.getId() != null)
+                        .flatMap(book -> this.cacheBookReactive(book)) // cacheBookReactive returns Mono<Void>
+                        .then(); 
+                }
+                
+                return cacheIndividualBooksMono.thenReturn(finalPaginatedBooks);
             })
             .onErrorResume(e -> {
-                logger.error("Error in searchBooksReactive for query '{}': {}", query, e.getMessage(), e);
-                return Mono.just(new ArrayList<Book>()); // Return new empty ArrayList<Book> on error
+                logger.error("Error during searchBooksReactive for query '{}' (key {}): {}. Returning empty list.", query, cacheKey, e.getMessage(), e);
+                if (searchCache != null && this.cacheEnabled) {
+                    searchCache.put(cacheKey, Collections.emptyList()); 
+                    logger.warn("Cached empty list for search key '{}' due to error.", cacheKey);
+                }
+                return Mono.just(Collections.emptyList());
             });
     }
     
@@ -796,35 +768,65 @@ public class BookCacheService {
     }
 
     /**
-     * Handles book cover update events by invalidating cached entries
+     * Handles book cover update events by updating cached entries with new cover URL
      * 
      * @param event The event containing information about the updated book cover
      * 
-     * @implNote Removes book from all cache layers when cover image is updated
-     * Prevents stale cover image URLs from being served to clients
+     * @implNote Updates book in all cache layers when cover image is updated,
+     * rather than just invalidating for more efficient cache propagation
      */
     @EventListener
     public void handleBookCoverUpdate(BookCoverUpdatedEvent event) {
         if (event.getGoogleBookId() == null) {
-            logger.warn("BookCoverUpdatedEvent received with null googleBookId. Cannot process cache eviction.");
+            logger.warn("BookCoverUpdatedEvent received with null googleBookId. Cannot process cache update.");
             return;
         }
+        
         String bookId = event.getGoogleBookId();
+        String newCoverUrl = event.getNewCoverUrl();
+        
+        if (newCoverUrl == null || newCoverUrl.isEmpty()) {
+            logger.warn("BookCoverUpdatedEvent received with null/empty cover URL for book ID {}. Cannot update cache.", bookId);
+            return;
+        }
 
-        // Clear from Spring's cache if it holds Book objects directly
+        // Update in-memory cache if present
+        Book cachedBook = bookDetailCache.get(bookId);
+        if (cachedBook != null) {
+            // Update the book in-place to preserve other attributes
+            cachedBook.setCoverImageUrl(newCoverUrl);
+            logger.debug("Updated cover URL in memory cache for book ID: {}", bookId);
+        } else {
+            // Book not in memory cache, will need to be refreshed from database or API on next request
+            logger.debug("Book ID {} not found in memory cache, will be refreshed on next request", bookId);
+        }
+        
+        // Update in database if enabled
+        if (cacheEnabled && cachedBookRepository != null) {
+            Mono.fromCallable(() -> cachedBookRepository.findByGoogleBooksId(bookId))
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                .flatMap(optionalCachedBook -> {
+                    if (optionalCachedBook.isPresent()) {
+                        CachedBook dbBook = optionalCachedBook.get();
+                        // Update cover URL in database entry
+                        dbBook.setCoverImageUrl(newCoverUrl);
+                        return Mono.fromCallable(() -> cachedBookRepository.save(dbBook));
+                    }
+                    return Mono.empty();
+                })
+                .subscribe(
+                    updatedBook -> logger.info("Updated cover URL in database for book ID: {}", bookId),
+                    error -> logger.error("Error updating cover URL in database for book ID {}: {}", bookId, error.getMessage())
+                );
+        }
+        
+        // Clear from Spring's cache to ensure fresh data on next fetch
         Optional.ofNullable(cacheManager.getCache("books")).ifPresent(c -> {
             logger.debug("Evicting book ID {} from Spring 'books' cache due to cover update.", bookId);
             c.evict(bookId);
         });
-        // Clear from local ConcurrentHashMap
-        if (bookDetailCache.containsKey(bookId)) {
-            bookDetailCache.remove(bookId);
-            logger.debug("Removed book ID {} from local bookDetailCache due to cover update.", bookId);
-        }
-        // The database cache (CachedBook) would ideally be updated with the new URL if that event also carries it,
-        // or this event primarily serves to invalidate other caches that might hold the old URL.
-        // If CachedBookRepository.save() is called elsewhere with the updated Book object, that handles persistence.
-        logger.info("Processed cache invalidations for book ID {} due to BookCoverUpdatedEvent.", bookId);
+        
+        logger.info("Processed cache updates for book ID {} due to BookCoverUpdatedEvent.", bookId);
     }
 
     /**
@@ -860,5 +862,168 @@ public class BookCacheService {
         
         logger.warn("No active persistent cache and in-memory bookDetailCache is empty. Cannot provide book IDs for sitemap.");
         return Collections.emptySet();
+    }
+
+    /**
+     * Checks if a book is present in any of the cache layers.
+     *
+     * @param id The Google Books ID to check.
+     * @return true if the book is found in any cache, false otherwise.
+     */
+    public boolean isBookInCache(String id) {
+        if (id == null || id.isEmpty()) {
+            return false;
+        }
+        // 1. Check in-memory cache
+        if (bookDetailCache.containsKey(id)) {
+            return true;
+        }
+        // 2. Check Spring's CacheManager
+        org.springframework.cache.Cache booksCache = cacheManager.getCache("books");
+        if (booksCache != null && booksCache.get(id) != null) {
+            return true;
+        }
+        // 3. Check persistent repository if enabled
+        if (cacheEnabled && cachedBookRepository != null) {
+            try {
+                return cachedBookRepository.findByGoogleBooksId(id).isPresent();
+            } catch (Exception e) {
+                logger.warn("Error checking persistent cache for book ID {}: {}", id, e.getMessage());
+                // If persistent cache check fails, assume not in this layer
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Retrieves a book from the cache layers only. Does not fall back to API.
+     * Used primarily for testing and specific cache-only scenarios.
+     *
+     * @param id The Google Books ID to look up in the cache.
+     * @return Optional containing the book if found in any cache, empty otherwise.
+     * @throws IllegalArgumentException if id is null or empty.
+     */
+    public Optional<Book> getCachedBook(String id) {
+        if (id == null || id.isEmpty()) {
+            throw new IllegalArgumentException("Book ID cannot be null or empty for getCachedBook");
+        }
+        // 1. Try in-memory cache
+        Book book = bookDetailCache.get(id);
+        if (book != null) {
+            return Optional.of(book);
+        }
+        // 2. Try Spring's CacheManager
+        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        if (booksSpringCache != null) {
+            Book cachedValue = booksSpringCache.get(id, Book.class);
+            if (cachedValue != null) {
+                return Optional.of(cachedValue);
+            }
+        }
+        // 3. Try persistent repository if enabled
+        if (cacheEnabled && cachedBookRepository != null) {
+            try {
+                return cachedBookRepository.findByGoogleBooksId(id).map(CachedBook::toBook);
+            } catch (Exception e) {
+                logger.warn("Error reading from persistent cache for getCachedBook (ID {}): {}", id, e.getMessage());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Public method to explicitly cache a book in all relevant layers.
+     * This is a synchronous operation for simplicity in tests or specific use cases.
+     * For reactive caching, use internal cacheBookReactive.
+     *
+     * @param book The Book object to cache.
+     * @throws IllegalArgumentException if book or book.getId() is null.
+     */
+    public void cacheBook(Book book) {
+        if (book == null || book.getId() == null) {
+            throw new IllegalArgumentException("Book and Book ID must not be null for cacheBook");
+        }
+        // 1. Add to in-memory cache
+        bookDetailCache.put(book.getId(), book);
+        // 2. Add to Spring's CacheManager
+        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        if (booksSpringCache != null) {
+            booksSpringCache.put(book.getId(), book);
+        }
+        // 3. Add to persistent repository if enabled (using reactive method for its logic)
+        if (cacheEnabled && cachedBookRepository != null) {
+            cacheBookReactive(book)
+                .doOnError(e -> logger.error("Error in synchronous cacheBook via reactive for ID {}: {}", book.getId(), e.getMessage()))
+                .subscribe(); // Fire and forget, errors logged by cacheBookReactive
+        }
+        logger.info("Explicitly cached book ID: {}", book.getId());
+    }
+
+    /**
+     * Evicts a book from all cache layers.
+     *
+     * @param id The Google Books ID of the book to evict.
+     * @throws IllegalArgumentException if id is null or empty.
+     */
+    public void evictBook(String id) {
+        if (id == null || id.isEmpty()) {
+            throw new IllegalArgumentException("Book ID cannot be null or empty for evictBook");
+        }
+        // 1. Evict from in-memory cache
+        bookDetailCache.remove(id);
+        // 2. Evict from Spring's CacheManager
+        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        if (booksSpringCache != null) {
+            booksSpringCache.evictIfPresent(id);
+        }
+        // 3. Evict from persistent repository if enabled
+        if (cacheEnabled && cachedBookRepository != null) {
+            try {
+                // Assuming CachedBook uses GoogleBooksId as its primary ID or has a method to delete by it
+                // If CachedBook's @Id is different, this needs adjustment.
+                // For now, let's assume we find it first, then delete by its actual DB ID.
+                cachedBookRepository.findByGoogleBooksId(id).ifPresent(cachedBook -> {
+                    cachedBookRepository.deleteById(cachedBook.getId());
+                    logger.info("Evicted book with Google ID {} (DB ID {}) from persistent cache.", id, cachedBook.getId());
+                });
+            } catch (Exception e) {
+                logger.error("Error evicting book ID {} from persistent cache: {}", id, e.getMessage());
+            }
+        }
+        logger.info("Evicted book ID {} from caches.", id);
+    }
+
+    /**
+     * Clears all entries from all relevant cache layers.
+     * Use with caution.
+     */
+    public void clearAll() {
+        // 1. Clear in-memory cache
+        bookDetailCache.clear();
+        // 2. Clear Spring's CacheManager
+        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        if (booksSpringCache != null) {
+            booksSpringCache.clear();
+        }
+        // 3. Clear persistent repository if enabled
+        if (cacheEnabled && cachedBookRepository != null) {
+            try {
+                cachedBookRepository.deleteAll();
+                logger.info("Cleared all entries from persistent cache.");
+            } catch (Exception e) {
+                logger.error("Error clearing persistent cache: {}", e.getMessage());
+            }
+        }
+        logger.info("Cleared all caches.");
+    }
+
+
+    private String generateSearchCacheKey(String query, int startIndex, int maxResults, Integer publishedYear, String langCode, String orderBy) {
+        String year = (publishedYear == null) ? "null" : publishedYear.toString();
+        String lc = (langCode == null || langCode.trim().isEmpty()) ? "null" : langCode.trim().toLowerCase();
+        String ob = (orderBy == null || orderBy.trim().isEmpty()) ? "default" : orderBy.trim().toLowerCase();
+        
+        return String.format("q:%s_s:%d_m:%d_y:%s_l:%s_o:%s", 
+            query, startIndex, maxResults, year, lc, ob);
     }
 }

@@ -28,32 +28,94 @@ public class RecentlyViewedService {
 
     private static final Logger logger = LoggerFactory.getLogger(RecentlyViewedService.class);
     private final GoogleBooksService googleBooksService;
+    private final DuplicateBookService duplicateBookService; // Added
 
     // In-memory storage for recently viewed books
     private final LinkedList<Book> recentlyViewedBooks = new LinkedList<>();
     private static final int MAX_RECENT_BOOKS = 10;
 
     @Autowired
-    public RecentlyViewedService(GoogleBooksService googleBooksService) {
+    public RecentlyViewedService(GoogleBooksService googleBooksService, DuplicateBookService duplicateBookService) { // Added duplicateBookService
         this.googleBooksService = googleBooksService;
+        this.duplicateBookService = duplicateBookService; // Added
     }
 
     /**
-     * Add a book to the recently viewed list
+     * Add a book to the recently viewed list, ensuring canonical ID is used.
      *
      * @param book the book to add
      */
     public void addToRecentlyViewed(Book book) {
+        if (book == null) {
+            logger.warn("RECENT_VIEWS_DEBUG: Attempted to add a null book to recently viewed.");
+            return;
+        }
+
+        String originalBookId = book.getId();
+        logger.info("RECENT_VIEWS_DEBUG: Attempting to add book. Original ID: '{}', Title: '{}'", originalBookId, book.getTitle());
+
+        String canonicalId = originalBookId; // Default to original
+
+        // Attempt to find a canonical representation
+        Optional<com.williamcallahan.book_recommendation_engine.model.CachedBook> canonicalCachedBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
+        if (canonicalCachedBookOpt.isPresent()) {
+            com.williamcallahan.book_recommendation_engine.model.CachedBook cachedCanonical = canonicalCachedBookOpt.get();
+            if (cachedCanonical.getGoogleBooksId() != null && !cachedCanonical.getGoogleBooksId().isEmpty()) {
+                canonicalId = cachedCanonical.getGoogleBooksId();
+            } else if (cachedCanonical.getId() != null && !cachedCanonical.getId().isEmpty()) { // Fallback to CachedBook's own ID if Google ID is missing
+                canonicalId = cachedCanonical.getId();
+            }
+            logger.info("RECENT_VIEWS_DEBUG: Resolved original ID '{}' to canonical ID '{}' for book title '{}'", originalBookId, canonicalId, book.getTitle());
+        } else {
+            logger.info("RECENT_VIEWS_DEBUG: No canonical CachedBook found for book ID '{}', Title '{}'. Using original ID as canonical.", originalBookId, book.getTitle());
+        }
+        
+        if (canonicalId == null || canonicalId.isEmpty()) {
+            logger.warn("RECENT_VIEWS_DEBUG: Null or empty canonical ID determined for book title '{}' (original ID '{}'). Skipping add.", book.getTitle(), originalBookId);
+            return;
+        }
+
+        final String finalCanonicalId = canonicalId;
+
+        Book bookToAdd = book;
+        // If the canonical ID is different from the book's current ID,
+        // create a new Book object (or clone) for storage in the list with the canonical ID.
+        // This avoids modifying the original 'book' object which might be used elsewhere.
+        if (!java.util.Objects.equals(originalBookId, finalCanonicalId)) {
+            logger.info("RECENT_VIEWS_DEBUG: Book ID mismatch. Original: '{}', Canonical: '{}'. Creating new Book instance for recent views.", originalBookId, finalCanonicalId);
+            bookToAdd = new Book();
+            // Copy essential properties for display in recent views
+            bookToAdd.setId(finalCanonicalId);
+            bookToAdd.setTitle(book.getTitle());
+            bookToAdd.setAuthors(book.getAuthors());
+            bookToAdd.setCoverImageUrl(book.getCoverImageUrl());
+            bookToAdd.setPublishedDate(book.getPublishedDate());
+            // Add other fields if they are displayed in the "Recent Views" section
+        }
+
+
         synchronized (recentlyViewedBooks) {
-            // Remove the book if it already exists to avoid duplicates
-            recentlyViewedBooks.removeIf(b -> java.util.Objects.equals(b.getId(), book.getId()));
+            String existingIds = recentlyViewedBooks.stream()
+                                    .map(b -> b != null ? b.getId() : "null")
+                                    .collect(Collectors.joining(", "));
+            logger.info("RECENT_VIEWS_DEBUG: Existing IDs in recent views before removal: [{}] for new canonical ID '{}'", existingIds, finalCanonicalId);
+    
+            boolean removed = recentlyViewedBooks.removeIf(b -> 
+                b != null && java.util.Objects.equals(b.getId(), finalCanonicalId)
+            );
 
-            // Add the book to the beginning of the list
-            recentlyViewedBooks.addFirst(book);
-
-            // Trim the list if it exceeds the maximum size
+            if (removed) {
+                logger.info("RECENT_VIEWS_DEBUG: Found and removed existing entry for canonical ID '{}'", finalCanonicalId);
+            } else {
+                logger.info("RECENT_VIEWS_DEBUG: No existing entry found for canonical ID '{}'", finalCanonicalId);
+            }
+    
+            recentlyViewedBooks.addFirst(bookToAdd); // Add the (potentially new) book instance with canonical ID
+            logger.info("RECENT_VIEWS_DEBUG: Added book with canonical ID '{}'. List size now: {}", finalCanonicalId, recentlyViewedBooks.size());
+    
             while (recentlyViewedBooks.size() > MAX_RECENT_BOOKS) {
-                recentlyViewedBooks.removeLast();
+                Book removedLastBook = recentlyViewedBooks.removeLast();
+                logger.info("RECENT_VIEWS_DEBUG: Trimmed book. ID: '{}'. List size now: {}", removedLastBook.getId(), recentlyViewedBooks.size());
             }
         }
     }
