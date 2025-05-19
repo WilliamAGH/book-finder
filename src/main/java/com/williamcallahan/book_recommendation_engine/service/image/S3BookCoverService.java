@@ -75,12 +75,12 @@ public class S3BookCoverService implements ExternalCoverService {
     private String s3SecretAccessKey;
     
     @Value("${s3.enabled:true}")
-    private boolean s3EnabledCheck; // Renamed to avoid conflict if s3Enabled is used from injected client's state
+    private boolean s3EnabledCheck;
 
     @Value("${app.cover-cache.max-file-size-bytes:5242880}") 
     private long maxFileSizeBytes; 
     
-    private final S3Client s3Client; // Now final and injected
+    private final S3Client s3Client;
     private final WebClient webClient;
     private final ImageProcessingService imageProcessingService;
     private final EnvironmentService environmentService;
@@ -113,7 +113,6 @@ public class S3BookCoverService implements ExternalCoverService {
         }
     }
 
-    
     /**
      * Cleanup method called during bean destruction
      * - S3Client lifecycle managed by Spring
@@ -124,8 +123,8 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     /**
-     * Checks if S3 functionality is enabled and the client is available.
-     * @return true if S3 is enabled and usable, false otherwise.
+     * Checks if S3 functionality is enabled and the client is available
+     * @return true if S3 is enabled and usable, false otherwise
      */
     public boolean isS3Enabled() {
         return this.s3EnabledCheck && this.s3Client != null;
@@ -248,11 +247,11 @@ public class S3BookCoverService implements ExternalCoverService {
             }
             // For other S3 errors, log it and return false
             logger.error("S3Exception checking S3 object existence for key {}: Status={}, Message={}", s3Key, s3e.statusCode(), s3e.getMessage());
-            objectExistsCache.put(s3Key, false); // Or consider not caching on general S3 errors
+            objectExistsCache.put(s3Key, false);
             return false;
-        } catch (Exception e) { // Catch any other unexpected exceptions
+        } catch (Exception e) {
             logger.error("Unexpected error checking S3 object existence for key {}: {}", s3Key, e.getMessage(), e);
-            objectExistsCache.put(s3Key, false); // Or consider not caching
+            objectExistsCache.put(s3Key, false);
             return false; 
         }
     }
@@ -302,8 +301,8 @@ public class S3BookCoverService implements ExternalCoverService {
         .doOnSuccess(exists -> objectExistsCache.put(s3Key, exists)) // Cache success (true or false from try-catch)
         .onErrorResume(e -> {
             // This will catch exceptions re-thrown from the try-catch block (e.g., non-404 S3Exception, other unexpected errors)
-            // We cache 'false' in these error cases to prevent repeated failed attempts for a while.
-            // Depending on the error, one might choose not to cache or cache for a shorter duration.
+            // It will cache 'false' in these error cases to prevent repeated failed attempts for a while
+            // Depending on the error, one might choose not to cache or cache for a shorter duration
             objectExistsCache.put(s3Key, false); 
             logger.warn("Async S3 check failed for key {} due to {}. Caching as non-existent.", s3Key, e.getClass().getSimpleName());
             return Mono.just(false); 

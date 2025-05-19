@@ -63,6 +63,13 @@ public enum CoverImageSource {
     NONE("No Source"),
     
     /**
+     * Mock cover source for testing
+     * - Used in unit and integration tests
+     * - Not used in production code
+     */
+    MOCK("Mock Source"),
+    
+    /**
      * Source not yet determined
      * - Default state before source is set
      * - Typically used during initialization

@@ -1,20 +1,20 @@
 /**
- * Implements a multi-level caching strategy for retrieving {@link Book} objects based on their Google Books ID
- * This strategy is designed to be used by services like {@link GoogleBooksService} or {@link BookApiProxy}
- * to minimize direct API calls and improve performance and resilience
+ * Multi-level caching strategy for Book objects with tiered fallback mechanism
  *
- * The caching layers are checked in the following order:
- * 1. In-memory cache ({@code bookDetailCache}): Fastest, simple ConcurrentHashMap
- * 2. Spring Cache (managed by {@code CacheManager}, configured with name "books"): Leverages Spring's caching abstraction
- * 3. Local disk cache (if {@code localCacheEnabled} is true, stored in {@code localCacheDirectory}): Useful for development/testing to persist cache across restarts
- * 4. Database cache (if {@code cacheEnabled} is true and {@code CachedBookRepository} is available): Persistent caching using a database table
- * 5. S3 cache (via {@link S3RetryService#fetchJsonWithRetry(String)}): Distributed, persistent cache, typically the largest and most resilient cache layer before hitting the live API
+ * Provides efficient book retrieval through five cache layers:
+ * 1. In-memory cache - Fast ConcurrentHashMap for immediate access
+ * 2. Spring Cache - Managed by Spring's caching abstraction
+ * 3. Local disk cache - Optional development cache persisting across restarts
+ * 4. Database cache - Optional persistent storage using database
+ * 5. S3 cache - Distributed storage for resilient, large-scale caching
  *
- * If a book is not found in any cache layer, it falls back to fetching from the {@link GoogleBooksService#getBookById(String)} method
- * Successfully fetched books (from S3 or the live API) are then used to populate the preceding cache layers to ensure subsequent requests are served faster
- *
- * This class also handles cache eviction and provides methods to check for existence and retrieve from cache-only without external fallbacks
- * A property {@code googlebooks.api.override.bypass-caches} can be set to true to bypass all cache lookups and go directly to the GoogleBooksService, primarily for debugging
+ * Features:
+ * - Checks caches in order of speed before API fallback
+ * - Populates all cache layers after successful retrieval
+ * - Provides both synchronous and reactive interfaces
+ * - Supports cache-only queries and existence checks
+ * - Optional cache bypass for testing and debugging
+ * - Thread-safe implementation for concurrent access
  *
  * @author William Callahan
  */
@@ -23,6 +23,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 
@@ -50,7 +51,7 @@ import reactor.core.scheduler.Schedulers;
 public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book> {
     private static final Logger logger = LoggerFactory.getLogger(GoogleBooksCachingStrategy.class);
     
-    private final GoogleBooksService googleBooksService;
+    private final BookDataOrchestrator bookDataOrchestrator;
     private final S3RetryService s3RetryService;
     private final CacheManager cacheManager;
     private final CachedBookRepository cachedBookRepository;
@@ -74,20 +75,20 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     /**
      * Constructs a GoogleBooksCachingStrategy with required dependencies
      * 
-     * @param googleBooksService Service for fetching book data from Google Books API (used as a final fallback)
-     * @param s3RetryService Service for S3 operations with retry capabilities (used for S3 cache layer)
-     * @param cacheManager Spring cache manager for managing in-memory caches (used for Spring Cache layer)
-     * @param cachedBookRepository Repository for database-backed caching (optional, for database cache layer)
-     * @param objectMapper JSON mapper for serializing/deserializing book data for local disk and S3 cache
+     * @param bookDataOrchestrator Orchestrator for coordinating book data access across sources
+     * @param s3RetryService Service for S3 operations with retry capabilities
+     * @param cacheManager Spring cache manager for managing in-memory caches
+     * @param cachedBookRepository Repository for database-backed caching (optional)
+     * @param objectMapper JSON mapper for serializing/deserializing book data
      */
     @Autowired
     public GoogleBooksCachingStrategy(
-            GoogleBooksService googleBooksService,
+            BookDataOrchestrator bookDataOrchestrator,
             S3RetryService s3RetryService,
             CacheManager cacheManager,
             @Autowired(required = false) CachedBookRepository cachedBookRepository,
             ObjectMapper objectMapper) {
-        this.googleBooksService = googleBooksService;
+        this.bookDataOrchestrator = bookDataOrchestrator;
         this.s3RetryService = s3RetryService;
         this.cacheManager = cacheManager;
         this.cachedBookRepository = cachedBookRepository;
@@ -110,10 +111,10 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Retrieves a book by its Google Books ID using multi-level cache approach
+     * Retrieves a book by ID using multi-level cache with API fallback
      * 
      * @param bookId The Google Books ID to look up
-     * @return CompletionStage completing with the book if found, or null if not found
+     * @return CompletionStage with Optional<Book> result
      */
     @Override
     public CompletionStage<Optional<Book>> get(String bookId) {
@@ -122,8 +123,12 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
 
         if (bypassCachesOverride) {
-            logger.warn("BYPASS_CACHES_OVERRIDE ENABLED: Skipping all caches for book ID: {}. Going directly to GoogleBooksService.", bookId);
-            return googleBooksService.getBookById(bookId).thenApply(Optional::ofNullable);
+            logger.warn("BYPASS_CACHES_OVERRIDE ENABLED: Skipping all caches for book ID: {}. Going directly to BookDataOrchestrator.", bookId);
+            // Even with bypass, the orchestrator handles the full API fetch logic now
+            return bookDataOrchestrator.getBookByIdTiered(bookId)
+                .map(Optional::ofNullable)
+                .defaultIfEmpty(Optional.empty())
+                .toFuture();
         }
         
         // Step 1: Check in-memory cache (fastest)
@@ -179,7 +184,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                     try {
                         // Parse the JSON from S3
                         JsonNode bookNode = objectMapper.readTree(s3Result.getData().get());
-                        Book s3Book = googleBooksService.convertJsonToBook(bookNode);
+                        Book s3Book = BookJsonParser.convertJsonToBook(bookNode, objectMapper);
                         
                         if (s3Book != null && s3Book.getId() != null) {
                             logger.debug("S3 cache hit for book ID: {}", bookId);
@@ -200,24 +205,29 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                     logger.debug("S3 is disabled or misconfigured. Fetching book {} directly from API.", bookId);
                 }
                 
-                // Step 6: Fall back to API call after all cache layers miss
-                logger.debug("All caches missed for book ID: {}. Calling GoogleBooksService.getBookById.", bookId);
-                CompletionStage<Book> bookStageFallback = googleBooksService.getBookById(bookId);
-                return bookStageFallback.thenCompose(apiBook -> {
-                        if (apiBook != null) {
-                            // Update all caches with the book from API
-                             putReactive(bookId, apiBook).subscribe();
-                        }
-                        return CompletableFuture.completedFuture(Optional.ofNullable(apiBook));
-                    });
+                // Step 6: Fall back to BookDataOrchestrator for Tiers 3 & 4
+                logger.debug("All local/S3 caches missed for book ID: {}. Calling BookDataOrchestrator.getBookByIdTiered.", bookId);
+                return bookDataOrchestrator.getBookByIdTiered(bookId)
+                    .flatMap(orchestratedBook -> {
+                        // If orchestrator returns a book, it means it was fetched from API (Tier 3 or 4)
+                        // and already saved to S3 by the orchestrator.
+                        // We just need to populate our Tier 1 caches here.
+                        putReactive(bookId, orchestratedBook).subscribe(
+                            null,
+                            e -> logger.error("Error populating Tier 1 caches from orchestrator result for {}: {}", bookId, e.getMessage())
+                        );
+                        return Mono.just(Optional.of(orchestratedBook));
+                    })
+                    .defaultIfEmpty(Optional.empty()) // If orchestrator also returns empty
+                    .toFuture(); // Convert Mono<Optional<Book>> to CompletionStage<Optional<Book>>
             });
     }
 
     /**
-     * Retrieves a book by its Google Books ID using reactive programming
+     * Retrieves a book by ID using reactive programming model
      * 
      * @param bookId The Google Books ID to look up
-     * @return Mono emitting the book if found, or empty if not found
+     * @return Mono<Book> emitting book or empty if not found
      */
     @Override
     public Mono<Book> getReactive(String bookId) {
@@ -232,11 +242,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Updates all caches with a book value
+     * Updates all cache layers with a book value
      * 
-     * @param bookId The Google Books ID to associate with the book
+     * @param bookId The Google Books ID to use as cache key
      * @param book The book to cache
-     * @return CompletionStage that completes when the operation is done
+     * @return CompletionStage<Void> completing when caching completes
      */
     @Override
     public CompletionStage<Void> put(String bookId, Book book) {
@@ -270,11 +280,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Updates all caches with a book value using reactive programming
+     * Reactively updates all cache layers with a book value
      * 
-     * @param bookId The Google Books ID to associate with the book
+     * @param bookId The Google Books ID to use as cache key
      * @param book The book to cache
-     * @return Mono that completes when the operation is done
+     * @return Mono<Void> completing when caching completes
      */
     @Override
     public Mono<Void> putReactive(String bookId, Book book) {
@@ -338,8 +348,8 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     /**
      * Removes a book from all cache layers
      * 
-     * @param bookId The Google Books ID to remove
-     * @return CompletionStage that completes when the operation is done
+     * @param bookId The Google Books ID to evict
+     * @return CompletionStage<Void> completing when eviction completes
      */
     @Override
     public CompletionStage<Void> evict(String bookId) {
@@ -386,7 +396,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
      * Checks if a book exists in any cache layer
      * 
      * @param bookId The Google Books ID to check
-     * @return true if the book exists in any cache, false otherwise
+     * @return true if book exists in any cache, false otherwise
      */
     @Override
     public boolean exists(String bookId) {
@@ -428,10 +438,10 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Gets a book from cache only, without fetching from S3 or API
+     * Gets a book from local caches only, without S3 or API fallback
      * 
      * @param bookId The Google Books ID to look up
-     * @return Optional containing the book if found in any local cache, empty otherwise
+     * @return Optional<Book> if found in any local cache
      */
     @Override
     public Optional<Book> getFromCacheOnly(String bookId) {
@@ -478,9 +488,9 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Clears all cache layers
+     * Clears all cache layers except S3
      * 
-     * @return CompletionStage that completes when the operation is done
+     * @return CompletionStage<Void> completing when clear operation completes
      */
     @Override
     public CompletionStage<Void> clearAll() {
@@ -526,9 +536,9 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Updates faster caches with a book value
+     * Updates in-memory and Spring caches for quick access
      * 
-     * @param bookId The Google Books ID
+     * @param bookId The Google Books ID as key
      * @param book The book to cache
      */
     private void updateFasterCaches(String bookId, Book book) {
@@ -543,10 +553,10 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Gets a book from the local disk cache
+     * Retrieves a book from the local disk cache
      * 
      * @param bookId The Google Books ID
-     * @return The book if found, null otherwise
+     * @return Book if found in disk cache, null otherwise
      */
     private Book getBookFromLocalCache(String bookId) {
         if (!localCacheEnabled) {
@@ -567,10 +577,10 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Saves a book to the local disk cache
+     * Persists a book to the local disk cache
      * 
-     * @param bookId The Google Books ID
-     * @param book The book to save
+     * @param bookId The Google Books ID as filename
+     * @param book The book to serialize and save
      */
     private void saveBookToLocalCache(String bookId, Book book) {
         if (!localCacheEnabled) {
@@ -591,11 +601,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Updates a CachedBook with values from a Book
+     * Copies values from Book to CachedBook entity
      * 
      * @param cachedBook The existing CachedBook to update
-     * @param book The Book with new values
-     * @return The updated CachedBook
+     * @param book The Book with current values
+     * @return The updated CachedBook ready for persistence
      */
     private CachedBook updateCachedBook(CachedBook cachedBook, Book book) {
         // Update all fields from the Book

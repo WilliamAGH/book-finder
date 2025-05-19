@@ -144,7 +144,7 @@ public class HomeController {
         )
         .flatMap(this::processBooksCovers) // This sets book.getCoverImageUrl()
         .map(bookList -> bookList.stream()
-            .filter(this::isActualCover) // Enhanced cover filter
+            .filter(this::isActualCover)
             .collect(Collectors.toList())
         )
         .map(this::deduplicateBooksById)
@@ -192,7 +192,7 @@ public class HomeController {
 
         Mono<List<Book>> processedRecentBooksMono = recentBooksMono
             .flatMap(this::processBooksCovers)
-            .map(bookList -> bookList.stream() // Enhanced cover filter
+            .map(bookList -> bookList.stream()
                 .filter(this::isActualCover)
                 .collect(Collectors.toList())
             )
@@ -229,7 +229,7 @@ public class HomeController {
             coverUrl.contains("image-not-available.png") ||
             coverUrl.contains("mock-placeholder.svg") ||
             // Add more known placeholder substrings if necessary
-            coverUrl.endsWith("/images/transparent.gif") // Example of another type
+            coverUrl.endsWith("/images/transparent.gif")
         ) {
             return false;
         }
