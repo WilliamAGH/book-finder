@@ -127,14 +127,6 @@ curl -u admin:$APP_SECURITY_ADMIN_PASSWORD -X POST 'http://localhost:8081/admin/
 - [SpotBugs Maven Plugin](https://spotbugs.github.io/)
 - [Maven Dependency Plugin](https://maven.apache.org/plugins/maven-dependency-plugin/)
 
-## Troubleshooting
-
-**Port Conflicts (macOS/Linux):**
-```bash
-lsof -i :{PORT}  # Find process using port
-kill -9 <PID>    # Kill process
-```
-
 ## License
 
 MIT License 

@@ -31,7 +31,6 @@
         <spring-ai.version>1.0.0-RC1</spring-ai.version>
         <wro4j.version>2.1.1</wro4j.version>
         <maven.resources.useDefaultDelimiters>false</maven.resources.useDefaultDelimiters>
-        <!-- <maven.resources.overwrite>true</maven.resources.overwrite> Removed, rely on plugin config -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <mockito.version>5.11.0</mockito.version>
