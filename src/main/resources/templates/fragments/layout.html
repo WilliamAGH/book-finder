@@ -156,7 +156,7 @@
     
     <!-- Clicky Analytics - Only rendered when enabled via properties -->
     <th:block th:if="${@environment.getProperty('app.clicky.enabled', 'false') == 'true'}">
-        <!-- Clicky tracking script - badge removed but tracking maintained -->
+        <!-- Clicky tracking script -->
         <script async th:src="'https://static.getclicky.com/' + ${@environment.getProperty('app.clicky.site-id', '101484793')} + '.js'"></script>
         <noscript>
             <p><img alt="Clicky" width="1" height="1" th:src="'//in.getclicky.com/' + ${@environment.getProperty('app.clicky.site-id', '101484793')} + 'ns.gif'" /></p>

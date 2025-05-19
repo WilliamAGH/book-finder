@@ -21,7 +21,6 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
     // The image will now rely on its container and its own CSS rules
     // (e.g., object-fit: contain and max-width/max-height: 100%)
     // to size itself appropriately
-    // I removed the addition of 'normalized-cover' and 'high-res-cover' classes
 }
 
 /**
