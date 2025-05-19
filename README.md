@@ -37,6 +37,28 @@ Use a `.env` file for local setup (copy from `.env.example` and update values). 
 - `SPRING_AI_OPENAI_API_KEY`
 - `GOOGLE_BOOKS_API_KEY`
 - `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, etc. (for S3 features)
+- `APP_ADMIN_PASSWORD` (for the built-in 'admin' user)
+- `APP_USER_PASSWORD` (for the built-in 'user' user)
+
+### Built-in User Accounts
+
+The application includes two pre-defined in-memory user accounts configured via Spring Security:
+
+1.  **Admin User:**
+    *   **Username:** `admin` (hardcoded)
+    *   **Password:** Configured via the `APP_ADMIN_PASSWORD` environment variable (see `.env.example`).
+    *   **Roles:** `ADMIN`, `USER`
+    *   **Access:** Can access administrative functions under the `/admin/**` path (e.g., S3 cleanup utilities).
+    *   **Usage:** Intended for application administrators to perform maintenance tasks.
+
+2.  **Regular User:**
+    *   **Username:** `user` (hardcoded)
+    *   **Password:** Configured via the `APP_USER_PASSWORD` environment variable (see `.env.example`).
+    *   **Roles:** `USER`
+    *   **Access:** Cannot access `/admin/**` paths. Can access general application features (currently, most non-admin paths are `permitAll()`).
+    *   **Usage:** Can be used for testing features that might require a standard authenticated user in the future, or if parts of the application are secured for `USER` role.
+
+These accounts are primarily for basic authentication to protected administrative endpoints. For production, ensure strong, unique passwords are set for `APP_ADMIN_PASSWORD` and `APP_USER_PASSWORD` via your environment.
 
 ## Running the Application
 

@@ -43,12 +43,12 @@ public class SecurityConfig {
     public UserDetailsService userDetailsService(PasswordEncoder passwordEncoder) {
         UserDetails admin = User.builder()
             .username("admin")
-            .password(passwordEncoder.encode("adminpassword")) // Store encoded password
+            .password(passwordEncoder.encode("${app.security.admin.password}"))
             .roles("ADMIN", "USER")
             .build();
         UserDetails regularUser = User.builder()
             .username("user")
-            .password(passwordEncoder.encode("userpassword"))
+            .password(passwordEncoder.encode("${app.security.user.password}"))
             .roles("USER")
             .build();
         return new InMemoryUserDetailsManager(admin, regularUser);
