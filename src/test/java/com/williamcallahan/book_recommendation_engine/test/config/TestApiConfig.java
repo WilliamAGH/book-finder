@@ -41,7 +41,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-// Added S3Client imports
+// S3Client imports
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
@@ -49,10 +49,9 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
-// Added LocalDiskCoverCacheService and related imports
+// LocalDiskCoverCacheService and related imports
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
-// ImageDetails, CompletableFuture, Optional, Book, CoverImageSource, ImageResolutionPreference are already imported for LongitoodService mock or S3StorageService
 
 /**
  * Test-specific configuration that prevents real API calls
@@ -150,7 +149,7 @@ public class TestApiConfig {
     
     /**
      * Initializer for test environment to ensure predictable test behavior
-     * Logs activation of test profile and mock services.
+     * Logs activation of test profile and mock services
      */
     @PostConstruct
     public void testEnvironmentInitializer() {
@@ -169,18 +168,6 @@ public class TestApiConfig {
         Mockito.when(mockLongitoodService.fetchCover(Mockito.any(Book.class)))
                .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
         
-        // Example of more specific stubbing if needed for certain tests:
-        // Book specificBook = new Book();
-        // specificBook.setId("longitoodTestId");
-        // specificBook.setIsbn13("978-longitood");
-        // Mockito.when(mockLongitoodService.fetchCover(Mockito.argThat(book -> "longitoodTestId".equals(book.getId()))))
-        //        .thenReturn(CompletableFuture.completedFuture(Optional.of(
-        //            new ImageDetails("http://example.com/mockcover-longitood.jpg", 
-        //                           "MOCK_LONGITOOD", 
-        //                           "mock-longitood-id", 
-        //                           CoverImageSource.LONGITOOD, 
-        //                           ImageResolutionPreference.ORIGINAL)
-        //        )));
         logger.info("Mock LongitoodService configured to return empty Optional by default.");
         return mockLongitoodService;
     }
@@ -246,7 +233,7 @@ public class TestApiConfig {
                 );
             });
         
-        // Stub other public methods if necessary for tests, e.g., methods to check if an image exists in cache.
+        // Stub other public methods if necessary for tests, e.g., methods to check if an image exists in cache
         // Mockito.when(mockDiskCache.getCachedImagePath(Mockito.anyString())).thenReturn(Optional.empty());
 
         logger.info("Mock LocalDiskCoverCacheService configured.");

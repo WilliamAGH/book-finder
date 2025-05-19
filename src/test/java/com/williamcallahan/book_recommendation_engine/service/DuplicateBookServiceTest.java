@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.when;
-import static org.mockito.ArgumentMatchers.eq; // Added import for eq
+import static org.mockito.ArgumentMatchers.eq;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -19,8 +19,8 @@ import java.util.Collections;
 import java.util.List;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.model.CachedBook; // Added import
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository; // Changed from BookRepository
+import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 
 /**
  * Test class for DuplicateBookService
@@ -32,7 +32,7 @@ public class DuplicateBookServiceTest {
      * Mock repository for database operations
      */
     @Mock
-    private CachedBookRepository cachedBookRepository; // Changed from BookRepository
+    private CachedBookRepository cachedBookRepository;
 
     /**
      * Service instance under test
