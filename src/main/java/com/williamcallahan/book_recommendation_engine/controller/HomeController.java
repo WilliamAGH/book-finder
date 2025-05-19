@@ -100,16 +100,16 @@ public class HomeController {
     private int maxDescriptionLength;
 
     // Affiliate IDs from properties
-    @Value("${app.affiliate.barnesnoble.cj.publisherid:}")
+    @Value("${affiliate.barnesandnoble.publisher-id:#{null}}")
     private String barnesNobleCjPublisherId;
 
-    @Value("${app.affiliate.barnesnoble.cj.websiteid:}")
+    @Value("${affiliate.barnesandnoble.website-id:#{null}}")
     private String barnesNobleCjWebsiteId;
 
-    @Value("${app.affiliate.bookshop.id:}")
+    @Value("${affiliate.bookshop.affiliate-id:#{null}}")
     private String bookshopAffiliateId;
 
-    @Value("${app.affiliate.amazon.tag:}")
+    @Value("${affiliate.amazon.associate-tag:#{null}}")
     private String amazonAssociateTag;
 
     /**
@@ -479,6 +479,9 @@ public class HomeController {
                         }
                         // Pass ASIN, title, and associate tag to the updated Audible link generator
                         affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag));
+                        // Generate Amazon affiliate link using ISBN or title
+                        String isbnForAmazon = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
+                        affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag));
                         
                         model.addAttribute("affiliateLinks", affiliateLinks);
 
@@ -524,6 +527,9 @@ public class HomeController {
                             affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId));
                         }
                         affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag));
+                        // Generate Amazon affiliate link on error fallback
+                        String isbnForAmazonOnError = (isbn13OnError != null && !isbn13OnError.isEmpty()) ? isbn13OnError : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
+                        affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag));
                         
                         model.addAttribute("affiliateLinks", affiliateLinksOnError);
 
