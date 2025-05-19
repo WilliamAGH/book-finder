@@ -133,12 +133,10 @@ public class BookCoverManagementServiceS3UploadTest {
             bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
         }
         
-        // Give a moment for the @Async S3 result to be processed
-        Thread.sleep(100); // Increased sleep time slightly for async operations
-        
         // ASSERT
         // Verify S3 upload was attempted with correct parameters
-        verify(s3Service).uploadProcessedCoverToS3Async(
+        // Use Mockito timeout to wait for async operations
+        verify(s3Service, timeout(1000)).uploadProcessedCoverToS3Async(
             eq(testImageBytes),
             eq(".jpg"),
             isNull(),
@@ -150,10 +148,10 @@ public class BookCoverManagementServiceS3UploadTest {
         );
         
         // Verify cache is updated with S3 details
-        verify(cacheManager).putFinalImageDetails(eq(identifierKey), eq(s3UploadedImageDetails));
+        verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(s3UploadedImageDetails));
         
         // Verify event is published with S3 details
-        verify(eventPublisher).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+        verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
             @Override
             public boolean matches(BookCoverUpdatedEvent event) {
                 return event.getIdentifierKey().equals(identifierKey) &&
@@ -236,12 +234,10 @@ public class BookCoverManagementServiceS3UploadTest {
             bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
         }
             
-        // Give time for the @Async callbacks
-        Thread.sleep(100); // Increased sleep time
-            
         // ASSERT
         // Verify S3 upload was attempted
-        verify(s3Service).uploadProcessedCoverToS3Async(
+        // Use Mockito timeout to wait for async operations
+        verify(s3Service, timeout(1000)).uploadProcessedCoverToS3Async(
             eq(testImageBytes),
             anyString(),
             isNull(),
@@ -253,8 +249,8 @@ public class BookCoverManagementServiceS3UploadTest {
         );
             
         // Verify fallback to local cache details in cacheManager and eventPublisher
-        verify(cacheManager).putFinalImageDetails(eq(identifierKey), eq(localCacheImageDetails));
-        verify(eventPublisher).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+        verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(localCacheImageDetails));
+        verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
             @Override
             public boolean matches(BookCoverUpdatedEvent event) {
                 return event.getIdentifierKey().equals(identifierKey) &&
@@ -318,17 +314,16 @@ public class BookCoverManagementServiceS3UploadTest {
         // ACT
         bookCoverManagementService.processCoverInBackground(testBook, "http://some.url/that-will-fail.jpg"); // Provisional hint
         
-        Thread.sleep(100); // Allow async processing
-        
         // ASSERT
         // Verify that createPlaceholderImageDetails was called because fetching failed
-        verify(diskService).createPlaceholderImageDetails(eq(testBook.getId()), eq("background-fetch-failed"));
+        // Use Mockito timeout to wait for async operations
+        verify(diskService, timeout(1000)).createPlaceholderImageDetails(eq(testBook.getId()), eq("background-fetch-failed"));
         
         // Verify cache is updated with placeholder details
-        verify(cacheManager).putFinalImageDetails(eq(identifierKey), eq(placeholderDetails));
+        verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(placeholderDetails));
         
         // Verify event is published with placeholder details
-        verify(eventPublisher).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+        verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
             @Override
             public boolean matches(BookCoverUpdatedEvent event) {
                 return event.getIdentifierKey().equals(identifierKey) &&
