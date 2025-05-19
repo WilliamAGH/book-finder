@@ -50,14 +50,6 @@ spring:
     connect-timeout: 2000
     lettuce:
       shutdown-timeout: 0
-    
-  autoconfigure:
-    exclude:
-      - org.springframework.ai.autoconfigure.vectorstore.pgvector.PgVectorStoreAutoConfiguration
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
-      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
 
   web:
     resources:
@@ -120,8 +112,8 @@ spring:
     # database-platform: "" # Optionally, we could clear this too, but empty URL/driver should suffice
 logging:
   level:
-    com.williamcallahan.book_recommendation_engine: DEBUG # More verbose logging for dev
-    org.springframework.web: DEBUG
+    com.williamcallahan.book_recommendation_engine: INFO # Changed from DEBUG
+    org.springframework.web: INFO # Changed from DEBUG
     org.hibernate: WARN # Reduce Hibernate noise if no DB
 app:
   environment:

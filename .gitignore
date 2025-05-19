@@ -28,6 +28,7 @@ node_modules
 *.png
 *.webp
 *.svg
+.dev-cache
 
 ### FORCE INCLUDE ALL STATIC IMAGES ###
 !src/main/resources/static/images/*
