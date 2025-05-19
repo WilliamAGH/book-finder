@@ -237,7 +237,7 @@ public class LocalDiskCoverCacheService {
         return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
                 .timeout(Duration.ofSeconds(10))
                 .toFuture()
-                .thenComposeAsync(imageBytes -> { // Changed to thenComposeAsync
+                .thenComposeAsync(imageBytes -> {
                     logger.info("Successfully downloaded {} bytes. Context: {}", imageBytes.length, finalLogContext);
                     try {
                         if (googlePlaceholderHash != null) {

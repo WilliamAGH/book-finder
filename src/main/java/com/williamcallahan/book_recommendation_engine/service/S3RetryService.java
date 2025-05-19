@@ -133,11 +133,11 @@ public class S3RetryService {
             String volumeId, String jsonContent, int attempt, long backoffMs) {
 
         return s3StorageService.uploadJsonAsync(volumeId, jsonContent)
-            .thenAccept(result -> { // Changed from thenApply to thenAccept for Void
+            .thenAccept(result -> {
                 // Success - no retry needed
                 apiRequestMonitor.recordMetric("s3/upload_success", "volumeId " + volumeId);
             })
-            .exceptionallyCompose(e -> { // Changed to exceptionallyCompose for async retry
+            .exceptionallyCompose(e -> {
                 if (attempt < maxRetries) {
                     int nextAttempt = attempt + 1;
                     long nextBackoffMs = (long) (backoffMs * backoffMultiplier);

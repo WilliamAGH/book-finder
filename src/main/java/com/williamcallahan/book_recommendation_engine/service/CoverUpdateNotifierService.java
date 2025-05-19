@@ -67,7 +67,7 @@ public class CoverUpdateNotifierService {
 
         String destination = "/topic/book/" + event.getGoogleBookId() + "/coverUpdate";
         
-        Map<String, Object> payload = new HashMap<>(); // Changed to Map<String, Object> to accommodate enum/string
+        Map<String, Object> payload = new HashMap<>();
         payload.put("googleBookId", event.getGoogleBookId());
         payload.put("newCoverUrl", event.getNewCoverUrl());
         payload.put("identifierKey", event.getIdentifierKey());
