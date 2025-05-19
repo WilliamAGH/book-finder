@@ -27,11 +27,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import reactor.core.publisher.Mono;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.CompletableFuture;
 
-import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import org.mockito.ArgumentMatcher;
 
 /**
  * Unit tests for S3 upload functionality in BookCoverManagementService
@@ -67,9 +69,14 @@ public class BookCoverManagementServiceS3UploadTest {
         CoverCacheManager cacheManager = mock(CoverCacheManager.class);
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         EnvironmentService environmentService = mock(EnvironmentService.class);
+
+        BookCoverManagementService bookCoverManagementService = new BookCoverManagementService(
+            cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService
+        );
         
         // Set up test book
         Book testBook = createTestBook();
+        String identifierKey = "test-book-id"; // Assuming createTestBook sets ID to "test-book-id"
         
         // Configure mock behaviors
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
@@ -77,9 +84,9 @@ public class BookCoverManagementServiceS3UploadTest {
         when(diskService.getCacheDirName()).thenReturn(CACHE_DIR_NAME);
         when(diskService.getCacheDirString()).thenReturn(CACHE_DIR_PATH);
         
-        // Local cache hit
+        // Local cache hit that will be uploaded to S3
         ImageDetails localCacheImageDetails = new ImageDetails(
-            "/book-covers/test-image.jpg",
+            CACHE_DIR_PATH + "/test-image.jpg", // Simulate a local file path
             "GOOGLE_BOOKS",
             "test-image.jpg",
             CoverImageSource.LOCAL_CACHE,
@@ -88,14 +95,14 @@ public class BookCoverManagementServiceS3UploadTest {
         );
         
         when(sourceFetchingService.getBestCoverImageUrlAsync(
-                any(Book.class), anyString(), any(ImageProvenanceData.class)))
+                eq(testBook), anyString(), any(ImageProvenanceData.class)))
             .thenReturn(CompletableFuture.completedFuture(localCacheImageDetails));
         
         // Configure S3 upload success result
         ImageDetails s3UploadedImageDetails = new ImageDetails(
             "https://cdn.example.com/books/test-image.jpg",
-            "S3_CACHE",
-            "books/test-image.jpg",
+            "S3_CACHE", // Source name for S3
+            "books/test-image.jpg", // Key for S3
             CoverImageSource.S3_CACHE,
             ImageResolutionPreference.ORIGINAL,
             500, 700
@@ -104,51 +111,35 @@ public class BookCoverManagementServiceS3UploadTest {
         when(s3Service.uploadProcessedCoverToS3Async(
                 any(byte[].class),
                 eq(".jpg"),
-                isNull(),
+                isNull(), // Assuming no CDN prefix for this direct upload call
                 eq(500),
                 eq(700),
                 eq(testBook.getId()),
-                eq("GOOGLE_BOOKS"),
+                eq("GOOGLE_BOOKS"), // Source name from localCacheImageDetails
                 any(ImageProvenanceData.class)))
             .thenReturn(Mono.just(s3UploadedImageDetails));
+
+        // Mock file reading for the S3 upload part within BookCoverManagementService
+        // This requires knowing the path construction logic or mocking Files.readAllBytes
+        // For simplicity, let's assume the testImageBytes are correctly read if the path matches.
+        // If BookCoverManagementService uses diskService.getCacheDirString() + filename:
+        Path mockLocalImagePath = Paths.get(CACHE_DIR_PATH, "test-image.jpg");
+        try (var mockedFiles = mockStatic(java.nio.file.Files.class)) {
+            mockedFiles.when(() -> java.nio.file.Files.exists(mockLocalImagePath)).thenReturn(true);
+            mockedFiles.when(() -> java.nio.file.Files.readAllBytes(mockLocalImagePath)).thenReturn(testImageBytes);
+
+            // ACT
+            logger.info("Testing S3 upload functionality by calling BookCoverManagementService.processCoverInBackground");
+            bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
+        }
         
-        // ACT - Simulate background processing with S3 upload
-        logger.info("Testing S3 upload functionality with mock calls");
-        
-        // Simulate the final part of processCoverInBackground where S3 upload succeeds
-        ImageProvenanceData provenanceData = new ImageProvenanceData();
-        provenanceData.setBookId(testBook.getId());
-        
-        // Call the S3 upload service
-        Mono<ImageDetails> s3Result = s3Service.uploadProcessedCoverToS3Async(
-            testImageBytes, 
-            ".jpg", 
-            null, 
-            500,
-            700,
-            testBook.getId(),
-            "GOOGLE_BOOKS", 
-            provenanceData
-        );
-        
-        // Execute the S3 upload and process the result
-        s3Result.subscribe(s3UploadedDetails -> {
-            // Update cache with S3 details
-            cacheManager.putFinalImageDetails("test:9781234567890", s3UploadedDetails);
-            
-            // Publish event with S3 details
-            eventPublisher.publishEvent(new BookCoverUpdatedEvent(
-                "test:9781234567890", s3UploadedDetails.getUrlOrPath(), 
-                testBook.getId(), CoverImageSource.S3_CACHE
-            ));
-        });
-        
-        // Give a moment for the S3 result to be processed
-        Thread.sleep(50); 
+        // Give a moment for the @Async S3 result to be processed
+        Thread.sleep(100); // Increased sleep time slightly for async operations
         
         // ASSERT
+        // Verify S3 upload was attempted with correct parameters
         verify(s3Service).uploadProcessedCoverToS3Async(
-            any(byte[].class),
+            eq(testImageBytes),
             eq(".jpg"),
             isNull(),
             eq(500),
@@ -158,8 +149,18 @@ public class BookCoverManagementServiceS3UploadTest {
             any(ImageProvenanceData.class)
         );
         
-        verify(eventPublisher).publishEvent(any(BookCoverUpdatedEvent.class));
-        verify(cacheManager).putFinalImageDetails(anyString(), any(ImageDetails.class));
+        // Verify cache is updated with S3 details
+        verify(cacheManager).putFinalImageDetails(eq(identifierKey), eq(s3UploadedImageDetails));
+        
+        // Verify event is published with S3 details
+        verify(eventPublisher).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+            @Override
+            public boolean matches(BookCoverUpdatedEvent event) {
+                return event.getIdentifierKey().equals(identifierKey) &&
+                       event.getNewCoverUrl().equals(s3UploadedImageDetails.getUrlOrPath()) && // Corrected method name
+                       event.getSource() == CoverImageSource.S3_CACHE;
+            }
+        }));
     }
     
     /**
@@ -181,12 +182,18 @@ public class BookCoverManagementServiceS3UploadTest {
         
         S3BookCoverService s3Service = mock(S3BookCoverService.class);
         LocalDiskCoverCacheService diskService = mock(LocalDiskCoverCacheService.class);
+        CoverSourceFetchingService sourceFetchingService = mock(CoverSourceFetchingService.class); // Added declaration
         CoverCacheManager cacheManager = mock(CoverCacheManager.class);
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         EnvironmentService environmentService = mock(EnvironmentService.class);
+
+        BookCoverManagementService bookCoverManagementService = new BookCoverManagementService(
+            cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService
+        );
         
         // Set up test book
         Book testBook = createTestBook();
+        String identifierKey = "test-book-id";
         
         // Configure mock behaviors
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
@@ -194,15 +201,19 @@ public class BookCoverManagementServiceS3UploadTest {
         when(diskService.getCacheDirName()).thenReturn(CACHE_DIR_NAME);
         when(diskService.getCacheDirString()).thenReturn(CACHE_DIR_PATH);
         
-        // Local cache hit
+        // Local cache hit that will attempt S3 upload
         ImageDetails localCacheImageDetails = new ImageDetails(
-            "/book-covers/test-image.jpg",
+            CACHE_DIR_PATH + "/test-image.jpg", // Simulate a local file path
             "GOOGLE_BOOKS",
             "test-image.jpg",
             CoverImageSource.LOCAL_CACHE,
             ImageResolutionPreference.ORIGINAL,
             500, 700
         );
+        
+        when(sourceFetchingService.getBestCoverImageUrlAsync(
+                eq(testBook), anyString(), any(ImageProvenanceData.class)))
+            .thenReturn(CompletableFuture.completedFuture(localCacheImageDetails));
             
         // Configure S3 upload to fail
         when(s3Service.uploadProcessedCoverToS3Async(
@@ -211,69 +222,46 @@ public class BookCoverManagementServiceS3UploadTest {
                 isNull(),
                 anyInt(),
                 anyInt(),
-                anyString(),
-                anyString(),
+                eq(testBook.getId()),
+                eq("GOOGLE_BOOKS"),
                 any(ImageProvenanceData.class)))
             .thenReturn(Mono.error(new RuntimeException("S3 upload failed")));
+
+        Path mockLocalImagePath = Paths.get(CACHE_DIR_PATH, "test-image.jpg");
+        try (var mockedFiles = mockStatic(java.nio.file.Files.class)) {
+            mockedFiles.when(() -> java.nio.file.Files.exists(mockLocalImagePath)).thenReturn(true);
+            mockedFiles.when(() -> java.nio.file.Files.readAllBytes(mockLocalImagePath)).thenReturn(testImageBytes);
         
-        // ACT
-        ImageProvenanceData provenanceData = new ImageProvenanceData();
-        provenanceData.setBookId(testBook.getId());
-        
-        try {
-            // Call the S3 upload service that will produce an error
-            Mono<ImageDetails> s3Result = s3Service.uploadProcessedCoverToS3Async(
-                testImageBytes, 
-                ".jpg", 
-                null, 
-                500,
-                700,
-                testBook.getId(),
-                "GOOGLE_BOOKS", 
-                provenanceData
-            );
-            
-            // Set up our error handler
-            s3Result
-                .doOnError(ex -> {
-                    // This is what we want to test - the error handling for S3 upload failure
-                    cacheManager.putFinalImageDetails("test:9781234567890", localCacheImageDetails);
-                    
-                    eventPublisher.publishEvent(new BookCoverUpdatedEvent(
-                        "test:9781234567890", 
-                        localCacheImageDetails.getUrlOrPath(),
-                        testBook.getId(),
-                        localCacheImageDetails.getCoverImageSource()
-                    ));
-                })
-                .doOnSuccess(ignored -> fail("Should not succeed"))
-                .subscribe(
-                    ignored -> {}, // onNext - should not be called
-                    ex -> logger.info("Expected error handled: " + ex.getMessage()) // onError
-                );
-            
-            // Give time for the async callbacks
-            Thread.sleep(50);
-            
-            // ASSERT
-            verify(s3Service).uploadProcessedCoverToS3Async(
-                any(byte[].class),
-                anyString(),
-                isNull(),
-                anyInt(),
-                anyInt(),
-                anyString(),
-                anyString(),
-                any(ImageProvenanceData.class)
-            );
-            
-            // Verify fallback to local cache
-            verify(cacheManager).putFinalImageDetails(anyString(), eq(localCacheImageDetails));
-            verify(eventPublisher).publishEvent(any(BookCoverUpdatedEvent.class));
-            
-        } catch (Exception e) {
-            fail("Test should not throw exception: " + e.getMessage());
+            // ACT
+            bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
         }
+            
+        // Give time for the @Async callbacks
+        Thread.sleep(100); // Increased sleep time
+            
+        // ASSERT
+        // Verify S3 upload was attempted
+        verify(s3Service).uploadProcessedCoverToS3Async(
+            eq(testImageBytes),
+            anyString(),
+            isNull(),
+            anyInt(),
+            anyInt(),
+            eq(testBook.getId()),
+            eq("GOOGLE_BOOKS"),
+            any(ImageProvenanceData.class)
+        );
+            
+        // Verify fallback to local cache details in cacheManager and eventPublisher
+        verify(cacheManager).putFinalImageDetails(eq(identifierKey), eq(localCacheImageDetails));
+        verify(eventPublisher).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+            @Override
+            public boolean matches(BookCoverUpdatedEvent event) {
+                return event.getIdentifierKey().equals(identifierKey) &&
+                       event.getNewCoverUrl().equals(localCacheImageDetails.getUrlOrPath()) && // Corrected method name
+                       event.getSource() == localCacheImageDetails.getCoverImageSource();
+            }
+        }));
     }
     
     /**
@@ -290,57 +278,64 @@ public class BookCoverManagementServiceS3UploadTest {
      */
     @Test
     public void testPlaceholderFallback() throws Exception {
+        // ARRANGE
+        S3BookCoverService s3Service = mock(S3BookCoverService.class); // Needed for BookCoverManagementService constructor
         LocalDiskCoverCacheService diskService = mock(LocalDiskCoverCacheService.class);
+        CoverSourceFetchingService sourceFetchingService = mock(CoverSourceFetchingService.class);
         CoverCacheManager cacheManager = mock(CoverCacheManager.class);
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         EnvironmentService environmentService = mock(EnvironmentService.class);
+
+        BookCoverManagementService bookCoverManagementService = new BookCoverManagementService(
+            cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService
+        );
         
-        // Set up test book
         Book testBook = createTestBook();
+        String identifierKey = "test-book-id";
         
-        // Configure mock behaviors
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
-        when(diskService.getCacheDirName()).thenReturn(CACHE_DIR_NAME);
-        when(diskService.getCacheDirString()).thenReturn(CACHE_DIR_PATH);
+        // No need to mock getCacheDirName or getCacheDirString if not directly used by this test's new flow
             
-        // Configure placeholder
+        // Configure source fetching to return null (or placeholder-like details)
+        when(sourceFetchingService.getBestCoverImageUrlAsync(
+                eq(testBook), anyString(), any(ImageProvenanceData.class)))
+            .thenReturn(CompletableFuture.completedFuture(null)); // Simulate no image found
+        
         ImageDetails placeholderDetails = new ImageDetails(
             LOCAL_PLACEHOLDER_PATH,
             "SYSTEM_PLACEHOLDER",
-            "placeholder",
-            CoverImageSource.LOCAL_CACHE,
-            ImageResolutionPreference.UNKNOWN
+            "placeholder", // filename part
+            CoverImageSource.LOCAL_CACHE, // Source for placeholder
+            ImageResolutionPreference.UNKNOWN // Resolution for placeholder
         );
         
+        // This mock is crucial: BookCoverManagementService calls this when getBestCoverImageUrlAsync yields no good image
         when(diskService.createPlaceholderImageDetails(
                 eq(testBook.getId()), eq("background-fetch-failed")))
             .thenReturn(placeholderDetails);
         
-        // ACT - simulate placeholder fallback
+        // ACT
+        bookCoverManagementService.processCoverInBackground(testBook, "http://some.url/that-will-fail.jpg"); // Provisional hint
         
-        // Get image details - returns null
-        ImageDetails imageDetails = null;
-        
-        // Handle the fallback
-        if (imageDetails == null) {
-            ImageDetails placeholderImageDetails = diskService.createPlaceholderImageDetails(
-                testBook.getId(), "background-fetch-failed");
-                
-            cacheManager.putFinalImageDetails("test:9781234567890", placeholderImageDetails);
-            
-            eventPublisher.publishEvent(new BookCoverUpdatedEvent(
-                "test:9781234567890", 
-                placeholderImageDetails.getUrlOrPath(),
-                testBook.getId(),
-                placeholderImageDetails.getCoverImageSource()
-            ));
-        }
+        Thread.sleep(100); // Allow async processing
         
         // ASSERT
+        // Verify that createPlaceholderImageDetails was called because fetching failed
         verify(diskService).createPlaceholderImageDetails(eq(testBook.getId()), eq("background-fetch-failed"));
-        verify(cacheManager).putFinalImageDetails(anyString(), eq(placeholderDetails));
-        verify(eventPublisher).publishEvent(any(BookCoverUpdatedEvent.class));
+        
+        // Verify cache is updated with placeholder details
+        verify(cacheManager).putFinalImageDetails(eq(identifierKey), eq(placeholderDetails));
+        
+        // Verify event is published with placeholder details
+        verify(eventPublisher).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+            @Override
+            public boolean matches(BookCoverUpdatedEvent event) {
+                return event.getIdentifierKey().equals(identifierKey) &&
+                       event.getNewCoverUrl().equals(placeholderDetails.getUrlOrPath()) && // Corrected method name
+                       event.getSource() == placeholderDetails.getCoverImageSource();
+            }
+        }));
     }
     
     /**

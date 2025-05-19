@@ -22,7 +22,6 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -176,13 +175,14 @@ class GoogleBooksServiceTest {
         // Mock GoogleApiFetcher to return the mock volume
         when(googleApiFetcherMock.fetchVolumeByIdAuthenticated(bookId)).thenReturn(Mono.just(mockVolumeNode));
 
-        CompletableFuture<Book> resultFuture = googleBooksService.getBookById(bookId).toCompletableFuture();
-        Book book = resultFuture.get();
-
-        assertNotNull(book);
-        assertEquals(bookId, book.getId());
-        assertEquals("API Book", book.getTitle());
-        assertTrue(book.getAuthors().contains("API Author"));
+        StepVerifier.create(Mono.fromCompletionStage(googleBooksService.getBookById(bookId)))
+                .assertNext(book -> {
+                    assertNotNull(book);
+                    assertEquals(bookId, book.getId());
+                    assertEquals("API Book", book.getTitle());
+                    assertTrue(book.getAuthors().contains("API Author"));
+                })
+                .verifyComplete();
     }
     
     /**
@@ -253,10 +253,8 @@ class GoogleBooksServiceTest {
 
         CompletionStage<Book> resultStage = googleBooksService.getBookById(bookId);
         
-        // The fallback method in GoogleBooksService should catch this and return null
         StepVerifier.create(Mono.fromCompletionStage(resultStage))
-            .expectNextCount(0) // Expecting null, which means empty Mono after fallback
-            .verifyComplete();
+            .verifyComplete(); // no item emitted – just completion
          // Verify that the fallback method recorded the failure
         verify(apiRequestMonitorMock).recordFailedRequest(anyString(), anyString());
     }

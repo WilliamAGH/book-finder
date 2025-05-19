@@ -83,8 +83,7 @@ public class BookCoverManagementServiceTest {
     @BeforeEach
     public void setUp() {
         // Reset only the mocks - not the coverCacheManager which is a real object managed by Spring
-        Mockito.reset(s3BookCoverService, localDiskCoverCacheService, 
-                      coverSourceFetchingService, eventPublisher, environmentService);
+        Mockito.reset(s3BookCoverService, localDiskCoverCacheService, coverSourceFetchingService);
 
         // Configure common behavior for the mocks
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);

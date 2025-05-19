@@ -21,7 +21,6 @@ import com.williamcallahan.book_recommendation_engine.service.RecommendationServ
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.CoverImages;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -118,15 +117,19 @@ class BookControllerTest {
   void commonMockSetup() {
     when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class), any(ImageResolutionPreference.class)))
         .thenAnswer(invocation -> {
-            Book book = invocation.getArgument(0);
-            if (book != null) {
-                book.setCoverImageUrl("http://example.com/fake-cover.jpg");
-                book.setCoverImages(new CoverImages(
-                    "http://example.com/fake-cover.jpg", 
-                    "http://example.com/fake-cover-fallback.jpg",
-                    CoverImageSource.LOCAL_CACHE));
-            }
-            return CompletableFuture.completedFuture(book);
+            // Book book = invocation.getArgument(0); // This line is not strictly necessary if we only return a URL
+            // if (book != null) {
+            //     // Mutating the book object here might not be seen by the caller if only the Future<String> is used.
+            //     // If the intention is to ensure the book object passed in gets these values set,
+            //     // this approach is fine, but the return type of the mock must match the method signature.
+            //     book.setCoverImageUrl("http://example.com/fake-cover.jpg");
+            //     book.setCoverImages(new CoverImages(
+            //         "http://example.com/fake-cover.jpg", 
+            //         "http://example.com/fake-cover-fallback.jpg",
+            //         CoverImageSource.LOCAL_CACHE));
+            // }
+            // Return the expected URL string, not the Book instance
+            return CompletableFuture.completedFuture("http://example.com/fake-cover.jpg");
         });
   }
 
