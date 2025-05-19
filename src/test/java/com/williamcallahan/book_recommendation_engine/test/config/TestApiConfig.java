@@ -35,6 +35,7 @@ import org.springframework.context.annotation.Profile;
 import jakarta.annotation.PostConstruct;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import java.nio.charset.StandardCharsets;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -108,7 +109,7 @@ public class TestApiConfig {
                 try {
                     Resource mockResource = new ClassPathResource("mock-responses/books/" + volumeId + ".json");
                     if (mockResource.exists()) {
-                        String json = new String(mockResource.getInputStream().readAllBytes());
+                        String json = new String(mockResource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
                         return CompletableFuture.completedFuture(S3FetchResult.success(json));
                     } else {
                         // Create a minimal fake response

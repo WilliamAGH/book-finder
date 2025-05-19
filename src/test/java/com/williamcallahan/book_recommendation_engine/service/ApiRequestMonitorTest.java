@@ -30,20 +30,20 @@ public class ApiRequestMonitorTest {
     @Test
     public void testRecordSuccessfulCall() {
         // Starting counts should be zero
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_requests"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_successful"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_failed"));
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_requests")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_successful")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_failed")).intValue());
         
         // Record a successful call
         apiRequestMonitor.recordSuccessfulRequest("test/endpoint");
         
         // Verify counts were updated correctly
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_requests"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_successful"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_failed"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("daily_requests"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("daily_successful"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("daily_failed"));
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_requests")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_successful")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_failed")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("daily_successful")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("daily_failed")).intValue());
         assertEquals(1L, (Long) apiRequestMonitor.getMetricsMap().get("total_requests"));
         assertEquals(1L, (Long) apiRequestMonitor.getMetricsMap().get("total_successful"));
         assertEquals(0L, (Long) apiRequestMonitor.getMetricsMap().get("total_failed"));
@@ -62,12 +62,12 @@ public class ApiRequestMonitorTest {
         apiRequestMonitor.recordFailedRequest("test/endpoint", "Test error message");
         
         // Verify counts were updated correctly
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_requests"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_successful"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_failed"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("daily_requests"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("daily_successful"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("daily_failed"));
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_requests")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_successful")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_failed")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("daily_successful")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("daily_failed")).intValue());
         assertEquals(1L, (Long) apiRequestMonitor.getMetricsMap().get("total_requests"));
         assertEquals(0L, (Long) apiRequestMonitor.getMetricsMap().get("total_successful"));
         assertEquals(1L, (Long) apiRequestMonitor.getMetricsMap().get("total_failed"));
@@ -80,30 +80,30 @@ public class ApiRequestMonitorTest {
         apiRequestMonitor.recordFailedRequest("test/endpoint", "Test error message");
         
         // Verify initial state
-        assertEquals(2, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_requests"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_successful"));
-        assertEquals(1, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_failed"));
-        assertEquals(2, (Integer) apiRequestMonitor.getMetricsMap().get("daily_requests"));
+        assertEquals(2, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_requests")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_successful")).intValue());
+        assertEquals(1, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_failed")).intValue());
+        assertEquals(2, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
         
         // Reset hourly metrics
         apiRequestMonitor.resetHourlyCounters();
         
         // Verify hourly counters were reset
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_requests"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_successful"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_failed"));
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_requests")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_successful")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_failed")).intValue());
         
         // But daily and total shouldn't be affected
-        assertEquals(2, (Integer) apiRequestMonitor.getMetricsMap().get("daily_requests"));
+        assertEquals(2, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
         assertEquals(2L, (Long) apiRequestMonitor.getMetricsMap().get("total_requests"));
         
         // Reset daily metrics
         apiRequestMonitor.resetDailyCounters();
         
         // Verify daily counters were reset
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("daily_requests"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("daily_successful"));
-        assertEquals(0, (Integer) apiRequestMonitor.getMetricsMap().get("daily_failed"));
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("daily_successful")).intValue());
+        assertEquals(0, ((Number) apiRequestMonitor.getMetricsMap().get("daily_failed")).intValue());
         
         // But total shouldn't be affected
         assertEquals(2L, (Long) apiRequestMonitor.getMetricsMap().get("total_requests"));
@@ -145,10 +145,10 @@ public class ApiRequestMonitorTest {
         int expectedFailures = totalExpectedCalls / 5; // Every 5th call is a failure
         int expectedSuccesses = totalExpectedCalls - expectedFailures;
         
-        assertEquals(totalExpectedCalls, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_requests"));
-        assertEquals(expectedSuccesses, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_successful"));
-        assertEquals(expectedFailures, (Integer) apiRequestMonitor.getMetricsMap().get("hourly_failed"));
-        assertEquals(totalExpectedCalls, (Integer) apiRequestMonitor.getMetricsMap().get("daily_requests"));
+        assertEquals(totalExpectedCalls, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_requests")).intValue());
+        assertEquals(expectedSuccesses, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_successful")).intValue());
+        assertEquals(expectedFailures, ((Number) apiRequestMonitor.getMetricsMap().get("hourly_failed")).intValue());
+        assertEquals(totalExpectedCalls, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
         assertEquals(totalExpectedCalls, apiRequestMonitor.getTotalRequests()); // Direct getter for total
         
         // Check endpoint tracking

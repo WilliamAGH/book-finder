@@ -14,6 +14,13 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
+import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
+import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -23,18 +30,20 @@ import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.hamcrest.Matchers.*;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
-import com.williamcallahan.book_recommendation_engine.model.Book;
+// Duplicate imports for BookCacheService and Book were removed by the previous step, this ensures they are not re-added if logic reruns.
+// import com.williamcallahan.book_recommendation_engine.service.BookCacheService; 
+// import com.williamcallahan.book_recommendation_engine.model.Book;
 import java.util.Collections;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.mockito.Mockito;
 import static org.mockito.ArgumentMatchers.anyString;
-import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
-import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
+// Duplicate imports for RecommendationService, RecentlyViewedService, BookImageOrchestrationService, CoverImageSource, ImageResolutionPreference were removed.
+// import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+// import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+// import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
+// import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+// import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import java.util.concurrent.CompletableFuture;
@@ -99,8 +108,7 @@ class BookControllerTest {
   void commonMockSetup() {
     when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class), any(ImageResolutionPreference.class)))
         .thenAnswer(invocation -> {
-            Book book = invocation.getArgument(0);
-            return CompletableFuture.completedFuture(book);
+            return CompletableFuture.completedFuture("http://example.com/fake-cover.jpg");
         });
   }
 
@@ -141,8 +149,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/search - non-empty list returns 200 and array of books in results")
   void searchBooks_nonEmptyList_returnsArrayInResults() throws Exception {
-    Book book = createTestBook("1", "Effective Java", "Joshua Bloch");
-    when(bookCacheService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(book)));
+    when(bookCacheService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(createTestBook("1", "Effective Java", "Joshua Bloch"))));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -160,8 +167,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/{id} - existing id returns 200 and book JSON")
   void getBookById_found_returnsBook() throws Exception {
-    Book book = createTestBook("1", "Domain-Driven Design", "Eric Evans");
-    when(bookCacheService.getBookByIdReactive("1")).thenReturn(Mono.just(book));
+    when(bookCacheService.getBookByIdReactive("1")).thenReturn(Mono.just(createTestBook("1", "Domain-Driven Design", "Eric Evans")));
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/1"))
       .andExpect(request().asyncStarted())

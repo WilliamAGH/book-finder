@@ -15,6 +15,8 @@ import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCov
 import com.williamcallahan.book_recommendation_engine.types.CoverImages;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -25,7 +27,7 @@ import java.util.ArrayList;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.anyString; // For mocking getSimilarBooks
 import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBooks
-import static org.mockito.ArgumentMatchers.any; // For mocking any objectlarBooks
+import static org.mockito.ArgumentMatchers.any; // For mocking any objects
 import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
 import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
 import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
@@ -157,8 +159,8 @@ class HomeControllerTest {
             .expectBody(String.class)
             .value(body -> {
                 try {
-                    assert body.contains("NYT Bestseller") : "Response body did not contain 'NYT Bestseller'.\nBody:\n" + body;
-                    assert body.contains("Recent Read") : "Response body did not contain 'Recent Read'.\nBody:\n" + body;
+                    assertTrue(body.contains("NYT Bestseller"), "Response body did not contain 'NYT Bestseller'.\nBody:\n" + body);
+                    assertTrue(body.contains("Recent Read"), "Response body did not contain 'Recent Read'.\nBody:\n" + body);
                 } catch (AssertionError e) {
                     System.out.println("\n\n==== DEBUG: Response Body ====");
                     System.out.println(body);
@@ -181,8 +183,8 @@ class HomeControllerTest {
             .expectStatus().isOk()
             .expectBody(String.class)
             .value(body -> {
-                assert !body.contains("NYT Bestseller");
-                assert !body.contains("Recent Read");
+                assertFalse(body.contains("NYT Bestseller"));
+                assertFalse(body.contains("Recent Read"));
             });
     }
     /**
@@ -200,8 +202,8 @@ class HomeControllerTest {
             .expectStatus().isOk()
             .expectBody(String.class)
             .value(body -> {
-                assert !body.contains("NYT Bestseller");
-                assert !body.contains("Recent Read");
+                assertFalse(body.contains("NYT Bestseller"));
+                assertFalse(body.contains("Recent Read"));
             });
     }
 }
