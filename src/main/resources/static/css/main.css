@@ -1287,6 +1287,7 @@ section {
         display: inline-block;
     }
     
+    /* Use flexbox to align child elements (e.g., links) within navigation items for mobile responsiveness */
     .nav-item {
         display: flex;
     }
