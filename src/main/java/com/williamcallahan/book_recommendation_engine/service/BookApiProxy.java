@@ -1,21 +1,15 @@
 /**
  * Proxy service for smart API usage that minimizes external calls
- * This class acts as the primary entry point for retrieving book data
- * It orchestrates calls to {@link GoogleBooksService} for live API interactions
- * and {@link GoogleBooksMockService} when running in 'dev' or 'test' profiles
- *
- * Key Features:
- * - Implements multi-level caching:
- *   1. In-memory request cache (for in-flight requests)
- *   2. Local file system cache (primarily for 'dev' and 'test' to speed up subsequent runs)
- *   3. Delegates to {@link GoogleBooksService}, which uses {@link GoogleBooksCachingStrategy}
- *      for further caching layers (S3, database, Spring's Cache Abstraction, etc.)
- * - Provides intelligent request merging via in-memory cache to reduce duplicate API calls
- * - Logs API usage patterns to help identify optimization opportunities
- * - Supports different caching strategies and behaviors based on active Spring profiles and configuration properties
  *
  * @author William Callahan
+ *
+ * Features:
+ * - Implements multi-level caching for book data
+ * - Provides intelligent request merging to reduce duplicate API calls
+ * - Logs API usage patterns to help identify optimization opportunities
+ * - Supports different caching strategies based on active profiles
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -39,15 +33,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Smart API proxy that minimizes external calls in all environments
- * Implements a multi-level cache strategy with fallbacks:
- * 1. In-memory cache (fastest)
- * 2. Local disk cache (for development and testing)
- * 3. S3 remote cache (for all environments)
- * 4. Mock data (for development and testing)
- * 5. Real API call (last resort)
- */
 @Service
 public class BookApiProxy {
     private static final Logger logger = LoggerFactory.getLogger(BookApiProxy.class);
@@ -68,12 +53,11 @@ public class BookApiProxy {
 
     /**
      * Constructs the BookApiProxy with necessary dependencies
-     * Initializes local cache directories if local caching is enabled
      *
-     * @param googleBooksService The service for interacting with the actual Google Books API
-     * @param s3StorageService The service for interacting with S3 (used by this proxy for S3-first strategy, and by GoogleBooksService)
-     * @param objectMapper Jackson ObjectMapper for JSON processing
-     * @param mockService Optional mock service, active in 'dev' and 'test' profiles
+     * @param googleBooksService Service for interacting with Google Books API
+     * @param s3StorageService Service for interacting with S3
+     * @param objectMapper ObjectMapper for JSON processing
+     * @param mockService Optional mock service for testing
      */
     @Autowired
     public BookApiProxy(GoogleBooksService googleBooksService, 
@@ -105,22 +89,10 @@ public class BookApiProxy {
     }
     
     /**
-     * Smart book retrieval that minimizes API calls by employing a multi-level cache strategy
-     * and request merging
+     * Smart book retrieval that minimizes API calls using caching
      *
-     * The lookup order is generally:
-     * 1. In-memory cache for in-flight requests ({@code bookRequestCache})
-     * 2. Local file system cache (if {@code localCacheEnabled} is true)
-     * 3. {@link GoogleBooksMockService} (if active profile is 'dev' or 'test' and mock data exists)
-     * 4. S3 Cache (if {@code alwaysCheckS3First} is true, checked directly by this proxy)
-     * 5. {@link GoogleBooksService#getBookById(String)}, which then uses {@link GoogleBooksCachingStrategy}
-     *    (handling S3, database, Spring cache, and finally the live API call)
-     *
-     * Results from successful retrievals (mock, S3, or live API) are used to populate
-     * the local file cache and potentially the mock service's persisted mocks
-     * 
-     * @param bookId The book ID to retrieve
-     * @return CompletionStage with the Book if found, completed with null otherwise
+     * @param bookId Book ID to retrieve
+     * @return CompletionStage with the Book if found, null otherwise
      */
     @Cacheable(value = "bookRequests", key = "#bookId", condition = "#root.target.cacheEnabled")
     public CompletionStage<Book> getBookById(String bookId) {
@@ -141,10 +113,10 @@ public class BookApiProxy {
     }
     
     /**
-     * Process the actual book request through the caching layers
-     * 
-     * @param bookId The book ID to retrieve
-     * @param future The future to complete with the result
+     * Process book request through caching layers
+     *
+     * @param bookId Book ID to retrieve
+     * @param future Future to complete with result
      */
     private void processBookRequest(String bookId, CompletableFuture<Book> future) {
         // First try the local file cache (in dev/test mode)
@@ -154,6 +126,8 @@ public class BookApiProxy {
                 logger.debug("Retrieved book {} from local cache", bookId);
                 future.complete(localBook);
                 return;
+            } else {
+                logger.debug("Local cache MISS for bookId: {}", bookId);
             }
         }
         
@@ -171,10 +145,13 @@ public class BookApiProxy {
                 
                 return;
             }
+        } else if (mockService.isPresent()) {
+            logger.debug("Mock service MISS for bookId: {} (or no mock data available)", bookId);
         }
         
         // Always check S3 cache first in configurations that prefer it
         if (alwaysCheckS3First) {
+            logger.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
             // Try to get from S3 cache directly
             s3StorageService.fetchJsonAsync(bookId)
                 .<Book>thenCompose(s3Result -> {
@@ -200,7 +177,11 @@ public class BookApiProxy {
                             } catch (Exception e) {
                                 logger.warn("Error parsing book from S3 cache: {}", e.getMessage());
                             }
+                        } else {
+                            logger.debug("S3 cache MISS (data not present) for bookId: {}", bookId);
                         }
+                    } else {
+                        logger.debug("S3 cache MISS (fetch not successful) for bookId: {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
                     }
                     // If S3 fails or data is not present, fallback to the actual API
                     if (logApiCalls) {
@@ -254,21 +235,11 @@ public class BookApiProxy {
     }
     
     /**
-     * Smart book search that minimizes API calls by employing a multi-level cache strategy
+     * Smart book search that minimizes API calls using caching
      *
-     * The lookup order is generally:
-     * 1. In-memory cache for in-flight requests ({@code searchRequestCache})
-     * 2. Local file system cache (if {@code localCacheEnabled} is true)
-     * 3. {@link GoogleBooksMockService} (if active profile is 'dev' or 'test' and mock data exists for the query)
-     * 4. {@link GoogleBooksService#searchBooksAsyncReactive(String, String)}, which is expected to handle its own
-     *    caching layers before making the actual API call
-     *
-     * Results from successful searches are cached to the local file system and may be persisted
-     * to mock service data for future test runs
-     *
-     * @param query The search query
+     * @param query Search query
      * @param langCode Language code for search results
-     * @return Mono emitting the list of books matching the search
+     * @return Mono emitting list of books matching the search
      */
     @Cacheable(value = "searchRequests", key = "#query + '-' + #langCode", condition = "#root.target.cacheEnabled")
     public Mono<List<Book>> searchBooks(String query, String langCode) {
@@ -291,11 +262,11 @@ public class BookApiProxy {
     }
     
     /**
-     * Process the actual search request through the caching layers
-     * 
-     * @param query The search query
-     * @param langCode Language code for search results
-     * @param future The future to complete with the result
+     * Process search request through caching layers
+     *
+     * @param query Search query
+     * @param langCode Language code
+     * @param future Future to complete with result
      */
     private void processSearchRequest(String query, String langCode, CompletableFuture<List<Book>> future) {
         // First try the local file cache (in dev/test mode)
@@ -347,9 +318,9 @@ public class BookApiProxy {
     }
     
     /**
-     * Gets a book from the local file cache
-     * 
-     * @param bookId The book ID to retrieve
+     * Gets book from local file cache
+     *
+     * @param bookId Book ID to retrieve
      * @return Book if found in cache, null otherwise
      */
     private Book getBookFromLocalCache(String bookId) {
@@ -370,10 +341,10 @@ public class BookApiProxy {
     }
     
     /**
-     * Saves a book to the local file cache
-     * 
-     * @param bookId The book ID to save
-     * @param book The Book object to save
+     * Saves book to local file cache
+     *
+     * @param bookId Book ID to save
+     * @param book Book object to save
      */
     private void saveBookToLocalCache(String bookId, Book book) {
         if (!localCacheEnabled || book == null) return;

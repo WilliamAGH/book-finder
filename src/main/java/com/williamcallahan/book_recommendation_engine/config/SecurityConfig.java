@@ -42,7 +42,7 @@ import java.util.stream.Collectors;
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
 
-    private final AuthenticationEntryPoint customBasicAuthenticationEntryPoint; // Added
+    private final AuthenticationEntryPoint customBasicAuthenticationEntryPoint;
 
     @Value("${app.security.headers.content-security-policy.enabled:true}")
     private boolean cspEnabled;

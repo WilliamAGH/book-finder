@@ -1,3 +1,17 @@
+/**
+ * Health monitoring system components for web page availability in the book recommendation engine
+ * 
+ * This file provides:
+ * - A reusable WebPageHealthIndicator class for checking web page availability
+ * - HomepageHealthIndicator for monitoring the application's homepage
+ * - BookDetailPageHealthIndicator for checking book detail pages using a test book ID
+ * 
+ * These health indicators are used by Spring Boot Actuator to provide health status
+ * information through the /actuator/health endpoint, helping with monitoring and
+ * diagnostics of the application's frontend availability
+ * 
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.config;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -27,18 +41,39 @@ public class WebPageHealthIndicator {
     private static final Duration PAGE_TIMEOUT = Duration.ofSeconds(5);
     private final boolean isParentConfigured; // New field
 
+    /**
+     * Constructs a WebPageHealthIndicator with all required parameters
+     * 
+     * @param webClientBuilder The Spring WebClient builder for making HTTP requests
+     * @param baseUrl The base URL for the web application (e.g., http://localhost:8081)
+     * @param path The path to check (e.g., "/" for homepage or "/books/123" for a book detail page)
+     * @param healthCheckName A descriptive name for this health check (used in health status reporting)
+     * @param reportErrorsAsDown If true, HTTP errors (4xx, 5xx) will be reported as DOWN; if false as UP with details
+     * @param isParentConfigured Indicates if the parent health indicator is properly configured
+     * 
+     * @implNote Creates a WebClient with the provided base URL if the parent is configured
+     */
     public WebPageHealthIndicator(WebClient.Builder webClientBuilder, String baseUrl, String path, String healthCheckName, boolean reportErrorsAsDown, boolean isParentConfigured) {
         this.isParentConfigured = isParentConfigured;
         if (this.isParentConfigured && baseUrl != null) {
             this.webClient = webClientBuilder.baseUrl(baseUrl).build();
         } else {
-            this.webClient = null; // Or a dummy client if preferred, but null is fine if checkPage handles it
+            this.webClient = null;
         }
         this.path = path;
         this.healthCheckName = healthCheckName;
         this.reportErrorsAsDown = reportErrorsAsDown;
     }
 
+    /**
+     * Performs the health check by making an HTTP request to the configured page
+     * 
+     * @return Mono emitting a Health object with the check result and details
+     * 
+     * @implNote Checks if the page is accessible with a successful HTTP status (2xx)
+     * Handles different error scenarios (4xx, 5xx, timeouts, connection issues)
+     * Returns appropriate health status based on configuration and response
+     */
     public Mono<Health> checkPage() {
         if (!this.isParentConfigured || this.webClient == null) {
             return Mono.just(Health.unknown()
@@ -96,14 +131,29 @@ public class WebPageHealthIndicator {
 class HomepageHealthIndicator implements ReactiveHealthIndicator {
     private final WebPageHealthIndicator delegate;
 
+    /**
+     * Constructs a HomepageHealthIndicator with required dependencies
+     * 
+     * @param webClientBuilder The Spring WebClient builder for making HTTP requests
+     * @param serverPort The port on which the server is running (defaults to 8081)
+     * @param reportErrorsAsDown If true, HTTP errors will be reported as DOWN status
+     * 
+     * @implNote Creates a WebPageHealthIndicator delegate to check the homepage (root path)
+     */
     public HomepageHealthIndicator(WebClient.Builder webClientBuilder,
                                    @Value("${server.port:8081}") int serverPort,
                                    @Value("${healthcheck.report-errors-as-down:true}") boolean reportErrorsAsDown) {
         String baseUrl = "http://localhost:" + serverPort;
-        // Assuming HomepageHealthIndicator is always configured as it gets port directly or defaults
         this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/", "homepage", reportErrorsAsDown, true);
     }
 
+    /**
+     * Implements the health() method from ReactiveHealthIndicator interface
+     * 
+     * @return Mono emitting a Health object with the homepage availability status
+     * 
+     * @implNote Delegates to the WebPageHealthIndicator instance to perform the actual check
+     */
     @Override
     public Mono<Health> health() {
         return delegate.checkPage();
@@ -121,6 +171,17 @@ class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
     private final String testBookId;
     private final boolean isConfigured;
 
+    /**
+     * Constructs a BookDetailPageHealthIndicator with required dependencies
+     * 
+     * @param webClientBuilder The Spring WebClient builder for making HTTP requests
+     * @param serverPort The port on which the server is running (defaults to 8081)
+     * @param testBookId The ID of a test book to check for existence (configured via properties)
+     * @param reportErrorsAsDown If true, HTTP errors will be reported as DOWN status
+     * 
+     * @implNote Creates a WebPageHealthIndicator delegate if a test book ID is configured
+     * Otherwise, remains in an unconfigured state and will return UP with a not_configured detail
+     */
     public BookDetailPageHealthIndicator(
             WebClient.Builder webClientBuilder,
             @Value("${server.port:8081}") int serverPort,
@@ -130,13 +191,20 @@ class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
         this.isConfigured = this.testBookId != null && !this.testBookId.trim().isEmpty();
         if (isConfigured) {
             String baseUrl = "http://localhost:" + serverPort;
-            // Assuming BookDetailPageHealthIndicator is configured if testBookId is present
             this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/books/" + this.testBookId, "book_detail_page", reportErrorsAsDown, true);
         } else {
-            this.delegate = null; // Delegate remains null if not configured
+            this.delegate = null;
         }
     }
 
+    /**
+     * Implements the health() method from ReactiveHealthIndicator interface
+     * 
+     * @return Mono emitting a Health object with the book detail page availability status
+     * 
+     * @implNote Returns UP with not_configured detail if no test book ID is configured
+     * Otherwise delegates to the WebPageHealthIndicator instance to perform the actual check
+     */
     @Override
     public Mono<Health> health() {
         if (!isConfigured) {
