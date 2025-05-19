@@ -34,7 +34,6 @@ import org.junit.jupiter.api.Disabled;
 /**
  * Smoke test for BookCoverManagementService using mocked dependencies
  * 
- * @author William Callahan
  */
 @Disabled("Test disabled due to context loading issues - fix by configuring proper test slice")
 public class BookCoverManagementServiceSmokeTest {

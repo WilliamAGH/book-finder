@@ -46,7 +46,7 @@ function updateServerThemePreference(theme, useSystem) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-XSRF-TOKEN': getCookie('XSRF-TOKEN') // Add CSRF token header
+            ...(getCookie('XSRF-TOKEN') ? {'X-XSRF-TOKEN': getCookie('XSRF-TOKEN')} : {}) // Add CSRF token header if available
         },
         body: JSON.stringify(data)
     })

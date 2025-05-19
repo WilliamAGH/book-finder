@@ -43,8 +43,6 @@ import static org.mockito.Mockito.*;
 
 /**
  * Spring-based test suite for BookCoverManagementService
- * 
- * @author William Callahan
  */
 @SpringBootTest
 @ActiveProfiles("test")
