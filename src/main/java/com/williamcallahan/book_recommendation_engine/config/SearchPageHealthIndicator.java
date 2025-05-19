@@ -24,11 +24,11 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 @Component("searchPageHealthIndicator")
 class SearchPageHealthIndicator implements ReactiveHealthIndicator, ApplicationListener<WebServerInitializedEvent> {
-    private WebPageHealthIndicator delegate;
+    private volatile WebPageHealthIndicator delegate;
     private final WebClient.Builder webClientBuilder;
     private final boolean reportErrorsAsDown;
     private static final String HEALTHCHECK_QUERY = "healthcheck";
-    private boolean isConfigured = false;
+    private volatile boolean isConfigured = false;
     private static final Logger logger = LoggerFactory.getLogger(SearchPageHealthIndicator.class);
 
     /**

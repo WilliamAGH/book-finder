@@ -19,9 +19,10 @@ import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Enhanced caching configuration specifically for development mode
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Configuration
 @EnableCaching
+@EnableScheduling
 @Profile("dev")
 public class DevModeConfig {
     private static final Logger logger = LoggerFactory.getLogger(DevModeConfig.class);
@@ -47,6 +49,8 @@ public class DevModeConfig {
     @Value("${app.mock.response.directory:src/test/resources/mock-responses}")
     private String mockResponseDirectory;
     
+    private CacheManager cacheManager;
+
     /**
      * Enhanced cache manager for development with longer retention periods
      * 
@@ -74,6 +78,7 @@ public class DevModeConfig {
         logger.info("Dev mode cache initialized: 'books' TTL {} mins, 'bookSearchResults' TTL {} mins. Request limit: {}/min",
                 googleBooksCacheTtlMinutes, searchResultsCacheTtlMinutes, googleBooksRequestLimitPerMinute);
         
+        this.cacheManager = cacheManager;
         return cacheManager;
     }
     
@@ -97,37 +102,23 @@ public class DevModeConfig {
      * Logs cache hit and miss statistics periodically
      * Only enabled in dev mode to monitor cache performance
      */
-    @Bean
-    public Runnable cacheMissesLogger(CacheManager cacheManager) {
-        Thread thread = new Thread(() -> {
-            while (true) {
-                try {
-                    TimeUnit.MINUTES.sleep(10);
-                    if (cacheManager instanceof CaffeineCacheManager) {
-                        CaffeineCacheManager caffeineCacheManager = (CaffeineCacheManager) cacheManager;
-                        logger.info("Dev mode cache statistics: {}",
-                            caffeineCacheManager.getCacheNames().stream()
-                                .map(cacheName -> {
-                                    org.springframework.cache.Cache cache = caffeineCacheManager.getCache(cacheName);
-                                    String cacheStats = "Cache object is null";
-                                    if (cache != null) {
-                                        Object nativeCache = cache.getNativeCache();
-                                        cacheStats = nativeCache != null ? nativeCache.toString() : "No native cache object";
-                                    }
-                                    return String.format("%s: %s", cacheName, cacheStats);
-                                })
-                                .reduce((a, b) -> a + ", " + b)
-                                .orElse("No caches"));
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-        });
-        thread.setDaemon(true);
-        thread.setName("dev-cache-stats");
-        thread.start();
-        return () -> {};
+    @Scheduled(fixedDelayString = "PT10M")
+    public void logCacheStats() {
+        if (cacheManager instanceof CaffeineCacheManager) {
+            CaffeineCacheManager caffeineCacheManager = (CaffeineCacheManager) cacheManager;
+            logger.info("Dev mode cache statistics: {}",
+                caffeineCacheManager.getCacheNames().stream()
+                    .map(cacheName -> {
+                        org.springframework.cache.Cache cache = caffeineCacheManager.getCache(cacheName);
+                        String cacheStats = "Cache object is null";
+                        if (cache != null) {
+                            Object nativeCache = cache.getNativeCache();
+                            cacheStats = nativeCache != null ? nativeCache.toString() : "No native cache object";
+                        }
+                        return String.format("%s: %s", cacheName, cacheStats);
+                    })
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("No caches"));
+        }
     }
 }
