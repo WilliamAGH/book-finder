@@ -89,10 +89,22 @@ section {
     transition: color 0.3s;
     padding: 0.5rem 1rem;
     margin: 0 0.25rem;
+    position: relative;
 }
 
 .nav-link:hover, .nav-link.active {
     color: var(--text-color-accent);
+}
+
+.nav-link.active:after {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background-color: currentColor;
+    border-radius: 2px;
 }
 
 .navbar-toggler {
@@ -1115,9 +1127,8 @@ section {
     content: '';
     position: absolute;
     bottom: -5px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 20px;
+    left: 0;
+    width: 100%;
     height: 2px;
     background-color: white;
     border-radius: 2px;
@@ -1257,4 +1268,19 @@ section {
 /* Ensure breadcrumb links have proper styling */
 [data-theme="dark"] .breadcrumb-item a:hover {
     color: var(--brand-secondary-light) !important;
+}
+
+/* Mobile responsive active link styling */
+@media (max-width: 991.98px) {
+    .nav-link.active:after,
+    [data-theme="light"] .modern-navbar .nav-link.active:after {
+        bottom: 0;
+        height: 2px;
+        width: 100%;
+        left: 0;
+    }
+    
+    .navbar-collapse .nav-link {
+        padding: 0.75rem 1rem;
+    }
 }
