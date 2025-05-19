@@ -692,9 +692,19 @@ section {
     color: var(--primary-color);
 }
 
+/* Make the theme toggle more visible on mobile in dark mode */
 [data-theme="dark"] #theme-toggle {
-    color: var(--dark-color);
-    /* background-color: transparent; */
+    color: white; /* Light color for visibility */
+    background-color: rgba(255, 255, 255, 0.15); /* Subtle light background */
+    box-shadow: 0 0 5px rgba(255, 255, 255, 0.2); /* Subtle glow */
+}
+
+/* Ensure the theme toggle is large enough and has proper spacing on mobile */
+.theme-toggle-header.d-lg-none {
+    margin-right: 10px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
 }
 
 /* Dark mode styling for "Other Editions" section in book details */
@@ -1198,6 +1208,11 @@ section {
 /* Specific override for "Results for:" text */
 [data-theme="dark"] .search-header {
     color: #e2e8f0 !important;
+}
+
+/* Fix for "Results for" text in the search header */
+[data-theme="dark"] .search-header .text-muted {
+    color: #e2e8f0 !important; /* Light gray color for better visibility */
 }
 
 /* Dark mode text color fixes for book details page */
