@@ -56,6 +56,7 @@ public class Book {
     private CoverImages coverImages;
 
     private List<EditionInfo> otherEditions;
+    private String asin; // For Amazon Standard Identification Number, useful for Audible
     
     // Map to store special qualifiers such as "new york times bestseller" or other search-specific attributes
     private Map<String, Object> qualifiers;
@@ -923,5 +924,13 @@ public class Book {
                 ", authors=" + authors +
                 ", otherEditionsCount=" + (otherEditions != null ? otherEditions.size() : 0) +
                 '}';
+    }
+
+    public String getAsin() {
+        return asin;
+    }
+
+    public void setAsin(String asin) {
+        this.asin = asin;
     }
 }

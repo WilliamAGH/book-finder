@@ -104,12 +104,35 @@ public class BookCacheService {
     @Cacheable(value = "books", key = "#id", unless = "#result == null")
     public Book getBookById(String id) {
         logger.debug("BookCacheService.getBookById (sync) called for ID: {}", id);
-        try {
-            return getBookByIdReactive(id).block(Duration.ofSeconds(10));
-        } catch (Exception e) {
-            logger.error("Error in synchronous getBookById for ID {}: {}", id, e.getMessage(), e);
-            return null;
+
+        // @Cacheable handles Spring Cache -- if we're here, it was a Spring Cache miss
+
+        // 1. Check in-memory cache (bookDetailCache)
+        Book book = bookDetailCache.get(id);
+        if (book != null) {
+            logger.debug("In-memory cache hit for book ID (sync): {}", id);
+            return book; // Spring will cache this result due to @Cacheable
         }
+
+        // 2. Check database cache (if enabled and synchronous)
+        if (cacheEnabled && cachedBookRepository != null) {
+            try {
+                Optional<CachedBook> dbCachedBookOpt = cachedBookRepository.findByGoogleBooksId(id);
+                if (dbCachedBookOpt.isPresent()) {
+                    Book dbBook = dbCachedBookOpt.get().toBook();
+                    logger.debug("Database cache hit for book ID (sync): {}", id);
+                    // Populate faster in-memory cache
+                    bookDetailCache.put(id, dbBook);
+                    return dbBook; // Spring will cache this result
+                }
+            } catch (Exception e) {
+                logger.warn("Error accessing database cache for book ID {} (sync): {}", id, e.getMessage());
+                // Proceed as if DB cache miss
+            }
+        }
+        
+        logger.debug("Book ID {} not found in any synchronous caches (Spring, In-Memory, DB). Returning null.", id);
+        return null;
     }
     
     /**

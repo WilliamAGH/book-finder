@@ -184,7 +184,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                     try {
                         // Parse the JSON from S3
                         JsonNode bookNode = objectMapper.readTree(s3Result.getData().get());
-                        Book s3Book = BookJsonParser.convertJsonToBook(bookNode, objectMapper);
+                        Book s3Book = BookJsonParser.convertJsonToBook(bookNode);
                         
                         if (s3Book != null && s3Book.getId() != null) {
                             logger.debug("S3 cache hit for book ID: {}", bookId);
@@ -208,16 +208,14 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                 // Step 6: Fall back to BookDataOrchestrator for Tiers 3 & 4
                 logger.debug("All local/S3 caches missed for book ID: {}. Calling BookDataOrchestrator.getBookByIdTiered.", bookId);
                 return bookDataOrchestrator.getBookByIdTiered(bookId)
-                    .flatMap(orchestratedBook -> {
+                    .flatMap(orchestratedBook ->
                         // If orchestrator returns a book, it means it was fetched from API (Tier 3 or 4)
                         // and already saved to S3 by the orchestrator.
                         // We just need to populate our Tier 1 caches here.
-                        putReactive(bookId, orchestratedBook).subscribe(
-                            null,
-                            e -> logger.error("Error populating Tier 1 caches from orchestrator result for {}: {}", bookId, e.getMessage())
-                        );
-                        return Mono.just(Optional.of(orchestratedBook));
-                    })
+                        putReactive(bookId, orchestratedBook)
+                            .doOnError(e -> logger.error("Error populating Tier 1 caches from orchestrator result for {}: {}", bookId, e.getMessage()))
+                            .then(Mono.just(Optional.of(orchestratedBook)))
+                    )
                     .defaultIfEmpty(Optional.empty()) // If orchestrator also returns empty
                     .toFuture(); // Convert Mono<Optional<Book>> to CompletionStage<Optional<Book>>
             });

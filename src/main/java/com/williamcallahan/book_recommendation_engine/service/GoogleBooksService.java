@@ -20,6 +20,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
+import com.williamcallahan.book_recommendation_engine.service.GoogleApiFetcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+@SuppressWarnings("unused")
 @Service
 public class GoogleBooksService {
 
@@ -135,7 +138,7 @@ public class GoogleBooksService {
                         return Flux.empty();
                     })
             )
-            .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode, objectMapper)) // Use BookJsonParser
+            .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode)) // Use BookJsonParser
             .filter(Objects::nonNull)
             .map(book -> {
                 if (!queryQualifiers.isEmpty()) {
@@ -256,10 +259,13 @@ public class GoogleBooksService {
      * @param bookId Google Books volume ID
      * @return CompletionStage containing the Book object if found, or null otherwise
      */
+    @CircuitBreaker(name = "googleBooksService", fallbackMethod = "getBookByIdFallback")
+    @TimeLimiter(name = "googleBooksService")
+    @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "getBookByIdRateLimitFallback")
     public CompletionStage<Book> getBookById(String bookId) {
         logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheService/GoogleBooksCachingStrategy.", bookId);
         return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
-            .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode, objectMapper))
+            .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode))
             // Record successful API fetch for the book
             .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest(
                 "volumes/get/authenticated/" + bookId

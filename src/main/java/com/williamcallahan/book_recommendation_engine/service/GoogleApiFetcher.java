@@ -26,16 +26,9 @@ import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Optional;
+import java.time.Duration;
 
-/**
- * Fetches book data from Google Books API with resilient error handling
- * 
- * @author William Callahan
- */
 @Service
 public class GoogleApiFetcher {
 
@@ -51,10 +44,10 @@ public class GoogleApiFetcher {
     private String googleBooksApiKey;
 
     /**
-     * Creates a new GoogleApiFetcher with required dependencies
+     * Constructs GoogleApiFetcher with required dependencies
      * 
-     * @param webClientBuilder Builder for creating WebClient instances
-     * @param apiRequestMonitor Monitor for tracking API request metrics
+     * @param webClientBuilder WebClient builder 
+     * @param apiRequestMonitor API request tracking service
      */
     @Autowired
     public GoogleApiFetcher(WebClient.Builder webClientBuilder, ApiRequestMonitor apiRequestMonitor) {
@@ -63,10 +56,10 @@ public class GoogleApiFetcher {
     }
 
     /**
-     * Fetches a single volume by ID using an authenticated Google Books API call
+     * Fetches a volume using authenticated API call
      *
-     * @param bookId The Google Books ID of the volume
-     * @return A Mono emitting the raw JsonNode response from the API
+     * @param bookId Google Books ID
+     * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdAuthenticated(String bookId) {
         if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
@@ -106,10 +99,10 @@ public class GoogleApiFetcher {
     }
 
     /**
-     * Fetches a single volume by ID using an unauthenticated Google Books API call
+     * Fetches a volume using unauthenticated API call
      *
-     * @param bookId The Google Books ID of the volume
-     * @return A Mono emitting the raw JsonNode response from the API
+     * @param bookId Google Books ID
+     * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdUnauthenticated(String bookId) {
         String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
@@ -145,13 +138,13 @@ public class GoogleApiFetcher {
     }
 
     /**
-     * Searches volumes using an authenticated Google Books API call
+     * Searches volumes with authenticated API call
      *
-     * @param query The search query
-     * @param startIndex The starting index for pagination
-     * @param orderBy The order for results (e.g., "relevance", "newest")
-     * @param langCode Optional language code to restrict results (e.g., "en")
-     * @return A Mono emitting the raw JsonNode response for one page of search results
+     * @param query Search terms
+     * @param startIndex Pagination start index
+     * @param orderBy Sort order ("relevance", "newest")
+     * @param langCode Language restriction code
+     * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesAuthenticated(String query, int startIndex, String orderBy, String langCode) {
         if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
@@ -161,40 +154,32 @@ public class GoogleApiFetcher {
     }
 
     /**
-     * Searches volumes using an unauthenticated Google Books API call
+     * Searches volumes with unauthenticated API call
      *
-     * @param query The search query
-     * @param startIndex The starting index for pagination
-     * @param orderBy The order for results (e.g., "relevance", "newest")
-     * @param langCode Optional language code to restrict results (e.g., "en")
-     * @return A Mono emitting the raw JsonNode response for one page of search results
+     * @param query Search terms
+     * @param startIndex Pagination start index
+     * @param orderBy Sort order ("relevance", "newest")
+     * @param langCode Language restriction code
+     * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesUnauthenticated(String query, int startIndex, String orderBy, String langCode) {
         return searchVolumesInternal(query, startIndex, orderBy, langCode, false);
     }
 
     /**
-     * Internal implementation for searching volumes with shared logic
+     * Internal implementation for searching volumes
      * 
-     * @param query The search query
-     * @param startIndex The starting index for pagination
-     * @param orderBy The order for results
-     * @param langCode Optional language code for filtering
-     * @param authenticated Whether to use API key for authentication
-     * @return A Mono emitting the raw JsonNode response
+     * @param query Search terms
+     * @param startIndex Pagination start index
+     * @param orderBy Sort order
+     * @param langCode Language filter
+     * @param authenticated Use API key for authentication
+     * @return JsonNode response with search results
      */
     private Mono<JsonNode> searchVolumesInternal(String query, int startIndex, String orderBy, String langCode, boolean authenticated) {
-        String encodedQuery;
-        try {
-            encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
-        } catch (java.io.UnsupportedEncodingException e) {
-            logger.error("Failed to URL encode query: {}", query, e);
-            return Mono.error(e);
-        }
-
         UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
                 .pathSegment("v1", "volumes")
-                .queryParam("q", encodedQuery)
+                .queryParam("q", query) // builder will safely encode
                 .queryParam("startIndex", startIndex)
                 .queryParam("maxResults", 40); // Standard maxResults
 
@@ -241,10 +226,10 @@ public class GoogleApiFetcher {
     }
 
     /**
-     * Determines query type for monitoring metrics
+     * Categorizes query for monitoring metrics
      * 
-     * @param query The search query to analyze
-     * @return String representing query type category
+     * @param query Search query to analyze
+     * @return Query type category
      */
     private String getQueryTypeForMonitoring(String query) {
         if (query.contains("intitle:")) return "title";

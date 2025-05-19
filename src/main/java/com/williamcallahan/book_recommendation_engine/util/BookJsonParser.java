@@ -13,7 +13,7 @@
 package com.williamcallahan.book_recommendation_engine.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,24 +28,17 @@ import java.util.Map;
 import java.util.Arrays;
 
 
-/**
- * Parser for converting Google Books API JSON to Book objects
- * 
- * @author William Callahan
- */
 public class BookJsonParser {
 
     private static final Logger logger = LoggerFactory.getLogger(BookJsonParser.class);
 
     /**
-     * Converts a single volume item JSON (from Google Books API) to a complete Book object
-     * This is the primary public method for this utility
+     * Converts Google Books API JSON to Book object
      *
-     * @param item JsonNode containing volume information
-     * @param objectMapper The ObjectMapper to use for JSON processing, if needed internally (though mostly direct node access)
-     * @return Fully populated Book object, or null if the input item is null
+     * @param item JsonNode with volume data
+     * @return Populated Book object or null if input is null
      */
-    public static Book convertJsonToBook(JsonNode item, ObjectMapper objectMapper) {
+    public static Book convertJsonToBook(JsonNode item) {
         if (item == null) {
             logger.warn("Input JsonNode is null. Cannot convert to Book.");
             return null;
@@ -63,10 +56,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Extracts basic book information from the JSON node
+     * Extracts book core data from JSON
      * 
-     * @param item The JSON node containing volume information
-     * @param book The Book object to populate with extracted data
+     * @param item Volume JSON node
+     * @param book Book to populate
      */
     private static void extractBookBaseInfo(JsonNode item, Book book) {
         if (!item.has("volumeInfo")) {
@@ -116,14 +109,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Extracts list of authors from volume info
-     * - Handles missing authors field
-     * - Handles non-array authors field
-     * - Handles null or empty author values
-     * - Returns an empty list when no valid authors are found
+     * Extracts authors from volume info
      * 
-     * @param volumeInfo The JSON node containing volume information
-     * @return List of author names, never null but may be empty
+     * @param volumeInfo Volume info JSON node
+     * @return List of author names (never null)
      */
     private static List<String> getAuthorsFromVolumeInfo(JsonNode volumeInfo) {
         List<String> authors = new ArrayList<>();
@@ -160,10 +149,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Extracts best available cover image URL from volume info
+     * Extracts best cover image URL from JSON
      * 
-     * @param volumeInfo The JSON node containing volume information
-     * @return The best quality cover image URL available, or null if none found
+     * @param volumeInfo Volume info JSON node
+     * @return Best quality cover URL or null
      */
     private static String getGoogleCoverImageFromVolumeInfo(JsonNode volumeInfo) {
         if (volumeInfo.has("imageLinks")) {
@@ -189,11 +178,11 @@ public class BookJsonParser {
     }
 
     /**
-     * Enhances Google Books cover URL by fixing protocol and quality parameters
+     * Enhances Google Books cover URL
      * 
-     * @param url Original cover image URL
-     * @param quality Target quality level (high, medium, low)
-     * @return Enhanced URL with proper protocol and quality settings
+     * @param url Original cover URL
+     * @param quality Target quality (high, medium, low)
+     * @return Enhanced URL with proper protocol and settings
      */
     private static String enhanceGoogleCoverUrl(String url, String quality) {
         if (url == null) return null;
@@ -258,10 +247,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Sets additional commercial fields like price and currency
+     * Sets commercial fields (price, currency)
      * 
-     * @param item The JSON node containing volume information
-     * @param book The Book object to populate with additional data
+     * @param item Volume JSON node
+     * @param book Book to populate
      */
     private static void setAdditionalFields(JsonNode item, Book book) {
         if (item.has("saleInfo")) {
@@ -275,10 +264,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Sets book access links and availability information
+     * Sets access links and availability flags
      * 
-     * @param item The JSON node containing volume information
-     * @param book The Book object to populate with link data
+     * @param item Volume JSON node
+     * @param book Book to populate
      */
     private static void setLinks(JsonNode item, Book book) {
         if (item.has("accessInfo")) {
@@ -294,10 +283,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Parses published date from various date formats
+     * Parses published date with format fallbacks
      * 
-     * @param volumeInfo The JSON node containing volume information
-     * @return Parsed Date object or null if parsing fails
+     * @param volumeInfo Volume info JSON node
+     * @return Date object or null if parsing fails
      */
     private static Date parsePublishedDate(JsonNode volumeInfo) {
         if (volumeInfo.has("publishedDate")) {
@@ -327,10 +316,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Extracts edition identifier information from JSON
+     * Extracts edition identifier info
      * 
-     * @param identifier The JSON node containing identifier information
-     * @param otherEditions The list to add extracted edition info to
+     * @param identifier Identifier JSON node
+     * @param otherEditions List to add edition info
      */
     private static void extractEditionInfoFromItem(JsonNode identifier, List<Book.EditionInfo> otherEditions) {
         if (identifier.has("type") && identifier.has("identifier")) {
@@ -344,10 +333,10 @@ public class BookJsonParser {
     }
     
     /**
-     * Extracts qualifiers from the JSON item node
+     * Extracts qualifiers from JSON
      * 
-     * @param item The JSON node containing volume and qualifier information
-     * @param book The Book object to populate with qualifiers
+     * @param item Volume JSON with qualifiers
+     * @param book Book to populate with qualifiers
      */
     private static void extractQualifiersFromItem(JsonNode item, Book book) {
         if (item != null && item.has("qualifiers")) {
@@ -383,12 +372,10 @@ public class BookJsonParser {
     }
 
     /**
-     * Extracts qualifiers from a search query string
-     * This method is specific to how GoogleBooksService used to embed qualifiers based on search terms
-     * It can be used by BookDataOrchestrator if search-term-based qualifiers are still desired
+     * Extracts qualifiers from search query
      *
-     * @param query The search query string
-     * @return A map of extracted qualifiers
+     * @param query Search query string
+     * @return Map of extracted qualifiers
      */
     public static Map<String, Object> extractQualifiersFromSearchQuery(String query) {
         Map<String, Object> qualifiers = new HashMap<>();
