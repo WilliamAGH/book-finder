@@ -280,11 +280,12 @@ public class BookCoverManagementService {
                     ImageDetails placeholderDetails = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-fetch-failed");
                     
                     if (placeholderDetails == null) {
-                        logger.error("CRITICAL: localDiskCoverCacheService.createPlaceholderImageDetails returned null for BookID {}. Aborting this path.", bookIdForLog);
+                        // As per review suggestion, throw an exception instead of silently returning
+                        logger.error("CRITICAL: localDiskCoverCacheService.createPlaceholderImageDetails returned null for BookID {}. Throwing exception.", bookIdForLog);
                         if (identifierKey != null) {
-                             coverCacheManager.invalidateProvisionalUrl(identifierKey);
+                            coverCacheManager.invalidateProvisionalUrl(identifierKey); // Attempt to clean up provisional URL
                         }
-                        return; 
+                        throw new IllegalStateException("createPlaceholderImageDetails returned null for BookID " + bookIdForLog + " with identifierKey " + identifierKey);
                     }
 
                     coverCacheManager.putFinalImageDetails(identifierKey, placeholderDetails);
@@ -387,10 +388,14 @@ public class BookCoverManagementService {
                 // For now, keeping the check but noting potential redundancy or need for better error handling strategy.
 
                 coverCacheManager.putFinalImageDetails(identifierKey, placeholderOnError);
-                eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey,
-                                                                  placeholderOnError.getUrlOrPath(),
-                                                                  bookIdForLog,
-                                                                  placeholderOnError.getCoverImageSource()));
+                if (placeholderOnError != null && placeholderOnError.getUrlOrPath() != null && placeholderOnError.getCoverImageSource() != null) {
+                    eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey,
+                                                                      placeholderOnError.getUrlOrPath(),
+                                                                      bookIdForLog,
+                                                                      placeholderOnError.getCoverImageSource()));
+                } else {
+                    logger.error("Background: placeholderOnError or its properties are null for BookID {}. Event not published from exceptionally block.", bookIdForLog);
+                }
                 return null;
             });
     }

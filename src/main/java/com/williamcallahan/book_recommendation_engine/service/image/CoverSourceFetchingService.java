@@ -42,9 +42,12 @@ public class CoverSourceFetchingService {
     private final GoogleBooksService googleBooksService;
     private final CoverCacheManager coverCacheManager;
 
-    private static final Pattern GOOGLE_PG_PATTERN = Pattern.compile("[?&]pg=([A-Z]+[0-9]+)");
-    private static final Pattern GOOGLE_PRINTSEC_FRONTCOVER_PATTERN = Pattern.compile("[?&](printsec=frontcover|pt=frontcover)");
-    private static final Pattern GOOGLE_EDGE_CURL_PATTERN = Pattern.compile("[?&]edge=curl");
+    private static final Pattern GOOGLE_PG_PATTERN =
+            Pattern.compile("[?&]pg=([A-Z]+[0-9]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern GOOGLE_PRINTSEC_FRONTCOVER_PATTERN =
+            Pattern.compile("[?&](printsec=frontcover|pt=frontcover)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern GOOGLE_EDGE_CURL_PATTERN =
+            Pattern.compile("[?&]edge=curl", Pattern.CASE_INSENSITIVE);
 
     /**
      * Constructs the CoverSourceFetchingService
@@ -438,7 +441,9 @@ public class CoverSourceFetchingService {
     private void addAttemptToProvenance(ImageProvenanceData provenanceData, ImageSourceName sourceName, String urlAttempted, ImageAttemptStatus status, String failureReason, ImageDetails detailsIfSuccess) {
         if (provenanceData == null) return;
         if (provenanceData.getAttemptedImageSources() == null) {
-            provenanceData.setAttemptedImageSources(new ArrayList<>());
+            provenanceData.setAttemptedImageSources(
+                java.util.Collections.synchronizedList(new ArrayList<>())
+            );
         }
         ImageProvenanceData.AttemptedSourceInfo attemptInfo = new ImageProvenanceData.AttemptedSourceInfo(sourceName, urlAttempted, status);
         if (failureReason != null) {

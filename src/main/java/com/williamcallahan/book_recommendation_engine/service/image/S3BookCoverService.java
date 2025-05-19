@@ -334,6 +334,7 @@ public class S3BookCoverService implements ExternalCoverService {
                 logger.debug("Book ID {}: Downloaded {} bytes from {}. Starting image processing.", bookId, rawImageBytes.length, imageUrl);
                 // Convert CompletableFuture to Mono and continue reactive chain
                 return Mono.fromFuture(imageProcessingService.processImageForS3(rawImageBytes, bookId))
+                    .subscribeOn(Schedulers.boundedElastic())
                     .flatMap(processedImage -> {
                         if (!processedImage.isProcessingSuccessful()) {
                             logger.warn("Book ID {}: Image processing failed. Reason: {}. Will not upload to S3.", bookId, processedImage.getProcessingError());
@@ -595,7 +596,7 @@ public class S3BookCoverService implements ExternalCoverService {
         // Extract filename from the original imageS3Key
         String filename = imageS3Key.substring(imageS3Key.lastIndexOf('/') + 1);
         // Replace image extension with .txt for provenance file
-        String provenanceFilename = filename.replaceAll("\\\\.(jpg|jpeg|png|gif|webp|svg)$", ".txt");
+        String provenanceFilename = filename.replaceAll("\\.(?i)(jpg|jpeg|png|gif|webp|svg)$", ".txt");
         if (provenanceFilename.equals(filename)) { 
             provenanceFilename = filename + ".txt";
             logger.warn("Image S3 key {} (filename: {}) did not have a recognized image extension. Appending .txt for provenance: {}", imageS3Key, filename, provenanceFilename);
