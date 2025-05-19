@@ -362,38 +362,7 @@ public class BookController {
                     .map(processedBooks -> {
                         // Process books for qualifiers and update S3 if needed
                         for (Book book : processedBooks) {
-                            boolean qualifiersUpdated = false;
-                            
-                            // Add search query qualifier if not present
-                            if (!book.hasQualifier("searchQuery")) {
-                                book.addQualifier("searchQuery", "intitle:" + title);
-                                qualifiersUpdated = true;
-                            }
-                            
-                            // Update S3 if we added qualifiers
-                            if (qualifiersUpdated) {
-                                Schedulers.boundedElastic().schedule(() -> {
-                                    try {
-                                        s3RetryService.updateBookJsonWithRetry(book)
-                                            .whenComplete((result, ex) -> {
-                                                if (ex != null) {
-                                                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
-                                                        book.getId(), cause.getMessage());
-                                                } else {
-                                                    logger.debug("Successfully updated S3 with title search qualifiers for book {}", 
-                                                        book.getId());
-                                                }
-                                            }).join();
-                                    } catch (CompletionException ce) {
-                                        logger.error("CompletionException during S3 update for book {}: {}", 
-                                            book.getId(), ce.getCause() != null ? ce.getCause().getMessage() : ce.getMessage());
-                                    } catch (Exception e) {
-                                        logger.error("Error during S3 update for book {}: {}", 
-                                            book.getId(), e.getMessage());
-                                    }
-                                });
-                            }
+                            updateBookQualifiersAsync(book, "searchQuery", "intitle:" + title);
                         }
                         
                         Map<String, Object> response = new HashMap<>();
@@ -462,38 +431,7 @@ public class BookController {
                     .map(processedBooks -> {
                         // Process books for qualifiers and update S3 if needed
                         for (Book book : processedBooks) {
-                            boolean qualifiersUpdated = false;
-                            
-                            // Add search query qualifier if not present
-                            if (!book.hasQualifier("searchQuery")) {
-                                book.addQualifier("searchQuery", "inauthor:" + author);
-                                qualifiersUpdated = true;
-                            }
-                            
-                            // Update S3 if we added qualifiers
-                            if (qualifiersUpdated) {
-                                Schedulers.boundedElastic().schedule(() -> {
-                                    try {
-                                        s3RetryService.updateBookJsonWithRetry(book)
-                                            .whenComplete((result, ex) -> {
-                                                if (ex != null) {
-                                                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
-                                                        book.getId(), cause.getMessage());
-                                                } else {
-                                                    logger.debug("Successfully updated S3 with author search qualifiers for book {}", 
-                                                        book.getId());
-                                                }
-                                            }).join();
-                                    } catch (CompletionException ce) {
-                                        logger.error("CompletionException during S3 update for book {}: {}", 
-                                            book.getId(), ce.getCause() != null ? ce.getCause().getMessage() : ce.getMessage());
-                                    } catch (Exception e) {
-                                        logger.error("Error during S3 update for book {}: {}", 
-                                            book.getId(), e.getMessage());
-                                    }
-                                });
-                            }
+                            updateBookQualifiersAsync(book, "searchQuery", "inauthor:" + author);
                         }
                         
                         Map<String, Object> response = new HashMap<>();
@@ -562,38 +500,7 @@ public class BookController {
                     .map(processedBooks -> {
                         // Process books for qualifiers and update S3 if needed
                         for (Book book : processedBooks) {
-                            boolean qualifiersUpdated = false;
-                            
-                            // Add search query qualifier if not present
-                            if (!book.hasQualifier("searchQuery")) {
-                                book.addQualifier("searchQuery", "isbn:" + isbn);
-                                qualifiersUpdated = true;
-                            }
-                            
-                            // Update S3 if we added qualifiers
-                            if (qualifiersUpdated) {
-                                Schedulers.boundedElastic().schedule(() -> {
-                                    try {
-                                        s3RetryService.updateBookJsonWithRetry(book)
-                                            .whenComplete((result, ex) -> {
-                                                if (ex != null) {
-                                                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                                                    logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
-                                                        book.getId(), cause.getMessage());
-                                                } else {
-                                                    logger.debug("Successfully updated S3 with ISBN search qualifiers for book {}", 
-                                                        book.getId());
-                                                }
-                                            }).join();
-                                    } catch (CompletionException ce) {
-                                        logger.error("CompletionException during S3 update for book {}: {}", 
-                                            book.getId(), ce.getCause() != null ? ce.getCause().getMessage() : ce.getMessage());
-                                    } catch (Exception e) {
-                                        logger.error("Error during S3 update for book {}: {}", 
-                                            book.getId(), e.getMessage());
-                                    }
-                                });
-                            }
+                            updateBookQualifiersAsync(book, "searchQuery", "isbn:" + isbn);
                         }
                         
                         Map<String, Object> response = new HashMap<>();
@@ -755,6 +662,39 @@ public class BookController {
      * @param book The book object to create, from the request body
      * @return Mono containing ResponseEntity with the created book and 201 status, or an error status
      */
+    private void updateBookQualifiersAsync(Book book, String qualifier, String value) {
+        boolean qualifiersUpdated = false;
+        
+        if (!book.hasQualifier(qualifier)) {
+            book.addQualifier(qualifier, value);
+            qualifiersUpdated = true;
+        }
+        
+        if (qualifiersUpdated) {
+            Schedulers.boundedElastic().schedule(() -> {
+                try {
+                    s3RetryService.updateBookJsonWithRetry(book)
+                        .whenComplete((result, ex) -> {
+                            if (ex != null) {
+                                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                                logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
+                                    book.getId(), cause.getMessage());
+                            } else {
+                                logger.debug("Successfully updated S3 with {} qualifiers for book {}", 
+                                    qualifier, book.getId());
+                            }
+                        }).join();
+                } catch (CompletionException ce) {
+                    logger.error("CompletionException during S3 update for book {}: {}", 
+                        book.getId(), ce.getCause() != null ? ce.getCause().getMessage() : ce.getMessage());
+                } catch (Exception e) {
+                    logger.error("Error during S3 update for book {}: {}", 
+                        book.getId(), e.getMessage());
+                }
+            });
+        }
+    }
+
     @PostMapping
     public Mono<ResponseEntity<Book>> createBook(@RequestBody Book book) {
         logger.info("Attempting to create book: {}", book.getTitle());
