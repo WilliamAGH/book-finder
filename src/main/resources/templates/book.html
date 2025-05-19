@@ -274,37 +274,37 @@
                                         </div>
                                         <!-- External Links -->
                                         <div class="book-links d-flex flex-wrap gap-2">
-                                            <a th:if="${book.previewLink}" th:href="${book.previewLink}" target="_blank" class="btn btn-outline-primary me-2">
+                                            <a th:if="${book.previewLink}" th:href="${book.previewLink}" target="_blank" class="btn btn-outline-primary btn-affiliate me-2">
                                                 <i class="fas fa-book-open"></i> Preview
                                             </a>
-                                            <a th:if="${book.infoLink}" th:href="${book.infoLink}" target="_blank" class="btn btn-outline-secondary me-2">
+                                            <a th:if="${book.infoLink}" th:href="${book.infoLink}" target="_blank" class="btn btn-outline-secondary btn-affiliate me-2">
                                                 <i class="fas fa-info-circle"></i> More Info
                                             </a>
                                             <!-- Google Books Link -->
                                             <a th:if="${book.id != null}" th:href="${'https://www.google.com/books/edition/' + book.title?.replace(' ', '_') + '/' + book.id + '?hl=en'}" 
-                                               target="_blank" class="btn btn-outline-primary me-2">
+                                               target="_blank" class="btn btn-outline-primary btn-affiliate me-2">
                                                 <i class="fas fa-book"></i> View on Google Books
                                             </a>
                                             <!-- View on Goodreads Button -->
                                             <a th:with="
                                                    goodreadsSearchTerm=${book.isbn13 != null ? book.isbn13 : (book.isbn10 != null ? book.isbn10 : book.title + ' ' + (book.authors != null && not #lists.isEmpty(book.authors) ? book.authors[0] : ''))}
                                                "
-                                               th:href="'https://www.goodreads.com/search?q=' + ${#uris.escapeQueryParam(goodreadsSearchTerm)}" 
-                                               target="_blank" 
-                                               class="btn btn-outline-info">
-                                                <i class="fas fa-book-reader"></i> View on Goodreads
+                                               th:href="'https://www.goodreads.com/search?q=' + ${#uris.escapeQueryParam(goodreadsSearchTerm)}"
+                                               target="_blank"
+                                               class="btn btn-info btn-affiliate me-2">
+                                                <i class="fab fa-goodreads"></i> Find on Goodreads
                                             </a>
-                                            <!-- Amazon View Button -->
-                                            <a th:if="${book.isbn13 != null}" th:href="'https://www.amazon.com/s?k=' + ${book.isbn13} + '&ref=nosim&tag=williamagh-20'" target="_blank" class="btn btn-warning me-2">
-                                                <i class="fas fa-shopping-cart"></i> View on Amazon.com
-                                            </a>
-                                            <a th:if="${book.isbn13 == null && book.isbn10 != null}" th:href="'https://www.amazon.com/s?k=' + ${book.isbn10} + '&ref=nosim&tag=williamagh-20'" target="_blank" class="btn btn-warning me-2">
+                                            <!-- Amazon.com (existing general link - might be redundant or complementary) -->
+                                            <a th:if="${book.isbn13 != null || book.isbn10 != null}"
+                                               th:href="'https://www.amazon.com/s?k=' + ${book.isbn13 != null ? book.isbn13 : book.isbn10} + '&ref=nosim&tag=williamagh-20'" 
+                                               target="_blank"
+                                               class="btn btn-warning btn-affiliate me-2">
                                                 <i class="fas fa-shopping-cart"></i> View on Amazon.com
                                             </a>
                                             <a th:if="${book.isbn13 == null && book.isbn10 == null && book.title != null}" th:with="searchTerms=${book.title + ' ' + (book.authors != null && not #lists.isEmpty(book.authors) ? book.authors[0] : '')}"
                                                th:href="'https://www.amazon.com/s?k=' + ${#uris.escapeQueryParam(searchTerms)} + '&ref=nosim&tag=williamagh-20'"
                                                target="_blank"
-                                               class="btn btn-warning me-2">
+                                               class="btn btn-warning btn-affiliate me-2">
                                                 <i class="fas fa-shopping-cart"></i> View on Amazon.com
                                             </a>
                                         </div>
@@ -424,6 +424,25 @@
                                                 </div>
                                             </div>
                                         </div>
+
+                                        <!-- Affiliate Links Section -->
+                                        <div class="mt-4 pt-3 border-top" th:if="${affiliateLinks != null and !affiliateLinks.isEmpty()}">
+                                            <h5 class="mb-3">Purchase Options</h5>
+                                            <div class="d-flex flex-wrap gap-2">
+                                                <a th:if="${affiliateLinks.barnesAndNoble}" th:href="${affiliateLinks.barnesAndNoble}" target="_blank" rel="noopener sponsored" class="btn btn-barnesandnoble btn-affiliate mb-2">
+                                                    <i class="fas fa-store me-2"></i> Barnes & Noble
+                                                </a>
+                                                <a th:if="${affiliateLinks.bookshop}" th:href="${affiliateLinks.bookshop}" target="_blank" rel="noopener sponsored" class="btn btn-bookshop btn-affiliate mb-2">
+                                                    <i class="fas fa-shopping-bag me-2"></i> Bookshop.org
+                                                </a>
+                                                <a th:if="${affiliateLinks.audible}" th:href="${affiliateLinks.audible}" target="_blank" rel="noopener sponsored" class="btn btn-audible btn-affiliate mb-2">
+                                                    <i class="fas fa-headphones-alt me-2"></i> Listen on Audible
+                                                </a>
+                                            </div>
+                                            <p class="mt-2 mb-0"><small><em>As an affiliate, I may earn from qualifying purchases. Your support is appreciated!</em></small></p>
+                                        </div>
+                                        <!-- End Affiliate Links Section -->
+
                                     </div>
                                     
                                     <div class="tab-pane fade" id="editions" role="tabpanel" aria-labelledby="editions-tab" th:if="${book.otherEditions != null and !#lists.isEmpty(book.otherEditions)}">

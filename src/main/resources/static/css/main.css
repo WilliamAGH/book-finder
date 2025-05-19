@@ -1292,3 +1292,45 @@ section {
         display: flex;
     }
 }
+
+/* Custom Affiliate Button Styles */
+.btn.btn-affiliate {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out, background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+    margin-bottom: 0.5rem; 
+}
+.btn.btn-affiliate:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+}
+
+.btn.btn-barnesandnoble {
+    background-color: #00563f !important; 
+    border-color: #00563f !important;
+    color: #ffffff !important;
+}
+.btn.btn-barnesandnoble:hover {
+    background-color: #00402f !important; 
+    border-color: #003526 !important;
+}
+
+.btn.btn-bookshop {
+    background-color: #4C32C0 !important; 
+    border-color: #4C32C0 !important;
+    color: #ffffff !important;
+}
+.btn.btn-bookshop:hover {
+    background-color: #3c28a0 !important; 
+    border-color: #302080 !important;
+}
+
+.btn.btn-audible {
+    background-color: #ff9900 !important; 
+    border-color: #ff9900 !important;
+    color: #000000 !important; 
+}
+.btn.btn-audible:hover {
+    background-color: #e68a00 !important; 
+    border-color: #cc7a00 !important;
+    color: #000000 !important;
+}
+/* End Custom Affiliate Button Styles */
