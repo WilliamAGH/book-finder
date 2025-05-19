@@ -173,8 +173,6 @@ These overrides should be used with caution, especially the rate limiter bypass,
 1. Find PID: `netstat -ano | findstr :{PORT}`
 2. Kill PID: `taskkill /PID <PID> /F`
 
-**MacOS DNS Resolution:** Includes `netty-resolver-dns-native-macos` for M1/M2 Macs.
-
 ## UML Diagram
 
 See [UML README](src/main/resources/uml/README.md).
