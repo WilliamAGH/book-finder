@@ -21,6 +21,7 @@ import com.williamcallahan.book_recommendation_engine.service.RecommendationServ
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
+import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,6 +49,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.Map;
+import java.util.HashMap;
 
 @Controller
 public class HomeController {
@@ -60,6 +63,7 @@ public class HomeController {
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
+    private final AffiliateLinkService affiliateLinkService;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -89,6 +93,25 @@ public class HomeController {
     private static final Pattern ISBN13_PATTERN = Pattern.compile("^[0-9]{13}$");
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
+    @Value("${app.default-cover-preference:GOOGLE_BOOKS}")
+    private String defaultCoverPreference;
+
+    @Value("${app.seo.max-description-length:170}")
+    private int maxDescriptionLength;
+
+    // Affiliate IDs from properties
+    @Value("${app.affiliate.barnesnoble.cj.publisherid:}")
+    private String barnesNobleCjPublisherId;
+
+    @Value("${app.affiliate.barnesnoble.cj.websiteid:}")
+    private String barnesNobleCjWebsiteId;
+
+    @Value("${app.affiliate.bookshop.id:}")
+    private String bookshopAffiliateId;
+
+    @Value("${app.affiliate.amazon.tag:}")
+    private String amazonAssociateTag;
+
     /**
      * Constructs the HomeController with required services
      * 
@@ -107,6 +130,7 @@ public class HomeController {
                           EnvironmentService environmentService,
                           DuplicateBookService duplicateBookService,
                           LocalDiskCoverCacheService localDiskCoverCacheService,
+                          AffiliateLinkService affiliateLinkService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
@@ -115,6 +139,7 @@ public class HomeController {
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
         this.localDiskCoverCacheService = localDiskCoverCacheService;
+        this.affiliateLinkService = affiliateLinkService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
     }
 
@@ -442,6 +467,21 @@ public class HomeController {
                         // Populate other editions/duplicates
                         duplicateBookService.populateDuplicateEditions(book);
 
+                        // Generate Affiliate Links
+                        Map<String, String> affiliateLinks = new HashMap<>();
+                        String isbn13 = book.getIsbn13();
+                        String asin = book.getAsin();
+                        String title = book.getTitle(); // Get the book title
+
+                        if (isbn13 != null) {
+                            affiliateLinks.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
+                            affiliateLinks.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId));
+                        }
+                        // Pass ASIN, title, and associate tag to the updated Audible link generator
+                        affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag));
+                        
+                        model.addAttribute("affiliateLinks", affiliateLinks);
+
                         try {
                             recentlyViewedService.addToRecentlyViewed(book);
                         } catch (Exception e) {
@@ -473,6 +513,19 @@ public class HomeController {
                         
                         // Populate other editions/duplicates even on cover error, if book object exists
                         duplicateBookService.populateDuplicateEditions(book);
+
+                        // Generate Affiliate Links even on cover error, if book object exists
+                        Map<String, String> affiliateLinksOnError = new HashMap<>();
+                        String isbn13OnError = book.getIsbn13();
+                        String asinOnError = book.getAsin();
+
+                        if (isbn13OnError != null) {
+                            affiliateLinksOnError.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
+                            affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId));
+                        }
+                        affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag));
+                        
+                        model.addAttribute("affiliateLinks", affiliateLinksOnError);
 
                         return Mono.just(book);
                     });

@@ -96,34 +96,43 @@ public class SecurityConfig {
             // Set Referrer-Policy based on configuration
             ReferrerPolicyHeaderWriter.ReferrerPolicy policy = ReferrerPolicyHeaderWriter.ReferrerPolicy.valueOf(referrerPolicy);
             headers.referrerPolicy(referrer -> referrer.policy(policy));
-            
-            if (clickyEnabled) {
-                // Build the img-src directive with all required domains
+
+            if (cspEnabled) { // Check if CSP is enabled first
                 StringBuilder imgSrcDirective = new StringBuilder("'self' data: ");
-                // Add Clicky Analytics domains
-                imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
-                
+                StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline'");
+                StringBuilder connectSrcDirective = new StringBuilder("'self'");
+
+                if (clickyEnabled) {
+                    // Add Clicky Analytics domains for img-src, script-src, and connect-src
+                    imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
+                    scriptSrcDirective.append(" https://static.getclicky.com https://clicky.com");
+                    connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
+                }
+
                 // Add book covers CDN domain
-                imgSrcDirective.append(bookCoversCdnDomain);
-                
+                if (bookCoversCdnDomain != null && !bookCoversCdnDomain.isEmpty()) {
+                    imgSrcDirective.append(bookCoversCdnDomain).append(" ");
+                }
+
                 // Add additional domains if specified
                 if (bookCoversAdditionalDomains != null && !bookCoversAdditionalDomains.isEmpty()) {
-                    // Split the comma-separated list and trim each domain
                     String formattedDomains = Arrays.stream(bookCoversAdditionalDomains.split(","))
                         .map(String::trim)
+                        .filter(s -> !s.isEmpty())
                         .collect(Collectors.joining(" "));
-                    
-                    imgSrcDirective.append(" ").append(formattedDomains);
+                    if (!formattedDomains.isEmpty()) {
+                        imgSrcDirective.append(formattedDomains);
+                    }
                 }
-                
-                // Add Content Security Policy header with dynamic img-src directive
+
+                // Add Content Security Policy header with dynamic directives
                 headers.addHeaderWriter(new StaticHeadersWriter("Content-Security-Policy",
                     "default-src 'self'; " +
-                    "script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://static.getclicky.com https://clicky.com 'unsafe-inline'; " +
+                    "script-src " + scriptSrcDirective.toString() + "; " +
                     "style-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com 'unsafe-inline'; " +
-                    "img-src " + imgSrcDirective.toString() + "; " +
+                    "img-src " + imgSrcDirective.toString().trim() + "; " + // trim to remove trailing space if no additional domains
                     "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; " +
-                    "connect-src 'self' https://static.getclicky.com https://in.getclicky.com https://clicky.com; " +
+                    "connect-src " + connectSrcDirective.toString() + "; " +
                     "frame-src 'self'; " +
                     "object-src 'none'"
                 ));

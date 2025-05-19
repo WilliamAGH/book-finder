@@ -65,13 +65,14 @@ public class AdminController {
             @RequestParam(name = "limit", required = false) Integer limitOptional) {
         
         String prefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
-        int batchLimitToUse = limitOptional != null ? limitOptional : defaultBatchLimit;
-        if (batchLimitToUse <= 0) { // Ensure batch limit is positive, or treat 0/negative as no limit (process all)
+        int requestedLimit     = limitOptional != null ? limitOptional : defaultBatchLimit;
+        int batchLimitToUse    = requestedLimit > 0 ? requestedLimit : Integer.MAX_VALUE;
+        if (requestedLimit <= 0) {
             // This behavior can be adjusted; for now, let's say 0 or negative means a very large number (effectively no limit for practical purposes)
             // or stick to a sane default if that's preferred
             // The S3CoverCleanupService currently handles batchLimit > 0
             // If batchLimit is 0 or negative, it processes all
-            logger.warn("Batch limit specified as {} (or defaulted to it), which means no effective limit. Processing all found items.", batchLimitToUse);
+            logger.warn("Batch limit {} requested; treating as unlimited.", requestedLimit);
         }
         
         logger.info("Admin endpoint /admin/s3-cleanup/dry-run invoked. Triggering S3 Cover Cleanup Dry Run with prefix: '{}', limit: {}", prefixToUse, batchLimitToUse);

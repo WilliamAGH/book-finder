@@ -553,15 +553,15 @@ public class BookController {
             .doOnSuccess(recentlyViewedService::addToRecentlyViewed) // No null check needed as stream errors out if book not found
             .map(book -> ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body((Object)book)) // Map to ResponseEntity
             // The switchIfEmpty below is now less likely to be the primary "not found" path for the book ID itself,
-            // but could still handle cases where bookImageOrchestrationService returns an empty Mono (if its internal onErrorResume was removed).
-            // However, with ResponseStatusException, onErrorResume will catch it.
+            // but could still handle cases where bookImageOrchestrationService returns an empty Mono (if its internal onErrorResume was removed)
+            // However, with ResponseStatusException, onErrorResume will catch it
             .switchIfEmpty(Mono.just(ResponseEntity.notFound().build())) 
             .onErrorResume(e -> {
                 logger.error("Error getting book by ID '{}': {}", id, e.getMessage(), e);
                 if (e instanceof ResponseStatusException rse) {
                     // If it's already a ResponseStatusException (like our NOT_FOUND), return it directly
-                    // or wrap it in a Mono.error to be handled by Spring's default error handling.
-                    // For clarity, we can re-throw it if it's one we expect, or map to a generic error.
+                    // or wrap it in a Mono.error to be handled by Spring's default error handling
+                    // For clarity, we can re-throw it if it's one we expect, or map to a generic error
                     if (rse.getStatusCode() == HttpStatus.NOT_FOUND) {
                         Map<String, String> errorResponse = new HashMap<>();
                         errorResponse.put("error", "Not Found");
@@ -688,7 +688,7 @@ public class BookController {
                             logger.debug("Successfully updated S3 with {} qualifiers for book {}", 
                                 qualifier, book.getId());
                         }
-                    }).join();
+                    });
                 } catch (CompletionException ce) {
                     logger.error("CompletionException during S3 update for book {}: {}", 
                         book.getId(), ce.getCause() != null ? ce.getCause().getMessage() : ce.getMessage());
@@ -777,8 +777,7 @@ public class BookController {
         
         // Ensure the ID in the path matches the ID in the book object
         if (bookUpdate.getId() != null && !bookUpdate.getId().equals(id)) {
-            return Mono.just(ResponseEntity.badRequest()
-                .body(null)); // ID mismatch between path and body
+            return Mono.just(ResponseEntity.badRequest().<Book>build()); // ID mismatch between path and body
         }
         
         // Set the ID from the path
@@ -797,7 +796,7 @@ public class BookController {
             })
             .onErrorResume(IllegalArgumentException.class, e -> {
                 logger.error("Validation error updating book with ID {}: {}", id, e.getMessage());
-                return Mono.just(ResponseEntity.badRequest().build());
+                return Mono.just(ResponseEntity.badRequest().<Book>build());
             })
             .onErrorResume(e -> {
                 if (e instanceof ResponseStatusException) {
