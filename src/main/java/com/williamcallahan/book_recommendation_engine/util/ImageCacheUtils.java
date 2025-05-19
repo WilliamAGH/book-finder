@@ -1,3 +1,18 @@
+/**
+ * Utility library for image caching and processing in the book recommendation engine
+ * 
+ * This class provides functionality for:
+ * - Image hash calculation and comparison
+ * - File extension detection and management
+ * - Mapping between different image source enumerations
+ * - Book identifier extraction and prioritization
+ * - Secure filename generation for cached images
+ * 
+ * All methods are static and thread-safe, designed for use across the application
+ * when handling book cover images and related caching operations.
+ * 
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.util;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -12,19 +27,25 @@ import java.util.Base64;
  * Utility class for image caching operations
  * - Provides helper methods for hashing, filename generation, and type mapping
  *
- * @author William Callahan
  */
 public final class ImageCacheUtils {
 
+    /**
+     * Private constructor to prevent instantiation of utility class
+     */
     private ImageCacheUtils() {
         // Prevent instantiation
     }
 
     /**
      * Computes SHA-256 hash for given image data
+     * 
      * @param imageData Byte array of the image
      * @return SHA-256 hash byte array
      * @throws NoSuchAlgorithmException If SHA-256 algorithm is not available
+     * 
+     * @implNote Uses standard MessageDigest implementation for secure hashing
+     * Useful for deduplication and content-based caching of images
      */
     public static byte[] computeImageHash(byte[] imageData) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -33,9 +54,14 @@ public final class ImageCacheUtils {
 
     /**
      * Compares two byte arrays for similarity (equality)
+     * 
      * @param hash1 First byte array
      * @param hash2 Second byte array
      * @return True if arrays are identical, false otherwise
+     * 
+     * @implNote Performs byte-by-byte comparison rather than using Arrays.equals
+     * for more explicit control and clarity -- returns false immediately on length
+     * mismatch or when any corresponding bytes differ
      */
     public static boolean isHashSimilar(byte[] hash1, byte[] hash2) {
         if (hash1 == null || hash2 == null || hash1.length != hash2.length) {
@@ -51,9 +77,13 @@ public final class ImageCacheUtils {
 
     /**
      * Extracts file extension from a URL string
-     * - Defaults to .jpg if no valid extension is found
+     * 
      * @param url The URL string
      * @return File extension (e.g., .jpg, .png)
+     * 
+     * @implNote Defaults to .jpg if no valid extension is found
+     * Handles URLs with query parameters by truncating them before extraction
+     * Validates that the extension is a known image format to prevent invalid extensions
      */
     public static String getFileExtensionFromUrl(String url) {
         String extension = ".jpg"; // Default extension
@@ -74,10 +104,14 @@ public final class ImageCacheUtils {
 
     /**
      * Generates a filename from a URL using SHA-256 hash
-     * - Truncates hash for brevity and appends original extension
+     * 
      * @param url The URL string
      * @return Generated filename string
      * @throws NoSuchAlgorithmException If SHA-256 algorithm is not available
+     * 
+     * @implNote Creates a URL-safe Base64 encoded hash of the URL
+     * Truncates hash to 32 characters maximum for brevity and file system compatibility
+     * Appends the original file extension to maintain MIME type information
      */
     public static String generateFilenameFromUrl(String url) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -90,9 +124,15 @@ public final class ImageCacheUtils {
 
     /**
      * Determines the best identifier to use as a cache key for a book
-     * - Prioritizes ISBN-13, then ISBN-10, then Google Books ID
+     * 
      * @param book The book object
-     * @return The most specific available identifier, or null
+     * @return The most specific available identifier, or null if no valid identifiers exist
+     * 
+     * @implNote Prioritizes identifiers in order of specificity and standardization:
+     * 1. ISBN-13 (most specific and internationally standardized)
+     * 2. ISBN-10 (older but still widely used standard)
+     * 3. Google Books ID (platform-specific but unique)
+     * Returns null if book is null or has no valid identifiers
      */
     public static String getIdentifierKey(Book book) {
         if (book == null) {
@@ -113,8 +153,15 @@ public final class ImageCacheUtils {
 
     /**
      * Maps a string representation of a source name to ImageSourceName enum
+     * 
      * @param sourceNameString The string name of the source
-     * @return Corresponding ImageSourceName enum, or UNKNOWN
+     * @return Corresponding ImageSourceName enum, or UNKNOWN if no match found
+     * 
+     * @implNote Uses a multi-stage approach to mapping:
+     * 1. Pattern matching for common source name variations (case-insensitive)
+     * 2. Direct enum parsing for exact matches after normalization
+     * 3. Falls back to UNKNOWN if no match is found or input is null
+     * Designed to be flexible with different string formats from various sources
      */
     public static ImageSourceName mapStringToImageSourceName(String sourceNameString) {
         if (sourceNameString == null) {
@@ -139,8 +186,13 @@ public final class ImageCacheUtils {
 
     /**
      * Maps CoverImageSource enum to ImageSourceName enum
+     * 
      * @param coverImageSource The CoverImageSource enum value
-     * @return Corresponding ImageSourceName enum, or UNKNOWN
+     * @return Corresponding ImageSourceName enum, or UNKNOWN if no match found
+     * 
+     * @implNote Attempts direct name-based mapping first for maintainability
+     * Falls back to explicit case-by-case mapping if direct conversion fails
+     * Handles special cases and ensures all CoverImageSource values have a mapping
      */
     public static ImageSourceName mapCoverImageSourceToImageSourceName(CoverImageSource coverImageSource) {
         if (coverImageSource == null) {
@@ -166,8 +218,14 @@ public final class ImageCacheUtils {
 
     /**
      * Maps ImageSourceName enum back to CoverImageSource enum
+     * 
      * @param sourceNameEnum The ImageSourceName enum value
-     * @return Corresponding CoverImageSource enum, or UNDEFINED
+     * @return Corresponding CoverImageSource enum, or UNDEFINED if no match found
+     * 
+     * @implNote Reverse mapping companion to mapCoverImageSourceToImageSourceName
+     * Attempts direct name-based mapping first for maintainability
+     * Falls back to explicit switch statement for handling special cases
+     * Returns UNDEFINED for ImageSourceName values that have no CoverImageSource equivalent
      */
     public static CoverImageSource mapImageSourceNameEnumToCoverImageSource(ImageSourceName sourceNameEnum) {
         if (sourceNameEnum == null) {

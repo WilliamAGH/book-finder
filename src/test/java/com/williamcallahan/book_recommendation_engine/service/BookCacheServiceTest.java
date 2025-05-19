@@ -30,7 +30,6 @@ import org.springframework.cache.CacheManager;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.springframework.web.reactive.function.client.WebClient;
-// import com.williamcallahan.book_recommendation_engine.service.BookCacheService; // Already imported by @InjectMocks
 import java.util.List; // For List.of() in helper
 
 @ExtendWith(MockitoExtension.class)
@@ -167,7 +166,7 @@ class BookCacheServiceTest {
         bookCacheService.evictBook(bookId);
 
         // Then
-        verify(cache).evictIfPresent(bookId); // Changed from evict to evictIfPresent
+        verify(cache).evictIfPresent(bookId);
     }
 
     /**

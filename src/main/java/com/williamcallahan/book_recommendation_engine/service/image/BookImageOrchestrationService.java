@@ -1,12 +1,12 @@
 /**
- * Orchestrates the retrieval and management of book cover image URLs.
+ * Orchestrates the retrieval and management of book cover image URLs
  * 
  * @author William Callahan
  * 
  * This service coordinates the process of retrieving book cover images from various sources,
- * prioritizing cached images when available before fetching from external services. It works
+ * prioritizing cached images when available before fetching from external services -- it works
  * with BookCoverCacheService to provide fast initial image URLs while triggering
- * background processing for optimal image quality.
+ * background processing for optimal image quality
  * 
  * Key responsibilities:
  * - Providing immediate cover URLs for fast page rendering

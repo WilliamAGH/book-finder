@@ -31,7 +31,6 @@
         <spring-ai.version>1.0.0-RC1</spring-ai.version>
         <wro4j.version>2.1.1</wro4j.version>
         <maven.resources.useDefaultDelimiters>false</maven.resources.useDefaultDelimiters>
-        <!-- <maven.resources.overwrite>true</maven.resources.overwrite> Removed, rely on plugin config -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <mockito.version>5.11.0</mockito.version>
@@ -201,6 +200,39 @@
     </dependencyManagement>
 
     <profiles>
+        <profile>
+            <id>dev</id>
+            <properties>
+                <spring.profiles.active>dev</spring.profiles.active>
+                <spring-boot.run.jvmArguments>-Dspring.devtools.restart.enabled=true</spring-boot.run.jvmArguments>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.1</version>
+                        <executions>
+                            <execution>
+                                <id>clean-install-before-run</id>
+                                <phase>validate</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>mvn</executable>
+                                    <arguments>
+                                        <argument>clean</argument>
+                                        <argument>compile</argument>
+                                        <argument>-DskipTests</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>snapshot-dependencies</id>
             <repositories>
@@ -376,9 +408,6 @@
                 <configuration>
                     <overwrite>true</overwrite>
                     <encoding>UTF-8</encoding>
-                    <excludes>
-                        <exclude>static/covers/**</exclude> <!-- Exclude cached cover images from resource processing -->
-                    </excludes>
                     <nonFilteredFileExtensions>
                         <nonFilteredFileExtension>jpg</nonFilteredFileExtension>
                         <nonFilteredFileExtension>jpeg</nonFilteredFileExtension>
@@ -399,6 +428,14 @@
                         </goals>
                         <configuration>
                             <overwrite>true</overwrite>
+                            <resources>
+                                <resource>
+                                    <directory>src/main/resources</directory>
+                                    <excludes>
+                                        <exclude>static/covers/**</exclude> <!-- Exclude cached cover images from resource processing -->
+                                    </excludes>
+                                </resource>
+                            </resources>
                         </configuration>
                     </execution>
                     <execution>
@@ -445,6 +482,31 @@
                     <includes>
                         <include>**/*Test.java</include>
                     </includes>
+                </configuration>
+            </plugin>
+            <!-- PMD Plugin: Detects unused private fields, methods, and variables -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-pmd-plugin</artifactId>
+                <version>3.21.2</version>
+                <configuration>
+                    <rulesets>
+                        <ruleset>${project.basedir}/pmd-ruleset.xml</ruleset>
+                    </rulesets>
+                </configuration>
+            </plugin>
+            <!-- SpotBugs Plugin: Finds dead stores, unused fields, and some unused code -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>4.8.3.0</version>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Low</threshold>
+                    <xmlOutput>true</xmlOutput>
+                    <xmlOutputDirectory>target</xmlOutputDirectory>
+                    <htmlOutput>true</htmlOutput>
+                    <htmlOutputDirectory>target/site/spotbugs</htmlOutputDirectory>
                 </configuration>
             </plugin>
         </plugins>

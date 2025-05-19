@@ -33,8 +33,7 @@ import java.time.format.DateTimeFormatter;
 @Controller
 public class SitemapController {
 
-    private static final Logger logger = LoggerFactory.getLogger(SitemapController.class); // Added logger
-    // private final BookCacheService bookCacheService; // Replaced
+    private static final Logger logger = LoggerFactory.getLogger(SitemapController.class);
     private final BookSitemapService bookSitemapService;
     @Value("${app.base-url:https://findmybook.net}")
     private String baseUrl;

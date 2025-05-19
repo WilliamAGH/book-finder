@@ -11,7 +11,7 @@ import com.williamcallahan.book_recommendation_engine.service.RecommendationServ
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
-import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService; // Added import
+import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.types.CoverImages;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,7 +32,8 @@ import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
 import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
 import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
 import reactor.core.publisher.Mono; // For mocking reactive service
-@WebFluxTest(HomeController.class)
+@WebFluxTest(value = HomeController.class,
+    excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
     /**
      * WebTestClient for controller integration testing
@@ -90,11 +91,6 @@ class HomeControllerTest {
                 return Mono.just(coverImages);
             });
 
-        // Mock LocalDiskCoverCacheService if needed for specific interactions,
-        // for now, a basic mock is enough to satisfy dependency injection.
-        // Example: when(localDiskCoverCacheService.someMethod(anyString())).thenReturn("mockValue");
-        // For the current error, just having the bean present is the key.
-        // Let's add a default behavior for getLocalPlaceholderPath as it's used in HomeController
         when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
     
         // Configure RecentlyViewedService with empty view history

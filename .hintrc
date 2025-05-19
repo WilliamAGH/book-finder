@@ -8,7 +8,9 @@
       "default",
       {
         "ignore": [
-          "-webkit-user-drag"
+          "-webkit-user-drag",
+          "overscroll-behavior-y",
+          "overscroll-behavior-y: contain"
         ]
       }
     ]

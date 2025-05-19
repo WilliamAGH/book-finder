@@ -468,8 +468,8 @@ public class CoverSourceFetchingService {
         logger.debug("Attempting S3 for Book ID {}", bookIdForLog);
         // Direct S3 check through HEAD request
         // Returns S3 URL without downloading content
-        return s3BookCoverService.fetchCover(book) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
-            .thenApply(s3RemoteDetailsOptional -> { // Changed from thenCompose to thenApply for direct ImageDetails or placeholder
+        return s3BookCoverService.fetchCover(book)
+            .thenApply(s3RemoteDetailsOptional -> {
                 if (s3RemoteDetailsOptional.isPresent()) {
                     ImageDetails s3RemoteDetails = s3RemoteDetailsOptional.get();
                     if (isValidImageDetails(s3RemoteDetails) && s3RemoteDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
@@ -512,7 +512,7 @@ public class CoverSourceFetchingService {
         logger.debug("Attempting OpenLibrary for ISBN {}, size {} (Book ID for log: {})", isbn, sizeSuffix, bookIdForLog);
         final String finalIsbn = isbn; // For use in lambda
 
-        return openLibraryService.fetchOpenLibraryCoverDetails(isbn, sizeSuffix) // Assuming this now returns CompletableFuture<Optional<ImageDetails>>
+        return openLibraryService.fetchOpenLibraryCoverDetails(isbn, sizeSuffix)
             .thenCompose(remoteImageDetailsOptional -> {
                 String olUrlAttempted = "OpenLibrary ISBN: " + finalIsbn + ", size: " + sizeSuffix;
                 if (remoteImageDetailsOptional.isPresent()) {
@@ -522,8 +522,8 @@ public class CoverSourceFetchingService {
                         return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(remoteImageDetails.getUrlOrPath(), bookIdForLog, provenanceData, "OpenLibrary-" + sizeSuffix)
                             .thenApply(cachedDetails -> {
                                  if (isValidImageDetails(cachedDetails)) return cachedDetails;
-                                 // If download/cache failed for a valid URL, downloadAndStoreImageLocallyAsync handles its own provenance for that specific download attempt.
-                                 // We might still mark the ISBN as bad here.
+                                 // If download/cache failed for a valid URL, downloadAndStoreImageLocallyAsync handles its own provenance for that specific download attempt
+                                 // might still mark the ISBN as bad here
                                  coverCacheManager.addKnownBadOpenLibraryIsbn(finalIsbn);
                                  return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "ol-" + sizeSuffix + "-dl-fail");
                             });
@@ -601,7 +601,6 @@ public class CoverSourceFetchingService {
                     logger.warn("Book ID {}: Google API (ISBN) search for '{}' returned null or empty list of books.", bookIdForLog, isbn);
                 }
                 String urlAttempted = "Google ISBN: " + isbn;
-                // This log might be redundant if the more specific logs above have fired.
                 // logger.warn("Google Books API (by ISBN) did not yield a usable image for {}.", urlAttempted);
                 addAttemptToProvenance(provenanceData, ImageSourceName.GOOGLE_BOOKS, urlAttempted, ImageAttemptStatus.FAILURE_NOT_FOUND, "No usable image from Google/ISBN search (either no book, no URL, or URL failed checks)", null);
                 return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-isbn-no-image"));
@@ -730,15 +729,15 @@ public class CoverSourceFetchingService {
     }
 
     /**
-     * Validates if a Google Books image URL is likely to be a cover.
-     * - Prefers URLs with "printsec=frontcover" or "pt=frontcover".
-     * - Penalizes URLs with "edge=curl".
-     * - Penalizes URLs with "pg=" followed by typical page identifiers (e.g., PA5, PT10).
+     * Validates if a Google Books image URL is likely to be a cover
+     * - Prefers URLs with "printsec=frontcover" or "pt=frontcover"
+     * - Penalizes URLs with "edge=curl"
+     * - Penalizes URLs with "pg=" followed by typical page identifiers (e.g., PA5, PT10)
      *
-     * @param url The Google Books image URL to validate.
-     * @param bookIdForLog Identifier for logging.
-     * @param contextHint A hint for logging about where this check is being performed (e.g., "ProvisionalHint", "GoogleAPI-ISBN").
-     * @return True if the URL is likely a cover, false otherwise.
+     * @param url The Google Books image URL to validate
+     * @param bookIdForLog Identifier for logging
+     * @param contextHint A hint for logging about where this check is being performed (e.g., "ProvisionalHint", "GoogleAPI-ISBN")
+     * @return True if the URL is likely a cover, false otherwise
      */
     private boolean isLikelyGoogleCoverUrl(String url, String bookIdForLog, String contextHint) {
         if (url == null || url.isEmpty()) {
@@ -751,32 +750,32 @@ public class CoverSourceFetchingService {
         if (hasPageParam) {
             String pageId = pgMatcher.group(1);
             // Allow specific 'pg' parameters if they are known to be cover-related, e.g. "PP1" (often first page of a book, sometimes cover)
-            // For now, any 'pg=' is a strong indicator it's NOT a generic cover image.
-            // This could be refined if specific 'pg=' values are confirmed to be reliable for covers.
-            // Example: !pageId.startsWith("PP") might be too restrictive if PP1 is sometimes the cover.
-            // Current logic: if any pg= found, it's not a preferred cover.
+            // For now, any 'pg=' is a strong indicator it's NOT a generic cover image
+            // This could be refined if specific 'pg=' values are confirmed to be reliable for covers
+            // Example: !pageId.startsWith("PP") might be too restrictive if PP1 is sometimes the cover
+            // Current logic: if any pg= found, it's not a preferred cover
             logger.debug("Book ID {}: URL {} has 'pg={}' parameter. Context: {}. Considered not a primary cover.", bookIdForLog, url, pageId, contextHint);
-            return false; // Strict: any 'pg=' parameter makes it unlikely to be the best cover.
+            return false; // Strict: any 'pg=' parameter makes it unlikely to be the best cover
         }
 
         Matcher edgeCurlMatcher = GOOGLE_EDGE_CURL_PATTERN.matcher(url);
         if (edgeCurlMatcher.find()) {
             logger.debug("Book ID {}: URL {} has 'edge=curl' parameter. Context: {}. Considered not a primary cover.", bookIdForLog, url, contextHint);
-            return false; // 'edge=curl' usually means it's a page preview with curled effect.
+            return false; // 'edge=curl' usually means it's a page preview with curled effect
         }
         
         Matcher frontcoverMatcher = GOOGLE_PRINTSEC_FRONTCOVER_PATTERN.matcher(url);
         if (frontcoverMatcher.find()) {
             logger.debug("Book ID {}: URL {} has 'printsec=frontcover' or 'pt=frontcover'. Context: {}. Considered a likely cover.", bookIdForLog, url, contextHint);
-            return true; // Strong positive indicator.
+            return true; // Strong positive indicator
         }
 
         // If no strong negative indicators (pg, edge=curl) and no strong positive (frontcover),
-        // we might accept it, but with lower confidence.
-        // The existing `enhanceGoogleImageUrl` already tries to add `zoom=0` which is good.
+        // we might accept it, but with lower confidence
+        // The existing `enhanceGoogleImageUrl` already tries to add `zoom=0` which is good
         // For now, if it doesn't have 'pg' or 'edge=curl', let it pass,
-        // as sometimes Google API might not include `printsec=frontcover` in all cover links.
-        // The dimension checks later will still apply.
+        // as sometimes Google API might not include `printsec=frontcover` in all cover links
+        // The dimension checks later will still apply
         logger.debug("Book ID {}: URL {} has no strong negative indicators (like 'pg=' or 'edge=curl') and no explicit positive indicators (like 'printsec=frontcover'). Context: {}. Considered a potential cover by default, relying on subsequent dimension/content checks.", bookIdForLog, url, contextHint);
         return true;
     }

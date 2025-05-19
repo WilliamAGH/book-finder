@@ -21,7 +21,6 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
     // The image will now rely on its container and its own CSS rules
     // (e.g., object-fit: contain and max-width/max-height: 100%)
     // to size itself appropriately
-    // I removed the addition of 'normalized-cover' and 'high-res-cover' classes
 }
 
 /**
@@ -29,6 +28,12 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
  * @param {string|null} theme - The theme preference ('light', 'dark', or null for system)
  * @param {boolean} useSystem - Whether to use system preference
  */
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
 function updateServerThemePreference(theme, useSystem) {
     // Create request data
     const data = {
@@ -40,7 +45,8 @@ function updateServerThemePreference(theme, useSystem) {
     fetch('/api/theme', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            ...(getCookie('XSRF-TOKEN') ? {'X-XSRF-TOKEN': getCookie('XSRF-TOKEN')} : {}) // Add CSRF token header if available
         },
         body: JSON.stringify(data)
     })

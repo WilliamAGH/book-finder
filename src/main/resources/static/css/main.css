@@ -7,6 +7,25 @@ body {
     display: flex;
     flex-direction: column;
     line-height: 1.6;
+    margin: 0; /* Ensure no body margin */
+    padding-top: 0; /* Ensure no body top padding */
+    border-top: 0; /* Ensure no body top border */
+}
+
+html {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overscroll-behavior-y: contain; /* Prevent bounce overscroll showing browser background */
+}
+
+/* Set HTML background to match navbar start color for each theme */
+html:not([data-theme="dark"]) { /* Assumes light theme by default or when data-theme="light" */
+    background-color: #4a38bd; /* Light mode navbar gradient start */
+}
+
+html[data-theme="dark"] {
+    background-color: #1a1a2e; /* Dark mode navbar gradient start */
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -971,9 +990,6 @@ section {
     background-color: var(--hero-bg-color); /* Solid dark background, as per inspiration */
 }
 
-[data-theme="dark"] .navbar {
-    background-color: var(--navbar-bg-dark);
-}
 
 /* "View All" button in dark mode - change to text link style */
 [data-theme="dark"] .btn-view-all.btn-outlined {
@@ -1292,3 +1308,45 @@ section {
         display: flex;
     }
 }
+
+/* Custom Affiliate Button Styles */
+.btn.btn-affiliate {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out, background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
+    margin-bottom: 0.5rem; 
+}
+.btn.btn-affiliate:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+}
+
+.btn.btn-barnesandnoble {
+    background-color: #00563f !important; 
+    border-color: #00563f !important;
+    color: #ffffff !important;
+}
+.btn.btn-barnesandnoble:hover {
+    background-color: #00402f !important; 
+    border-color: #003526 !important;
+}
+
+.btn.btn-bookshop {
+    background-color: #4C32C0 !important; 
+    border-color: #4C32C0 !important;
+    color: #ffffff !important;
+}
+.btn.btn-bookshop:hover {
+    background-color: #3c28a0 !important; 
+    border-color: #302080 !important;
+}
+
+.btn.btn-audible {
+    background-color: #ff9900 !important; 
+    border-color: #ff9900 !important;
+    color: #000000 !important; 
+}
+.btn.btn-audible:hover {
+    background-color: #e68a00 !important; 
+    border-color: #cc7a00 !important;
+    color: #000000 !important;
+}
+/* End Custom Affiliate Button Styles */

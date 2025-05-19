@@ -1,3 +1,18 @@
+/**
+ * Service responsible for tracking, managing, and providing recently viewed books
+ * 
+ * This component provides functionality for:
+ * - Maintaining a thread-safe list of recently viewed books
+ * - Handling canonical book ID resolution to prevent duplicates
+ * - Providing fallback recommendations when history is empty
+ * - Supporting both synchronous and reactive APIs
+ * - Ensuring memory efficiency through size limits
+ * 
+ * Used throughout the application to enhance user experience by enabling
+ * "recently viewed" sections and personalized recommendations
+ *
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -13,9 +28,7 @@ import reactor.core.publisher.Mono;
 
 /**
  * Service for tracking and managing recently viewed books
- *
- * @author William Callahan
- *
+ * 
  * Features:
  * - Maintains a thread-safe list of recently viewed books
  * - Limits the number of books in the history to avoid memory issues
@@ -28,22 +41,36 @@ public class RecentlyViewedService {
 
     private static final Logger logger = LoggerFactory.getLogger(RecentlyViewedService.class);
     private final GoogleBooksService googleBooksService;
-    private final DuplicateBookService duplicateBookService; // Added
+    private final DuplicateBookService duplicateBookService;
 
     // In-memory storage for recently viewed books
     private final LinkedList<Book> recentlyViewedBooks = new LinkedList<>();
     private static final int MAX_RECENT_BOOKS = 10;
 
+    /**
+     * Constructs a RecentlyViewedService with required dependencies
+     * 
+     * @param googleBooksService Service for fetching book data from Google Books API
+     * @param duplicateBookService Service for handling duplicate book detection and canonical ID resolution
+     * 
+     * @implNote Initializes the in-memory linked list for storing recently viewed books
+     */
     @Autowired
-    public RecentlyViewedService(GoogleBooksService googleBooksService, DuplicateBookService duplicateBookService) { // Added duplicateBookService
+    public RecentlyViewedService(GoogleBooksService googleBooksService, DuplicateBookService duplicateBookService) {
         this.googleBooksService = googleBooksService;
-        this.duplicateBookService = duplicateBookService; // Added
+        this.duplicateBookService = duplicateBookService;
     }
 
     /**
-     * Add a book to the recently viewed list, ensuring canonical ID is used.
+     * Adds a book to the recently viewed list, ensuring canonical ID is used
      *
-     * @param book the book to add
+     * @param book The book to add to recently viewed history
+     * 
+     * @implNote Uses DuplicateBookService to find canonical representation of the book
+     * Creates a new Book instance with the canonical ID if needed to avoid modifying the original
+     * Removes any existing entry for the same book before adding it to the front of the list
+     * Maintains a maximum size limit by removing oldest entries when necessary
+     * Thread-safe implementation with synchronized blocks
      */
     public void addToRecentlyViewed(Book book) {
         if (book == null) {
@@ -79,8 +106,8 @@ public class RecentlyViewedService {
 
         Book bookToAdd = book;
         // If the canonical ID is different from the book's current ID,
-        // create a new Book object (or clone) for storage in the list with the canonical ID.
-        // This avoids modifying the original 'book' object which might be used elsewhere.
+        // create a new Book object (or clone) for storage in the list with the canonical ID
+        // This avoids modifying the original 'book' object which might be used elsewhere
         if (!java.util.Objects.equals(originalBookId, finalCanonicalId)) {
             logger.info("RECENT_VIEWS_DEBUG: Book ID mismatch. Original: '{}', Canonical: '{}'. Creating new Book instance for recent views.", originalBookId, finalCanonicalId);
             bookToAdd = new Book();
@@ -122,9 +149,14 @@ public class RecentlyViewedService {
 
     /**
      * Asynchronously fetches and processes default books if no books have been viewed
-     * This method is now fully non-blocking internally
      *
-     * @return A Mono containing a list of default books
+     * @return A Mono containing a list of default book recommendations
+     * 
+     * @implNote Uses reactive programming model for non-blocking operation
+     * Filters books to ensure they have valid cover images
+     * Sorts by publication date with newest books first
+     * Limits results to the maximum number of books in history
+     * Provides error handling with fallback to empty list
      */
     public Mono<List<Book>> fetchDefaultBooksAsync() {
         logger.debug("Fetching default books reactively.");
@@ -148,10 +180,15 @@ public class RecentlyViewedService {
     }
     
     /**
-     * Get the list of recently viewed books
-     * If the list is empty, it attempts to fetch default books
+     * Gets the list of recently viewed books with fallback to recommendations
      *
-     * @return a list of recently viewed books or default books
+     * @return A Mono emitting either the user's recently viewed books or default recommendations
+     * 
+     * @implNote Performs optimistic check for empty list before acquiring lock
+     * Uses reactive approach for fetching default books when needed
+     * Handles race conditions where another thread might have populated the list
+     * Returns a defensive copy of the list to prevent external modifications
+     * Properly handles thread interruption with status restoration
      */
     public Mono<List<Book>> getRecentlyViewedBooksReactive() {
         // Optimistic check outside the lock
@@ -187,17 +224,27 @@ public class RecentlyViewedService {
     }
 
     /**
-     * Blocking version of getRecentlyViewedBooks for backward compatibility
+     * Gets the list of recently viewed books using a blocking approach
+     * 
+     * @return A list of recently viewed books or default recommendations
+     * 
+     * @implNote Blocking version of getRecentlyViewedBooksReactive for backward compatibility
+     * Delegates to the reactive method and blocks until completion
+     * Use only when reactive programming is not suitable for the calling context
      */
     public List<Book> getRecentlyViewedBooks() {
         return getRecentlyViewedBooksReactive().block();
     }
 
     /**
-     * Check if a book cover image is valid (not a placeholder)
+     * Checks if a book cover image URL points to a valid cover image
      *
-     * @param imageUrl the image URL to check
-     * @return true if the image is a valid cover, false otherwise
+     * @param imageUrl The image URL to check
+     * @return true if the image is a valid cover, false if null or a placeholder
+     * 
+     * @implNote Checks for null URLs
+     * Detects placeholder images by checking for specific filename patterns
+     * Used to filter out books with missing or placeholder covers in recommendations
      */
     private boolean isValidCoverImage(String imageUrl) {
         if (imageUrl == null) {
@@ -209,7 +256,11 @@ public class RecentlyViewedService {
     }
 
     /**
-     * Clear the recently viewed books list.
+     * Clears the recently viewed books list
+     * 
+     * @implNote Thread-safe implementation using synchronized block
+     * Logs the action for debugging and audit purposes
+     * Does not affect default recommendations which are generated dynamically
      */
     public void clearRecentlyViewedBooks() {
         synchronized (recentlyViewedBooks) {

@@ -153,15 +153,20 @@
     <!-- STOMP over WebSocket for real-time cover updates -->
     <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js" defer></script>
+    
+    <!-- Clicky Analytics - Only rendered when enabled via properties -->
+    <th:block th:if="${@environment.getProperty('app.clicky.enabled', 'false') == 'true'}">
+        <!-- Clicky tracking script -->
+        <script async th:src="'https://static.getclicky.com/' + ${@environment.getProperty('app.clicky.site-id', '101484793')} + '.js'"></script>
+        <noscript>
+            <p><img alt="Clicky" width="1" height="1" th:src="'//in.getclicky.com/' + ${@environment.getProperty('app.clicky.site-id', '101484793')} + 'ns.gif'" /></p>
+        </noscript>
+    </th:block>
+    <!-- End Clicky Analytics -->
+    
     <!-- Additional Scripts -->
     <th:block th:replace="${extraScripts} ?: _"></th:block>
 </th:block>
-
-<!-- Clicky Analytics -->
-<a title="Web Analytics" href="https://clicky.com/101484793"><img alt="Clicky" src="https://static.getclicky.com/media/links/badge.gif" border="0" /></a>
-<script async src="https://static.getclicky.com/101484793.js"></script>
-<noscript><p><img alt="Clicky" width="1" height="1" src="//in.getclicky.com/101484793ns.gif" /></p></noscript>
-<!-- End Clicky Analytics -->
 
 </body>
 </html>

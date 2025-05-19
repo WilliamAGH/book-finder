@@ -21,6 +21,7 @@ import com.williamcallahan.book_recommendation_engine.service.RecommendationServ
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
+import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,10 +45,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.stream.Collectors;
-import java.util.Set; // Added for de-duplication
-import java.util.concurrent.ConcurrentHashMap; // Added for de-duplication using stream
-import java.util.function.Function; // Added for de-duplication using stream
-import java.util.function.Predicate; // Added for de-duplication using stream
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.Map;
+import java.util.HashMap;
 
 @Controller
 public class HomeController {
@@ -59,7 +62,8 @@ public class HomeController {
     private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
-    private final LocalDiskCoverCacheService localDiskCoverCacheService; // Added
+    private final LocalDiskCoverCacheService localDiskCoverCacheService;
+    private final AffiliateLinkService affiliateLinkService;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -89,6 +93,25 @@ public class HomeController {
     private static final Pattern ISBN13_PATTERN = Pattern.compile("^[0-9]{13}$");
     private static final Pattern ISBN_ANY_PATTERN = Pattern.compile("^[0-9]{9}[0-9X]$|^[0-9]{13}$");
 
+    @Value("${app.default-cover-preference:GOOGLE_BOOKS}")
+    private String defaultCoverPreference;
+
+    @Value("${app.seo.max-description-length:170}")
+    private int maxDescriptionLength;
+
+    // Affiliate IDs from properties
+    @Value("${app.affiliate.barnesnoble.cj.publisherid:}")
+    private String barnesNobleCjPublisherId;
+
+    @Value("${app.affiliate.barnesnoble.cj.websiteid:}")
+    private String barnesNobleCjWebsiteId;
+
+    @Value("${app.affiliate.bookshop.id:}")
+    private String bookshopAffiliateId;
+
+    @Value("${app.affiliate.amazon.tag:}")
+    private String amazonAssociateTag;
+
     /**
      * Constructs the HomeController with required services
      * 
@@ -106,7 +129,8 @@ public class HomeController {
                           BookCoverManagementService bookCoverManagementService,
                           EnvironmentService environmentService,
                           DuplicateBookService duplicateBookService,
-                          LocalDiskCoverCacheService localDiskCoverCacheService, // Added
+                          LocalDiskCoverCacheService localDiskCoverCacheService,
+                          AffiliateLinkService affiliateLinkService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
@@ -114,7 +138,8 @@ public class HomeController {
         this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
-        this.localDiskCoverCacheService = localDiskCoverCacheService; // Added
+        this.localDiskCoverCacheService = localDiskCoverCacheService;
+        this.affiliateLinkService = affiliateLinkService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
     }
 
@@ -144,11 +169,11 @@ public class HomeController {
         )
         .flatMap(this::processBooksCovers) // This sets book.getCoverImageUrl()
         .map(bookList -> bookList.stream()
-            .filter(this::isActualCover) // Enhanced cover filter
+            .filter(this::isActualCover)
             .collect(Collectors.toList())
         )
-        .map(this::deduplicateBooksById) // Added de-duplication step
-        .map(bookList -> { // This map now primarily populates duplicate editions on unique books
+        .map(this::deduplicateBooksById)
+        .map(bookList -> {
             bookList.forEach(duplicateBookService::populateDuplicateEditions);
             return bookList;
         })
@@ -192,12 +217,12 @@ public class HomeController {
 
         Mono<List<Book>> processedRecentBooksMono = recentBooksMono
             .flatMap(this::processBooksCovers)
-            .map(bookList -> bookList.stream() // Enhanced cover filter
+            .map(bookList -> bookList.stream()
                 .filter(this::isActualCover)
                 .collect(Collectors.toList())
             )
-            .map(this::deduplicateBooksById) // Added de-duplication step
-            .map(bookList -> { // This map now primarily populates duplicate editions on unique books
+            .map(this::deduplicateBooksById)
+            .map(bookList -> {
                 bookList.forEach(duplicateBookService::populateDuplicateEditions);
                 return bookList;
             })
@@ -229,7 +254,7 @@ public class HomeController {
             coverUrl.contains("image-not-available.png") ||
             coverUrl.contains("mock-placeholder.svg") ||
             // Add more known placeholder substrings if necessary
-            coverUrl.endsWith("/images/transparent.gif") // Example of another type
+            coverUrl.endsWith("/images/transparent.gif")
         ) {
             return false;
         }
@@ -316,12 +341,12 @@ public class HomeController {
 
         if (!isYearFilteringEnabled) {
             effectiveYear = null;
-            // If year filtering is disabled, we don't attempt to extract year from query.
-            // The original query is used as is.
+            // If year filtering is disabled, we don't attempt to extract year from query
+            // The original query is used as is
         } else {
             // Only attempt to extract year from query if year param is not already provided
-            // AND year filtering is enabled.
-            if (queryForProcessing != null && effectiveYear == null) { // Check effectiveYear here
+            // AND year filtering is enabled
+            if (queryForProcessing != null && effectiveYear == null) {
                 java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
                 java.util.regex.Matcher matcher = yearPattern.matcher(queryForProcessing);
                 
@@ -336,7 +361,7 @@ public class HomeController {
                         String processedQueryWithoutYear = (beforeYear + afterYear).trim().replaceAll("\\s+", " ");
                         
                         // Update queryForProcessing for the current request if not redirecting immediately,
-                        // though the redirect is typical here.
+                        // though the redirect is typical here
                         // queryForProcessing = processedQueryWithoutYear; 
                         // effectiveYear = extractedYear; // Set effectiveYear if detected
 
@@ -418,7 +443,7 @@ public class HomeController {
                 return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
                     .map(coverImagesResult -> {
                         book.setCoverImages(coverImagesResult);
-                        String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg"; // Default placeholder
+                        String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg";
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
                             book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
                             effectiveCoverImageUrl = coverImagesResult.getPreferredUrl();
@@ -441,6 +466,21 @@ public class HomeController {
 
                         // Populate other editions/duplicates
                         duplicateBookService.populateDuplicateEditions(book);
+
+                        // Generate Affiliate Links
+                        Map<String, String> affiliateLinks = new HashMap<>();
+                        String isbn13 = book.getIsbn13();
+                        String asin = book.getAsin();
+                        String title = book.getTitle(); // Get the book title
+
+                        if (isbn13 != null) {
+                            affiliateLinks.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
+                            affiliateLinks.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId));
+                        }
+                        // Pass ASIN, title, and associate tag to the updated Audible link generator
+                        affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag));
+                        
+                        model.addAttribute("affiliateLinks", affiliateLinks);
 
                         try {
                             recentlyViewedService.addToRecentlyViewed(book);
@@ -473,6 +513,19 @@ public class HomeController {
                         
                         // Populate other editions/duplicates even on cover error, if book object exists
                         duplicateBookService.populateDuplicateEditions(book);
+
+                        // Generate Affiliate Links even on cover error, if book object exists
+                        Map<String, String> affiliateLinksOnError = new HashMap<>();
+                        String isbn13OnError = book.getIsbn13();
+                        String asinOnError = book.getAsin();
+
+                        if (isbn13OnError != null) {
+                            affiliateLinksOnError.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
+                            affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId));
+                        }
+                        affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag));
+                        
+                        model.addAttribute("affiliateLinks", affiliateLinksOnError);
 
                         return Mono.just(book);
                     });
@@ -517,7 +570,7 @@ public class HomeController {
                         .filter(this::isActualCover)
                         .collectList()
                     )
-                    .map(books -> books.stream().limit(6).collect(Collectors.toList())) // Limit to max 6 books
+                    .map(books -> books.stream().limit(6).collect(Collectors.toList()))
                     .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
                     .doOnError(e -> {
                         logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());
@@ -666,7 +719,7 @@ public class HomeController {
     }
     
     /**
-     * Handle book lookup by ISBN-10, then redirect to the canonical URL with Google Book ID.
+     * Handle book lookup by ISBN-10, then redirect to the canonical URL with Google Book ID
      * Kept for compatibility and explicit format specification
      * 
      * @param isbn10 the book's ISBN-10

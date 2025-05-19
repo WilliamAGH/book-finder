@@ -4,25 +4,30 @@
  * @author William Callahan
  *
  * Features:
- * - Excludes default database auto-configurations to allow conditional DB setup (Note: Some exclusions removed to fix bean issue)
+ * - Excludes default database auto-configurations to allow conditional DB setup
  * - Enables caching for improved performance
  * - Supports asynchronous operations for non-blocking API calls
  * - Entry point for Spring Boot application
  */
+
 package com.williamcallahan.book_recommendation_engine;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cache.annotation.EnableCaching;
-// Imports for CommandLineRunner, S3CoverCleanupService, Value, Bean are no longer needed here
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 
 @SpringBootApplication(exclude = {
-    OpenAiAudioSpeechAutoConfiguration.class, 
-    OpenAiAudioTranscriptionAutoConfiguration.class 
+    OpenAiAudioSpeechAutoConfiguration.class,
+    OpenAiAudioTranscriptionAutoConfiguration.class,
+    // Disable default Spring Security auto-configuration to allow public access
+    org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
+    org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration.class,
+    // Disable reactive security auto-configuration for WebFlux endpoints
+    org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class
 })
 @EnableCaching
 @EnableAsync
@@ -37,6 +42,4 @@ public class BookRecommendationEngineApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(BookRecommendationEngineApplication.class, args);
 	}
-
-    // CommandLineRunner removed as per user request for manual trigger
 }
