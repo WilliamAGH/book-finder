@@ -30,8 +30,6 @@ import com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookR
 /**
  * Configuration to disable database components in absence of a database URL
  *
- * @author William Callahan
- *
  * Features:
  * - Activates only when no database URL is configured in properties
  * - Ensures application functions without database dependencies

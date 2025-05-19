@@ -31,8 +31,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Test class for RobotsController with nested test scenarios for different environments
- *
- * @author William Callahan
  */
 @WebMvcTest(RobotsController.class)
 class RobotsControllerTest {
@@ -40,7 +38,6 @@ class RobotsControllerTest {
     /**
      * Test security configuration allowing anonymous access to robots.txt
      * 
-     * @author William Callahan
      */
     @Configuration
     @EnableWebSecurity
@@ -74,7 +71,6 @@ class RobotsControllerTest {
     /**
      * Production domain + main branch test scenario
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)
@@ -100,7 +96,6 @@ class RobotsControllerTest {
     /**
      * Non-production domain + main branch test scenario
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)
@@ -126,7 +121,6 @@ class RobotsControllerTest {
     /**
      * Production domain + non-main branch test scenario
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)
@@ -152,7 +146,6 @@ class RobotsControllerTest {
     /**
      * Non-production domain + non-main branch test scenario
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)
@@ -178,7 +171,6 @@ class RobotsControllerTest {
     /**
      * Empty URL property test scenario
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)
@@ -204,7 +196,6 @@ class RobotsControllerTest {
     /**
      * Empty branch property test scenario
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)
@@ -230,7 +221,6 @@ class RobotsControllerTest {
     /**
      * Default configuration test scenario with no properties set
      * 
-     * @author William Callahan
      */
     @Nested
     @WebMvcTest(RobotsController.class)

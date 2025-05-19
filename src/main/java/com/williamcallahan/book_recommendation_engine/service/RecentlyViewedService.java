@@ -28,9 +28,7 @@ import reactor.core.publisher.Mono;
 
 /**
  * Service for tracking and managing recently viewed books
- *
- * @author William Callahan
- *
+ * 
  * Features:
  * - Maintains a thread-safe list of recently viewed books
  * - Limits the number of books in the history to avoid memory issues

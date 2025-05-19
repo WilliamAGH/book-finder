@@ -27,8 +27,6 @@ import java.time.Duration;
 /**
  * Helper class for implementing health check indicators for web pages
  * 
- * @author William Callahan
- * 
  * Provides a reusable mechanism for checking the health of web pages
  * Used by specific health indicator components for different page types
  */
@@ -125,7 +123,6 @@ public class WebPageHealthIndicator {
 /**
  * Health indicator for checking the homepage availability
  * 
- * @author William Callahan
  */
 @Component("homepageHealthIndicator")
 class HomepageHealthIndicator implements ReactiveHealthIndicator {
@@ -163,7 +160,6 @@ class HomepageHealthIndicator implements ReactiveHealthIndicator {
 /**
  * Health indicator for checking book detail page availability
  *
- * @author William Callahan
  */
 @Component("bookDetailPageHealthIndicator")
 class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {

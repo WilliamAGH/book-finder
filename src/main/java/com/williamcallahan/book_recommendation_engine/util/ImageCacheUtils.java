@@ -27,7 +27,6 @@ import java.util.Base64;
  * Utility class for image caching operations
  * - Provides helper methods for hashing, filename generation, and type mapping
  *
- * @author William Callahan
  */
 public final class ImageCacheUtils {
 
