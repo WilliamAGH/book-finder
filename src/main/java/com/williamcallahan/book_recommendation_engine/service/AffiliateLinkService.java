@@ -13,6 +13,9 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.UnsupportedEncodingException;
@@ -22,10 +25,19 @@ import java.nio.charset.StandardCharsets;
 @Service
 public class AffiliateLinkService {
 
-    // These would ideally be injected from application.properties or a config server
-    // For Barnes & Noble, you'd have your specific CJ publisher ID and website ID (AID)
-    // For Bookshop.org, your affiliate ID
-    // For Amazon/Audible, your Associates Tag
+    private static final Logger logger = LoggerFactory.getLogger(AffiliateLinkService.class);
+
+    @Value("${affiliate.barnesandnoble.publisher-id:#{null}}")
+    private String defaultCjPublisherId;
+
+    @Value("${affiliate.barnesandnoble.website-id:#{null}}")
+    private String defaultCjWebsiteId;
+
+    @Value("${affiliate.bookshop.affiliate-id:#{null}}")
+    private String defaultBookshopAffiliateId;
+
+    @Value("${affiliate.amazon.associate-tag:#{null}}")
+    private String defaultAmazonAssociateTag;
 
     /**
      * Generates an affiliate link for Barnes & Noble using CJ Affiliate
@@ -52,7 +64,7 @@ public class AffiliateLinkService {
             return String.format("https://www.anrdoezrs.net/click-%s-%s?url=%s&sid=%s",
                                  cjPublisherId, cjWebsiteId, encodedProductUrl, isbn);
         } catch (UnsupportedEncodingException e) {
-            System.err.println("Error encoding Barnes & Noble URL: " + e.getMessage());
+            logger.error("Error encoding Barnes & Noble URL: {}", e.getMessage(), e);
             return "https://www.barnesandnoble.com/w/?ean=" + isbn; // Fallback to direct search on error
         }
     }
@@ -108,7 +120,7 @@ public class AffiliateLinkService {
                 }
                 return searchUrl;
             } catch (UnsupportedEncodingException e) {
-                System.err.println("Error encoding title for Audible search: " + e.getMessage());
+                logger.error("Error encoding title for Audible search: {}", e.getMessage(), e);
                 // Fallback to generic search if title encoding fails
             }
         }
@@ -120,4 +132,4 @@ public class AffiliateLinkService {
         }
         return "https://www.audible.com/search"; 
     }
-} 
+}

@@ -93,7 +93,10 @@ public class GoogleBooksService {
             // Record successful API call on receiving a response
             .doOnNext(response -> apiRequestMonitor.recordSuccessfulRequest(
                 "volumes/search/authenticated?query=" + query + "&startIndex=" + startIndex + "&orderBy=" + orderBy + "&langCode=" + langCode
-            ));
+            ))
+            .doOnError(e -> apiRequestMonitor.recordFailedRequest(
+                "volumes/search/authenticated?query=" + query + "&startIndex=" + startIndex,
+                e.getMessage()));
     }
 
     /**
@@ -265,7 +268,8 @@ public class GoogleBooksService {
     public CompletionStage<Book> getBookById(String bookId) {
         logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheService/GoogleBooksCachingStrategy.", bookId);
         return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
-            .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode))
+            .map(BookJsonParser::convertJsonToBook)
+            .filter(Objects::nonNull)
             // Record successful API fetch for the book
             .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest(
                 "volumes/get/authenticated/" + bookId
