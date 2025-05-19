@@ -1,5 +1,21 @@
 package com.williamcallahan.book_recommendation_engine.config;
 
+/**
+ * Configuration class for Spring Security settings in the Book Recommendation Engine
+ *
+ * @author William Callahan
+ *
+ * Key Features:
+ * - Enables Web Security and Method Security for @PreAuthorize annotations
+ * - Configures role-based access control for different URL patterns
+ * - Sets up HTTP Basic Authentication and Form Login
+ * - Uses custom AuthenticationEntryPoint for admin paths
+ * - Defines in-memory user details for admin and user roles
+ * - Implements Content Security Policy and Referrer-Policy headers
+ * - Manages CSRF protection
+ */
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -11,27 +27,108 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
+import org.springframework.security.web.header.writers.StaticHeadersWriter;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
+import java.util.Arrays;
+import java.util.stream.Collectors;
+
 @Configuration
 @EnableWebSecurity
-@EnableMethodSecurity(prePostEnabled = true) // Enables @PreAuthorize, @PostAuthorize, etc.
+@EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
+
+    private final AuthenticationEntryPoint customBasicAuthenticationEntryPoint; // Added
+
+    @Value("${app.security.headers.content-security-policy.enabled:true}")
+    private boolean cspEnabled;
+
+    @Value("${app.security.headers.referrer-policy:ORIGIN_WHEN_CROSS_ORIGIN}")
+    private String referrerPolicy;
+
+    @Value("${app.clicky.enabled:true}")
+    private boolean clickyEnabled;
+
+    @Value("${app.clicky.site-id:101484793}")
+    private String clickySiteId;
+    
+    @Value("${app.book.covers.cdn-domain:https://book-finder.sfo3.digitaloceanspaces.com}")
+    private String bookCoversCdnDomain;
+    
+    @Value("${app.book.covers.additional-domains:}")
+    private String bookCoversAdditionalDomains;
+
+    public SecurityConfig(CustomBasicAuthenticationEntryPoint customBasicAuthenticationEntryPoint) {
+        this.customBasicAuthenticationEntryPoint = customBasicAuthenticationEntryPoint;
+    }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            // Specify a security matcher pattern to avoid conflicts with test configurations
+            .securityMatcher("/**")
             .authorizeHttpRequests(authorizeRequests ->
                 authorizeRequests
                     .requestMatchers("/admin/**").hasRole("ADMIN")
+                    .requestMatchers("/robots.txt").permitAll() // Explicitly permit robots.txt
                     .anyRequest().permitAll() // Default to permit all for non-admin routes
             )
             .formLogin(withDefaults()) // Enable form-based login
-            .httpBasic(withDefaults()) // Enable HTTP Basic authentication
+            .httpBasic(httpBasic -> httpBasic
+                .authenticationEntryPoint(customBasicAuthenticationEntryPoint) // Use custom entry point for admin paths
+            )
             .csrf(withDefaults()); // Enable CSRF protection with defaults
+
+        // Configure headers if CSP is enabled
+        if (cspEnabled) {
+            configureSecurity(http);
+        }
+            
         return http.build();
+    }
+
+    private void configureSecurity(HttpSecurity http) throws Exception {
+        http.headers(headers -> {
+            // Set Referrer-Policy based on configuration
+            ReferrerPolicyHeaderWriter.ReferrerPolicy policy = ReferrerPolicyHeaderWriter.ReferrerPolicy.valueOf(referrerPolicy);
+            headers.referrerPolicy(referrer -> referrer.policy(policy));
+            
+            if (clickyEnabled) {
+                // Build the img-src directive with all required domains
+                StringBuilder imgSrcDirective = new StringBuilder("'self' data: ");
+                // Add Clicky Analytics domains
+                imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
+                
+                // Add book covers CDN domain
+                imgSrcDirective.append(bookCoversCdnDomain);
+                
+                // Add additional domains if specified
+                if (bookCoversAdditionalDomains != null && !bookCoversAdditionalDomains.isEmpty()) {
+                    // Split the comma-separated list and trim each domain
+                    String formattedDomains = Arrays.stream(bookCoversAdditionalDomains.split(","))
+                        .map(String::trim)
+                        .collect(Collectors.joining(" "));
+                    
+                    imgSrcDirective.append(" ").append(formattedDomains);
+                }
+                
+                // Add Content Security Policy header with dynamic img-src directive
+                headers.addHeaderWriter(new StaticHeadersWriter("Content-Security-Policy",
+                    "default-src 'self'; " +
+                    "script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://static.getclicky.com https://clicky.com 'unsafe-inline'; " +
+                    "style-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com 'unsafe-inline'; " +
+                    "img-src " + imgSrcDirective.toString() + "; " +
+                    "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; " +
+                    "connect-src 'self' https://static.getclicky.com https://in.getclicky.com https://clicky.com; " +
+                    "frame-src 'self'; " +
+                    "object-src 'none'"
+                ));
+            }
+        });
     }
 
     @Bean
