@@ -28,6 +28,12 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
  * @param {string|null} theme - The theme preference ('light', 'dark', or null for system)
  * @param {boolean} useSystem - Whether to use system preference
  */
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
 function updateServerThemePreference(theme, useSystem) {
     // Create request data
     const data = {
@@ -39,7 +45,8 @@ function updateServerThemePreference(theme, useSystem) {
     fetch('/api/theme', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-XSRF-TOKEN': getCookie('XSRF-TOKEN') // Add CSRF token header
         },
         body: JSON.stringify(data)
     })

@@ -7,6 +7,25 @@ body {
     display: flex;
     flex-direction: column;
     line-height: 1.6;
+    margin: 0; /* Ensure no body margin */
+    padding-top: 0; /* Ensure no body top padding */
+    border-top: 0; /* Ensure no body top border */
+}
+
+html {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overscroll-behavior-y: contain; /* Prevent bounce overscroll showing browser background */
+}
+
+/* Set HTML background to match navbar start color for each theme */
+html:not([data-theme="dark"]) { /* Assumes light theme by default or when data-theme="light" */
+    background-color: #4a38bd; /* Light mode navbar gradient start */
+}
+
+html[data-theme="dark"] {
+    background-color: #1a1a2e; /* Dark mode navbar gradient start */
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -971,9 +990,6 @@ section {
     background-color: var(--hero-bg-color); /* Solid dark background, as per inspiration */
 }
 
-[data-theme="dark"] .navbar {
-    background-color: var(--navbar-bg-dark);
-}
 
 /* "View All" button in dark mode - change to text link style */
 [data-theme="dark"] .btn-view-all.btn-outlined {
