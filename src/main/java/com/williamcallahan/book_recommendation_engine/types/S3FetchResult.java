@@ -11,7 +11,7 @@ package com.williamcallahan.book_recommendation_engine.types;
 
 import java.util.Optional;
 
-public class S3FetchResult<T> {
+public final class S3FetchResult<T> {
     
     public enum Status {
         SUCCESS,        // Item was successfully retrieved
@@ -25,6 +25,12 @@ public class S3FetchResult<T> {
     private final String errorMessage;
     
     private S3FetchResult(Status status, T data, String errorMessage) {
+        if (status == Status.SUCCESS && data == null) {
+            throw new IllegalArgumentException("SUCCESS result requires non-null data");
+        }
+        if (status != Status.SUCCESS && errorMessage == null) {
+            throw new IllegalArgumentException(status + " result requires non-null errorMessage");
+        }
         this.status = status;
         this.data = data;
         this.errorMessage = errorMessage;

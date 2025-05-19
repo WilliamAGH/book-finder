@@ -844,7 +844,7 @@ public class Book {
      * @param qualifiers Map of qualifier name to qualifier data
      */
     public void setQualifiers(Map<String, Object> qualifiers) {
-        this.qualifiers = qualifiers;
+        this.qualifiers = qualifiers != null ? qualifiers : new HashMap<>();
     }
     
     /**

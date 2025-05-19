@@ -190,10 +190,9 @@ public class BookCacheWarmingScheduler {
     }
     
     /**
-     * Get a list of book IDs to warm in the cache, prioritizing:
-     * 1. Recently viewed books
-     * 2. Popular/trending books
-     * 3. Books specifically marked for warming
+     * Get a list of book IDs to warm in the cache, based on recently viewed books.
+     * This currently prioritizes recently viewed books that have not been warmed recently.
+     * Future enhancements could include popular/trending books or those specifically marked for warming.
      * 
      * @return List of book IDs to warm
      */
