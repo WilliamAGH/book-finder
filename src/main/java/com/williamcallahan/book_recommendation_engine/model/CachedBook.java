@@ -58,7 +58,7 @@ public class CachedBook {
 
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "cached_book_categories", joinColumns = @JoinColumn(name = "book_id"))
-    @Column(name = "category", columnDefinition = "text") // Keep for explicit text array if needed, or remove if default is fine
+    @Column(name = "category", length = 255) // plain TEXT is fine; columnDefinition not needed
     private List<String> categories;
 
     @Column(name = "average_rating")

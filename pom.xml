@@ -30,6 +30,11 @@
         <java.version>21</java.version>
         <spring-ai.version>1.0.0-RC1</spring-ai.version>
         <wro4j.version>2.1.1</wro4j.version>
+        <maven.resources.useDefaultDelimiters>false</maven.resources.useDefaultDelimiters>
+        <!-- <maven.resources.overwrite>true</maven.resources.overwrite> Removed, rely on plugin config -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <mockito.version>5.11.0</mockito.version>
     </properties>
     <dependencies>
         <dependency>
@@ -48,6 +53,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
         <dependency>
             <groupId>io.github.wimdeblauwe</groupId>
@@ -191,42 +200,47 @@
         </dependencies>
     </dependencyManagement>
 
-    <repositories>
-        <repository>
-            <id>spring-milestones</id>
-            <name>Spring Milestones</name>
-            <url>https://repo.spring.io/milestone</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </repository>
-        <repository>
-            <id>spring-snapshots</id>
-            <name>Spring Snapshots</name>
-            <url>https://repo.spring.io/snapshot</url>
-            <releases>
-                <enabled>false</enabled>
-            </releases>
-        </repository>
-    </repositories>
-    <pluginRepositories>
-        <pluginRepository>
-            <id>spring-milestones</id>
-            <name>Spring Milestones</name>
-            <url>https://repo.spring.io/milestone</url>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
-        </pluginRepository>
-        <pluginRepository>
-            <id>spring-snapshots</id>
-            <name>Spring Snapshots</name>
-            <url>https://repo.spring.io/snapshot</url>
-            <releases>
-                <enabled>false</enabled>
-            </releases>
-        </pluginRepository>
-    </pluginRepositories>
+    <profiles>
+        <profile>
+            <id>snapshot-dependencies</id>
+            <repositories>
+                <repository>
+                    <id>spring-milestones</id>
+                    <name>Spring Milestones</name>
+                    <url>https://repo.spring.io/milestone</url>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </repository>
+                <repository>
+                    <id>spring-snapshots</id>
+                    <name>Spring Snapshots</name>
+                    <url>https://repo.spring.io/snapshot</url>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>spring-milestones</id>
+                    <name>Spring Milestones</name>
+                    <url>https://repo.spring.io/milestone</url>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </pluginRepository>
+                <pluginRepository>
+                    <id>spring-snapshots</id>
+                    <name>Spring Snapshots</name>
+                    <url>https://repo.spring.io/snapshot</url>
+                    <releases>
+                        <enabled>false</enabled>
+                    </releases>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+    </profiles>
 
     <build>
         <pluginManagement>
@@ -274,12 +288,49 @@
         </pluginManagement>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                        <configuration>
+                            <!-- <compilerArgs>
+                                <arg>-XprintRounds</arg>
+                                <arg>-XprintProcessorInfo</arg>
+                                <arg>-verbose</arg>
+                            </compilerArgs>
+                            <showWarnings>true</showWarnings>
+                            <showDeprecation>true</showDeprecation> -->
+                        </configuration>
+                    </execution>
+                </executions>
+                <configuration>
+                     <source>${java.version}</source>
+                     <target>${java.version}</target>
+                     <release>${java.version}</release>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <jvmArguments>-XX:+EnableDynamicAgentLoading -Xshare:off</jvmArguments>
                     <profiles>
                         <profile>dev</profile>
                     </profiles>
+                    <!-- Note: To avoid Java agent warnings, set the MAVEN_OPTS environment variable:
+                         export MAVEN_OPTS="-XX:+EnableDynamicAgentLoading" -->
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
                 </configuration>
             </plugin>
             <plugin>
@@ -308,13 +359,13 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <wroManagerFactory>ro.isdc.wro.manager.factory.standalone.DefaultStandaloneContextAwareManagerFactory</wroManagerFactory>
+                    <wroManagerFactory>ro.isdc.wro.maven.plugin.manager.factory.ConfigurableWroManagerFactory</wroManagerFactory>
+                    <wroFile>${basedir}/src/main/resources/wro.xml</wroFile>
+                    <extraConfigFile>${basedir}/src/main/resources/wro.properties</extraConfigFile>
                     <contextFolder>${basedir}/src/main/resources</contextFolder>
                     <cssDestinationFolder>${project.build.directory}/classes/static/css/</cssDestinationFolder>
                     <jsDestinationFolder>${project.build.directory}/classes/static/js/</jsDestinationFolder>
-                    <wroFile>${basedir}/src/main/resources/wro.xml</wroFile>
-                    <extraConfigFile>${basedir}/src/main/resources/wro.properties</extraConfigFile>
-                    <minimize>true</minimize>
+                    <ignoreMissingResources>false</ignoreMissingResources>
                     <targetGroups>app</targetGroups>
                 </configuration>
             </plugin>
@@ -324,11 +375,25 @@
                 <version>3.3.1</version>
                 <configuration>
                     <overwrite>true</overwrite>
+                    <encoding>UTF-8</encoding>
+                    <excludes>
+                        <exclude>static/covers/**</exclude> <!-- Exclude cached cover images from resource processing -->
+                    </excludes>
+                    <nonFilteredFileExtensions>
+                        <nonFilteredFileExtension>jpg</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>jpeg</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>png</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>gif</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>properties</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>p12</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>jks</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>pfx</nonFilteredFileExtension>
+                    </nonFilteredFileExtensions>
+                    <useDefaultDelimiters>false</useDefaultDelimiters>
                 </configuration>
                 <executions>
                     <execution>
                         <id>default-resources</id>
-                        <phase>process-resources</phase>
                         <goals>
                             <goal>resources</goal>
                         </goals>
@@ -336,11 +401,51 @@
                             <overwrite>true</overwrite>
                         </configuration>
                     </execution>
+                    <execution>
+                        <id>default-testResources</id>
+                        <goals>
+                            <goal>testResources</goal>
+                        </goals>
+                    </execution>
                 </executions>
             </plugin>
             <plugin>
                 <artifactId>maven-clean-plugin</artifactId>
                 <version>3.3.2</version>
+                <executions>
+                    <execution>
+                        <id>clean-images-before-build</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                        <configuration>
+                            <filesets>
+                                <fileset>
+                                    <directory>${project.build.directory}/classes/static/covers</directory>
+                                    <includes>
+                                        <include>**/*.jpg</include>
+                                        <include>**/*.jpeg</include>
+                                        <include>**/*.png</include>
+                                        <include>**/*.gif</include>
+                                    </includes>
+                                    <followSymlinks>false</followSymlinks>
+                                </fileset>
+                            </filesets>
+                            <failOnError>true</failOnError> <!-- Ensure failure if cleaning doesn't work -->
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-XX:+EnableDynamicAgentLoading -Xshare:off --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -javaagent:"${settings.localRepository}/net/bytebuddy/byte-buddy-agent/1.14.4/byte-buddy-agent-1.14.4.jar"</argLine>
+                    <includes>
+                        <include>**/*Test.java</include>
+                    </includes>
+                </configuration>
             </plugin>
         </plugins>
     </build>

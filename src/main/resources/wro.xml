@@ -4,6 +4,8 @@
         xsi:schemaLocation="http://www.isdc.ro/wro wro.xsd">
 
   <group name="app">
+    <!-- Include variables before main.css so CSS custom-properties are defined -->
+    <css>/static/css/variables.css</css>
     <css>/static/css/main.css</css>
     <js>/static/js/main.js</js>
     <js>/static/js/cover-source-handler.js</js>

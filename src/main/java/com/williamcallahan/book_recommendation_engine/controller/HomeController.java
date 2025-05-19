@@ -19,10 +19,12 @@ import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
+import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,6 +44,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.stream.Collectors;
+import java.util.Set; // Added for de-duplication
+import java.util.concurrent.ConcurrentHashMap; // Added for de-duplication using stream
+import java.util.function.Function; // Added for de-duplication using stream
+import java.util.function.Predicate; // Added for de-duplication using stream
+
 @Controller
 public class HomeController {
 
@@ -52,6 +59,9 @@ public class HomeController {
     private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
+    private final LocalDiskCoverCacheService localDiskCoverCacheService; // Added
+    private final boolean isYearFilteringEnabled;
+
     private static final int MAX_RECENT_BOOKS = 8;
     private static final int MAX_BESTSELLERS = 8;
     
@@ -95,13 +105,17 @@ public class HomeController {
                           RecommendationService recommendationService,
                           BookCoverManagementService bookCoverManagementService,
                           EnvironmentService environmentService,
-                          DuplicateBookService duplicateBookService) {
+                          DuplicateBookService duplicateBookService,
+                          LocalDiskCoverCacheService localDiskCoverCacheService, // Added
+                          @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
+        this.localDiskCoverCacheService = localDiskCoverCacheService; // Added
+        this.isYearFilteringEnabled = isYearFilteringEnabled;
     }
 
     /**
@@ -126,12 +140,21 @@ public class HomeController {
 
         // Fetch Current Bestsellers
         Mono<List<Book>> bestsellersMono = bookCacheService.searchBooksReactive(
-                "new york times bestsellers", 0, MAX_BESTSELLERS, null
+                "new york times bestsellers", 0, MAX_BESTSELLERS, null, null, null
         )
-        .flatMap(this::processBooksCovers)
+        .flatMap(this::processBooksCovers) // This sets book.getCoverImageUrl()
+        .map(bookList -> bookList.stream()
+            .filter(this::isActualCover) // Enhanced cover filter
+            .collect(Collectors.toList())
+        )
+        .map(this::deduplicateBooksById) // Added de-duplication step
+        .map(bookList -> { // This map now primarily populates duplicate editions on unique books
+            bookList.forEach(duplicateBookService::populateDuplicateEditions);
+            return bookList;
+        })
         .doOnSuccess(bestsellers -> model.addAttribute("currentBestsellers", bestsellers))
         .doOnError(e -> {
-            logger.error("Error fetching current bestsellers: {}", e.getMessage());
+            logger.error("Error fetching and filtering current bestsellers: {}", e.getMessage());
             model.addAttribute("currentBestsellers", Collections.emptyList());
         })
         .onErrorReturn(Collections.emptyList());
@@ -148,7 +171,7 @@ public class HomeController {
             String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
             logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
             
-            recentBooksMono = bookCacheService.searchBooksReactive(randomQuery, 0, needed) 
+            recentBooksMono = bookCacheService.searchBooksReactive(randomQuery, 0, needed, null, null, null)
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
@@ -169,9 +192,18 @@ public class HomeController {
 
         Mono<List<Book>> processedRecentBooksMono = recentBooksMono
             .flatMap(this::processBooksCovers)
+            .map(bookList -> bookList.stream() // Enhanced cover filter
+                .filter(this::isActualCover)
+                .collect(Collectors.toList())
+            )
+            .map(this::deduplicateBooksById) // Added de-duplication step
+            .map(bookList -> { // This map now primarily populates duplicate editions on unique books
+                bookList.forEach(duplicateBookService::populateDuplicateEditions);
+                return bookList;
+            })
             .doOnSuccess(recent -> model.addAttribute("recentBooks", recent))
-            .doOnError(e -> {
-                logger.error("Error fetching recent books: {}", e.getMessage());
+        .doOnError(e -> {
+            logger.error("Error fetching and filtering recent books: {}", e.getMessage());
                 model.addAttribute("recentBooks", Collections.emptyList());
             })
             .onErrorReturn(Collections.emptyList());
@@ -180,6 +212,44 @@ public class HomeController {
         return Mono.zip(bestsellersMono, processedRecentBooksMono)
             .map(tuple -> "index")
             .onErrorReturn("index"); // Fallback to rendering index even if one stream fails
+    }
+
+    // Helper predicate for filtering out known placeholder images
+    private boolean isActualCover(Book book) {
+        String coverUrl = book.getCoverImageUrl();
+        if (coverUrl == null || coverUrl.isEmpty()) {
+            return false; // No URL, not an actual cover
+        }
+        // Check against the primary placeholder path
+        if (coverUrl.equals(this.localDiskCoverCacheService.getLocalPlaceholderPath())) {
+            return false;
+        }
+        // Check for other known placeholder patterns/names
+        if (coverUrl.contains("placeholder-book-cover.svg") || 
+            coverUrl.contains("image-not-available.png") ||
+            coverUrl.contains("mock-placeholder.svg") ||
+            // Add more known placeholder substrings if necessary
+            coverUrl.endsWith("/images/transparent.gif") // Example of another type
+        ) {
+            return false;
+        }
+        return true; // Assume it's an actual cover if none of the above match
+    }
+
+    // Helper method to de-duplicate a list of books by their ID
+    private List<Book> deduplicateBooksById(List<Book> books) {
+        if (books == null || books.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return books.stream()
+                .filter(distinctByKey(Book::getId))
+                .collect(Collectors.toList());
+    }
+
+    // Utility for distinctByKey
+    private static <T> Predicate<T> distinctByKey(Function<? super T, ?> keyExtractor) {
+        Set<Object> seen = ConcurrentHashMap.newKeySet();
+        return t -> seen.add(keyExtractor.apply(t));
     }
     
     // Helper method to process covers for a list of books
@@ -240,32 +310,44 @@ public class HomeController {
     public Object search(String query, 
                        @RequestParam(required = false) Integer year,
                        Model model) {
-        // Check if we need to redirect with extracted year
-        if (query != null && year == null) {
-            // Try to extract year from query
-            java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
-            java.util.regex.Matcher matcher = yearPattern.matcher(query);
-            
-            if (matcher.find()) {
-                // Extract the year
-                String yearStr = matcher.group(1);
-                try {
-                    int extractedYear = Integer.parseInt(yearStr);
-                    logger.info("Detected year {} in query text. Redirecting to use year parameter.", extractedYear);
-                    
-                    // Remove the year from the query
-                    String beforeYear = query.substring(0, matcher.start());
-                    String afterYear = query.substring(matcher.end());
-                    String processedQuery = (beforeYear + afterYear).trim().replaceAll("\\s+", " ");
-                    
-                    // Build the redirect URL with the year parameter
-                    String redirectUrl = "/search?query=" + URLEncoder.encode(processedQuery, StandardCharsets.UTF_8) 
-                                      + "&year=" + extractedYear;
-                    
-                    return new RedirectView(redirectUrl);
-                } catch (Exception e) {
-                    logger.warn("Failed to extract year from query: {}", e.getMessage());
-                    // Continue with normal rendering if year extraction fails
+        
+        Integer effectiveYear = year;
+        String queryForProcessing = query;
+
+        if (!isYearFilteringEnabled) {
+            effectiveYear = null;
+            // If year filtering is disabled, we don't attempt to extract year from query.
+            // The original query is used as is.
+        } else {
+            // Only attempt to extract year from query if year param is not already provided
+            // AND year filtering is enabled.
+            if (queryForProcessing != null && effectiveYear == null) { // Check effectiveYear here
+                java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
+                java.util.regex.Matcher matcher = yearPattern.matcher(queryForProcessing);
+                
+                if (matcher.find()) {
+                    String yearStr = matcher.group(1);
+                    try {
+                        int extractedYear = Integer.parseInt(yearStr);
+                        logger.info("Detected year {} in query text. Redirecting to use year parameter.", extractedYear);
+                        
+                        String beforeYear = queryForProcessing.substring(0, matcher.start());
+                        String afterYear = queryForProcessing.substring(matcher.end());
+                        String processedQueryWithoutYear = (beforeYear + afterYear).trim().replaceAll("\\s+", " ");
+                        
+                        // Update queryForProcessing for the current request if not redirecting immediately,
+                        // though the redirect is typical here.
+                        // queryForProcessing = processedQueryWithoutYear; 
+                        // effectiveYear = extractedYear; // Set effectiveYear if detected
+
+                        String redirectUrl = "/search?query=" + URLEncoder.encode(processedQueryWithoutYear, StandardCharsets.UTF_8) 
+                                          + "&year=" + extractedYear;
+                        
+                        return new RedirectView(redirectUrl);
+                    } catch (Exception e) {
+                        logger.warn("Failed to extract year from query: {}", e.getMessage());
+                        // Continue with normal rendering if year extraction fails, effectiveYear remains as initially set
+                    }
                 }
             }
         }
@@ -273,8 +355,9 @@ public class HomeController {
         // Normal rendering path
         model.addAttribute("isDevelopmentMode", environmentService.isDevelopmentMode());
         model.addAttribute("currentEnv", environmentService.getCurrentEnvironmentMode());
-        model.addAttribute("query", query);
-        model.addAttribute("year", year); // Pass year parameter to the view
+        model.addAttribute("query", queryForProcessing); // Use the original query or processed if year was stripped (though redirect handles this)
+        model.addAttribute("year", effectiveYear); // Pass effectiveYear (possibly null if disabled or not found)
+        model.addAttribute("isYearFilteringEnabled", isYearFilteringEnabled); // Pass the flag
         model.addAttribute("activeTab", "search");
         model.addAttribute("title", "Search Books");
         model.addAttribute("description", "Search our extensive catalog of books by title, author, or ISBN. Find detailed information and recommendations.");
@@ -404,7 +487,7 @@ public class HomeController {
         return bookMonoWithCover
             .flatMap(fetchedBook -> { // fetchedBook is the main book, potentially null if initial fetch failed and resulted in empty()
                 // Fetch similar books using RecommendationService
-                Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 6)
+                Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 10)  // Request 10 instead of 6
                     .flatMap(similarBooksList -> Flux.fromIterable(similarBooksList)
                         .concatMap(similarBook -> {
                             if (similarBook == null) return Mono.justOrEmpty(null);
@@ -430,8 +513,11 @@ public class HomeController {
                                 });
                         })
                         .filter(java.util.Objects::nonNull)
+                        // Add the filter for actual covers
+                        .filter(this::isActualCover)
                         .collectList()
                     )
+                    .map(books -> books.stream().limit(6).collect(Collectors.toList())) // Limit to max 6 books
                     .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
                     .doOnError(e -> {
                         logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());

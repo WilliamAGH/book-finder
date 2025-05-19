@@ -39,26 +39,50 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    
+    <!-- Google Fonts - New (Inter & Poppins) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
+    
     <!-- Custom CSS -->
+    <!-- CSS Variables Definitions -->
+    <link rel="stylesheet" th:href="@{/css/variables.css}">
     <link rel="stylesheet" th:href="@{/css/main.css}">
     <link rel="icon" type="image/x-icon" th:href="@{/favicon.ico}" href="/favicon.ico">
     <!-- Additional CSS -->
     <th:block th:replace="${extraCSS} ?: _"></th:block>
+
+    <!-- Logo visibility based on theme -->
+    <style>
+        /* Always show dark-mode logo on dark header background */
+        .navbar-brand .logo-light-mode {
+            display: none !important;
+        }
+        .navbar-brand .logo-dark-mode {
+            display: inline !important;
+            height: 50px;
+        }
+    </style>
+
 </head>
-<body>
+<body class="modern-layout">
 
 <!-- Navbar -->
-<nav th:fragment="navbar" id="main-navbar" class="navbar navbar-expand-lg sticky-top navbar-light">
+<nav th:fragment="navbar" id="main-navbar" class="navbar navbar-expand-lg sticky-top navbar-dark bg-dark modern-navbar">
     <div class="container">
-        <a class="navbar-brand" th:href="@{/}">
-            <i class="fas fa-book-reader me-2"></i>Book Finder
+        <a class="navbar-brand" th:href="@{\/}">
+            <span class="logo-light-mode">
+                <img th:src="@{/images/findmybook-logo.png}" alt="Book Finder Logo" style="height: 50px;">
+            </span>
+            <img th:src="@{/images/findmybook-logo.png}" alt="Book Finder Logo" class="logo-dark-mode" style="height: 50px;">
         </a>
-        <!-- Mobile-only theme toggle -->
-        <a id="theme-toggle-mobile" class="nav-link theme-toggle theme-toggle-header d-lg-none" href="#" title="Toggle theme">
+        
+        <!-- Theme toggle button outside hamburger menu for mobile -->
+        <a id="theme-toggle" class="theme-toggle theme-toggle-header d-lg-none" href="#" title="Toggle theme">
             <i class="fas fa-moon theme-icon"></i>
         </a>
+        
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" 
                 data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" 
                 aria-expanded="false" aria-label="Toggle navigation">
@@ -83,7 +107,11 @@
                         <i class="fas fa-book me-1"></i> Explore
                     </a>
                 </li>
-                <!-- Desktop-only theme toggle -->
+                <li class="nav-item">
+                    <a class="nav-link" th:href="@{/explore}">
+                        <i class="fas fa-list me-1"></i> Categories
+                    </a>
+                </li>
                 <li class="nav-item theme-toggle-item d-none d-lg-block">
                     <a id="theme-toggle-list" class="nav-link theme-toggle" href="#" title="Toggle theme">
                         <i class="fas fa-moon theme-icon"></i>
@@ -95,7 +123,7 @@
 </nav>
 
 <!-- Main Content -->
-<main th:fragment="content" class="main-content">
+<main th:fragment="content" class="main-content modern-main-content">
     <div class="container">
         <th:block th:replace="${content} ?: _">
         </th:block>
@@ -103,14 +131,14 @@
 </main>
 
 <!-- Footer -->
-<footer th:fragment="footer" class="footer">
+<footer th:fragment="footer" class="footer modern-footer">
     <div class="container">
         <div class="row">
             <div class="col-md-6">
                 <p class="mb-0">By <a href="https://williamcallahan.com" target="_blank" rel="noopener" class="text-decoration-none">William Callahan</a></p>
             </div>
             <div class="col-md-6 text-md-end">
-                <p class="mb-0">Powered by <a href="https://books.google.com/" target="_blank" rel="noopener" class="text-decoration-none">Google Books</a></p>
+                <p class="mb-0"><a href="https://github.com/WilliamAGH/book-finder" target="_blank" rel="noopener" class="text-decoration-none">Open Source</a> • Made with ❤️ in California</p>
             </div>
         </div>
     </div>

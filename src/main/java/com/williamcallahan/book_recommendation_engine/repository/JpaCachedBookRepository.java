@@ -98,7 +98,7 @@ public interface JpaCachedBookRepository extends JpaRepository<CachedBook, Strin
      * @return Optional containing the book if both conditions are met
      */
     @Query(value = "SELECT * FROM cached_books c WHERE c.id = :id AND c.authors @> CAST(CONCAT('[\"', :author, '\"]') AS jsonb)", nativeQuery = true)
-    Optional<CachedBook> findByIdAndAuthor(@Param("id") Long id, @Param("author") String author);
+    Optional<CachedBook> findByIdAndAuthor(@Param("id") String id, @Param("author") String author);
     
     /**
      * Find books by category with partial matching

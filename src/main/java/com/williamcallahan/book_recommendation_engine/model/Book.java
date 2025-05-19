@@ -15,6 +15,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
 public class Book {
     private String id;
     private String title;
@@ -51,6 +53,9 @@ public class Book {
     private CoverImages coverImages;
 
     private List<EditionInfo> otherEditions;
+    
+    // Map to store special qualifiers such as "new york times bestseller" or other search-specific attributes
+    private Map<String, Object> qualifiers;
 
     // Transient field to store the raw JSON response from Google Books API for provenance logging
     private transient String rawJsonResponse;
@@ -237,6 +242,7 @@ public class Book {
      */
     public Book() {
         this.otherEditions = new ArrayList<>();
+        this.qualifiers = new HashMap<>();
     }
 
     /**
@@ -257,6 +263,7 @@ public class Book {
         this.coverImageUrl = coverImageUrl;
         this.imageUrl = imageUrl;
         this.otherEditions = new ArrayList<>();
+        this.qualifiers = new HashMap<>();
     }
 
     /**
@@ -819,6 +826,48 @@ public class Book {
      */
     public void setRawJsonResponse(String rawJsonResponse) {
         this.rawJsonResponse = rawJsonResponse;
+    }
+
+    /**
+     * Get map of special qualifiers for this book 
+     * (e.g., "new york times bestseller", "award winner", search terms that matched)
+     * 
+     * @return Map of qualifier name to qualifier data
+     */
+    public Map<String, Object> getQualifiers() {
+        return qualifiers;
+    }
+
+    /**
+     * Set map of special qualifiers for this book
+     * 
+     * @param qualifiers Map of qualifier name to qualifier data
+     */
+    public void setQualifiers(Map<String, Object> qualifiers) {
+        this.qualifiers = qualifiers != null ? qualifiers : new HashMap<>();
+    }
+    
+    /**
+     * Add a single qualifier to this book
+     * 
+     * @param key Qualifier name/type
+     * @param value Qualifier data/value
+     */
+    public void addQualifier(String key, Object value) {
+        if (this.qualifiers == null) {
+            this.qualifiers = new HashMap<>();
+        }
+        this.qualifiers.put(key, value);
+    }
+    
+    /**
+     * Check if this book has a specific qualifier
+     * 
+     * @param key Qualifier name/type to check
+     * @return true if the book has this qualifier
+     */
+    public boolean hasQualifier(String key) {
+        return this.qualifiers != null && this.qualifiers.containsKey(key);
     }
 
     /**

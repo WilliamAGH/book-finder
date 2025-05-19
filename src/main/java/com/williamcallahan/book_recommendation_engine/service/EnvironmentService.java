@@ -1,15 +1,8 @@
-package com.williamcallahan.book_recommendation_engine.service;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
-import org.springframework.stereotype.Service;
-
 /**
  * Service for environment detection and configuration management
- * 
+ *
  * @author William Callahan
- * 
+ *
  * Features:
  * - Determines active Spring profiles (dev, prod)
  * - Provides configuration properties to templates and services
@@ -18,6 +11,12 @@ import org.springframework.stereotype.Service;
  * - Enables conditional rendering based on environment context
  * - Supports feature flags for staged rollouts and debugging
  */
+package com.williamcallahan.book_recommendation_engine.service;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.stereotype.Service;
 @Service("environmentService")
 public class EnvironmentService {
 
@@ -25,9 +24,7 @@ public class EnvironmentService {
 
     /**
      * Constructs EnvironmentService with Spring environment
-     * - Injects the Spring Environment abstraction
-     * - Enables access to property sources and profiles
-     * 
+     *
      * @param environment Spring Environment configuration object
      */
     @Autowired
@@ -45,27 +42,22 @@ public class EnvironmentService {
 
     /**
      * Checks if the 'prod' profile is active
-     * This can also be inferred if 'dev' is not active, given 'prod' is the default
      * @return true if 'prod' profile is active or if no specific dev/test profile is active
      */
     public boolean isProductionMode() {
-        // Only return true if 'prod' profile is explicitly active
         return environment.acceptsProfiles(Profiles.of("prod"));
     }
 
     /**
      * Gets a string representation of the current application environment mode
-     * Relies on the 'app.environment.mode' property set in profile-specific configurations
-     * Defaults to "production" if the property is not found or no specific profile is matched
      * @return "development", "production", or the value of "app.environment.mode"
      */
     public String getCurrentEnvironmentMode() {
-        return environment.getProperty("app.environment.mode", "production"); // Default to "production"
+        return environment.getProperty("app.environment.mode", "production");
     }
 
     /**
      * Checks if book cover debug mode is enabled
-     * Relies on the 'book.cover.debug-mode' property
      * @return true if 'book.cover.debug-mode' is true, false otherwise or if not set
      */
     public boolean isBookCoverDebugMode() {

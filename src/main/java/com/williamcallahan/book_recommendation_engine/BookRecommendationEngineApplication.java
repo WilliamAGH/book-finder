@@ -14,10 +14,12 @@ package com.williamcallahan.book_recommendation_engine;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cache.annotation.EnableCaching;
+// Imports for CommandLineRunner, S3CoverCleanupService, Value, Bean are no longer needed here
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
+
 @SpringBootApplication(exclude = {
     OpenAiAudioSpeechAutoConfiguration.class, 
     OpenAiAudioTranscriptionAutoConfiguration.class 
@@ -35,4 +37,6 @@ public class BookRecommendationEngineApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(BookRecommendationEngineApplication.class, args);
 	}
+
+    // CommandLineRunner removed as per user request for manual trigger
 }

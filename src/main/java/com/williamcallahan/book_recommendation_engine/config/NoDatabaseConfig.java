@@ -5,7 +5,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
+import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration; // Added
+import org.springframework.context.annotation.Bean; // Added
 import org.springframework.context.annotation.Configuration;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository; // Added
+import com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookRepository; // Added
 
 /**
  * Configuration to disable database components in absence of a database URL
@@ -24,8 +28,14 @@ import org.springframework.context.annotation.Configuration;
 @EnableAutoConfiguration(exclude = {
         DataSourceAutoConfiguration.class,
         DataSourceTransactionManagerAutoConfiguration.class,
-        HibernateJpaAutoConfiguration.class
+        HibernateJpaAutoConfiguration.class,
+        JpaRepositoriesAutoConfiguration.class // Added this
 })
 public class NoDatabaseConfig {
     // Empty configuration class - functionality provided by annotations
+
+    @Bean
+    public CachedBookRepository cachedBookRepository() {
+        return new NoOpCachedBookRepository();
+    }
 }

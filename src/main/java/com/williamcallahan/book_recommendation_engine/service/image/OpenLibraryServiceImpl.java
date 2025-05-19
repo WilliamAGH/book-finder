@@ -1,3 +1,15 @@
+/**
+ * Implementation of the Open Library book cover service for retrieving cover images
+ * 
+ * @author William Callahan
+ * 
+ * Features:
+ * - Fetches book cover images from Open Library's free API
+ * - Supports ISBN-based lookups for precise image matching
+ * - Implements rate limiting protection for API compliance
+ * - Handles multiple cover sizes (small, medium, large)
+ * - Provides fallback mechanisms when service is unavailable
+ */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -9,21 +21,10 @@ import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * Implementation of the Open Library book cover service
- *
- * @author William Callahan
- *
- * Features:
- * - Fetches book cover images from the Open Library API
- * - Supports multiple image sizes (small, medium, large)
- * - Provides ISBN-based lookup for consistent cover retrieval
- * - Returns detailed metadata about image source and resolution 
- * - Handles cover retrieval without requiring actual HTTP calls
- */
 @Service
 public class OpenLibraryServiceImpl implements OpenLibraryService {
 
@@ -37,6 +38,7 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
      * @return A CompletableFuture emitting ImageDetails for the large-size cover, or null if not available
      */
     @Override
+    @RateLimiter(name = "openLibraryServiceRateLimiter", fallbackMethod = "fetchCoverRateLimitFallback")
     public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
         String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
 
@@ -107,5 +109,22 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
             resolutionPreference
         );
         return CompletableFuture.completedFuture(Optional.of(details));
+    }
+    
+    /**
+     * Fallback method for rate limiting in fetchCover
+     * - Called when the rate limit for OpenLibrary API is exceeded
+     * - Logs the rate limiting event for monitoring
+     * - Returns empty result to indicate no image is available
+     *
+     * @param book The book that triggered the rate limiter
+     * @param t The throwable from the rate limiter
+     * @return Empty Optional wrapped in CompletableFuture
+     */
+    public CompletableFuture<Optional<ImageDetails>> fetchCoverRateLimitFallback(Book book, Throwable t) {
+        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
+        logger.warn("OpenLibraryService rate limit exceeded for book ID: {}, ISBN: {}. Error: {}", 
+            book.getId(), isbn, t.getMessage());
+        return CompletableFuture.completedFuture(Optional.empty());
     }
 }

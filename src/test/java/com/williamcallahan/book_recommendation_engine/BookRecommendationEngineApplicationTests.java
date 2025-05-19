@@ -2,8 +2,8 @@ package com.williamcallahan.book_recommendation_engine;
 
 import com.williamcallahan.book_recommendation_engine.repository.JpaCachedBookRepository;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
@@ -27,8 +27,8 @@ import org.springframework.test.context.ActiveProfiles;
 @ActiveProfiles("test") // Ensure the "test" profile and its H2 configuration are active
 class BookRecommendationEngineApplicationTests {
 
-    @Mock
-    private JpaCachedBookRepository jpaCachedBookRepository; // Mock the repository
+    @MockitoBean
+    private JpaCachedBookRepository jpaCachedBookRepository;
 
     /**
      * Verifies that the Spring application context loads successfully
