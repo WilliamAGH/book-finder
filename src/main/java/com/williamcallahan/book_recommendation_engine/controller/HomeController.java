@@ -44,10 +44,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.stream.Collectors;
-import java.util.Set; // Added for de-duplication
-import java.util.concurrent.ConcurrentHashMap; // Added for de-duplication using stream
-import java.util.function.Function; // Added for de-duplication using stream
-import java.util.function.Predicate; // Added for de-duplication using stream
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 @Controller
 public class HomeController {
@@ -59,7 +59,7 @@ public class HomeController {
     private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
-    private final LocalDiskCoverCacheService localDiskCoverCacheService; // Added
+    private final LocalDiskCoverCacheService localDiskCoverCacheService;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -106,7 +106,7 @@ public class HomeController {
                           BookCoverManagementService bookCoverManagementService,
                           EnvironmentService environmentService,
                           DuplicateBookService duplicateBookService,
-                          LocalDiskCoverCacheService localDiskCoverCacheService, // Added
+                          LocalDiskCoverCacheService localDiskCoverCacheService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
@@ -114,7 +114,7 @@ public class HomeController {
         this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
-        this.localDiskCoverCacheService = localDiskCoverCacheService; // Added
+        this.localDiskCoverCacheService = localDiskCoverCacheService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
     }
 
@@ -147,8 +147,8 @@ public class HomeController {
             .filter(this::isActualCover) // Enhanced cover filter
             .collect(Collectors.toList())
         )
-        .map(this::deduplicateBooksById) // Added de-duplication step
-        .map(bookList -> { // This map now primarily populates duplicate editions on unique books
+        .map(this::deduplicateBooksById)
+        .map(bookList -> {
             bookList.forEach(duplicateBookService::populateDuplicateEditions);
             return bookList;
         })
@@ -196,8 +196,8 @@ public class HomeController {
                 .filter(this::isActualCover)
                 .collect(Collectors.toList())
             )
-            .map(this::deduplicateBooksById) // Added de-duplication step
-            .map(bookList -> { // This map now primarily populates duplicate editions on unique books
+            .map(this::deduplicateBooksById)
+            .map(bookList -> {
                 bookList.forEach(duplicateBookService::populateDuplicateEditions);
                 return bookList;
             })
@@ -316,12 +316,12 @@ public class HomeController {
 
         if (!isYearFilteringEnabled) {
             effectiveYear = null;
-            // If year filtering is disabled, we don't attempt to extract year from query.
-            // The original query is used as is.
+            // If year filtering is disabled, we don't attempt to extract year from query
+            // The original query is used as is
         } else {
             // Only attempt to extract year from query if year param is not already provided
-            // AND year filtering is enabled.
-            if (queryForProcessing != null && effectiveYear == null) { // Check effectiveYear here
+            // AND year filtering is enabled
+            if (queryForProcessing != null && effectiveYear == null) {
                 java.util.regex.Pattern yearPattern = java.util.regex.Pattern.compile("\\b(19\\d{2}|20\\d{2})\\b");
                 java.util.regex.Matcher matcher = yearPattern.matcher(queryForProcessing);
                 
@@ -336,7 +336,7 @@ public class HomeController {
                         String processedQueryWithoutYear = (beforeYear + afterYear).trim().replaceAll("\\s+", " ");
                         
                         // Update queryForProcessing for the current request if not redirecting immediately,
-                        // though the redirect is typical here.
+                        // though the redirect is typical here
                         // queryForProcessing = processedQueryWithoutYear; 
                         // effectiveYear = extractedYear; // Set effectiveYear if detected
 
@@ -418,7 +418,7 @@ public class HomeController {
                 return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
                     .map(coverImagesResult -> {
                         book.setCoverImages(coverImagesResult);
-                        String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg"; // Default placeholder
+                        String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg";
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
                             book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
                             effectiveCoverImageUrl = coverImagesResult.getPreferredUrl();
@@ -517,7 +517,7 @@ public class HomeController {
                         .filter(this::isActualCover)
                         .collectList()
                     )
-                    .map(books -> books.stream().limit(6).collect(Collectors.toList())) // Limit to max 6 books
+                    .map(books -> books.stream().limit(6).collect(Collectors.toList()))
                     .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
                     .doOnError(e -> {
                         logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());
@@ -666,7 +666,7 @@ public class HomeController {
     }
     
     /**
-     * Handle book lookup by ISBN-10, then redirect to the canonical URL with Google Book ID.
+     * Handle book lookup by ISBN-10, then redirect to the canonical URL with Google Book ID
      * Kept for compatibility and explicit format specification
      * 
      * @param isbn10 the book's ISBN-10

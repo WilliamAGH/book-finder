@@ -41,7 +41,7 @@ public class AdminController {
     public AdminController(S3CoverCleanupService s3CoverCleanupService,
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
-                           @Value("${app.s3.cleanup.quarantine-prefix:images/non-covers-pages/}") String configuredQuarantinePrefix) { // Added
+                           @Value("${app.s3.cleanup.quarantine-prefix:images/non-covers-pages/}") String configuredQuarantinePrefix) {
         this.s3CoverCleanupService = s3CoverCleanupService;
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
