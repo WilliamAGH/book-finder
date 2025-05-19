@@ -1,11 +1,13 @@
 /**
  * Core book entity model containing all book metadata and cover image information
+ *
+ * @author William Callahan
+ *
+ * Features:
  * - Represents books fetched from external sources like Google Books API
  * - Stores comprehensive book details including bibliographic data
  * - Tracks cover image metadata including resolution information
  * - Contains edition information for related formats of the same book
- * 
- * @author William Callahan
  */
 package com.williamcallahan.book_recommendation_engine.model;
 
@@ -17,6 +19,7 @@ import java.util.Objects;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.stream.Collectors;
 public class Book {
     private String id;
     private String title;
@@ -62,6 +65,8 @@ public class Book {
 
     /**
      * Nested class representing alternate editions of a book
+     *
+     * Features:
      * - Contains edition-specific metadata like ISBN and publication date
      * - Stores unique identifiers for different book formats
      * - Tracks cover image URLs specific to each edition
@@ -82,14 +87,14 @@ public class Book {
 
         /**
          * Full constructor for EditionInfo
-         * 
-         * @param googleBooksId Google Books identifier for this edition
-         * @param type Type of edition or identifier (ISBN_10, ISBN_13, etc)
-         * @param identifier Actual identifier value
-         * @param editionIsbn10 Specific ISBN-10 for this edition
-         * @param editionIsbn13 Specific ISBN-13 for this edition
-         * @param publishedDate Publication date for this edition
-         * @param coverImageUrl Cover image URL specific to this edition
+         *
+         * @param googleBooksId Google Books identifier
+         * @param type Type of edition or identifier
+         * @param identifier Identifier value
+         * @param editionIsbn10 ISBN-10 for this edition
+         * @param editionIsbn13 ISBN-13 for this edition
+         * @param publishedDate Publication date
+         * @param coverImageUrl Cover image URL
          */
         public EditionInfo(String googleBooksId, String type, String identifier, String editionIsbn10, String editionIsbn13, Date publishedDate, String coverImageUrl) {
             this.googleBooksId = googleBooksId;
@@ -102,8 +107,8 @@ public class Book {
         }
 
         /**
-         * Get Google Books identifier for this edition
-         * 
+         * Get Google Books identifier
+         *
          * @return Google Books identifier
          */
         public String getGoogleBooksId() {
@@ -111,8 +116,8 @@ public class Book {
         }
 
         /**
-         * Set Google Books identifier for this edition
-         * 
+         * Set Google Books identifier
+         *
          * @param googleBooksId Google Books identifier
          */
         public void setGoogleBooksId(String googleBooksId) {
@@ -121,8 +126,7 @@ public class Book {
 
         /**
          * Get edition type or identifier type
-         * - Examples: ISBN_10, ISBN_13, ISSN, etc
-         * 
+         *
          * @return Edition type
          */
         public String getType() {
@@ -131,8 +135,7 @@ public class Book {
 
         /**
          * Set edition type or identifier type
-         * - Examples: ISBN_10, ISBN_13, ISSN, etc
-         * 
+         *
          * @param type Edition type
          */
         public void setType(String type) {
@@ -141,8 +144,7 @@ public class Book {
 
         /**
          * Get identifier value for this edition
-         * - Actual ISBN, ISSN, or other identifier number
-         * 
+         *
          * @return Edition identifier
          */
         public String getIdentifier() {
@@ -151,8 +153,7 @@ public class Book {
 
         /**
          * Set identifier value for this edition
-         * - Actual ISBN, ISSN, or other identifier number
-         * 
+         *
          * @param identifier Edition identifier
          */
         public void setIdentifier(String identifier) {
@@ -313,11 +314,22 @@ public class Book {
 
     /**
      * Set the list of book authors
+     * - Handles null input by creating an empty list
+     * - Filters out null or empty author strings
+     * - Trims author names for consistency
      * 
-     * @param authors List of author names
+     * @param authors List of author names (may be null)
      */
     public void setAuthors(List<String> authors) {
-        this.authors = authors;
+        if (authors == null) {
+            this.authors = new ArrayList<>();
+        } else {
+            this.authors = authors.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(author -> !author.isEmpty())
+                    .collect(Collectors.toList());
+        }
     }
 
     /**

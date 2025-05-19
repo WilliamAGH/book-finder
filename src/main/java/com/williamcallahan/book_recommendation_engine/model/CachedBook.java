@@ -1,12 +1,15 @@
 /**
  * Persistent entity for storing book data in database
+ *
+ * @author William Callahan
+ *
+ * Features:
  * - Extends book model with caching metadata
  * - Tracks access patterns and embedding vectors for similarity search
  * - Contains conversion methods between Book and CachedBook
  * - Used for reducing API calls and improving performance
- * 
- * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,6 +25,7 @@ import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
 @Entity
 @Table(name = "cached_books")
 @Data
@@ -91,7 +95,8 @@ public class CachedBook {
 
     /**
      * Vector embedding for semantic similarity searches
-     * 
+     *
+     * Features:
      * - Custom PgVector type wraps float arrays for the embedding
      * - Stored in PostgreSQL vector column in production
      * - Stored as TEXT in H2 for testing compatibility
@@ -112,10 +117,7 @@ public class CachedBook {
 
     /**
      * Convert from Book to CachedBook entity
-     * - Creates a persistent entity from transient book object
-     * - Adds metadata for caching like timestamps and access count
-     * - Stores vector embedding for similarity search
-     * 
+     *
      * @param book Book object to convert
      * @param rawData Raw JSON data from external API
      * @param embedding Vector embedding for similarity search
@@ -126,7 +128,8 @@ public class CachedBook {
         cachedBook.setId(book.getId());
         cachedBook.setGoogleBooksId(book.getId());
         cachedBook.setTitle(book.getTitle());
-        cachedBook.setAuthors(book.getAuthors());
+        // Ensure we have a non-null authors list, even if the book's authors are null
+        cachedBook.setAuthors(book.getAuthors() != null ? book.getAuthors() : new ArrayList<>());
         cachedBook.setDescription(book.getDescription());
         cachedBook.setCoverImageUrl(book.getCoverImageUrl());
         cachedBook.setIsbn10(book.getIsbn10());
@@ -153,17 +156,14 @@ public class CachedBook {
 
     /**
      * Convert CachedBook entity to Book object
-     * - Creates a transient Book object from persistent entity
-     * - Transfers all book metadata to Book model
-     * - Used when returning cached books to application layer
-     * 
+     *
      * @return Book object with data from this cached entity
      */
     public Book toBook() {
         Book book = new Book();
         book.setId(this.googleBooksId);
         book.setTitle(this.title);
-        book.setAuthors(this.authors);
+        book.setAuthors(this.authors != null ? this.authors : new ArrayList<>());
         book.setDescription(this.description);
         book.setCoverImageUrl(this.coverImageUrl);
         book.setIsbn10(this.isbn10);

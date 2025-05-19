@@ -11,6 +11,7 @@
  * - Tracks recently viewed books for personalized recommendations
  * - Implements similar book recommendations based on source books
  */
+
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.util.concurrent.CompletableFuture;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.net.URI;
@@ -61,10 +63,10 @@ public class BookController {
     /**
      * Constructs the BookController with all required services
      *
-     * @param bookCacheService Service for caching and retrieving book data from various sources
-     * @param recentlyViewedService Service for tracking and managing recently viewed books
-     * @param recommendationService Service for generating book recommendations based on various criteria
-     * @param bookImageOrchestrationService Service for orchestrating book cover image retrieval and processing
+     * @param bookCacheService Service for caching and retrieving book data
+     * @param recentlyViewedService Service for tracking recently viewed books
+     * @param recommendationService Service for generating book recommendations
+     * @param bookImageOrchestrationService Service for book cover image processing
      * @param s3RetryService Service for S3 operations with retries
      */
     @Autowired
@@ -81,15 +83,15 @@ public class BookController {
     }
     
     /**
-     * Search books by keyword with support for pagination, cover source preferences, and image resolution filtering
-     * 
-     * @param query Search query string to find matching books
-     * @param startIndex Start index for pagination (optional, defaults to 0)
-     * @param maxResults Maximum number of results to return (optional, defaults to 10)
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @param publishedYear Filter results by publication year (optional)
-     * @return Mono containing ResponseEntity with map of search results including pagination details
+     * Search books by keyword with pagination and filtering options
+     *
+     * @param query Search query string
+     * @param startIndex Start index for pagination
+     * @param maxResults Maximum results to return
+     * @param coverSource Preferred cover image source
+     * @param resolution Preferred image resolution
+     * @param publishedYear Filter by publication year
+     * @return Mono with search results and pagination details
      */
     @GetMapping("/search")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooks(
@@ -281,11 +283,10 @@ public class BookController {
     }
     
     /**
-     * Converts a string representation of cover image source to the corresponding enum value
-     * Safely handles invalid values by returning the default CoverImageSource.ANY
+     * Converts string to CoverImageSource enum
      *
-     * @param source String representation of a cover image source
-     * @return The corresponding CoverImageSource enum value, or ANY if not valid
+     * @param source String representation of cover image source
+     * @return CoverImageSource enum value or ANY if invalid
      */
     private CoverImageSource getCoverImageSourceFromString(String source) {
         try {
@@ -296,11 +297,10 @@ public class BookController {
     }
 
     /**
-     * Converts a string representation of image resolution preference to the corresponding enum value
-     * Safely handles invalid values by returning the default ImageResolutionPreference.ANY
+     * Converts string to ImageResolutionPreference enum
      *
-     * @param resolution String representation of an image resolution preference
-     * @return The corresponding ImageResolutionPreference enum value, or ANY if not valid
+     * @param resolution String representation of resolution preference
+     * @return ImageResolutionPreference enum value or ANY if invalid
      */
     private ImageResolutionPreference getImageResolutionPreferenceFromString(String resolution) {
         try {
@@ -311,13 +311,12 @@ public class BookController {
     }
     
     /**
-     * Search books by title with support for cover source preferences and image resolution filtering
-     * Uses "intitle:" advanced search operator to find books with matching titles
-     * 
+     * Search books by title with filtering options
+     *
      * @param title Book title to search for
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @return Mono containing ResponseEntity with map of search results filtered by title
+     * @param coverSource Preferred cover image source
+     * @param resolution Preferred image resolution
+     * @return Mono with search results filtered by title
      */
     @GetMapping("/search/title")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooksByTitle(
@@ -380,13 +379,12 @@ public class BookController {
     }
     
     /**
-     * Search books by author with support for cover source preferences and image resolution filtering
-     * Uses "inauthor:" advanced search operator to find books by specified author
-     * 
+     * Search books by author with filtering options
+     *
      * @param author Author name to search for
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @return Mono containing ResponseEntity with map of search results filtered by author
+     * @param coverSource Preferred cover image source
+     * @param resolution Preferred image resolution
+     * @return Mono with search results filtered by author
      */
     @GetMapping("/search/author")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooksByAuthor(
@@ -449,13 +447,12 @@ public class BookController {
     }
     
     /**
-     * Search books by ISBN with support for cover source preferences and image resolution filtering
-     * Supports both ISBN-10 and ISBN-13 formats for precise book identification
-     * 
-     * @param isbn Book ISBN number (can be ISBN-10 or ISBN-13 format)
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @return Mono containing ResponseEntity with map of search results for the specific ISBN
+     * Search books by ISBN with filtering options
+     *
+     * @param isbn Book ISBN number
+     * @param coverSource Preferred cover image source
+     * @param resolution Preferred image resolution
+     * @return Mono with search results for the specific ISBN
      */
     @GetMapping("/search/isbn")
     public Mono<ResponseEntity<Map<String, Object>>> searchBooksByISBN(
@@ -518,16 +515,15 @@ public class BookController {
     }
     
     /**
-     * Get book details by ID with support for cover source preferences and image resolution filtering
-     * Adds viewed book to recently viewed history for recommendation tracking
-     * 
+     * Get book details by ID with filtering options
+     *
      * @param id Book identifier to retrieve
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @return Mono containing ResponseEntity with the book if found, or not found status if not available
+     * @param coverSource Preferred cover image source
+     * @param resolution Preferred image resolution
+     * @return Mono with book details or not found status
      */
     @GetMapping("/{id}")
-    public Mono<ResponseEntity<Book>> getBookById(
+    public Mono<ResponseEntity<Object>> getBookById(
             @PathVariable String id,
             @RequestParam(required = false, defaultValue = "ANY") String coverSource,
             @RequestParam(required = false, defaultValue = "ANY") String resolution) {
@@ -538,7 +534,7 @@ public class BookController {
 
         // Use BookCacheService to get book by ID
         return bookCacheService.getBookByIdReactive(id)
-            .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID: " + id)))
+            .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID: " + id, null)))
             .flatMap(book -> // This flatMap only executes if book was found
                 Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
                     .map(processedBookFromService -> processedBookFromService)
@@ -555,7 +551,7 @@ public class BookController {
                     })
             )
             .doOnSuccess(recentlyViewedService::addToRecentlyViewed) // No null check needed as stream errors out if book not found
-            .map(book -> ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(book)) // Map to ResponseEntity
+            .map(book -> ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body((Object)book)) // Map to ResponseEntity
             // The switchIfEmpty below is now less likely to be the primary "not found" path for the book ID itself,
             // but could still handle cases where bookImageOrchestrationService returns an empty Mono (if its internal onErrorResume was removed).
             // However, with ResponseStatusException, onErrorResume will catch it.
@@ -567,7 +563,12 @@ public class BookController {
                     // or wrap it in a Mono.error to be handled by Spring's default error handling.
                     // For clarity, we can re-throw it if it's one we expect, or map to a generic error.
                     if (rse.getStatusCode() == HttpStatus.NOT_FOUND) {
-                         return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND).build());
+                        Map<String, String> errorResponse = new HashMap<>();
+                        errorResponse.put("error", "Not Found");
+                        errorResponse.put("message", rse.getReason());
+                        return Mono.just(ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body((Object)errorResponse));
                     }
                     return Mono.error(rse);
                 }
@@ -576,11 +577,10 @@ public class BookController {
     }
     
     /**
-     * Handle validation errors for request parameters across all endpoints
-     * Converts IllegalArgumentException to proper HTTP 400 Bad Request responses
-     * 
-     * @param ex The IllegalArgumentException thrown during request processing
-     * @return ResponseEntity with error details and 400 status code
+     * Handle validation errors for request parameters
+     *
+     * @param ex IllegalArgumentException from request processing
+     * @return ResponseEntity with error details and 400 status
      */
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
@@ -591,14 +591,13 @@ public class BookController {
     }
     
     /**
-     * Get similar books recommendations for a specific book with support for cover source and resolution preferences
-     * Uses the recommendation engine to find books similar to the given book ID based on various criteria
-     * 
+     * Get similar books recommendations for a specific book
+     *
      * @param id Source book ID to find similar books for
-     * @param count Number of recommendations to return (optional, defaults to 6)
-     * @param coverSource Preferred source for book cover images (optional, defaults to ANY)
-     * @param resolution Preferred resolution for book cover images (optional, defaults to ANY)
-     * @return Mono containing ResponseEntity with map of similar book recommendations
+     * @param count Number of recommendations to return
+     * @param coverSource Preferred cover image source
+     * @param resolution Preferred image resolution
+     * @return Mono with similar book recommendations
      */
     @GetMapping("/{id}/similar")
     public Mono<ResponseEntity<Map<String, Object>>> getSimilarBooks(
@@ -657,10 +656,11 @@ public class BookController {
     }
 
     /**
-     * Creates a new book resource
+     * Updates book qualifiers and persists to S3 asynchronously
      *
-     * @param book The book object to create, from the request body
-     * @return Mono containing ResponseEntity with the created book and 201 status, or an error status
+     * @param book Book to update qualifiers for
+     * @param qualifier Qualifier name
+     * @param value Qualifier value
      */
     private void updateBookQualifiersAsync(Book book, String qualifier, String value) {
         boolean qualifiersUpdated = false;
@@ -673,17 +673,22 @@ public class BookController {
         if (qualifiersUpdated) {
             Schedulers.boundedElastic().schedule(() -> {
                 try {
-                    s3RetryService.updateBookJsonWithRetry(book)
-                        .whenComplete((result, ex) -> {
-                            if (ex != null) {
-                                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                                logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
-                                    book.getId(), cause.getMessage());
-                            } else {
-                                logger.debug("Successfully updated S3 with {} qualifiers for book {}", 
-                                    qualifier, book.getId());
-                            }
-                        }).join();
+                    CompletableFuture<Void> future = s3RetryService.updateBookJsonWithRetry(book);
+                    if (future == null) {
+                        logger.error("Error during S3 update for book {}: S3RetryService returned null CompletableFuture", book.getId());
+                        return;
+                    }
+                    
+                    future.whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                            logger.warn("Failed to update S3 with new qualifiers for book {}: {}", 
+                                book.getId(), cause.getMessage());
+                        } else {
+                            logger.debug("Successfully updated S3 with {} qualifiers for book {}", 
+                                qualifier, book.getId());
+                        }
+                    }).join();
                 } catch (CompletionException ce) {
                     logger.error("CompletionException during S3 update for book {}: {}", 
                         book.getId(), ce.getCause() != null ? ce.getCause().getMessage() : ce.getMessage());
@@ -695,6 +700,12 @@ public class BookController {
         }
     }
 
+    /**
+     * Creates a new book resource
+     *
+     * @param book Book object to create
+     * @return Mono with created book and 201 status or error
+     */
     @PostMapping
     public Mono<ResponseEntity<Book>> createBook(@RequestBody Book book) {
         logger.info("Attempting to create book: {}", book.getTitle());
@@ -729,5 +740,72 @@ public class BookController {
             logger.error("Generic error creating book with title '{}': {}", book.getTitle(), e.getMessage(), e);
             return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
         });
+    }
+    
+    /**
+     * Deletes a book resource by ID
+     *
+     * @param id Book ID to delete
+     * @return Mono with empty response if successful
+     */
+    @DeleteMapping("/{id}")
+    public Mono<ResponseEntity<Void>> deleteBook(@PathVariable String id) {
+        logger.info("Attempting to delete book with ID: {}", id);
+        // Always attempt deletion and return 200 OK, even if book was not found
+        return Mono.fromRunnable(() -> bookCacheService.removeBook(id))
+            .then(Mono.just(ResponseEntity.ok().<Void>build()))
+            .onErrorResume(IllegalArgumentException.class, e -> {
+                logger.error("Validation error deleting book with ID {}: {}", id, e.getMessage());
+                return Mono.just(ResponseEntity.badRequest().build());
+            })
+            .onErrorResume(e -> {
+                logger.error("Error deleting book with ID {}: {}", id, e.getMessage(), e);
+                return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+            });
+    }
+    
+    /**
+     * Updates an existing book resource
+     *
+     * @param id Book ID to update
+     * @param bookUpdate Updated book data
+     * @return Mono with updated book if successful
+     */
+    @PutMapping("/{id}")
+    public Mono<ResponseEntity<Book>> updateBook(@PathVariable String id, @RequestBody Book bookUpdate) {
+        logger.info("Attempting to update book with ID: {}", id);
+        
+        // Ensure the ID in the path matches the ID in the book object
+        if (bookUpdate.getId() != null && !bookUpdate.getId().equals(id)) {
+            return Mono.just(ResponseEntity.badRequest()
+                .body(null)); // ID mismatch between path and body
+        }
+        
+        // Set the ID from the path
+        bookUpdate.setId(id);
+        
+        return bookCacheService.getBookByIdReactive(id)
+            // If book does not exist, still proceed to update (upsert behavior)
+            .defaultIfEmpty(bookUpdate)
+            .flatMap(existingBook -> {
+                // Update the book in the cache/database
+                return Mono.fromCallable(() -> {
+                    bookCacheService.updateBook(bookUpdate);
+                    return bookUpdate;
+                })
+                .map(updatedBook -> ResponseEntity.ok().body(updatedBook));
+            })
+            .onErrorResume(IllegalArgumentException.class, e -> {
+                logger.error("Validation error updating book with ID {}: {}", id, e.getMessage());
+                return Mono.just(ResponseEntity.badRequest().build());
+            })
+            .onErrorResume(e -> {
+                if (e instanceof ResponseStatusException) {
+                    return Mono.error(e); // Propagate status exceptions
+                }
+                logger.error("Error updating book with ID {}: {}", id, e.getMessage(), e);
+                return Mono.error(new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Error occurred while updating book", e));
+            });
     }
 }

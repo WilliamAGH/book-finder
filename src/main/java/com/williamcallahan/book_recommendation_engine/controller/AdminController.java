@@ -1,3 +1,16 @@
+/**
+ * REST Controller for administrative operations
+ * 
+ * @author William Callahan
+ * 
+ * Features:
+ * - Provides endpoints for S3 cover image cleanup operations
+ * - Supports dry run mode for evaluating cleanup impact
+ * - Handles moving flagged images to quarantine
+ * - Configurable batch processing limits
+ * - Detailed logging and error handling
+ * - Returns operation summaries in text and JSON formats
+ */
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
@@ -22,7 +35,7 @@ public class AdminController {
     private final S3CoverCleanupService s3CoverCleanupService;
     private final String configuredS3Prefix;
     private final int defaultBatchLimit;
-    private final String configuredQuarantinePrefix; // Added
+    private final String configuredQuarantinePrefix;
 
     @Autowired
     public AdminController(S3CoverCleanupService s3CoverCleanupService,
@@ -32,19 +45,19 @@ public class AdminController {
         this.s3CoverCleanupService = s3CoverCleanupService;
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
-        this.configuredQuarantinePrefix = configuredQuarantinePrefix; // Added
+        this.configuredQuarantinePrefix = configuredQuarantinePrefix;
     }
 
     /**
-     * Triggers a dry run of the S3 cover cleanup process.
+     * Triggers a dry run of the S3 cover cleanup process
      * The S3 prefix to scan can be overridden by a request parameter,
-     * otherwise, the configured 'app.s3.cleanup.prefix' is used.
+     * otherwise, the configured 'app.s3.cleanup.prefix' is used
      * The number of items to process can be limited by a request parameter,
-     * otherwise, the configured 'app.s3.cleanup.default-batch-limit' is used.
+     * otherwise, the configured 'app.s3.cleanup.default-batch-limit' is used
      *
-     * @param prefixOptional Optional request parameter to override the S3 prefix.
-     * @param limitOptional Optional request parameter to override the batch processing limit.
-     * @return A ResponseEntity containing a plain text summary and list of flagged files.
+     * @param prefixOptional Optional request parameter to override the S3 prefix
+     * @param limitOptional Optional request parameter to override the batch processing limit
+     * @return A ResponseEntity containing a plain text summary and list of flagged files
      */
     @GetMapping(value = "/s3-cleanup/dry-run", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> triggerS3CoverCleanupDryRun(
@@ -54,17 +67,17 @@ public class AdminController {
         String prefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
         int batchLimitToUse = limitOptional != null ? limitOptional : defaultBatchLimit;
         if (batchLimitToUse <= 0) { // Ensure batch limit is positive, or treat 0/negative as no limit (process all)
-            // This behavior can be adjusted. For now, let's say 0 or negative means a very large number (effectively no limit for practical purposes)
-            // or stick to a sane default if that's preferred.
-            // The S3CoverCleanupService currently handles batchLimit > 0.
-            // If batchLimit is 0 or negative, it processes all.
+            // This behavior can be adjusted; for now, let's say 0 or negative means a very large number (effectively no limit for practical purposes)
+            // or stick to a sane default if that's preferred
+            // The S3CoverCleanupService currently handles batchLimit > 0
+            // If batchLimit is 0 or negative, it processes all
             logger.warn("Batch limit specified as {} (or defaulted to it), which means no effective limit. Processing all found items.", batchLimitToUse);
         }
         
         logger.info("Admin endpoint /admin/s3-cleanup/dry-run invoked. Triggering S3 Cover Cleanup Dry Run with prefix: '{}', limit: {}", prefixToUse, batchLimitToUse);
 
         // Note: This is a synchronous call. For very long operations,
-        // consider making performDryRun @Async or wrapping this call.
+        // consider making performDryRun @Async or wrapping this call
         try {
             com.williamcallahan.book_recommendation_engine.types.DryRunSummary summary = s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse);
             
@@ -99,12 +112,12 @@ public class AdminController {
     }
 
     /**
-     * Triggers the action of moving flagged S3 cover images to a quarantine prefix.
+     * Triggers the action of moving flagged S3 cover images to a quarantine prefix
      *
-     * @param prefixOptional Optional request parameter to override the S3 source prefix.
-     * @param limitOptional Optional request parameter to override the batch processing limit.
-     * @param quarantinePrefixOptional Optional request parameter to override the quarantine prefix.
-     * @return A ResponseEntity containing the MoveActionSummary as JSON.
+     * @param prefixOptional Optional request parameter to override the S3 source prefix
+     * @param limitOptional Optional request parameter to override the batch processing limit
+     * @param quarantinePrefixOptional Optional request parameter to override the quarantine prefix
+     * @return A ResponseEntity containing the MoveActionSummary as JSON
      */
     @PostMapping(value = "/s3-cleanup/move-flagged", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<?> triggerS3CoverMoveAction(
