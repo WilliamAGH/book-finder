@@ -22,6 +22,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.HashSet;
+import java.util.Arrays;
+import java.util.Set;
 
 /**
  * Service for tracking API request metrics
@@ -52,9 +55,17 @@ public class ApiRequestMonitor {
     // Track calls by endpoint
     private final Map<String, AtomicInteger> endpointCounts = new ConcurrentHashMap<>();
     
-    // Track custom metrics (cache hits/misses, errors, etc.)
+    // Add maximum allowed metrics configuration
+    private static final int MAX_CUSTOM_METRICS = 100;
+    
     private final Map<String, AtomicInteger> customMetricCounts = new ConcurrentHashMap<>();
     private final Map<String, CopyOnWriteArrayList<String>> customMetricDetails = new ConcurrentHashMap<>();
+    
+    // Add whitelist for important metrics that should always be tracked
+    private final Set<String> whitelistedMetrics = new HashSet<>(Arrays.asList(
+        "cache.hit", "cache.miss", "api.error", "api.failure", 
+        "validation.error", "security.failure", "db.error"
+    ));
     
     // Static timestamp for last reset
     private volatile LocalDateTime lastHourlyReset = LocalDateTime.now();
@@ -134,7 +145,9 @@ public class ApiRequestMonitor {
         int successful = hourlySuccessful.getAndSet(0);
         int failed = hourlyFailed.getAndSet(0);
         
-        lastHourlyReset = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        lastHourlyReset = now;
+        currentHour = now; // keep the marker in-sync
         logger.info("Hourly API metrics reset. Previous hour: {} requests ({} successful, {} failed)",
                 requests, successful, failed);
     }
@@ -152,7 +165,9 @@ public class ApiRequestMonitor {
         // Also clear endpoint counts
         endpointCounts.clear();
         
-        lastDailyReset = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        lastDailyReset = now;
+        currentDay = now; // keep the marker in-sync
         logger.info("Daily API metrics reset. Previous day: {} requests ({} successful, {} failed)",
                 requests, successful, failed);
     }
@@ -187,6 +202,14 @@ public class ApiRequestMonitor {
      * @param details Optional details about the metric event
      */
     public void recordMetric(String metricName, String details) {
+        // Guard against unbounded growth - ignore metrics if we're at capacity and not whitelisted
+        if (customMetricCounts.size() >= MAX_CUSTOM_METRICS && !whitelistedMetrics.contains(metricName) && 
+            !customMetricCounts.containsKey(metricName)) {
+            logger.warn("Metric '{}' ignored: maximum number of distinct metrics reached ({})", 
+                        metricName, MAX_CUSTOM_METRICS);
+            return;
+        }
+        
         customMetricCounts.computeIfAbsent(metricName, k -> new AtomicInteger(0)).incrementAndGet();
         
         // Store details if provided, keeping only the last 100 entries per metric

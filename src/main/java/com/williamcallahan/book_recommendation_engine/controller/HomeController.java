@@ -19,11 +19,12 @@ import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
-import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService; // Added
+import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -59,9 +60,7 @@ public class HomeController {
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
     private final LocalDiskCoverCacheService localDiskCoverCacheService; // Added
-
-    @Autowired
-    private boolean isYearFilteringEnabled;
+    private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
     private static final int MAX_BESTSELLERS = 8;
@@ -107,7 +106,8 @@ public class HomeController {
                           BookCoverManagementService bookCoverManagementService,
                           EnvironmentService environmentService,
                           DuplicateBookService duplicateBookService,
-                          LocalDiskCoverCacheService localDiskCoverCacheService) { // Added
+                          LocalDiskCoverCacheService localDiskCoverCacheService, // Added
+                          @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled) {
         this.bookCacheService = bookCacheService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
@@ -115,6 +115,7 @@ public class HomeController {
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
         this.localDiskCoverCacheService = localDiskCoverCacheService; // Added
+        this.isYearFilteringEnabled = isYearFilteringEnabled;
     }
 
     /**
@@ -486,7 +487,7 @@ public class HomeController {
         return bookMonoWithCover
             .flatMap(fetchedBook -> { // fetchedBook is the main book, potentially null if initial fetch failed and resulted in empty()
                 // Fetch similar books using RecommendationService
-                Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 6)
+                Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 10)  // Request 10 instead of 6
                     .flatMap(similarBooksList -> Flux.fromIterable(similarBooksList)
                         .concatMap(similarBook -> {
                             if (similarBook == null) return Mono.justOrEmpty(null);
@@ -512,8 +513,11 @@ public class HomeController {
                                 });
                         })
                         .filter(java.util.Objects::nonNull)
+                        // Add the filter for actual covers
+                        .filter(this::isActualCover)
                         .collectList()
                     )
+                    .map(books -> books.stream().limit(6).collect(Collectors.toList())) // Limit to max 6 books
                     .doOnSuccess(similarBooks -> model.addAttribute("similarBooks", similarBooks))
                     .doOnError(e -> {
                         logger.warn("Error fetching similar book recommendations for ID {}: {}", id, e.getMessage());

@@ -9,6 +9,8 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import org.springframework.security.access.prepost.PreAuthorize;
+
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -25,6 +27,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/admin/api-metrics")
+@PreAuthorize("hasRole('ADMIN')")
 public class ApiMetricsController {
 
     private final ApiRequestMonitor apiRequestMonitor;

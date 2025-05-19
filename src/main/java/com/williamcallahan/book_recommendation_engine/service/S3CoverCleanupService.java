@@ -195,7 +195,12 @@ public class S3CoverCleanupService {
                         flaggedKeysList.add(sourceKey);
                         logger.info("[FLAGGED FOR MOVE] S3 object: {}", sourceKey);
 
-                        String originalFileName = sourceKey.substring(s3Prefix.length());
+                        String originalFileName;
+                        if (sourceKey.startsWith(s3Prefix)) {
+                            originalFileName = sourceKey.substring(s3Prefix.length());
+                        } else {
+                            originalFileName = sourceKey;
+                        }
                         if (originalFileName.startsWith("/")) {
                             originalFileName = originalFileName.substring(1);
                         }

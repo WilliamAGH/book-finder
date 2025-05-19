@@ -37,7 +37,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.time.Duration;
 import java.io.IOException;
-
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -48,6 +49,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import org.springframework.web.util.UriComponentsBuilder;
 
 @Service
 public class GoogleBooksService {
@@ -100,8 +103,15 @@ public class GoogleBooksService {
     @TimeLimiter(name = "googleBooksService")
     @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "searchBooksRateLimitFallback")
     public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
+        String encodedQuery;
+        try {
+            encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
+        } catch (java.io.UnsupportedEncodingException e) {
+            logger.error("Failed to URL encode query: {}", query, e);
+            return Mono.error(e); // Or handle more gracefully
+        }
         StringBuilder urlBuilder = new StringBuilder(String.format("%s/v1/volumes?q=%s&startIndex=%d&maxResults=40", 
-                googleBooksApiUrl, query, startIndex));
+                googleBooksApiUrl, encodedQuery, startIndex));
         
         if (googleBooksApiKey != null && !googleBooksApiKey.isEmpty()) {
             urlBuilder.append("&key=").append(googleBooksApiKey);
@@ -202,7 +212,6 @@ public class GoogleBooksService {
                         }
                     })
             )
-            .takeUntil(jsonNode -> !jsonNode.has("kind") ) // This condition might need review if it prematurely stops fetching
             .map(this::convertGroupToBook)
             .filter(Objects::nonNull)
             .map(book -> {
@@ -374,25 +383,23 @@ public class GoogleBooksService {
                 // If any condition leads to API fallback, fetch from API
                 // The circuit breaker on getBookById will handle failures from fetchFromGoogleBooksApiAndCache
                 // API call metrics are recorded inside fetchFromGoogleBooksApiAndCache
-                return fetchFromGoogleBooksApiAndCache(bookId);
+                return fetchFromGoogleBooksApiAndCache(bookId).toFuture();
             });
     }
 
-    private CompletionStage<Book> fetchFromGoogleBooksApiAndCache(String bookId) {
-        StringBuilder urlBuilder = new StringBuilder(String.format("%s/v1/volumes/%s", googleBooksApiUrl, bookId));
-        
-        if (googleBooksApiKey != null && !googleBooksApiKey.isEmpty()) {
-            urlBuilder.append("?key=").append(googleBooksApiKey);
-        }
-        
-        String url = urlBuilder.toString();
+    private Mono<Book> fetchFromGoogleBooksApiAndCache(String bookId) {
+        String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
+            .pathSegment("v1", "volumes", bookId)
+            .queryParamIfPresent("key", Optional.ofNullable(googleBooksApiKey)
+                .filter(key -> !key.isEmpty()))
+            .build(true)     // true = encode
+            .toUriString();
+            
         String endpoint = "volumes/get/" + bookId;
 
         logger.debug("Making Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
         
-        CompletableFuture<Book> future = new CompletableFuture<>();
-
-        webClient.get()
+        return webClient.get()
             .uri(url)
             .retrieve()
             .bodyToMono(JsonNode.class)
@@ -436,10 +443,7 @@ public class GoogleBooksService {
                     apiRequestMonitor.recordFailedRequest(endpoint, "Converted book was null for bookId: " + bookId);
                 }
                 return book;
-            })
-            .subscribe(future::complete, future::completeExceptionally);
-
-        return future;
+            });
     }
 
     /**

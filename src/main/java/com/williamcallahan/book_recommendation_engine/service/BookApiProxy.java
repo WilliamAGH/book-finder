@@ -55,31 +55,16 @@ public class BookApiProxy {
     private final GoogleBooksService googleBooksService;
     private final S3StorageService s3StorageService;
     private final ObjectMapper objectMapper;
-    
-    // Optional service that's only available in dev/test profiles
     private final Optional<GoogleBooksMockService> mockService;
     
     // In-memory cache as first-level cache
     private final Map<String, CompletableFuture<Book>> bookRequestCache = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<List<Book>>> searchRequestCache = new ConcurrentHashMap<>();
     
-    @Value("${google.books.api.cache.enabled:true}")
-    private boolean cacheEnabled;
-    
-    @Value("${app.local-cache.enabled:false}")
-    private boolean localCacheEnabled;
-    
-    @Value("${app.local-cache.directory:.dev-cache}")
-    private String localCacheDirectory;
-    
-    @Value("${app.s3-cache.always-check-first:false}")
-    private boolean alwaysCheckS3First;
-    
-    @Value("${app.api-client.log-calls:true}")
-    private boolean logApiCalls;
-    
-    @Value("${spring.profiles.active:default}")
-    private String activeProfile;
+    private final boolean localCacheEnabled;
+    private final String localCacheDirectory;
+    private final boolean alwaysCheckS3First;
+    private final boolean logApiCalls;
 
     /**
      * Constructs the BookApiProxy with necessary dependencies
@@ -94,17 +79,25 @@ public class BookApiProxy {
     public BookApiProxy(GoogleBooksService googleBooksService, 
                        S3StorageService s3StorageService, 
                        ObjectMapper objectMapper,
-                       Optional<GoogleBooksMockService> mockService) {
+                       Optional<GoogleBooksMockService> mockService,
+                       @Value("${app.local-cache.enabled:false}") boolean localCacheEnabled,
+                       @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
+                       @Value("${app.s3-cache.always-check-first:false}") boolean alwaysCheckS3First,
+                       @Value("${app.api-client.log-calls:true}") boolean logApiCalls) {
         this.googleBooksService = googleBooksService;
         this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;
         this.mockService = mockService;
+        this.localCacheEnabled = localCacheEnabled;
+        this.localCacheDirectory = localCacheDirectory;
+        this.alwaysCheckS3First = alwaysCheckS3First;
+        this.logApiCalls = logApiCalls;
         
         // Create local cache directory if needed
-        if (localCacheEnabled) {
+        if (this.localCacheEnabled) {
             try {
-                Files.createDirectories(Paths.get(localCacheDirectory, "books"));
-                Files.createDirectories(Paths.get(localCacheDirectory, "searches"));
+                Files.createDirectories(Paths.get(this.localCacheDirectory, "books"));
+                Files.createDirectories(Paths.get(this.localCacheDirectory, "searches"));
             } catch (Exception e) {
                 logger.warn("Could not create local cache directories: {}", e.getMessage());
             }
@@ -131,23 +124,36 @@ public class BookApiProxy {
      */
     @Cacheable(value = "bookRequests", key = "#bookId", condition = "#root.target.cacheEnabled")
     public CompletionStage<Book> getBookById(String bookId) {
-        // Check for in-flight requests to prevent duplicate API calls
-        CompletableFuture<Book> existingRequest = bookRequestCache.get(bookId);
-        if (existingRequest != null && !existingRequest.isDone()) {
-            logger.debug("Returning in-flight request for book ID: {}", bookId);
-            return existingRequest;
-        }
+        // Use computeIfAbsent for atomic get-or-create to prevent race conditions
+        CompletableFuture<Book> future = bookRequestCache.computeIfAbsent(bookId, id -> {
+            CompletableFuture<Book> newFuture = new CompletableFuture<>();
+            
+            // Remove from cache when complete to prevent memory leaks
+            newFuture.whenComplete((result, ex) -> bookRequestCache.remove(bookId));
+            
+            // Start processing pipeline
+            processBookRequest(bookId, newFuture);
+            
+            return newFuture;
+        });
         
-        CompletableFuture<Book> future = new CompletableFuture<>();
-        bookRequestCache.put(bookId, future);
-        
+        return future;
+    }
+    
+    /**
+     * Process the actual book request through the caching layers
+     * 
+     * @param bookId The book ID to retrieve
+     * @param future The future to complete with the result
+     */
+    private void processBookRequest(String bookId, CompletableFuture<Book> future) {
         // First try the local file cache (in dev/test mode)
         if (localCacheEnabled) {
             Book localBook = getBookFromLocalCache(bookId);
             if (localBook != null) {
                 logger.debug("Retrieved book {} from local cache", bookId);
                 future.complete(localBook);
-                return future;
+                return;
             }
         }
         
@@ -163,7 +169,7 @@ public class BookApiProxy {
                     saveBookToLocalCache(bookId, mockBook);
                 }
                 
-                return future;
+                return;
             }
         }
         
@@ -245,8 +251,6 @@ public class BookApiProxy {
                     return null;
                 });
         }
-        
-        return future;
     }
     
     /**
@@ -257,77 +261,89 @@ public class BookApiProxy {
      * 2. Local file system cache (if {@code localCacheEnabled} is true)
      * 3. {@link GoogleBooksMockService} (if active profile is 'dev' or 'test' and mock data exists for the query)
      * 4. {@link GoogleBooksService#searchBooksAsyncReactive(String, String)}, which is expected to handle its own
-     *    caching and rate limiting (Note: Search caching is less elaborate than single book lookup in current design)
+     *    caching layers before making the actual API call
      *
-     * Results from successful retrievals are used to populate the local file cache and
-     * potentially the mock service's persisted mocks
-     * 
+     * Results from successful searches are cached to the local file system and may be persisted
+     * to mock service data for future test runs
+     *
      * @param query The search query
-     * @param langCode Optional language code (e.g., "en", "fr")
-     * @return Mono containing a list of Book objects matching the search criteria
+     * @param langCode Language code for search results
+     * @return Mono emitting the list of books matching the search
      */
     @Cacheable(value = "searchRequests", key = "#query + '-' + #langCode", condition = "#root.target.cacheEnabled")
     public Mono<List<Book>> searchBooks(String query, String langCode) {
-        String cacheKey = query + "-" + (langCode != null ? langCode : "any");
+        String cacheKey = query + "-" + langCode;
         
-        // Check for in-flight requests
-        CompletableFuture<List<Book>> existingRequest = searchRequestCache.get(cacheKey);
-        if (existingRequest != null && !existingRequest.isDone()) {
-            return Mono.fromFuture(existingRequest);
-        }
+        // Use computeIfAbsent for atomic get-or-create to prevent race conditions
+        CompletableFuture<List<Book>> future = searchRequestCache.computeIfAbsent(cacheKey, key -> {
+            CompletableFuture<List<Book>> newFuture = new CompletableFuture<>();
+            
+            // Remove from cache when complete to prevent memory leaks
+            newFuture.whenComplete((result, ex) -> searchRequestCache.remove(cacheKey));
+            
+            // Start processing pipeline
+            processSearchRequest(query, langCode, newFuture);
+            
+            return newFuture;
+        });
         
-        CompletableFuture<List<Book>> future = new CompletableFuture<>();
-        searchRequestCache.put(cacheKey, future);
-        
-        // First, check local file cache
+        return Mono.fromCompletionStage(future);
+    }
+    
+    /**
+     * Process the actual search request through the caching layers
+     * 
+     * @param query The search query
+     * @param langCode Language code for search results
+     * @param future The future to complete with the result
+     */
+    private void processSearchRequest(String query, String langCode, CompletableFuture<List<Book>> future) {
+        // First try the local file cache (in dev/test mode)
         if (localCacheEnabled) {
             List<Book> localResults = getSearchFromLocalCache(query, langCode);
-            if (localResults != null) {
-                logger.debug("Retrieved search results for '{}' ({}) from local cache", query, langCode);
+            if (localResults != null && !localResults.isEmpty()) {
+                logger.debug("Retrieved search '{}' from local cache, {} results", query, localResults.size());
                 future.complete(localResults);
-                return Mono.fromFuture(future);
+                return;
             }
         }
         
-        // Next, check mock data
+        // Next, check mock data if available (in dev/test mode)
         if (mockService.isPresent() && mockService.get().hasMockDataForSearch(query)) {
             List<Book> mockResults = mockService.get().searchBooks(query);
             if (mockResults != null && !mockResults.isEmpty()) {
-                logger.debug("Retrieved search results for '{}' from mock data", query);
+                logger.debug("Retrieved search '{}' from mock data, {} results", query, mockResults.size());
                 future.complete(mockResults);
                 
-                // Still persist to local cache
+                // Still persist to local cache for faster future access
                 if (localCacheEnabled) {
                     saveSearchToLocalCache(query, langCode, mockResults);
                 }
                 
-                return Mono.fromFuture(future);
+                return;
             }
         }
         
-        // Finally, make the API call
+        // Fall back to the actual service (which has its own caching)
         if (logApiCalls) {
-            logger.info("Making REAL API call to Google Books for search: '{}' ({})", query, langCode);
+            logger.info("Making REAL API call to Google Books for search: '{}'", query);
         }
         
-        return googleBooksService.searchBooksAsyncReactive(query, langCode)
-            .doOnSuccess(results -> {
-                // Cache the results locally
-                if (localCacheEnabled) {
-                    saveSearchToLocalCache(query, langCode, results);
+        // This is already a Mono<List<Book>>, no need for collectList()
+        googleBooksService.searchBooksAsyncReactive(query, langCode)
+            .subscribe(
+                results -> {
+                    // Cache the results
+                    if (results != null && !results.isEmpty() && localCacheEnabled) {
+                        saveSearchToLocalCache(query, langCode, results);
+                    }
+                    future.complete(results);
+                },
+                error -> {
+                    logger.error("Error searching for '{}': {}", query, error.getMessage());
+                    future.completeExceptionally(error);
                 }
-                
-                // Also cache in mock service for tests
-                if (mockService.isPresent()) {
-                    mockService.get().saveSearchResults(query, results);
-                }
-                
-                future.complete(results);
-            })
-            .doOnError(ex -> {
-                logger.error("Error searching books for '{}': {}", query, ex.getMessage());
-                future.completeExceptionally(ex);
-            });
+            );
     }
     
     /**

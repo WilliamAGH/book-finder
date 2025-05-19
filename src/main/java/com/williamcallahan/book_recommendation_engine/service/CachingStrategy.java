@@ -35,9 +35,9 @@ public interface CachingStrategy<K, V> {
      * Retrieves a value from the cache or external source using the standard caching flow
      * 
      * @param key The key to look up
-     * @return CompletionStage that will complete with the value if found, or null if not found
+     * @return CompletionStage that will complete with the value wrapped in Optional if found, or empty Optional if not found
      */
-    CompletionStage<V> get(K key);
+    CompletionStage<Optional<V>> get(K key);
     
     /**
      * Retrieves a value from the cache or external source using reactive programming

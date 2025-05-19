@@ -60,6 +60,15 @@ import reactor.core.publisher.Mono;
 @Profile({"dev", "test"})
 public class GoogleBooksMockService {
     private static final Logger logger = LoggerFactory.getLogger(GoogleBooksMockService.class);
+
+    /**
+     * Helper method to normalize search queries for caching and internal lookups.
+     * @param query The raw search query.
+     * @return The normalized query (lowercase, trimmed), or null if the input is null.
+     */
+    public static String normalizeQuery(String query) {
+        return query == null ? null : query.toLowerCase().trim();
+    }
     
     private final Map<String, JsonNode> mockBookResponses = new ConcurrentHashMap<>();
     private final Map<String, List<Book>> mockSearchResults = new ConcurrentHashMap<>();
@@ -137,9 +146,8 @@ public class GoogleBooksMockService {
     private void loadMockResponsesFromFilesystem() {
         Path booksDir = Paths.get(mockResponseDirectory, "books");
         if (Files.exists(booksDir) && Files.isDirectory(booksDir)) {
-            try {
-                Files.list(booksDir)
-                    .filter(path -> path.toString().endsWith(".json"))
+            try (var stream = Files.list(booksDir)) {
+                stream.filter(path -> path.toString().endsWith(".json"))
                     .forEach(path -> {
                         try {
                             String filename = path.getFileName().toString();
@@ -171,9 +179,8 @@ public class GoogleBooksMockService {
     private void loadMockSearchResponses() {
         Path searchDir = Paths.get(mockResponseDirectory, "searches");
         if (Files.exists(searchDir) && Files.isDirectory(searchDir)) {
-            try {
-                Files.list(searchDir)
-                    .filter(path -> path.toString().endsWith(".json"))
+            try (var stream = Files.list(searchDir)) {
+                stream.filter(path -> path.toString().endsWith(".json"))
                     .forEach(path -> {
                         try {
                             String filename = path.getFileName().toString();
@@ -225,9 +232,10 @@ public class GoogleBooksMockService {
         if (!mockEnabled) return;
         
         mockBookResponses.put(bookId, bookNode);
-        
+
         // Also save to filesystem for persistence
-        Path bookFile = Paths.get(mockResponseDirectory, "books", bookId + ".json");
+        String safeBookId = bookId.replaceAll("[^A-Za-z0-9-_]", "_");
+        Path bookFile = Paths.get(mockResponseDirectory, "books", safeBookId + ".json");
         try {
             // Ensure directory exists
             Files.createDirectories(bookFile.getParent());
@@ -252,7 +260,7 @@ public class GoogleBooksMockService {
         if (!mockEnabled || searchQuery == null || books == null) return;
         
         // Normalize the query for consistent caching
-        String normalizedQuery = searchQuery.toLowerCase().trim();
+        String normalizedQuery = normalizeQuery(searchQuery); // Use helper
         
         mockSearchResults.put(normalizedQuery, books);
         
@@ -326,12 +334,16 @@ public class GoogleBooksMockService {
      * @param searchQuery The search query
      * @return List of {@link Book} objects if found in mock data, an empty list otherwise
      */
-    @Cacheable(value = "mockSearches", key = "#searchQuery", condition = "#root.target.mockEnabled")
+    @Cacheable(
+        value = "mockSearches", 
+        key = "T(com.williamcallahan.book_recommendation_engine.service.GoogleBooksMockService).normalizeQuery(#searchQuery)", 
+        condition = "#root.target.mockEnabled"
+    )
     public List<Book> searchBooks(String searchQuery) {
         if (!mockEnabled || searchQuery == null) return Collections.emptyList();
         
         // Normalize the query for consistent caching
-        String normalizedQuery = searchQuery.toLowerCase().trim();
+        String normalizedQuery = normalizeQuery(searchQuery); // Use helper
         
         List<Book> results = mockSearchResults.get(normalizedQuery);
         if (results != null && !results.isEmpty()) {
@@ -373,7 +385,7 @@ public class GoogleBooksMockService {
     public boolean hasMockDataForSearch(String searchQuery) {
         if (!mockEnabled || searchQuery == null) return false;
         
-        String normalizedQuery = searchQuery.toLowerCase().trim();
+        String normalizedQuery = normalizeQuery(searchQuery); // Use helper
         return mockSearchResults.containsKey(normalizedQuery);
     }
 }

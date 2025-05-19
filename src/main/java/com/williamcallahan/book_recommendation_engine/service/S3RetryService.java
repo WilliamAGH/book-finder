@@ -71,6 +71,12 @@ public class S3RetryService {
         
         // First attempt or retry
         return s3StorageService.fetchJsonAsync(volumeId)
+            .exceptionally(ex -> {
+                // Assuming logger is available and S3FetchResult.serviceError is correctly typed.
+                // The type T of S3FetchResult<T> is determined by fetchJsonAsync.
+                logger.warn("S3 fetch threw exception for volumeId {}: {}", volumeId, ex.getMessage());
+                return S3FetchResult.serviceError(ex.getMessage());
+            })
             .thenComposeAsync(result -> {
                 // Successfully fetched or confirmed not found - no retry needed
                 if (result.isSuccess() || result.isNotFound() || result.isDisabled()) {

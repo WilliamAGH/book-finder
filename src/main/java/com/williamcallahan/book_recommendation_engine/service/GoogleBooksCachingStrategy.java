@@ -116,30 +116,21 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
      * @return CompletionStage completing with the book if found, or null if not found
      */
     @Override
-    public CompletionStage<Book> get(String bookId) {
+    public CompletionStage<Optional<Book>> get(String bookId) {
         if (bookId == null || bookId.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
 
         if (bypassCachesOverride) {
             logger.warn("BYPASS_CACHES_OVERRIDE ENABLED: Skipping all caches for book ID: {}. Going directly to GoogleBooksService.", bookId);
-            return googleBooksService.getBookById(bookId)
-                .thenCompose(apiBook -> {
-                    // Even when bypassing caches for reads, we might still want to populate them on a successful API fetch
-                    // However, for a full bypass, we might skip this. For now, let's assume bypass is for reads
-                    // If the intention is to also bypass writes to cache on override, this 'putReactive' should also be conditional
-                    if (apiBook != null) {
-                        putReactive(bookId, apiBook).subscribe();
-                    }
-                    return CompletableFuture.completedFuture(apiBook);
-                });
+            return googleBooksService.getBookById(bookId).thenApply(Optional::ofNullable);
         }
         
         // Step 1: Check in-memory cache (fastest)
         Book cachedBook = bookDetailCache.get(bookId);
         if (cachedBook != null) {
             logger.debug("In-memory cache hit for book ID: {}", bookId);
-            return CompletableFuture.completedFuture(cachedBook);
+            return CompletableFuture.completedFuture(Optional.of(cachedBook));
         }
         
         // Step 2: Check Spring Cache
@@ -150,7 +141,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                 logger.debug("Spring cache hit for book ID: {}", bookId);
                 // Update in-memory cache
                 bookDetailCache.put(bookId, springCachedBook);
-                return CompletableFuture.completedFuture(springCachedBook);
+                return CompletableFuture.completedFuture(Optional.of(springCachedBook));
             }
         }
         
@@ -161,7 +152,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                 logger.debug("Local disk cache hit for book ID: {}", bookId);
                 // Update faster caches
                 updateFasterCaches(bookId, localBook);
-                return CompletableFuture.completedFuture(localBook);
+                return CompletableFuture.completedFuture(Optional.of(localBook));
             }
         }
         
@@ -174,7 +165,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                     logger.debug("Database cache hit for book ID: {}", bookId);
                     // Update faster caches
                     updateFasterCaches(bookId, dbBook);
-                    return CompletableFuture.completedFuture(dbBook);
+                    return CompletableFuture.completedFuture(Optional.of(dbBook));
                 }
             } catch (Exception e) {
                 logger.warn("Error accessing database cache for book ID {}: {}", bookId, e.getMessage());
@@ -194,7 +185,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                             logger.debug("S3 cache hit for book ID: {}", bookId);
                             // Update all caches
                             putReactive(bookId, s3Book).subscribe();
-                            return CompletableFuture.completedFuture(s3Book);
+                            return CompletableFuture.completedFuture(Optional.of(s3Book));
                         }
                         logger.warn("S3 cache for {} contained JSON, but it parsed to a null/invalid book. Falling back to API.", bookId);
                     } catch (Exception e) {
@@ -211,13 +202,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                 
                 // Step 6: Fall back to API call after all cache layers miss
                 logger.debug("All caches missed for book ID: {}. Calling GoogleBooksService.getBookById.", bookId);
-                return googleBooksService.getBookById(bookId)
-                    .thenCompose(apiBook -> {
+                CompletionStage<Book> bookStageFallback = googleBooksService.getBookById(bookId);
+                return bookStageFallback.thenCompose(apiBook -> {
                         if (apiBook != null) {
                             // Update all caches with the book from API
                              putReactive(bookId, apiBook).subscribe();
                         }
-                        return CompletableFuture.completedFuture(apiBook);
+                        return CompletableFuture.completedFuture(Optional.ofNullable(apiBook));
                     });
             });
     }
@@ -235,8 +226,9 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
         
         // Convert the CompletionStage-based method to Reactive
-        return Mono.defer(() -> Mono.fromCompletionStage(get(bookId)))
-            .flatMap(book -> book != null ? Mono.just(book) : Mono.empty());
+        // get(bookId) now returns CompletionStage<Optional<Book>>
+        return Mono.defer(() -> Mono.fromCompletionStage(get(bookId))) // This results in Mono<Optional<Book>>
+            .flatMap(optionalBook -> optionalBook.map(Mono::just).orElseGet(Mono::empty)); // Converts Mono<Optional<Book>> to Mono<Book>
     }
 
     /**

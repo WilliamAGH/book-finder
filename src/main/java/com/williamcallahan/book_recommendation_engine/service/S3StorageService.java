@@ -27,9 +27,13 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
@@ -142,13 +146,22 @@ public class S3StorageService {
         return Mono.<Void>fromRunnable(() -> {
             String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
             try {
+                byte[] compressedJson;
+                try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                     GZIPOutputStream gzipOutputStream = new GZIPOutputStream(bos)) {
+                    gzipOutputStream.write(jsonContent.getBytes(StandardCharsets.UTF_8));
+                    gzipOutputStream.finish();
+                    compressedJson = bos.toByteArray();
+                }
+
                 PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                         .bucket(bucketName)
                         .key(keyName)
                         .contentType("application/json")
+                        .contentEncoding("gzip")
                         .build();
 
-                s3Client.putObject(putObjectRequest, RequestBody.fromString(jsonContent, StandardCharsets.UTF_8));
+                s3Client.putObject(putObjectRequest, RequestBody.fromBytes(compressedJson));
                 logger.info("Successfully uploaded JSON for volumeId {} to S3 key {}", volumeId, keyName);
             } catch (Exception e) {
                 logger.error("Error uploading JSON for volumeId {} to S3: {}", volumeId, e.getMessage(), e);
@@ -180,7 +193,24 @@ public class S3StorageService {
                         .build();
 
                 ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
-                String jsonString = objectBytes.asUtf8String();
+                String jsonString;
+                // Check if the content is gzip encoded
+                String contentEncoding = objectBytes.response().contentEncoding();
+                if (contentEncoding != null && contentEncoding.equalsIgnoreCase("gzip")) {
+                    // Decompress gzip content
+                    try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(objectBytes.asByteArray()));
+                         ByteArrayOutputStream result = new ByteArrayOutputStream()) {
+                        byte[] buffer = new byte[1024];
+                        int length;
+                        while ((length = gis.read(buffer)) != -1) {
+                            result.write(buffer, 0, length);
+                        }
+                        jsonString = result.toString(StandardCharsets.UTF_8.name());
+                    }
+                } else {
+                    // Regular content
+                    jsonString = objectBytes.asUtf8String();
+                }
 
                 logger.debug("Successfully fetched JSON for volumeId {} from S3 key {}", volumeId, keyName);
                 return S3FetchResult.success(jsonString);
