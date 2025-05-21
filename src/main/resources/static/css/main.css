@@ -1215,8 +1215,9 @@ section {
     border-color: var(--button-outline-primary-hover-bg);
 }
 
-/* Light mode hero bleed overrides */
-[data-theme="light"] .main-content {
+/* Main content top padding consistency for hero bleed and general layout */
+[data-theme="light"] .main-content,
+[data-theme="dark"] .main-content {
     padding-top: 0 !important;
 }
 [data-theme="light"] .hero-section,
@@ -1319,6 +1320,15 @@ section {
     box-shadow: 0 4px 15px rgba(0,0,0,0.2);
 }
 
+/* Uniform height & centering for affiliate buttons & dropdown */
+.btn-affiliate {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 2.5rem !important;
+    padding: 0 1.25rem !important;
+}
+
 .btn.btn-barnesandnoble {
     background-color: #00563f !important; 
     border-color: #00563f !important;
@@ -1350,3 +1360,81 @@ section {
     color: #000000 !important;
 }
 /* End Custom Affiliate Button Styles */
+
+/* Affiliate Dropdown Styles */
+.affiliate-dropdown .dropdown-toggle {
+    display: flex;
+    align-items: center;
+}
+.affiliate-dropdown .dropdown-toggle::after {
+    margin-left: .5rem;
+}
+.affiliate-dropdown .dropdown-menu {
+    background-color: #fff;
+    border: 1px solid rgba(0,0,0,0.1);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    border-radius: .5rem;
+    transition: none;
+    transform: none !important;
+    margin-top: .25rem;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+}
+.affiliate-dropdown .dropdown-item {
+    padding: .5rem 1rem;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+.affiliate-dropdown .dropdown-item:hover {
+    background-color: #f8f9fa;
+}
+/* Dark mode overrides for affiliate dropdown */
+[data-theme="dark"] .affiliate-dropdown .dropdown-menu {
+    background-color: #2d2d2d;
+    border-color: rgba(255,255,255,0.1);
+}
+[data-theme="dark"] .affiliate-dropdown .dropdown-item:hover {
+    background-color: rgba(255,255,255,0.1);
+}
+
+/* Improved Affiliate Dropdown Positioning and Width */
+.affiliate-dropdown {
+    position: relative;
+    display: inline-block;
+    overflow: visible;
+}
+.affiliate-dropdown .dropdown-menu {
+    width: 100% !important;
+    left: 0 !important;
+    right: auto !important;
+    z-index: 1050 !important;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    background-color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: .5rem;
+}
+
+/* Dark mode reinterpretation */
+[data-theme="dark"] .affiliate-dropdown .dropdown-menu {
+    background-color: rgba(20,20,30,0.85) !important;
+    border-color: rgba(255,255,255,0.1) !important;
+}
+
+/* Consistent colors for dropdown items */
+.affiliate-dropdown .dropdown-item {
+    color: var(--text-color-primary) !important;
+}
+.affiliate-dropdown .dropdown-item:hover,
+.affiliate-dropdown .dropdown-item:focus {
+    background-color: #7C3AED !important; /* Brand purple */
+    color: #ffffff !important;
+}
+.affiliate-dropdown .dropdown-item.active {
+    background-color: #7C3AED !important;
+    color: #ffffff !important;
+}
+
+/* Allow affiliate dropdown menu to overflow main book card */
+.book-details > .card.shadow.border-0.mb-5 {
+    overflow: visible !important;
+}

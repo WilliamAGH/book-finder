@@ -682,7 +682,7 @@
             const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
 
             imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
-            imgElementForCard.alt = `${book.title} cover`;
+            imgElementForCard.alt = book.title ? `${book.title} cover` : 'Book cover';
             imgElementForCard.setAttribute('data-book-id', book.id);
             imgElementForCard.setAttribute('data-preferred-url', preferredUrl || '');
             imgElementForCard.setAttribute('data-fallback-url', fallbackUrl);
@@ -785,13 +785,14 @@
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
-            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
-            const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const preferredUrlListItem = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
+            const fallbackUrlListItem = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
 
             imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src
-            imgElementForListItem.alt = `${book.title} cover`;
+            imgElementForListItem.alt = book.title ? `${book.title} cover` : 'Book cover';
             imgElementForListItem.setAttribute('data-book-id', book.id);
-            imgElementForListItem.setAttribute('data-preferred-url', preferredUrl || '');
+            imgElementForListItem.setAttribute('data-preferred-url', preferredUrlListItem || '');
+            imgElementForListItem.setAttribute('data-fallback-url', fallbackUrlListItem);
             imgElementForListItem.setAttribute('data-fallback-url', fallbackUrl);
             imgElementForListItem.setAttribute('data-ultimate-fallback', '/images/placeholder-book-cover.svg');
             
@@ -1201,6 +1202,7 @@
     }
     .no-spinner {
         -moz-appearance: textfield;
+        appearance: textfield;
     }
     
     /* Qualifier badge styling */

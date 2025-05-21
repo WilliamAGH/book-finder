@@ -150,7 +150,7 @@
                         <li th:if="${searchQuery}" class="breadcrumb-item">
                             <a th:href="@{/search(query=${searchQuery})}"><span th:text="${searchQuery}">Search Query</span></a>
                         </li>
-                        <li class="breadcrumb-item active" aria-current="page" th:text="${book.title}">Book Title</li>
+                        <li class="breadcrumb-item active" aria-current="page" th:text="${book.title != null ? book.title : 'Book Details'}">Book Title</li>
                     </ol>
                 </nav>
                 
@@ -198,7 +198,7 @@
                         <!-- Book Details Section -->
                         <div class="col-md-8 col-lg-9">
                             <div class="card-body p-4 p-lg-5">
-                                <h1 class="card-title mb-2" th:text="${book.title}">Book Title</h1>
+                                <h1 class="card-title mb-2" th:text="${book.title != null ? book.title : 'Book Details'}">Book Title</h1>
                                 
                                 <!-- Authors -->
                                 <h5 class="card-subtitle mb-4 text-muted">
@@ -272,32 +272,35 @@
                                                 Book description text goes here.
                                             </div>
                                         </div>
-                                        <!-- External Links -->
-                                        <div class="book-links d-flex flex-wrap gap-2">
+                                        <!-- External Links (Preview & Info) -->
+                                        <div class="book-links d-flex flex-wrap gap-2 mb-4">
                                             <a th:if="${book.previewLink}" th:href="${book.previewLink}" target="_blank" class="btn btn-outline-primary btn-affiliate me-2">
-                                                <i class="fas fa-book-open"></i> Preview
+                                                <i class="fas fa-book-open me-2"></i> Preview
                                             </a>
                                             <a th:if="${book.infoLink}" th:href="${book.infoLink}" target="_blank" class="btn btn-outline-secondary btn-affiliate me-2">
-                                                <i class="fas fa-info-circle"></i> More Info
+                                                <i class="fas fa-info-circle me-2"></i> More Info
                                             </a>
+                                        </div>
+                                        <!-- View On Section -->
+                                        <h5 class="mb-3">View On</h5>
+                                        <div class="d-flex flex-wrap gap-2 mb-4">
                                             <!-- Google Books Link -->
                                             <a th:if="${book.id != null}" th:href="${'https://www.google.com/books/edition/' + book.title?.replace(' ', '_') + '/' + book.id + '?hl=en'}" 
                                                target="_blank" class="btn btn-outline-primary btn-affiliate me-2">
-                                                <i class="fas fa-book"></i> View on Google Books
+                                                <i class="fas fa-book me-2"></i> Google Books
                                             </a>
-                                            <!-- View on Goodreads Button -->
+                                            <!-- Goodreads Link -->
                                             <a th:with="
                                                    goodreadsSearchTerm=${book.isbn13 != null ? book.isbn13 : (book.isbn10 != null ? book.isbn10 : book.title + ' ' + (book.authors != null && not #lists.isEmpty(book.authors) ? book.authors[0] : ''))}
                                                "
                                                th:href="'https://www.goodreads.com/search?q=' + ${#uris.escapeQueryParam(goodreadsSearchTerm)}"
                                                target="_blank"
                                                class="btn btn-info btn-affiliate me-2">
-                                                <i class="fab fa-goodreads"></i> Find on Goodreads
+                                                <i class="fab fa-goodreads me-2"></i> Goodreads
                                             </a>
-                                            <!-- Add DRY Amazon affiliate link -->
-                                            <a th:if="${affiliateLinks.amazon}" th:href="${affiliateLinks.amazon}" target="_blank" rel="noopener sponsored" class="btn btn-warning btn-affiliate me-2">
-                                                <i class="fas fa-shopping-cart"></i> View on Amazon.com
-                                            </a>
+                                            <!-- Amazon Dropdown -->
+                                            <th:block th:if="${affiliateLinks != null}" 
+                                                      th:insert="~{fragments/affiliate-dropdown :: affiliateDropdown(affiliateLinks=${affiliateLinks})}"/>
                                         </div>
                                     </div>
                                     
@@ -429,12 +432,10 @@
                                                 <a th:if="${affiliateLinks.audible}" th:href="${affiliateLinks.audible}" target="_blank" rel="noopener sponsored" class="btn btn-audible btn-affiliate mb-2">
                                                     <i class="fas fa-headphones-alt me-2"></i> Listen on Audible
                                                 </a>
-                                                <!-- Add Amazon link to Purchase Options -->
                                                 <a th:if="${affiliateLinks.amazon}" th:href="${affiliateLinks.amazon}" target="_blank" rel="noopener sponsored" class="btn btn-warning btn-affiliate mb-2">
                                                     <i class="fas fa-shopping-cart me-2"></i> View on Amazon.com
                                                 </a>
                                             </div>
-                                            <p class="mt-2 mb-0"><small><em>As an affiliate, I may earn from qualifying purchases. Your support is appreciated!</em></small></p>
                                         </div>
                                         <!-- End Affiliate Links Section -->
 
@@ -485,15 +486,9 @@
             </div>
 
             <!-- Similar Books Section -->
-            <div class="similar-books-section mb-5">
+            <div class="similar-books-section mb-5" th:if="${similarBooks != null and not #lists.isEmpty(similarBooks)}">
                 <h3 class="mb-4">You Might Also Like</h3>
-                <div th:if="${similarBooks == null or #lists.isEmpty(similarBooks)}" class="text-center py-5">
-                    <p class="text-muted">
-                        <i class="fas fa-info-circle me-2"></i>
-                        No recommendations available.
-                    </p>
-                </div>
-                <div th:unless="${similarBooks == null or #lists.isEmpty(similarBooks)}" class="row g-4">
+                <div class="row g-4">
                     <div th:each="rec : ${similarBooks}" class="col-sm-6 col-md-4 col-lg-3">
                         <div class="card h-100">
                             <div class="position-relative book-cover-container">

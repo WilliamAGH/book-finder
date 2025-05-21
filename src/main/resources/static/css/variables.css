@@ -82,6 +82,12 @@
 
   --placeholder-text-color: var(--grey-500);
   --placeholder-bg-color: var(--grey-100);
+
+  --text-color: var(--text-color-primary);
+  --popular-tag-border: var(--border-color);
+  --footer-background-color: var(--grey-900); /* Default for light, overridden in dark */
+  --footer-text-color: var(--grey-200); /* Default for light, overridden in dark */
+  --section-bg-color: var(--grey-100); /* Default for light, can be overridden */
   
   --dropdown-bg: var(--card-bg);
   --dropdown-border-color: var(--border-color);
