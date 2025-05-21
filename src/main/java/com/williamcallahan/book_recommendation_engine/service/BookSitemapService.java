@@ -39,7 +39,7 @@ public class BookSitemapService {
     private static final Logger logger = LoggerFactory.getLogger(BookSitemapService.class);
 
     private final S3Client s3Client;
-    private final BookCacheService bookCacheService;
+    private final BookCacheFacadeService bookCacheFacadeService;
     private final ObjectMapper objectMapper;
     private final String s3BucketName;
     private final String accumulatedIdsS3Key;
@@ -52,19 +52,19 @@ public class BookSitemapService {
      * - Sets S3 bucket and key parameters from configuration
      * 
      * @param s3Client AWS S3 client for bucket operations
-     * @param bookCacheService Service for accessing cached book data
+     * @param bookCacheFacadeService Service for accessing cached book data
      * @param objectMapper JSON object mapper for serialization
      * @param s3BucketName Name of S3 bucket from configuration
      * @param accumulatedIdsS3Key S3 key for accumulated IDs file
      */
     @Autowired
     public BookSitemapService(S3Client s3Client,
-                              BookCacheService bookCacheService,
+                              BookCacheFacadeService bookCacheFacadeService,
                               ObjectMapper objectMapper,
                               @Value("${s3.bucket-name}") String s3BucketName,
                               @Value("${sitemap.s3.accumulated-ids-key}") String accumulatedIdsS3Key) {
         this.s3Client = s3Client;
-        this.bookCacheService = bookCacheService;
+        this.bookCacheFacadeService = bookCacheFacadeService;
         this.objectMapper = objectMapper;
         this.s3BucketName = s3BucketName;
         this.accumulatedIdsS3Key = accumulatedIdsS3Key;
@@ -152,17 +152,17 @@ public class BookSitemapService {
         // Step 2: Get current IDs from cache
         Set<String> currentCachedIds;
         try {
-            currentCachedIds = this.bookCacheService.getAllCachedBookIds();
+            currentCachedIds = this.bookCacheFacadeService.getAllCachedBookIds();
             
             if (currentCachedIds == null) {
                 currentCachedIds = Collections.emptySet();
-                logger.warn("bookCacheService.getAllCachedBookIds() returned null. Using empty set for current update cycle.");
+                logger.warn("bookCacheFacadeService.getAllCachedBookIds() returned null. Using empty set for current update cycle.");
             }
         } catch (UnsupportedOperationException e) {
-            logger.error("BookCacheService does not support getAllCachedBookIds(). S3 sitemap accumulation cannot proceed.", e);
+            logger.error("BookCacheFacadeService does not support getAllCachedBookIds(). S3 sitemap accumulation cannot proceed.", e);
             return;
         } catch (Exception e) {
-            logger.error("Error fetching IDs from BookCacheService.", e);
+            logger.error("Error fetching IDs from BookCacheFacadeService.", e);
             return; 
         }
         

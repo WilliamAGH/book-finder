@@ -14,6 +14,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import org.slf4j.Logger;
@@ -37,34 +38,85 @@ public class BookDataOrchestrator {
     private final S3RetryService s3RetryService;
     private final GoogleApiFetcher googleApiFetcher;
     private final ObjectMapper objectMapper;
+    private final OpenLibraryBookDataService openLibraryBookDataService;
+    // private final LongitoodBookDataService longitoodBookDataService; // Removed
+    private final BookDataAggregatorService bookDataAggregatorService;
 
-    /**
-     * Constructs BookDataOrchestrator with required dependencies
-     * 
-     * @param s3RetryService S3 storage service with retry capability
-     * @param googleApiFetcher Google Books API client
-     * @param objectMapper JSON parser for API responses
-     */
     @Autowired
     public BookDataOrchestrator(S3RetryService s3RetryService,
                                 GoogleApiFetcher googleApiFetcher,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                OpenLibraryBookDataService openLibraryBookDataService,
+                                // LongitoodBookDataService longitoodBookDataService, // Removed
+                                BookDataAggregatorService bookDataAggregatorService) {
         this.s3RetryService = s3RetryService;
         this.googleApiFetcher = googleApiFetcher;
         this.objectMapper = objectMapper;
+        this.openLibraryBookDataService = openLibraryBookDataService;
+        // this.longitoodBookDataService = longitoodBookDataService; // Removed
+        this.bookDataAggregatorService = bookDataAggregatorService;
     }
 
-    /**
-     * Fetches a book using 4-tier strategy (caller handles Tier 1 Memory/DB)
-     * 
-     * @param bookId Google Books ID
-     * @return Book if found or Mono.empty()
-     */
+    private Mono<Book> fetchFromApisAndAggregate(String bookId) {
+        // This will collect JsonNodes from various API sources
+        Mono<List<JsonNode>> apiResponsesMono = Mono.defer(() -> {
+            Mono<JsonNode> tier4Mono = googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
+                .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 4 Google Auth HIT for {}", bookId);})
+                .onErrorResume(e -> { logger.warn("Tier 4 Google Auth API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
+
+            Mono<JsonNode> tier3Mono = googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId)
+                .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 3 Google Unauth HIT for {}", bookId);})
+                .onErrorResume(e -> { logger.warn("Tier 3 Google Unauth API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
+
+            Mono<JsonNode> olMono = openLibraryBookDataService.fetchBookByIsbn(bookId)
+                .flatMap(book -> {
+                    try {
+                        logger.info("BookDataOrchestrator: Tier 5 OpenLibrary HIT for {}. Title: {}", bookId, book.getTitle());
+                        return Mono.just(objectMapper.valueToTree(book));
+                    } catch (IllegalArgumentException e) {
+                        logger.error("Error converting OpenLibrary Book to JsonNode for {}: {}", bookId, e.getMessage());
+                        return Mono.<JsonNode>empty();
+                    }
+                })
+                .onErrorResume(e -> { logger.warn("Tier 5 OpenLibrary API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
+
+            // Mono<JsonNode> longitoodMono = longitoodBookDataService.fetchBookByIsbn(bookId) // Removed
+            //     .flatMap(book -> {
+            //         try {
+            //             logger.info("BookDataOrchestrator: Tier 6 Longitood HIT for {}. Title: {}", bookId, book.getTitle());
+            //             return Mono.just(objectMapper.valueToTree(book));
+            //         } catch (IllegalArgumentException e) {
+            //             logger.error("Error converting Longitood Book to JsonNode for {}: {}", bookId, e.getMessage());
+            //             return Mono.<JsonNode>empty();
+            //         }
+            //     })
+            //     .onErrorResume(e -> { logger.warn("Tier 6 Longitood API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
+            
+            return Flux.concatDelayError(tier4Mono, tier3Mono, olMono) // Removed longitoodMono
+                .filter(Objects::nonNull)
+                .collectList();
+        });
+
+        return apiResponsesMono.flatMap(jsonList -> {
+            if (jsonList.isEmpty()) {
+                logger.info("BookDataOrchestrator: No data found from any API source for identifier: {}", bookId);
+                return Mono.<Book>empty();
+            }
+            ObjectNode aggregatedJson = bookDataAggregatorService.aggregateBookDataSources(bookId, "id", jsonList.toArray(new JsonNode[0]));
+            Book finalBook = BookJsonParser.convertJsonToBook(aggregatedJson);
+
+            if (finalBook == null || finalBook.getId() == null) {
+                logger.error("BookDataOrchestrator: Aggregation resulted in null or invalid book for identifier: {}", bookId);
+                return Mono.<Book>empty(); 
+            }
+            return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", bookId);
+        });
+    }
+
     public Mono<Book> getBookByIdTiered(String bookId) {
         logger.debug("BookDataOrchestrator: Starting tiered fetch for book ID: {}", bookId);
 
-        // Tier 2: Try S3 Cache
-        Mono<Book> s3FetchMono = Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(bookId))
+        Mono<Book> s3FetchBookMono = Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(bookId))
             .flatMap(s3Result -> {
                 if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
                     try {
@@ -85,97 +137,154 @@ public class BookDataOrchestrator {
                 } else if (s3Result.isDisabled()){
                     logger.info("BookDataOrchestrator: Tier 2 S3 is disabled. Proceeding to API for book ID: {}", bookId);
                 }
-                return Mono.<Book>empty(); // S3 miss or error, proceed to next tier
+                return Mono.empty(); 
             });
 
-        // Tier 3: Unauthenticated Google API
-        Mono<Book> tier3ApiMono = Mono.defer(() -> {
-            logger.info("BookDataOrchestrator: Tier 3 Unauthenticated API call for book ID: {}", bookId);
-            return googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId)
-                .flatMap(jsonNode -> processApiJsonResponse(jsonNode, bookId, "Unauthenticated", false));
-        });
-
-        // Tier 4: Authenticated Google API
-        Mono<Book> tier4ApiMono = Mono.defer(() -> {
-            logger.info("BookDataOrchestrator: Tier 4 Authenticated API call for book ID: {}", bookId);
-            return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
-                .flatMap(jsonNode -> processApiJsonResponse(jsonNode, bookId, "Authenticated", true));
-        });
-
-        return s3FetchMono
-            .switchIfEmpty(tier3ApiMono)
-            .switchIfEmpty(tier4ApiMono)
+        return s3FetchBookMono
+            .switchIfEmpty(Mono.<Book>defer(() -> fetchFromApisAndAggregate(bookId)))
             .doOnSuccess(book -> {
                 if (book != null) {
-                    logger.info("BookDataOrchestrator: Successfully fetched book ID: {} Title: {}", book.getId(), book.getTitle());
+                    logger.info("BookDataOrchestrator: Successfully processed book for identifier: {} Title: {}", bookId, book.getTitle());
                 } else {
-                    logger.info("BookDataOrchestrator: Failed to fetch book ID: {} from any tier.", bookId);
+                    logger.info("BookDataOrchestrator: Failed to fetch/process book for identifier: {} from any tier.", bookId);
                 }
             })
             .onErrorResume(e -> {
-                logger.error("BookDataOrchestrator: Error during tiered fetch for book ID {}: {}", bookId, e.getMessage(), e);
+                logger.error("BookDataOrchestrator: Critical error during tiered fetch for identifier {}: {}", bookId, e.getMessage(), e);
                 return Mono.<Book>empty();
             });
     }
 
-    /**
-     * Processes API response and saves to S3 cache
-     * 
-     * @param jsonNode API response as JSON node
-     * @param bookId Book ID being requested
-     * @param apiType API call type (Authenticated/Unauthenticated)
-     * @param isAuthenticated Whether call was authenticated
-     * @return Book if valid or Mono.empty()
-     */
-    private Mono<Book> processApiJsonResponse(JsonNode jsonNode, String bookId, String apiType, boolean isAuthenticated) {
-        if (jsonNode == null || jsonNode.isNull() || jsonNode.isMissingNode()) {
-            logger.warn("BookDataOrchestrator: {} API call for book ID {} returned empty or invalid JSON.", apiType, bookId);
-            return Mono.<Book>empty();
+    private Mono<Book> intelligentlyUpdateS3CacheAndReturnBook(Book bookToCache, JsonNode jsonToCache, String apiTypeContext, String s3Key) {
+        if (s3Key == null || s3Key.trim().isEmpty()) {
+            logger.error("BookDataOrchestrator ({}) - S3 Update: S3 key is null or empty for book title: {}. Cannot update S3 cache.", apiTypeContext, bookToCache.getTitle());
+            return Mono.just(bookToCache); 
         }
-        Book book = BookJsonParser.convertJsonToBook(jsonNode);
-        if (book != null && book.getId() != null) {
-            logger.info("BookDataOrchestrator: {} API HIT for book ID: {}. Title: {}", apiType, bookId, book.getTitle());
-            // Save raw JSON to S3
-            return Mono.fromCompletionStage(s3RetryService.uploadJsonWithRetry(book.getId(), jsonNode.toString()))
-                .doOnSuccess(v -> logger.info("BookDataOrchestrator: Successfully saved raw JSON from {} API to S3 for book ID: {}", apiType, book.getId()))
-                .doOnError(e -> logger.error("BookDataOrchestrator: Failed to save raw JSON from {} API to S3 for book ID: {}. Error: {}", apiType, book.getId(), e.getMessage()))
-                .thenReturn(book) // Return the book regardless of S3 save success/failure for this operation
-                .onErrorReturn(book); // If S3 save fails, still return the book
-        } else {
-            logger.warn("BookDataOrchestrator: {} API data for {} parsed to null/invalid book.", apiType, bookId);
-            return Mono.<Book>empty();
-        }
+        String newRawJson = jsonToCache.toString();
+
+        return Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(s3Key))
+            .flatMap(s3Result -> {
+                Book bookToReturn = bookToCache; 
+
+                if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
+                    String existingRawJson = s3Result.getData().get();
+                    try {
+                        JsonNode existingS3JsonNode = objectMapper.readTree(existingRawJson);
+                        Book existingBookFromS3 = BookJsonParser.convertJsonToBook(existingS3JsonNode);
+
+                        if (shouldUpdateS3(existingBookFromS3, bookToCache, existingRawJson, newRawJson, s3Key)) {
+                            logger.info("BookDataOrchestrator ({}) - S3 Update: New data for S3 key {} is better. Overwriting S3.", apiTypeContext, s3Key);
+                            return Mono.fromCompletionStage(s3RetryService.uploadJsonWithRetry(s3Key, newRawJson))
+                                .doOnSuccess(v -> logger.info("BookDataOrchestrator ({}) - S3 Update: Successfully overwrote S3 for S3 key: {}", apiTypeContext, s3Key))
+                                .doOnError(e -> logger.error("BookDataOrchestrator ({}) - S3 Update: Failed to overwrite S3 for S3 key: {}. Error: {}", apiTypeContext, s3Key, e.getMessage()))
+                                .thenReturn(bookToCache); 
+                        } else {
+                            logger.info("BookDataOrchestrator ({}) - S3 Update: Existing S3 data for S3 key {} is preferred or identical. Not overwriting.", apiTypeContext, s3Key);
+                            bookToReturn = existingBookFromS3; 
+                            return Mono.just(bookToReturn); 
+                        }
+                    } catch (Exception e) {
+                        logger.error("BookDataOrchestrator ({}) - S3 Update: Error processing existing S3 data for S3 key {}. Defaulting to overwrite S3 with new data. Error: {}", apiTypeContext, s3Key, e.getMessage(), e);
+                        return Mono.fromCompletionStage(s3RetryService.uploadJsonWithRetry(s3Key, newRawJson))
+                                .thenReturn(bookToCache); 
+                    }
+                } else { 
+                    if (s3Result.isNotFound()) {
+                         logger.info("BookDataOrchestrator ({}) - S3 Update: No existing S3 data found for S3 key {}. Uploading new data.", apiTypeContext, s3Key);
+                    } else if (s3Result.isServiceError()){
+                        logger.warn("BookDataOrchestrator ({}) - S3 Update: S3 service error fetching existing data for S3 key {}. Uploading new data. Error: {}", apiTypeContext, s3Key, s3Result.getErrorMessage().orElse("Unknown S3 Error"));
+                    } else if (s3Result.isDisabled()){
+                         logger.info("BookDataOrchestrator ({}) - S3 Update: S3 is disabled. Storing new data for S3 key {}.", apiTypeContext, s3Key);
+                    }
+                    return Mono.fromCompletionStage(s3RetryService.uploadJsonWithRetry(s3Key, newRawJson))
+                        .doOnSuccess(v -> logger.info("BookDataOrchestrator ({}) - S3 Update: Successfully uploaded new data to S3 for S3 key: {}", apiTypeContext, s3Key))
+                        .doOnError(e -> logger.error("BookDataOrchestrator ({}) - S3 Update: Failed to upload new data to S3 for S3 key: {}. Error: {}", apiTypeContext, s3Key, e.getMessage()))
+                        .thenReturn(bookToCache); 
+                }
+            })
+            .onErrorReturn(bookToCache); 
     }
 
-    /**
-     * Searches books using tiered API strategy (caller handles Tier 1/2)
-     * 
-     * @param query Search query string
-     * @param langCode Optional language code filter
-     * @param desiredTotalResults Maximum number of results to return
-     * @param orderBy Sort order parameter
-     * @return List of books matching query
-     */
+    private boolean shouldUpdateS3(Book existingBook, Book newBook, String existingRawJson, String newRawJson, String s3KeyContext) {
+        if (existingBook == null || existingRawJson == null || existingRawJson.isEmpty()) {
+            return true; 
+        }
+        if (newBook == null || newRawJson == null || newRawJson.isEmpty()) {
+            return false; 
+        }
+        if (existingRawJson.equals(newRawJson)) {
+            return false;
+        }
+        String oldDesc = existingBook.getDescription();
+        String newDesc = newBook.getDescription();
+        if (newDesc != null && !newDesc.isEmpty()) {
+            if (oldDesc == null || oldDesc.isEmpty()) return true; 
+            if (newDesc.length() > oldDesc.length() * 1.1) return true; 
+        }
+        int oldNonNullFields = countNonNullKeyFields(existingBook);
+        int newNonNullFields = countNonNullKeyFields(newBook);
+        if (newNonNullFields > oldNonNullFields) {
+            return true;
+        }
+        logger.debug("shouldUpdateS3: Defaulting to update for S3 key {} as raw JSON differs and simple heuristics didn't prevent it.", s3KeyContext);
+        return true; 
+    }
+
+    private int countNonNullKeyFields(Book book) {
+        if (book == null) return 0;
+        int count = 0;
+        if (book.getPublisher() != null && !book.getPublisher().isEmpty()) count++;
+        if (book.getPublishedDate() != null) count++;
+        if (book.getPageCount() != null && book.getPageCount() > 0) count++;
+        if (book.getIsbn10() != null && !book.getIsbn10().isEmpty()) count++;
+        if (book.getIsbn13() != null && !book.getIsbn13().isEmpty()) count++;
+        if (book.getCategories() != null && !book.getCategories().isEmpty()) count++;
+        if (book.getLanguage() != null && !book.getLanguage().isEmpty()) count++;
+        return count;
+    }
+    
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy) {
         logger.debug("BookDataOrchestrator: Starting tiered search for query: '{}', lang: {}, total: {}, order: {}", query, langCode, desiredTotalResults, orderBy);
         
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
+        boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable(); 
 
-        // Tier 3: Unauthenticated Search
-        return executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers)
-            .flatMap(unauthResults -> {
-                if (!unauthResults.isEmpty()) {
-                    logger.info("BookDataOrchestrator: Tier 3 Unauthenticated search successful for query '{}', found {} books.", query, unauthResults.size());
-                    return Mono.just(unauthResults);
+        Mono<List<Book>> primarySearchMono = apiKeyAvailable ?
+            executePagedSearch(query, langCode, desiredTotalResults, orderBy, true, queryQualifiers) :
+            executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers);
+
+        Mono<List<Book>> fallbackSearchMono = apiKeyAvailable ?
+            executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers) :
+            Mono.just(Collections.emptyList());
+
+        Mono<List<Book>> openLibrarySearchMono = openLibraryBookDataService.searchBooksByTitle(query)
+            .collectList()
+            .map(olBooks -> {
+                if (!olBooks.isEmpty() && !queryQualifiers.isEmpty()) {
+                    olBooks.forEach(book -> queryQualifiers.forEach(book::addQualifier));
                 }
-                // Tier 4: Authenticated Search (if Tier 3 was empty or failed implicitly)
-                logger.info("BookDataOrchestrator: Tier 3 Unauthenticated search for query '{}' yielded no results or failed. Proceeding to Tier 4 Authenticated search.", query);
-                return executePagedSearch(query, langCode, desiredTotalResults, orderBy, true, queryQualifiers);
+                return olBooks;
+            });
+
+        return primarySearchMono
+            .flatMap(googleResults1 -> {
+                if (!googleResults1.isEmpty()) {
+                    logger.info("BookDataOrchestrator: Primary Google search ({}) successful for query '{}', found {} books.", (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query, googleResults1.size());
+                    return Mono.just(googleResults1);
+                }
+                logger.info("BookDataOrchestrator: Primary Google search ({}) for query '{}' yielded no results. Proceeding to fallback Google search.", (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query);
+                return fallbackSearchMono.flatMap(googleResults2 -> {
+                    if (!googleResults2.isEmpty()) {
+                        logger.info("BookDataOrchestrator: Fallback Google search successful for query '{}', found {} books.", query, googleResults2.size());
+                        return Mono.just(googleResults2);
+                    }
+                    logger.info("BookDataOrchestrator: Fallback Google search for query '{}' yielded no results. Proceeding to OpenLibrary search.", query);
+                    return openLibrarySearchMono;
+                });
             })
             .doOnSuccess(books -> {
                 if (!books.isEmpty()) {
                     logger.info("BookDataOrchestrator: Successfully searched books for query '{}'. Found {} books.", query, books.size());
-                    // BookCacheService will handle populating its "bookSearchResults" cache and individual book caches.
                 } else {
                     logger.info("BookDataOrchestrator: Search for query '{}' yielded no results from any tier.", query);
                 }
@@ -186,21 +295,9 @@ public class BookDataOrchestrator {
             });
     }
 
-    /**
-     * Executes paged search against Google Books API
-     * 
-     * @param query Search query
-     * @param langCode Language filter
-     * @param desiredTotalResults Result count limit
-     * @param orderBy Sort order
-     * @param authenticated Use authenticated API
-     * @param queryQualifiers Extracted query qualifiers
-     * @return List of books from search results
-     */
     private Mono<List<Book>> executePagedSearch(String query, String langCode, int desiredTotalResults, String orderBy, boolean authenticated, Map<String, Object> queryQualifiers) {
         final int maxResultsPerPage = 40;
-        // Ensure desiredTotalResults is positive, default to a reasonable number if not.
-        final int maxTotalResultsToFetch = (desiredTotalResults > 0 && desiredTotalResults <= 200) ? desiredTotalResults : (desiredTotalResults <=0 ? 40 : 200) ; // Cap at 200 for sanity
+        final int maxTotalResultsToFetch = (desiredTotalResults > 0 && desiredTotalResults <= 200) ? desiredTotalResults : (desiredTotalResults <=0 ? 40 : 200) ; 
         final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "relevance";
         String authType = authenticated ? "Authenticated" : "Unauthenticated";
 
@@ -224,24 +321,17 @@ public class BookDataOrchestrator {
                     return Flux.empty();
                 });
             })
-            .map(jsonItem -> { // First, parse and add qualifiers
-                Book book = BookJsonParser.convertJsonToBook(jsonItem);
-                if (book != null && book.getId() != null) {
+            .flatMap(jsonItem -> { 
+                Book bookFromSearchItem = BookJsonParser.convertJsonToBook(jsonItem);
+                if (bookFromSearchItem != null && bookFromSearchItem.getId() != null) {
                     if (!queryQualifiers.isEmpty()) {
-                        queryQualifiers.forEach(book::addQualifier);
+                        queryQualifiers.forEach(bookFromSearchItem::addQualifier);
                     }
-                    return book; // Return the book object
+                    return Mono.just(bookFromSearchItem);
                 }
-                return null; // Return null if parsing failed or ID is missing
+                return Mono.<Book>empty(); 
             })
-            .filter(Objects::nonNull) // Filter out null books immediately
-            .flatMap(book -> // Now, for each valid book, perform the S3 upload and return the book
-                Mono.fromCompletionStage(s3RetryService.uploadJsonWithRetry(book.getId(), book.getRawJsonResponse())) // Assuming raw JSON is stored in book
-                    .doOnSuccess(v -> logger.debug("BookDataOrchestrator: {} search - Successfully saved raw JSON to S3 for book ID: {}", authType, book.getId()))
-                    .doOnError(e -> logger.error("BookDataOrchestrator: {} search - Failed to save raw JSON to S3 for book ID: {}. Error: {}", authType, book.getId(), e.getMessage()))
-                    .thenReturn(book) // Return the book after S3 operation
-                    .onErrorReturn(book) // Also return the book if S3 operation fails
-            )
+            .filter(Objects::nonNull) 
             .collectList()
             .map(books -> {
                 if (books.size() > maxTotalResultsToFetch) {
