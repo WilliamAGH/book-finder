@@ -16,7 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
@@ -53,8 +53,8 @@ class BookControllerTest {
     static class BookControllerTestConfiguration {
 
         @Bean
-        public BookCacheService bookCacheService() {
-            return Mockito.mock(BookCacheService.class);
+        public BookCacheFacadeService bookCacheFacadeService() {
+            return Mockito.mock(BookCacheFacadeService.class);
         }
 
         @Bean
@@ -100,7 +100,7 @@ class BookControllerTest {
   private ObjectMapper objectMapper;
 
   @Autowired
-  private BookCacheService bookCacheService;
+  private BookCacheFacadeService bookCacheFacadeService;
 
   @Autowired
   private RecommendationService recommendationService;
@@ -110,7 +110,7 @@ class BookControllerTest {
 
   @AfterEach
   void tearDown() {
-    reset(bookCacheService, recommendationService, bookImageOrchestrationService); 
+    reset(bookCacheFacadeService, recommendationService, bookImageOrchestrationService);
   }
 
   @BeforeEach
@@ -155,7 +155,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/search - empty list returns 200 and [] in results")
   void searchBooks_emptyList_returnsEmptyArrayInResults() throws Exception {
-    when(bookCacheService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
+    when(bookCacheFacadeService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -170,7 +170,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/search - non-empty list returns 200 and array of books in results")
   void searchBooks_nonEmptyList_returnsArrayInResults() throws Exception {
-    when(bookCacheService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(createTestBook("1", "Effective Java", "Joshua Bloch"))));
+    when(bookCacheFacadeService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(createTestBook("1", "Effective Java", "Joshua Bloch"))));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -188,7 +188,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/{id} - existing id returns 200 and book JSON")
   void getBookById_found_returnsBook() throws Exception {
-    when(bookCacheService.getBookByIdReactive("1")).thenReturn(Mono.just(createTestBook("1", "Domain-Driven Design", "Eric Evans")));
+    when(bookCacheFacadeService.getBookByIdReactive("1")).thenReturn(Mono.just(createTestBook("1", "Domain-Driven Design", "Eric Evans")));
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/1"))
       .andExpect(request().asyncStarted())
@@ -206,7 +206,7 @@ class BookControllerTest {
   @DisplayName("GET /api/books/{id} - non-existent id returns 404")
   void getBookById_notFound_returns404() throws Exception {
     // Mock to correctly simulate a book not being found
-    when(bookCacheService.getBookByIdReactive("99")).thenReturn(Mono.empty());
+    when(bookCacheFacadeService.getBookByIdReactive("99")).thenReturn(Mono.empty());
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/99"))
       .andExpect(request().asyncStarted())
@@ -226,8 +226,12 @@ class BookControllerTest {
     doAnswer(invocation -> {
         Book bookArg = invocation.getArgument(0);
         bookArg.setId("1"); 
-        return null; 
-    }).when(bookCacheService).cacheBook(any(Book.class));
+        return Mono.empty(); // cacheBookReactive returns Mono<Void>
+    }).when(bookCacheFacadeService).cacheBookReactive(any(Book.class));
+    
+    // Also need to mock the getBookByIdReactive for the PUT/POST redirect/location header check if it's called
+    // For POST, the location header is built using book.getId() which is set in the doAnswer.
+    // So, no explicit getBookByIdReactive mock needed for the successful POST case's location header.
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
             .contentType(MediaType.APPLICATION_JSON)
@@ -247,8 +251,11 @@ class BookControllerTest {
   @DisplayName("POST /api/books - invalid input returns 400")
   void createBook_invalidInput_returnsBadRequest() throws Exception {
     Book invalid = createTestBook(null, "", "Author"); 
+    // For cacheBookReactive, it returns Mono.error for such cases or handles internally.
+    // The controller's createBook method catches IllegalArgumentException from facade.cacheBook
+    // So, we need the facade's cacheBook to throw it.
     Mockito.doThrow(new IllegalArgumentException("Title cannot be empty"))
-      .when(bookCacheService).cacheBook(any(Book.class));
+      .when(bookCacheFacadeService).cacheBook(any(Book.class)); // Assuming facade.cacheBook is called and might throw this
       
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
             .contentType(MediaType.APPLICATION_JSON)
@@ -267,7 +274,9 @@ class BookControllerTest {
     Book existingBook = createTestBook("1", "Clean Code", "Robert C. Martin");
     
     // Mock to avoid NullPointerException
-    when(bookCacheService.getBookByIdReactive(eq("1"))).thenReturn(Mono.just(existingBook));
+    when(bookCacheFacadeService.getBookByIdReactive(eq("1"))).thenReturn(Mono.just(existingBook));
+    // Mock updateBook on the facade
+    Mockito.doNothing().when(bookCacheFacadeService).updateBook(any(Book.class));
     
     mockMvc.perform(put("/api/books/1") 
         .contentType(MediaType.APPLICATION_JSON)
@@ -281,7 +290,9 @@ class BookControllerTest {
     Book updatePayload = createTestBook(null, "Non Existent", "Author");
     
     // Mock to avoid NullPointerException and return empty for ID 99
-    when(bookCacheService.getBookByIdReactive(eq("99"))).thenReturn(Mono.empty());
+    when(bookCacheFacadeService.getBookByIdReactive(eq("99"))).thenReturn(Mono.empty());
+    // Mock updateBook on the facade
+    Mockito.doNothing().when(bookCacheFacadeService).updateBook(any(Book.class));
     
     mockMvc.perform(put("/api/books/99") 
         .contentType(MediaType.APPLICATION_JSON)
@@ -292,10 +303,10 @@ class BookControllerTest {
   @Test
   @DisplayName("DELETE /api/books/{id} - returns 200 OK")
   void deleteBook_returns200() throws Exception {
-    Book existingBook = createTestBook("1", "Clean Code", "Robert C. Martin");
+    // Book existingBook = createTestBook("1", "Clean Code", "Robert C. Martin"); // Unused
     
-    // Mock to avoid NullPointerException
-    when(bookCacheService.getBookByIdReactive(eq("1"))).thenReturn(Mono.just(existingBook));
+    // Mock removeBook on the facade
+    Mockito.doNothing().when(bookCacheFacadeService).removeBook(eq("1"));
     
     mockMvc.perform(delete("/api/books/1")) 
       .andExpect(status().isOk());
@@ -304,8 +315,8 @@ class BookControllerTest {
   @Test
   @DisplayName("DELETE /api/books/{id} - different id returns 200 OK")
   void deleteBook_differentId_returns200() throws Exception {
-    // Mock to avoid NullPointerException
-    when(bookCacheService.getBookByIdReactive(eq("99"))).thenReturn(Mono.empty());
+    // Mock removeBook on the facade
+    Mockito.doNothing().when(bookCacheFacadeService).removeBook(eq("99"));
     
     mockMvc.perform(delete("/api/books/99")) 
       .andExpect(status().isOk());
