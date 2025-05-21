@@ -15,7 +15,7 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheService; 
+import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
@@ -24,6 +24,7 @@ import com.williamcallahan.book_recommendation_engine.service.EnvironmentService
 import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
+import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
@@ -56,7 +57,7 @@ import java.util.HashMap;
 public class HomeController {
 
     private static final Logger logger = LoggerFactory.getLogger(HomeController.class);
-    private final BookCacheService bookCacheService; 
+    private final BookCacheFacadeService bookCacheFacadeService;
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
     private final BookCoverManagementService bookCoverManagementService;
@@ -64,6 +65,7 @@ public class HomeController {
     private final DuplicateBookService duplicateBookService;
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
     private final AffiliateLinkService affiliateLinkService;
+    private final NewYorkTimesService newYorkTimesService;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -115,7 +117,7 @@ public class HomeController {
     /**
      * Constructs the HomeController with required services
      * 
-     * @param bookCacheService Service for retrieving and caching book information
+     * @param bookCacheFacadeService Service for retrieving and caching book information
      * @param recentlyViewedService Service for tracking user book view history
      * @param recommendationService Service for generating book recommendations
      * @param bookCoverManagementService Service for retrieving and caching book cover images
@@ -123,7 +125,7 @@ public class HomeController {
      * @param duplicateBookService Service for handling duplicate book editions
      */
     @Autowired
-    public HomeController(BookCacheService bookCacheService,
+    public HomeController(BookCacheFacadeService bookCacheFacadeService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
                           BookCoverManagementService bookCoverManagementService,
@@ -131,8 +133,9 @@ public class HomeController {
                           DuplicateBookService duplicateBookService,
                           LocalDiskCoverCacheService localDiskCoverCacheService,
                           AffiliateLinkService affiliateLinkService,
-                          @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled) {
-        this.bookCacheService = bookCacheService;
+                          @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled,
+                          NewYorkTimesService newYorkTimesService) {
+        this.bookCacheFacadeService = bookCacheFacadeService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookCoverManagementService = bookCoverManagementService;
@@ -141,6 +144,7 @@ public class HomeController {
         this.localDiskCoverCacheService = localDiskCoverCacheService;
         this.affiliateLinkService = affiliateLinkService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
+        this.newYorkTimesService = newYorkTimesService;
     }
 
     /**
@@ -163,26 +167,24 @@ public class HomeController {
         model.addAttribute("ogImage", "https://findmybook.net/images/default-social-image.png"); // Default OG image
         model.addAttribute("keywords", "book recommendations, find books, book suggestions, reading, literature, home");
 
-        // Fetch Current Bestsellers
-        Mono<List<Book>> bestsellersMono = bookCacheService.searchBooksReactive(
-                "new york times bestsellers", 0, MAX_BESTSELLERS, null, null, null
-        )
-        .flatMap(this::processBooksCovers) // This sets book.getCoverImageUrl()
-        .map(bookList -> bookList.stream()
-            .filter(this::isActualCover)
-            .collect(Collectors.toList())
-        )
-        .map(this::deduplicateBooksById)
-        .map(bookList -> {
-            bookList.forEach(duplicateBookService::populateDuplicateEditions);
-            return bookList;
-        })
-        .doOnSuccess(bestsellers -> model.addAttribute("currentBestsellers", bestsellers))
-        .doOnError(e -> {
-            logger.error("Error fetching and filtering current bestsellers: {}", e.getMessage());
-            model.addAttribute("currentBestsellers", Collections.emptyList());
-        })
-        .onErrorReturn(Collections.emptyList());
+        // Fetch Current Bestsellers from New York Times (via S3/Cache)
+        Mono<List<Book>> bestsellersMono = newYorkTimesService.getCurrentBestSellers("hardcover-fiction", MAX_BESTSELLERS)
+            .flatMap(this::processBooksCovers)
+            .map(bookList -> bookList.stream()
+                .filter(this::isActualCover)
+                .collect(Collectors.toList())
+            )
+            .map(this::deduplicateBooksById)
+            .map(bookList -> {
+                bookList.forEach(duplicateBookService::populateDuplicateEditions);
+                return bookList;
+            })
+            .doOnSuccess(bestsellers -> model.addAttribute("currentBestsellers", bestsellers))
+            .doOnError(e -> {
+                logger.error("Error fetching and filtering current bestsellers: {}", e.getMessage());
+                model.addAttribute("currentBestsellers", Collections.emptyList());
+            })
+            .onErrorReturn(Collections.emptyList());
 
         // Add recently viewed books to the model
         List<Book> initialRecentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
@@ -196,7 +198,7 @@ public class HomeController {
             String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
             logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
             
-            recentBooksMono = bookCacheService.searchBooksReactive(randomQuery, 0, needed, null, null, null)
+            recentBooksMono = bookCacheFacadeService.searchBooksReactive(randomQuery, 0, needed, null, null, null)
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
@@ -431,11 +433,17 @@ public class HomeController {
         model.addAttribute("ogImage", "https://findmybook.net/images/og-logo.png"); // Default OG image
         model.addAttribute("keywords", "book, literature, reading, book details"); // Default keywords
 
-        // Use BookCacheService to get the main book
-        Mono<Book> bookMonoWithCover = bookCacheService.getBookByIdReactive(id)
+        // Use BookCacheFacadeService to get the main book
+        Mono<Book> bookMonoWithCover = bookCacheFacadeService.getBookByIdReactive(id)
+            // If not found by volume ID, fallback to ISBN-based search
+            .switchIfEmpty(
+                bookCacheFacadeService.getBooksByIsbnReactive(id)
+                    .filter(list -> list != null && !list.isEmpty())
+                    .map(list -> list.get(0))
+            )
             .flatMap(book -> {
                 if (book == null) {
-                    logger.info("No book found with ID: {} via BookCacheService", id);
+                    logger.info("No book found with ID: {} via BookCacheFacadeService", id);
                     model.addAttribute("book", null);
                     return Mono.empty(); // No book found, propagate empty to handle later
                 }
@@ -537,7 +545,7 @@ public class HomeController {
                     });
             })
             .doOnError(e -> { // Errors from getBookByIdReactive
-                 logger.error("Error getting book with ID: {} via BookCacheService", id, e);
+                 logger.error("Error getting book with ID: {} via BookCacheFacadeService", id, e);
                  model.addAttribute("error", "An error occurred while retrieving this book. Please try again later.");
                  model.addAttribute("book", null);
             })
@@ -657,7 +665,7 @@ public class HomeController {
             return Mono.just(new RedirectView("/?error=invalidIsbn&originalIsbn=" + isbn));
         }
         
-        return bookCacheService.getBooksByIsbnReactive(sanitizedIsbn)
+        return bookCacheFacadeService.getBooksByIsbnReactive(sanitizedIsbn)
             .map(books -> {
                 if (!books.isEmpty()) {
                     Book firstBook = books.get(0); // Take the first match

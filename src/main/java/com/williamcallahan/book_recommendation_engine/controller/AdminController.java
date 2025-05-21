@@ -13,6 +13,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,13 +37,16 @@ public class AdminController {
     private final String configuredS3Prefix;
     private final int defaultBatchLimit;
     private final String configuredQuarantinePrefix;
+    private final NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler; // Added
 
     @Autowired
     public AdminController(S3CoverCleanupService s3CoverCleanupService,
+                           NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler, // Added
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
                            @Value("${app.s3.cleanup.quarantine-prefix:images/non-covers-pages/}") String configuredQuarantinePrefix) {
         this.s3CoverCleanupService = s3CoverCleanupService;
+        this.newYorkTimesBestsellerScheduler = newYorkTimesBestsellerScheduler; // Added
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
         this.configuredQuarantinePrefix = configuredQuarantinePrefix;
@@ -156,6 +160,29 @@ public class AdminController {
             );
             logger.error(errorMessage, e);
             return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
+        }
+    }
+
+    /**
+     * Triggers the New York Times Bestseller processing job.
+     *
+     * @return A ResponseEntity indicating the outcome of the trigger.
+     */
+    @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> triggerNytBestsellerProcessing() {
+        logger.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
+        try {
+            // It's good practice to run schedulers asynchronously if they are long-running,
+            // but for a manual trigger, a direct call might be acceptable depending on execution time.
+            // If processNewYorkTimesBestsellers is very long, consider wrapping in an async task.
+            newYorkTimesBestsellerScheduler.processNewYorkTimesBestsellers();
+            String successMessage = "Successfully triggered New York Times Bestseller processing job.";
+            logger.info(successMessage);
+            return ResponseEntity.ok(successMessage);
+        } catch (Exception e) {
+            String errorMessage = "Failed to trigger New York Times Bestseller processing job: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
         }
     }
 }
