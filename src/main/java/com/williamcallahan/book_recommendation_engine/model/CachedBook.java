@@ -26,6 +26,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Map; // For qualifiers
+import java.util.HashMap; // For qualifiers initialization
 @Entity
 @Table(name = "cached_books")
 @Data
@@ -115,6 +117,21 @@ public class CachedBook {
     @Column(name = "access_count", nullable = false)
     private Integer accessCount;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb", name = "cached_recommendation_ids")
+    private List<String> cachedRecommendationIds;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private Map<String, Object> qualifiers;
+
+    // For simplicity, storing EditionInfo as JSONB. Requires EditionInfo to be Jackson-compatible.
+    // If complex queries on editions are needed, a separate @OneToMany entity might be better.
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "other_editions", columnDefinition = "jsonb")
+    private List<Book.EditionInfo> otherEditions;
+
+
     /**
      * Convert from Book to CachedBook entity
      *
@@ -150,6 +167,11 @@ public class CachedBook {
         cachedBook.setCreatedAt(now);
         cachedBook.setLastAccessed(now);
         cachedBook.setAccessCount(1);
+
+        // Populate new fields
+        cachedBook.setCachedRecommendationIds(book.getCachedRecommendationIds() != null ? new ArrayList<>(book.getCachedRecommendationIds()) : new ArrayList<>());
+        cachedBook.setQualifiers(book.getQualifiers() != null ? new HashMap<>(book.getQualifiers()) : new HashMap<>());
+        cachedBook.setOtherEditions(book.getOtherEditions() != null ? new ArrayList<>(book.getOtherEditions()) : new ArrayList<>());
         
         return cachedBook;
     }
@@ -177,6 +199,17 @@ public class CachedBook {
         book.setInfoLink(this.infoLink);
         book.setPreviewLink(this.previewLink);
         book.setPurchaseLink(this.purchaseLink);
+
+        // Populate new fields in Book from CachedBook
+        book.setCachedRecommendationIds(this.cachedRecommendationIds != null ? new ArrayList<>(this.cachedRecommendationIds) : new ArrayList<>());
+        book.setQualifiers(this.qualifiers != null ? new HashMap<>(this.qualifiers) : new HashMap<>());
+        book.setOtherEditions(this.otherEditions != null ? new ArrayList<>(this.otherEditions) : new ArrayList<>());
+        
+        // It's good practice to also set the rawJsonResponse if it's available in CachedBook,
+        // though Book.rawJsonResponse is transient, it can be useful if the Book object is immediately processed.
+        if (this.rawData != null) {
+            book.setRawJsonResponse(this.rawData.toString());
+        }
         
         return book;
     }
