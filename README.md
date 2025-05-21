@@ -112,12 +112,13 @@ resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.timeoutDuration
 
 Admin endpoints require HTTP Basic Authentication:
 - Username: `admin`
-- Password: Set via `APP_SECURITY_ADMIN_PASSWORD` environment variable
+- Password: Set via `APP_ADMIN_PASSWORD` environment variable (as defined in `.env.example`)
 
 Example:
 ```bash
-curl -u admin:$APP_SECURITY_ADMIN_PASSWORD -X POST 'http://localhost:8081/admin/s3-cleanup/move-flagged?limit=100'
+dotenv run sh -c 'curl -u admin:$APP_ADMIN_PASSWORD -X POST "http://localhost:${SERVER_PORT}/admin/s3-cleanup/move-flagged?limit=100"'
 ```
+This uses a `dotenv` wrapper to load `$APP_ADMIN_PASSWORD` and `$SERVER_PORT` from `.env`. For `dotenv-cli`, use `dotenv curl ...`. Alternatively, export variables: `export APP_ADMIN_PASSWORD='your_password'`.
 </details>
 
 #### References
