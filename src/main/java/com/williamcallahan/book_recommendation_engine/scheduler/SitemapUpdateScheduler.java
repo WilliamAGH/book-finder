@@ -1,12 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.scheduler;
-
-import com.williamcallahan.book_recommendation_engine.service.BookSitemapService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
-
 /**
  * Scheduler for automating sitemap maintenance tasks
  *
@@ -19,6 +10,15 @@ import org.springframework.stereotype.Component;
  * - Logs detailed information about task execution and status
  * - Integrates with BookSitemapService for actual update operations
  */
+
+package com.williamcallahan.book_recommendation_engine.scheduler;
+
+import com.williamcallahan.book_recommendation_engine.service.BookSitemapService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
 @Component
 public class SitemapUpdateScheduler {
 

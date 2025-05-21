@@ -11,7 +11,7 @@ package com.williamcallahan.book_recommendation_engine.scheduler;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import org.slf4j.Logger;
@@ -46,7 +46,7 @@ public class BookCacheWarmingScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(BookCacheWarmingScheduler.class);
     
-    private final BookCacheService bookCacheService;
+    private final BookCacheFacadeService bookCacheFacadeService;
     private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
     private final ApplicationContext applicationContext;
@@ -68,11 +68,11 @@ public class BookCacheWarmingScheduler {
     private int recentlyViewedDays;
 
     @Autowired
-    public BookCacheWarmingScheduler(BookCacheService bookCacheService, 
+    public BookCacheWarmingScheduler(BookCacheFacadeService bookCacheFacadeService,
                                      GoogleBooksService googleBooksService,
                                      RecentlyViewedService recentlyViewedService,
                                      ApplicationContext applicationContext) {
-        this.bookCacheService = bookCacheService;
+        this.bookCacheFacadeService = bookCacheFacadeService;
         this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.applicationContext = applicationContext;
@@ -142,7 +142,7 @@ public class BookCacheWarmingScheduler {
                 executor.schedule(() -> {
                     try {
                         // Check if book is already in cache first
-                        boolean inCache = bookCacheService.isBookInCache(bookId);
+                        boolean inCache = bookCacheFacadeService.isBookInCache(bookId);
                         
                         if (inCache) {
                             existingCount.incrementAndGet();
