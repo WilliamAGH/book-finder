@@ -13,7 +13,6 @@
 
 package com.williamcallahan.book_recommendation_engine.controller;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.web.error.ErrorAttributeOptions;
 import org.springframework.boot.web.servlet.error.ErrorAttributes;
@@ -28,7 +27,6 @@ import java.util.Map;
 @ConditionalOnWebApplication
 public class ErrorDiagnosticsController implements ErrorController {
 
-    @Autowired
     private ErrorAttributes errorAttributes;
 
     /**

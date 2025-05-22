@@ -5,7 +5,6 @@ import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrc
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -47,7 +46,6 @@ public class BookCoverController {
      * @param googleBooksService Service for retrieving book information from Google Books API
      * @param bookImageOrchestrationService Service for orchestrating book cover image operations
      */
-    @Autowired
     public BookCoverController(
             GoogleBooksService googleBooksService,
             BookImageOrchestrationService bookImageOrchestrationService) {

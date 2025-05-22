@@ -18,7 +18,6 @@ import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarming
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -41,7 +40,6 @@ public class AdminController {
     private final NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler;
     private final BookCacheWarmingScheduler bookCacheWarmingScheduler;
 
-    @Autowired
     public AdminController(S3CoverCleanupService s3CoverCleanupService,
                            NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler,
                            BookCacheWarmingScheduler bookCacheWarmingScheduler,

@@ -24,7 +24,6 @@ import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPrefe
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -57,7 +56,6 @@ public class BookController {
     private final BookImageOrchestrationService bookImageOrchestrationService;
     private final S3RetryService s3RetryService;
 
-    @Autowired
     private boolean isYearFilteringEnabled;
     
     /**
@@ -69,7 +67,6 @@ public class BookController {
      * @param bookImageOrchestrationService Service for book cover image processing
      * @param s3RetryService Service for S3 operations with retries
      */
-    @Autowired
     public BookController(BookCacheFacadeService bookCacheFacadeService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,

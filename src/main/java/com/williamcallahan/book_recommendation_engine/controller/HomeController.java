@@ -25,7 +25,6 @@ import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkServi
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -124,7 +123,6 @@ public class HomeController {
      * @param environmentService Service providing environment configuration information
      * @param duplicateBookService Service for handling duplicate book editions
      */
-    @Autowired
     public HomeController(BookCacheFacadeService bookCacheFacadeService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
@@ -489,7 +487,9 @@ public class HomeController {
                         affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag));
                         // Generate Amazon affiliate link using ISBN or title
                         String isbnForAmazon = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
-                        affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag));
+                        if (isbnForAmazon != null) {
+                            affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag));
+                        }
                         
                         model.addAttribute("affiliateLinks", affiliateLinks);
 
@@ -537,7 +537,9 @@ public class HomeController {
                         affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag));
                         // Generate Amazon affiliate link on error fallback
                         String isbnForAmazonOnError = (isbn13OnError != null && !isbn13OnError.isEmpty()) ? isbn13OnError : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
-                        affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag));
+                        if (isbnForAmazonOnError != null) {
+                            affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag));
+                        }
                         
                         model.addAttribute("affiliateLinks", affiliateLinksOnError);
 

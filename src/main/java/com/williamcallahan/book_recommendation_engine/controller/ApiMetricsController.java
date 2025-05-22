@@ -12,7 +12,6 @@ package com.williamcallahan.book_recommendation_engine.controller;
 import org.springframework.security.access.prepost.PreAuthorize;
 
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,7 +31,6 @@ public class ApiMetricsController {
 
     private final ApiRequestMonitor apiRequestMonitor;
 
-    @Autowired
     public ApiMetricsController(ApiRequestMonitor apiRequestMonitor) {
         this.apiRequestMonitor = apiRequestMonitor;
     }
