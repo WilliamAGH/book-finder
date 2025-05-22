@@ -92,8 +92,8 @@ public class AffiliateLinkService {
         try {
             String encodedProductUrl = URLEncoder.encode(productUrl, StandardCharsets.UTF_8.toString());
             barnesAndNobleLinksGenerated.increment();
-            return String.format("https://www.anrdoezrs.net/click-%s-%s?url=%s",
-                                 actualCjPublisherId, actualCjWebsiteId, encodedProductUrl);
+            return String.format("https://www.anrdoezrs.net/click-%s-%s?url=%s&sid=%s",
+                                 actualCjPublisherId, actualCjWebsiteId, encodedProductUrl, isbn);
         } catch (UnsupportedEncodingException e) {
             logger.error("Error encoding Barnes & Noble URL: {}", e.getMessage(), e);
             barnesAndNobleEncodingErrors.increment();

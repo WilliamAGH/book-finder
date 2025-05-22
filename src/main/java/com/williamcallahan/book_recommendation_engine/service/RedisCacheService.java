@@ -43,19 +43,21 @@ public class RedisCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisCacheService.class);
     private static final String BOOK_CACHE_PREFIX = "book:";
-    // Default TTL for book entries in Redis, e.g., 24 hours
-    private static final Duration BOOK_TTL = Duration.ofHours(24); // Time To Live for cached books
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final Duration bookTtl;
 
     @Value("${app.redis.cache.enabled:true}")
     private boolean redisCacheEnabled;
 
     @Autowired
-    public RedisCacheService(StringRedisTemplate stringRedisTemplate, ObjectMapper objectMapper) {
+    public RedisCacheService(StringRedisTemplate stringRedisTemplate, 
+                             ObjectMapper objectMapper,
+                             @Value("${app.cache.book.ttl:24h}") String bookTtlStr) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.bookTtl = Duration.parse("PT" + bookTtlStr.toUpperCase()); // Parses ISO-8601 duration, e.g., 24h, 30m, 60s
     }
 
     /**
@@ -119,7 +121,7 @@ public class RedisCacheService {
             }
             logger.debug("Redis cache MISS for book ID: {}", bookId);
         } catch (JsonProcessingException e) {
-            logger.error("Error deserializing book from Redis for ID {}: {}", bookId, e.getMessage());
+            logger.error("Error deserializing book from Redis for ID {}: {}", bookId, e.getMessage(), e);
         } catch (Exception e) {
             logger.error("Error getting book from Redis for ID {}: {}", bookId, e.getMessage(), e);
         }
@@ -155,7 +157,7 @@ public class RedisCacheService {
                     return Mono.empty();
                 })
                 .onErrorResume(JsonProcessingException.class, e -> {
-                    logger.error("Error deserializing book from Redis (reactive) for ID {}: {}", bookId, e.getMessage());
+                    logger.error("Error deserializing book from Redis (reactive) for ID {}: {}", bookId, e.getMessage(), e);
                     return Mono.empty();
                 })
                 .onErrorResume(Exception.class, e -> {
@@ -177,10 +179,10 @@ public class RedisCacheService {
         }
         try {
             String bookJson = objectMapper.writeValueAsString(book);
-            stringRedisTemplate.opsForValue().set(getKeyForBook(bookId), bookJson, BOOK_TTL);
+            stringRedisTemplate.opsForValue().set(getKeyForBook(bookId), bookJson, bookTtl);
             logger.debug("Cached book ID {} in Redis", bookId);
         } catch (JsonProcessingException e) {
-            logger.error("Error serializing book for Redis cache for ID {}: {}", bookId, e.getMessage());
+            logger.error("Error serializing book for Redis cache for ID {}: {}", bookId, e.getMessage(), e);
         } catch (Exception e) {
             logger.error("Error caching book in Redis for ID {}: {}", bookId, e.getMessage(), e);
         }
@@ -202,10 +204,10 @@ public class RedisCacheService {
         return Mono.fromRunnable(() -> {
                     try {
                         String bookJson = objectMapper.writeValueAsString(book);
-                        stringRedisTemplate.opsForValue().set(getKeyForBook(bookId), bookJson, BOOK_TTL);
+                        stringRedisTemplate.opsForValue().set(getKeyForBook(bookId), bookJson, bookTtl);
                         logger.debug("Cached book ID {} in Redis (reactive)", bookId);
                     } catch (JsonProcessingException e) {
-                        logger.error("Error serializing book for Redis cache (reactive) for ID {}: {}", bookId, e.getMessage());
+                        logger.error("Error serializing book for Redis cache (reactive) for ID {}: {}", bookId, e.getMessage(), e);
                         // Optionally rethrow or handle as a failed Mono
                     } catch (Exception e) {
                         logger.error("Error caching book in Redis (reactive) for ID {}: {}", bookId, e.getMessage(), e);

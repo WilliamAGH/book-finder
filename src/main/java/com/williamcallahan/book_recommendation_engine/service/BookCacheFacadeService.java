@@ -149,7 +149,8 @@ public class BookCacheFacadeService {
         // This part needs careful thought: if bookDetailCache is shared, one service can expose its keys.
         // For now, assuming BookSyncCacheService can provide its keys.
         // This might require adding a method to BookSyncCacheService like `getInMemoryCachedBookIds()`
-        logger.warn("BookCacheFacadeService: getAllCachedBookIds - DB not available or error, attempting to get from sync in-memory (not fully implemented yet).");
+        // logger.warn("BookCacheFacadeService: getAllCachedBookIds - DB not available or error, attempting to get from sync in-memory (not fully implemented yet).");
+        // TODO: Revisit how to get keys from Spring Cache if needed, or rely solely on DB for this method.
         // Set<String> inMemoryIds = new HashSet<>(bookSyncCacheService.getInMemoryCachedBookIds()); // Assuming such method exists
         // return inMemoryIds;
         return Collections.emptySet(); // Placeholder until in-memory key access is defined
@@ -157,9 +158,6 @@ public class BookCacheFacadeService {
 
     public boolean isBookInCache(String id) {
         if (id == null || id.isEmpty()) return false;
-        // Check L1 sync cache
-        if (bookSyncCacheService.isBookInInMemoryCache(id)) return true;
-        
         // Check Spring Cache (often managed at Facade level or by sync service)
         org.springframework.cache.Cache booksCache = cacheManager.getCache("books");
         if (booksCache != null && booksCache.get(id) != null) return true;
@@ -182,10 +180,6 @@ public class BookCacheFacadeService {
         if (id == null || id.isEmpty()) {
             throw new IllegalArgumentException("Book ID cannot be null or empty for getCachedBook");
         }
-        // Try L1 sync cache
-        Optional<Book> book = bookSyncCacheService.getBookFromInMemoryCache(id);
-        if (book.isPresent()) return book;
-
         // Try Spring Cache
         org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
@@ -212,9 +206,6 @@ public class BookCacheFacadeService {
         if (book == null || book.getId() == null) {
             throw new IllegalArgumentException("Book and Book ID must not be null for cacheBook");
         }
-        // Populate L1 sync cache
-        bookSyncCacheService.populateInMemoryCache(book.getId(), book);
-
         // Populate Spring Cache
         org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
@@ -235,9 +226,6 @@ public class BookCacheFacadeService {
         if (id == null || id.isEmpty()) {
             throw new IllegalArgumentException("Book ID cannot be null or empty for evictBook");
         }
-        // Evict from L1 sync cache
-        bookSyncCacheService.evictFromInMemoryCache(id);
-
         // Evict from Spring Cache
         org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
@@ -262,9 +250,6 @@ public class BookCacheFacadeService {
     }
 
     public void clearAll() {
-        // Clear L1 sync cache
-        bookSyncCacheService.clearInMemoryCache();
-
         // Clear Spring Cache
         org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {

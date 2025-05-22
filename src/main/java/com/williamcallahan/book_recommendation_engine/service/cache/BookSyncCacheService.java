@@ -26,14 +26,12 @@ import org.springframework.stereotype.Service;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class BookSyncCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(BookSyncCacheService.class);
 
-    private final ConcurrentHashMap<String, Book> bookDetailCache = new ConcurrentHashMap<>();
     private final RedisCacheService redisCacheService;
     private final CachedBookRepository cachedBookRepository; // Optional
     private final BookReactiveCacheService bookReactiveCacheService; // For delegation
@@ -61,39 +59,32 @@ public class BookSyncCacheService {
      * This method is called by the Facade which might have @Cacheable.
      * Cache hierarchy: In-memory (ConcurrentHashMap), Redis, Database.
      * If a book is found in a slower cache (Redis, Database), faster caches are populated.
-     * Returns null if the book is not found in any of these synchronous cache layers.
+     * Returns null if the book is not found in any of these synchronous cache layers
      *
-     * @param id The Google Books ID of the book to retrieve.
-     * @return The Book object if found in any synchronous cache, otherwise null.
+     * @param id The Google Books ID of the book to retrieve
+     * @return The Book object if found in any synchronous cache, otherwise null
      */
     public Book getBookById(String id) {
         logger.debug("BookSyncCacheService.getBookById (sync) called for ID: {}", id);
 
-        // 1. Check in-memory cache (bookDetailCache)
-        Book book = bookDetailCache.get(id);
-        if (book != null) {
-            logger.debug("In-memory cache hit for book ID (sync): {}", id);
-            return book;
-        }
-
-        // 2. Check Redis cache
+        // 1. Check Redis cache
         Optional<Book> redisBookOpt = redisCacheService.getBookById(id);
         if (redisBookOpt.isPresent()) {
             Book redisBook = redisBookOpt.get();
             logger.debug("Redis cache hit for book ID (sync): {}", id);
-            bookDetailCache.put(id, redisBook); // Populate faster in-memory cache
+            // The Spring Cache on the facade will handle in-memory caching
             return redisBook;
         }
 
-        // 3. Check database cache (if enabled and available)
+        // 2. Check database cache (if enabled and available)
         if (cacheEnabled && cachedBookRepository != null) {
             try {
                 Optional<CachedBook> dbCachedBookOpt = cachedBookRepository.findByGoogleBooksId(id);
                 if (dbCachedBookOpt.isPresent()) {
                     Book dbBook = dbCachedBookOpt.get().toBook();
                     logger.debug("Database cache hit for book ID (sync): {}", id);
-                    // Populate faster caches
-                    bookDetailCache.put(id, dbBook);
+                    // The Spring Cache on the facade will handle in-memory caching
+                    // Populate Redis if found in DB and not in Redis
                     redisCacheService.cacheBook(id, dbBook); // Also populate Redis
                     return dbBook;
                 }
@@ -108,11 +99,11 @@ public class BookSyncCacheService {
     }
 
     /**
-     * Synchronously retrieves books by ISBN.
-     * Delegates to the reactive version and blocks.
+     * Synchronously retrieves books by ISBN
+     * Delegates to the reactive version and blocks
      *
-     * @param isbn The book ISBN.
-     * @return A List of Book objects matching the ISBN, or an empty list.
+     * @param isbn The book ISBN
+     * @return A List of Book objects matching the ISBN, or an empty list
      */
     public List<Book> getBooksByIsbn(String isbn) {
         logger.debug("BookSyncCacheService.getBooksByIsbn (sync) called for ISBN: {}", isbn);
@@ -122,45 +113,22 @@ public class BookSyncCacheService {
     }
 
     /**
-     * Synchronously searches for books.
-     * Delegates to the reactive version and blocks.
+     * Synchronously searches for books
+     * Delegates to the reactive version and blocks
      *
-     * @param query The search query.
-     * @param startIndex The start index for pagination.
-     * @param maxResults The maximum number of results.
-     * @return A List of Book objects matching the search criteria, or an empty list.
+     * @param query The search query
+     * @param startIndex The start index for pagination
+     * @param maxResults The maximum number of results
+     * @return A List of Book objects matching the search criteria, or an empty list
      */
     public List<Book> searchBooks(String query, int startIndex, int maxResults) {
         logger.info("BookSyncCacheService.searchBooks (sync) with query: {}, startIndex: {}, maxResults: {}", query, startIndex, maxResults);
-        // This delegates to the reactive service.
-        // The reactive searchBooksReactive should handle its own caching (e.g. search results cache).
+        // This delegates to the reactive service
+        // The reactive searchBooksReactive should handle its own caching (e.g. search results cache)
         return bookReactiveCacheService.searchBooksReactive(query, startIndex, maxResults, null, null, "relevance")
                                      .blockOptional().orElse(Collections.emptyList());
     }
-    
-    // Helper method to populate in-memory cache, potentially called by other services or facade
-    public void populateInMemoryCache(String id, Book book) {
-        if (id != null && book != null) {
-            bookDetailCache.put(id, book);
-        }
-    }
-
-    // Helper method to evict from in-memory cache
-    public void evictFromInMemoryCache(String id) {
-        if (id != null) {
-            bookDetailCache.remove(id);
-        }
-    }
-    
-    // Helper method to clear in-memory cache
-    public void clearInMemoryCache() {
-        bookDetailCache.clear();
-    }
-     public boolean isBookInInMemoryCache(String id) {
-        return id != null && bookDetailCache.containsKey(id);
-    }
-
-    public Optional<Book> getBookFromInMemoryCache(String id) {
-        return Optional.ofNullable(bookDetailCache.get(id));
-    }
+    // In-memory cache helper methods (populateInMemoryCache, evictFromInMemoryCache, clearInMemoryCache, 
+    // isBookInInMemoryCache, getBookFromInMemoryCache) are removed as this service no longer manages a direct in-memory cache.
+    // Spring Cache (e.g., Caffeine via @Cacheable on BookCacheFacadeService) handles this role.
 }
