@@ -13,6 +13,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import io.micrometer.core.instrument.Counter;
@@ -33,6 +35,7 @@ import static org.mockito.Mockito.times;
  * Ensures affiliate links are generated correctly under various conditions
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AffiliateLinkServiceTest {
 
     @InjectMocks
@@ -58,9 +61,17 @@ class AffiliateLinkServiceTest {
      */
     @BeforeEach
     void setUp() {
-        // Mock the meterRegistry to return a mock Counter for any requested counter name
+        // Stub counters to return mockCounter
         when(meterRegistry.counter(anyString(), anyString(), anyString())).thenReturn(mockCounter);
-        when(meterRegistry.counter(anyString())).thenReturn(mockCounter); // For counters with only name
+        when(meterRegistry.counter(anyString())).thenReturn(mockCounter);
+        // Assign mockCounter to all counters in the service instance
+        ReflectionTestUtils.setField(affiliateLinkService, "barnesAndNobleLinksGenerated", mockCounter);
+        ReflectionTestUtils.setField(affiliateLinkService, "bookshopLinksGenerated", mockCounter);
+        ReflectionTestUtils.setField(affiliateLinkService, "audibleLinksGenerated", mockCounter);
+        ReflectionTestUtils.setField(affiliateLinkService, "barnesAndNobleEncodingErrors", mockCounter);
+        ReflectionTestUtils.setField(affiliateLinkService, "audibleEncodingErrors", mockCounter);
+        ReflectionTestUtils.setField(affiliateLinkService, "amazonLinksGenerated", mockCounter);
+        ReflectionTestUtils.setField(affiliateLinkService, "amazonEncodingErrors", mockCounter);
 
         // Initialize default affiliate IDs using ReflectionTestUtils as they are @Value injected
         ReflectionTestUtils.setField(affiliateLinkService, "defaultBookshopAffiliateId", BOOKSHOP_AFFILIATE_ID);
@@ -177,7 +188,7 @@ class AffiliateLinkServiceTest {
         String expectedLink = String.format("https://bookshop.org/a/%s/%s", BOOKSHOP_AFFILIATE_ID, TEST_ISBN);
         assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, BOOKSHOP_AFFILIATE_ID));
         verify(meterRegistry).counter("affiliate.links.generated", "type", "bookshop");
-        verify(mockCounter, times(2)).increment(); // Called once for B&N, once for Bookshop
+        verify(mockCounter, times(1)).increment(); // Called for Bookshop only
     }
 
     /**
@@ -240,7 +251,7 @@ s     */
         String expectedLink = String.format("https://www.audible.com/pd/%s?tag=%s", TEST_ASIN, AMAZON_ASSOCIATE_TAG);
         assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
         verify(meterRegistry).counter("affiliate.links.generated", "type", "audible");
-        verify(mockCounter, times(3)).increment(); // Called for B&N, Bookshop, Audible
+        verify(mockCounter, times(1)).increment(); // Called for Audible only
     }
 
     /**

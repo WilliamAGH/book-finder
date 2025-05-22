@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
 import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
 import reactor.core.publisher.Mono; // For mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
+import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 @WebFluxTest(value = HomeController.class,
     excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
@@ -70,6 +71,9 @@ class HomeControllerTest {
 
     @MockitoBean
     private NewYorkTimesService newYorkTimesService;
+    
+    @MockitoBean
+    private AffiliateLinkService affiliateLinkService;
     /**
      * Sets up common test fixtures
      * Configures mock services with default behaviors
