@@ -121,7 +121,7 @@ public class RedisConfig {
 
         if (ssl) { // Restore custom SSL context
             try {
-                SSLContext sslContext = SSLContext.getInstance("TLS");
+                SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
                 sslContext.init(null, new TrustManager[]{
                         new X509TrustManager() {
                             public void checkClientTrusted(X509Certificate[] chain, String authType) {}

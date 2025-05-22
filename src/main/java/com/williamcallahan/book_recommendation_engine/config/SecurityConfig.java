@@ -31,6 +31,7 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.StaticHeadersWriter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
@@ -90,7 +91,10 @@ public class SecurityConfig {
                 .authenticationEntryPoint(customBasicAuthenticationEntryPoint) // Use custom entry point for admin paths
             )
             .csrf(csrf -> csrf
-                .ignoringRequestMatchers("/admin/**") // Disable CSRF for /admin/** paths
+                .ignoringRequestMatchers(
+                    new AntPathRequestMatcher("/admin/s3-cleanup/dry-run", "GET"),
+                    new AntPathRequestMatcher("/admin/api-metrics/**", "GET")
+                )
             );
 
         // Configure headers if CSP is enabled

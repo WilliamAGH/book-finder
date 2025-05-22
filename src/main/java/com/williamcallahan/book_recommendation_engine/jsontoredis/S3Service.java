@@ -28,7 +28,6 @@ import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 
-
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -108,6 +107,9 @@ public class S3Service {
         } catch (IllegalStateException ise) {
             log.error("IllegalStateException (e.g., connection pool shut down) while getting S3 object for key {}: {}", key, ise.getMessage(), ise);
             throw new RuntimeException("Failed to get S3 object content for key " + key + " due to IllegalStateException.", ise);
+        } catch (NoSuchKeyException e) {
+            log.warn("S3 key not found: {} (bucket {})", key, bucketName);
+            throw e;
         } catch (Exception e) {
             log.error("Generic error getting S3 object content for key {}: {}", key, e.getMessage(), e);
             throw new RuntimeException("Failed to get S3 object content for key " + key, e);
