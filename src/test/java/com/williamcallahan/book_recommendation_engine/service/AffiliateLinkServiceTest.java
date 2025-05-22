@@ -385,4 +385,29 @@ s     */
     }
     
     // Test for encoding failure in Audible link generation (similar to B&N, would require refactor or deeper mocking)
+
+    // Amazon Tests
+    /**
+     * Tests Amazon link generation with valid ISBN and associate tag
+     * Verifies correct affiliate link format and metric increment
+     */
+    @Test
+    void generateAmazonLink_validIsbnAndAssociateTag_returnsAffiliateLink() {
+        String expectedLink = String.format("https://www.amazon.com/dp/%s?tag=%s", TEST_ISBN, AMAZON_ASSOCIATE_TAG);
+        assertEquals(expectedLink, affiliateLinkService.generateAmazonLink(TEST_ISBN, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
+        verify(meterRegistry).counter("affiliate.links.generated", "type", "amazon");
+        verify(mockCounter, times(1)).increment();
+    }
+
+    /**
+     * Tests Amazon link generation with null ISBN, valid title, and associate tag
+     * Verifies generation of search link with tag
+     * @throws UnsupportedEncodingException if URL encoding fails
+     */
+    @Test
+    void generateAmazonLink_nullIsbnValidTitleAndAssociateTag_returnsSearchLinkWithTag() throws UnsupportedEncodingException {
+        String encodedTitle = URLEncoder.encode(TEST_TITLE, StandardCharsets.UTF_8.toString());
+        String expectedLink = String.format("https://www.amazon.com/s?k=%s&tag=%s", encodedTitle, AMAZON_ASSOCIATE_TAG);
+        assertEquals(expectedLink, affiliateLinkService.generateAmazonLink(null, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
+    }
 }

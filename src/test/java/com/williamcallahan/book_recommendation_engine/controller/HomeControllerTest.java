@@ -150,9 +150,10 @@ class HomeControllerTest {
         when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
         // Mock for the "additional books" call (triggered because recentlyViewed is empty and needs 8 books) - updated signature
         // Make this mock more specific to avoid clashing with the bestsellers mock.
-        // It should match any string EXCEPT "new york times bestsellers" for the query.
+        // It should match any string EXCEPT "hardcover-fiction" for the query,
+        // as "hardcover-fiction" is now used for the NYT service call.
         when(bookCacheFacadeService.searchBooksReactive(
-                argThat((String query) -> query != null && !query.equals("new york times bestsellers")), 
+                argThat((String query) -> query != null && !query.equals("hardcover-fiction")), 
                 eq(0), 
                 eq(8), 
                 isNull(Integer.class), 
