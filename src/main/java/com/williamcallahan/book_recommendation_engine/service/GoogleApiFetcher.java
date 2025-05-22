@@ -16,12 +16,11 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
-import org.springframework.web.reactive.function.client.WebClientResponseException; // Added
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
@@ -38,7 +37,7 @@ public class GoogleApiFetcher {
     private final WebClient webClient;
     private final ApiRequestMonitor apiRequestMonitor;
 
-    @Value("${googlebooks.api.url}")
+    @Value("${google.books.api.base-url}")
     private String googleBooksApiUrl;
 
     @Value("${googlebooks.api.key:#{null}}") // Allow API key to be optional
@@ -50,7 +49,6 @@ public class GoogleApiFetcher {
      * @param webClientBuilder WebClient builder 
      * @param apiRequestMonitor API request tracking service
      */
-    @Autowired
     public GoogleApiFetcher(WebClient.Builder webClientBuilder, ApiRequestMonitor apiRequestMonitor) {
         this.webClient = webClientBuilder.build();
         this.apiRequestMonitor = apiRequestMonitor;

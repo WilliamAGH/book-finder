@@ -16,7 +16,6 @@ import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -42,7 +41,6 @@ public class S3RetryService {
      * @param initialBackoffMs Initial backoff time in milliseconds
      * @param backoffMultiplier Multiplier for exponential backoff
      */
-    @Autowired
     public S3RetryService(
             S3StorageService s3StorageService,
             ApiRequestMonitor apiRequestMonitor,

@@ -19,22 +19,22 @@ import com.williamcallahan.book_recommendation_engine.service.cache.BookSyncCach
 // import com.williamcallahan.book_recommendation_engine.service.cache.CacheMaintenanceService; // Not directly used by facade's public methods
 import com.williamcallahan.book_recommendation_engine.service.similarity.BookSimilarityService;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository; // For getAllCachedBookIds
-// import com.williamcallahan.book_recommendation_engine.service.RedisCacheService; // Used via sub-services or directly if needed
+import org.springframework.cache.CacheManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.CacheManager;
+import org.springframework.cache.Cache;
+import org.springframework.cache.Cache.ValueWrapper;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
 import java.util.Collections;
-// import java.util.HashSet; // Not used
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-// import java.util.stream.Collectors; // Not used
 
 @Service
 public class BookCacheFacadeService {
@@ -52,10 +52,8 @@ public class BookCacheFacadeService {
     @Value("${app.cache.enabled:true}")
     private boolean cacheEnabled; // To mirror logic from original BookCacheService
 
-    @Autowired
     public BookCacheFacadeService(BookSyncCacheService bookSyncCacheService,
                                   BookReactiveCacheService bookReactiveCacheService,
-                                  // CacheMaintenanceService cacheMaintenanceService, // Removed if not directly called
                                   BookSimilarityService bookSimilarityService,
                                   CacheManager cacheManager,
                                   RedisCacheService redisCacheService,
@@ -132,35 +130,95 @@ public class BookCacheFacadeService {
     // Cache management/utility methods
 
     public Set<String> getAllCachedBookIds() {
-        // Logic from original BookCacheService
+        // Primary strategy: Get from database cache (most complete and persistent)
         if (cacheEnabled && cachedBookRepository != null &&
             !(cachedBookRepository instanceof com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookRepository)) {
             try {
-                logger.info("BookCacheFacadeService: Fetching all distinct Google Books IDs from active persistent CachedBookRepository.");
+                logger.info("BookCacheFacadeService: Fetching all distinct Google Books IDs from persistent database cache.");
                 Set<String> ids = cachedBookRepository.findAllDistinctGoogleBooksIds();
-                logger.info("BookCacheFacadeService: Retrieved {} distinct book IDs from persistent repository.", ids != null ? ids.size() : 0);
-                return ids != null ? ids : Collections.emptySet();
+                if (ids != null && !ids.isEmpty()) {
+                    logger.info("BookCacheFacadeService: Retrieved {} distinct book IDs from database cache.", ids.size());
+                    return ids;
+                }
+                logger.debug("BookCacheFacadeService: Database cache returned empty result, trying fallback strategies.");
             } catch (Exception e) {
-                logger.error("BookCacheFacadeService: Error fetching all distinct Google Books IDs from persistent repository: {}", e.getMessage(), e);
+                logger.warn("BookCacheFacadeService: Error fetching from database cache, trying fallback strategies: {}", e.getMessage());
             }
+        } else {
+            logger.debug("BookCacheFacadeService: Database cache not available, trying fallback strategies.");
         }
-        // Fallback to in-memory cache keys if DB fails or is not primary source for this
-        // BookSyncCacheService holds the L1 in-memory cache now.
-        // This part needs careful thought: if bookDetailCache is shared, one service can expose its keys.
-        // For now, assuming BookSyncCacheService can provide its keys.
-        // This might require adding a method to BookSyncCacheService like `getInMemoryCachedBookIds()`
-        // logger.warn("BookCacheFacadeService: getAllCachedBookIds - DB not available or error, attempting to get from sync in-memory (not fully implemented yet).");
-        // TODO: Revisit how to get keys from Spring Cache if needed, or rely solely on DB for this method.
-        // Set<String> inMemoryIds = new HashSet<>(bookSyncCacheService.getInMemoryCachedBookIds()); // Assuming such method exists
-        // return inMemoryIds;
-        return Collections.emptySet(); // Placeholder until in-memory key access is defined
+
+        // Secondary strategy: Get from Redis cache
+        try {
+            Set<String> redisIds = redisCacheService.getAllBookIds();
+            if (!redisIds.isEmpty()) {
+                logger.info("BookCacheFacadeService: Retrieved {} distinct book IDs from Redis cache.", redisIds.size());
+                return redisIds;
+            }
+            logger.debug("BookCacheFacadeService: Redis cache returned empty result, trying next fallback strategy.");
+        } catch (Exception e) {
+            logger.warn("BookCacheFacadeService: Error fetching from Redis cache, trying next fallback strategy: {}", e.getMessage());
+        }
+
+        // Tertiary strategy: Get from Spring Cache (Caffeine) if possible
+        try {
+            Set<String> springCacheIds = getSpringCacheBookIds();
+            if (!springCacheIds.isEmpty()) {
+                logger.info("BookCacheFacadeService: Retrieved {} distinct book IDs from Spring Cache.", springCacheIds.size());
+                return springCacheIds;
+            }
+            logger.debug("BookCacheFacadeService: Spring Cache returned empty result.");
+        } catch (Exception e) {
+            logger.warn("BookCacheFacadeService: Error fetching from Spring Cache: {}", e.getMessage());
+        }
+
+        // Final fallback: empty set
+        logger.info("BookCacheFacadeService: No cached book IDs found in any cache layer.");
+        return Collections.emptySet();
+    }
+
+    /**
+     * Attempts to get all book IDs from Spring Cache by accessing the native Caffeine cache
+     * This is a fallback strategy when database and Redis are not available
+     * 
+     * @return Set of book IDs from Spring Cache, or empty set if not accessible
+     */
+    private Set<String> getSpringCacheBookIds() {
+        Cache booksCache = cacheManager.getCache("books");
+        if (booksCache == null) {
+            logger.debug("Spring Cache 'books' is not available.");
+            return Collections.emptySet();
+        }
+
+        // Try to access native Caffeine cache for key enumeration
+        Object nativeCache = booksCache.getNativeCache();
+        if (nativeCache instanceof com.github.benmanes.caffeine.cache.Cache) {
+            @SuppressWarnings("unchecked")
+            com.github.benmanes.caffeine.cache.Cache<Object, Object> caffeineCache = 
+                (com.github.benmanes.caffeine.cache.Cache<Object, Object>) nativeCache;
+            
+            Set<String> bookIds = new HashSet<>();
+            for (Object key : caffeineCache.asMap().keySet()) {
+                if (key instanceof String) {
+                    bookIds.add((String) key);
+                }
+            }
+            return bookIds;
+        } else {
+            logger.debug("Spring Cache native cache is not Caffeine type: {}", 
+                        nativeCache != null ? nativeCache.getClass().getSimpleName() : "null");
+            return Collections.emptySet();
+        }
     }
 
     public boolean isBookInCache(String id) {
         if (id == null || id.isEmpty()) return false;
         // Check Spring Cache (often managed at Facade level or by sync service)
-        org.springframework.cache.Cache booksCache = cacheManager.getCache("books");
-        if (booksCache != null && booksCache.get(id) != null) return true;
+        Cache booksCache = cacheManager.getCache("books");
+        if (booksCache != null) {
+            ValueWrapper wrapper = booksCache.get(id);
+            if (wrapper != null && wrapper.get() != null) return true;
+        }
 
         // Check Redis
         if (redisCacheService.getBookById(id).isPresent()) return true;
@@ -181,7 +239,7 @@ public class BookCacheFacadeService {
             throw new IllegalArgumentException("Book ID cannot be null or empty for getCachedBook");
         }
         // Try Spring Cache
-        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
             Book cachedValue = booksSpringCache.get(id, Book.class);
             if (cachedValue != null) return Optional.of(cachedValue);
@@ -207,7 +265,7 @@ public class BookCacheFacadeService {
             throw new IllegalArgumentException("Book and Book ID must not be null for cacheBook");
         }
         // Populate Spring Cache
-        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
             booksSpringCache.put(book.getId(), book);
         }
@@ -227,7 +285,7 @@ public class BookCacheFacadeService {
             throw new IllegalArgumentException("Book ID cannot be null or empty for evictBook");
         }
         // Evict from Spring Cache
-        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
             booksSpringCache.evictIfPresent(id);
         }
@@ -251,7 +309,7 @@ public class BookCacheFacadeService {
 
     public void clearAll() {
         // Clear Spring Cache
-        org.springframework.cache.Cache booksSpringCache = cacheManager.getCache("books");
+        Cache booksSpringCache = cacheManager.getCache("books");
         if (booksSpringCache != null) {
             booksSpringCache.clear();
         }

@@ -19,7 +19,6 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -42,7 +41,6 @@ public class BookDataOrchestrator {
     // private final LongitoodBookDataService longitoodBookDataService; // Removed
     private final BookDataAggregatorService bookDataAggregatorService;
 
-    @Autowired
     public BookDataOrchestrator(S3RetryService s3RetryService,
                                 GoogleApiFetcher googleApiFetcher,
                                 ObjectMapper objectMapper,
@@ -92,9 +90,18 @@ public class BookDataOrchestrator {
             //     })
             //     .onErrorResume(e -> { logger.warn("Tier 6 Longitood API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
             
-            return Flux.concatDelayError(tier4Mono, tier3Mono, olMono) // Removed longitoodMono
-                .filter(Objects::nonNull)
-                .collectList();
+            // Using Mono.zip to fetch in parallel while preserving order for aggregation.
+            // Providing a non-null default (empty ObjectNode) for sources that might be empty or error out.
+            return Mono.zip(
+                    tier4Mono.defaultIfEmpty(objectMapper.createObjectNode()),
+                    tier3Mono.defaultIfEmpty(objectMapper.createObjectNode()),
+                    olMono.defaultIfEmpty(objectMapper.createObjectNode())
+                )
+                .map(tuple -> 
+                    java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3())
+                        .filter(jsonNode -> jsonNode != null && jsonNode.size() > 0) // Filter out empty/placeholder nodes
+                        .collect(java.util.stream.Collectors.toList())
+                );
         });
 
         return apiResponsesMono.flatMap(jsonList -> {
@@ -109,7 +116,10 @@ public class BookDataOrchestrator {
                 logger.error("BookDataOrchestrator: Aggregation resulted in null or invalid book for identifier: {}", bookId);
                 return Mono.<Book>empty(); 
             }
-            return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", bookId);
+            // Use the canonical ID from the aggregated book for S3 storage
+            String s3StorageKey = finalBook.getId();
+            logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
+            return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", s3StorageKey);
         });
     }
 

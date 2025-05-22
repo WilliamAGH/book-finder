@@ -66,7 +66,6 @@ public class GoogleBooksService {
      * @param apiRequestMonitor Service for monitoring API usage metrics
      * @param googleApiFetcher Service for direct Google API calls
      */
-    @Autowired
     public GoogleBooksService(
             ObjectMapper objectMapper,
             ApiRequestMonitor apiRequestMonitor,
@@ -270,33 +269,30 @@ public class GoogleBooksService {
      * when only the ID is needed
      *
      * @param isbn The ISBN (10 or 13) to search for
-     * @return String representing the Google Books ID, or null if not found or error
+     * @return Mono emitting the Google Books ID, or empty if not found or error
      */
     @RateLimiter(name = "googleBooksServiceRateLimiter") // Apply rate limiting
-    public String fetchGoogleBookIdByIsbn(String isbn) {
+    public Mono<String> fetchGoogleBookIdByIsbn(String isbn) {
         logger.debug("Fetching Google Book ID for ISBN: {}", isbn);
-        try {
-            // Use the existing searchBooks method which is rate-limited and circuit-broken
-            // We only need the first result to get the ID.
-            // "relevance" is a good default order for ISBN search.
-            JsonNode responseNode = searchBooks("isbn:" + isbn, 0, "relevance", null)
-                .block(); // Block for simplicity, as scheduler is synchronous here
-
-            if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray() && responseNode.get("items").size() > 0) {
-                JsonNode firstItem = responseNode.get("items").get(0);
-                if (firstItem.has("id")) {
-                    String googleId = firstItem.get("id").asText();
-                    logger.info("Found Google Book ID: {} for ISBN: {}", googleId, isbn);
-                    return googleId;
+        return searchBooks("isbn:" + isbn, 0, "relevance", null)
+            .map(responseNode -> {
+                if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray() && responseNode.get("items").size() > 0) {
+                    JsonNode firstItem = responseNode.get("items").get(0);
+                    if (firstItem.has("id")) {
+                        String googleId = firstItem.get("id").asText();
+                        logger.info("Found Google Book ID: {} for ISBN: {}", googleId, isbn);
+                        return googleId;
+                    }
                 }
-            }
-            logger.warn("No Google Book ID found for ISBN: {}", isbn);
-            return null;
-        } catch (Exception e) {
-            logger.error("Error fetching Google Book ID for ISBN {}: {}", isbn, e.getMessage(), e);
-            apiRequestMonitor.recordFailedRequest("volumes/search/isbn_to_id/" + isbn, e.getMessage());
-            return null;
-        }
+                logger.warn("No Google Book ID found for ISBN: {}", isbn);
+                return null; // Will be filtered by filter(Objects::nonNull) or handled by switchIfEmpty
+            })
+            .filter(Objects::nonNull) // Ensure we only proceed if an ID was found
+            .doOnError(e -> {
+                logger.error("Error fetching Google Book ID for ISBN {}: {}", isbn, e.getMessage(), e);
+                apiRequestMonitor.recordFailedRequest("volumes/search/isbn_to_id/" + isbn, e.getMessage());
+            })
+            .onErrorResume(e -> Mono.empty()); // On error, return an empty Mono
     }
 
     /**

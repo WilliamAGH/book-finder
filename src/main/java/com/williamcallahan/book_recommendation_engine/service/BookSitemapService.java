@@ -14,7 +14,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -57,7 +56,6 @@ public class BookSitemapService {
      * @param s3BucketName Name of S3 bucket from configuration
      * @param accumulatedIdsS3Key S3 key for accumulated IDs file
      */
-    @Autowired
     public BookSitemapService(S3Client s3Client,
                               BookCacheFacadeService bookCacheFacadeService,
                               ObjectMapper objectMapper,

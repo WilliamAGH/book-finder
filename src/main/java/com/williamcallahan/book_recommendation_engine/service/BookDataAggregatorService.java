@@ -101,7 +101,9 @@ public class BookDataAggregatorService {
                 // We might want to store NYT buy_links under a specific key like 'nyt_buy_links'.
 
                 // For now, a general merge, NYT data takes precedence for shared field names (except 'id').
-                mergedBookJson.set(fieldName, nytValue);
+                if (!"buy_links".equals(fieldName)) {
+                    mergedBookJson.set(fieldName, nytValue);
+                }
             }
             // Add NYT specific fields if they are not directly named in a conflicting way
             if (nytBookJsonNode.has("rank")) {

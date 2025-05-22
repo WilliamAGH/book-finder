@@ -23,20 +23,26 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import org.springframework.boot.convert.DurationStyle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class RedisCacheService {
@@ -44,56 +50,82 @@ public class RedisCacheService {
     private static final Logger logger = LoggerFactory.getLogger(RedisCacheService.class);
     private static final String BOOK_CACHE_PREFIX = "book:";
 
+    private final AtomicBoolean redisCurrentlyAvailable = new AtomicBoolean(false);
+    private volatile long lastAvailabilityCheckTimestamp = 0L;
+    private static final long AVAILABILITY_CACHE_DURATION_MS = 30000; // Cache status for 30 seconds
+    private final Object availabilityCheckLock = new Object(); // Lock for synchronized block
+
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final Duration bookTtl;
+    private final Duration affiliateTtl;
 
     @Value("${app.redis.cache.enabled:true}")
     private boolean redisCacheEnabled;
 
-    @Autowired
     public RedisCacheService(StringRedisTemplate stringRedisTemplate, 
-                             ObjectMapper objectMapper,
-                             @Value("${app.cache.book.ttl:24h}") String bookTtlStr) {
+                              ObjectMapper objectMapper,
+                             @Value("${app.cache.book.ttl:24h}") String bookTtlStr,
+                             @Value("${app.cache.affiliate.ttl:1h}") String affiliateTtlStr) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
-        this.bookTtl = Duration.parse("PT" + bookTtlStr.toUpperCase()); // Parses ISO-8601 duration, e.g., 24h, 30m, 60s
+        this.bookTtl = DurationStyle.detectAndParse(bookTtlStr);
+        this.affiliateTtl = DurationStyle.detectAndParse(affiliateTtlStr);
     }
 
     /**
-     * Checks if the Redis cache is enabled via configuration and reachable by attempting a PING command
-     * @return true if Redis is enabled and a connection can be established, false otherwise
+     * Checks if the Redis cache is enabled via configuration and if Redis is reachable
+     * Availability status is cached for a short duration to reduce PING overhead
+     * @return true if Redis is enabled and considered available, false otherwise
      */
     public boolean isRedisAvailable() {
         if (!redisCacheEnabled) {
             return false;
         }
-        RedisConnection connection = null;
-        try {
-            RedisConnectionFactory connectionFactory = stringRedisTemplate.getConnectionFactory();
-            if (connectionFactory == null) {
-                logger.warn("Redis connection factory is null.");
-                return false;
+
+        long currentTime = System.currentTimeMillis();
+        if (currentTime - lastAvailabilityCheckTimestamp < AVAILABILITY_CACHE_DURATION_MS) {
+            return redisCurrentlyAvailable.get();
+        }
+
+        // Cache is stale or this is the first check, need to actually ping Redis
+        // Use a lock to prevent multiple threads from pinging simultaneously
+        synchronized (availabilityCheckLock) {
+            // Re-check condition inside synchronized block in case another thread updated it
+            if (currentTime - lastAvailabilityCheckTimestamp < AVAILABILITY_CACHE_DURATION_MS) {
+                return redisCurrentlyAvailable.get();
             }
-            connection = connectionFactory.getConnection();
-            // Assuming getConnection() throws an exception if it cannot provide a connection,
-            // rather than returning null. The specific null check for 'connection' might be considered dead code by some analyzers.
-            connection.ping();
-            return true;
-        } catch (RedisConnectionFailureException e) {
-            logger.warn("Redis connection failed: {}", e.getMessage());
-            return false;
-        } catch (Exception e) {
-            logger.error("Unexpected error pinging Redis: {}", e.getMessage(), e);
-            return false;
-        } finally {
-            if (connection != null) {
-                try {
-                    connection.close();
-                } catch (Exception e) {
-                    logger.error("Error closing Redis connection: {}", e.getMessage(), e);
+
+            RedisConnection connection = null;
+            try {
+                RedisConnectionFactory connectionFactory = stringRedisTemplate.getConnectionFactory();
+                if (connectionFactory == null) {
+                    logger.warn("Redis connection factory is null.");
+                    redisCurrentlyAvailable.set(false);
+                    lastAvailabilityCheckTimestamp = currentTime;
+                    return false;
                 }
+                connection = connectionFactory.getConnection();
+                connection.ping(); // Throws exception on failure
+                redisCurrentlyAvailable.set(true);
+                logger.debug("Redis PING successful, connection is available.");
+            } catch (RedisConnectionFailureException e) {
+                logger.warn("Redis connection failed during PING: {}", e.getMessage());
+                redisCurrentlyAvailable.set(false);
+            } catch (Exception e) {
+                logger.error("Unexpected error pinging Redis: {}", e.getMessage(), e);
+                redisCurrentlyAvailable.set(false);
+            } finally {
+                if (connection != null) {
+                    try {
+                        connection.close();
+                    } catch (Exception e) {
+                        logger.error("Error closing Redis connection after PING: {}", e.getMessage(), e);
+                    }
+                }
+                lastAvailabilityCheckTimestamp = currentTime; // Update timestamp regardless of success/failure
             }
+            return redisCurrentlyAvailable.get();
         }
     }
 
@@ -257,5 +289,78 @@ public class RedisCacheService {
         })
         .subscribeOn(Schedulers.boundedElastic())
         .then();
+    }
+
+    /**
+     * Retrieves a String value from Redis by key
+     * @param key Redis key
+     * @return Optional containing value if found
+     */
+    public Optional<String> getCachedString(String key) {
+        if (!isRedisAvailable() || key == null || key.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            String value = stringRedisTemplate.opsForValue().get(key);
+            return value != null ? Optional.of(value) : Optional.empty();
+        } catch (Exception e) {
+            logger.error("Error getting cache for key {}: {}", key, e.getMessage(), e);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Caches a String value in Redis with affiliate TTL
+     * @param key Redis key
+     * @param value Value to cache
+     */
+    public void cacheString(String key, String value) {
+        if (!isRedisAvailable() || key == null || key.isEmpty() || value == null) {
+            return;
+        }
+        try {
+            stringRedisTemplate.opsForValue().set(key, value, affiliateTtl);
+            logger.debug("Cached key {} in Redis", key);
+        } catch (Exception e) {
+            logger.error("Error caching key {} in Redis: {}", key, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Retrieves all book IDs from Redis cache using SCAN command
+     * Uses SCAN instead of KEYS for production safety
+     * @return Set of book IDs found in Redis, or empty set if Redis unavailable or error occurs
+     */
+    public Set<String> getAllBookIds() {
+        if (!isRedisAvailable()) {
+            return Collections.emptySet();
+        }
+        
+        Set<String> bookIds = new HashSet<>();
+        try {
+            // Use SCAN to safely iterate through keys matching book:* pattern
+            ScanOptions scanOptions = ScanOptions.scanOptions()
+                    .match(BOOK_CACHE_PREFIX + "*")
+                    .count(100) // Process in batches of 100
+                    .build();
+                    
+            try (Cursor<String> cursor = stringRedisTemplate.scan(scanOptions)) {
+                cursor.forEachRemaining(key -> {
+                    // Remove the "book:" prefix to get the actual book ID
+                    if (key.startsWith(BOOK_CACHE_PREFIX)) {
+                        String bookId = key.substring(BOOK_CACHE_PREFIX.length());
+                        if (!bookId.isEmpty()) {
+                            bookIds.add(bookId);
+                        }
+                    }
+                });
+            }
+            
+            logger.debug("Retrieved {} book IDs from Redis using SCAN", bookIds.size());
+            return bookIds;
+        } catch (Exception e) {
+            logger.error("Error scanning Redis for book keys: {}", e.getMessage(), e);
+            return Collections.emptySet();
+        }
     }
 }

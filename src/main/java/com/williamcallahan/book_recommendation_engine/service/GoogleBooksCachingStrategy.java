@@ -20,7 +20,6 @@ import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepos
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
@@ -77,20 +76,19 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
      * @param objectMapper Jackson ObjectMapper for JSON serialization/deserialization
      * @param redisCacheService Service for interacting with the Redis cache layer
      */
-    @Autowired
     public GoogleBooksCachingStrategy(
             BookDataOrchestrator bookDataOrchestrator,
             S3RetryService s3RetryService,
             CacheManager cacheManager,
-            @Autowired(required = false) CachedBookRepository cachedBookRepository,
+            CachedBookRepository cachedBookRepository,
             ObjectMapper objectMapper,
-            @Autowired(required = false) RedisCacheService redisCacheService) { // New parameter, now optional
+            RedisCacheService redisCacheService) {
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.s3RetryService = s3RetryService;
         this.cacheManager = cacheManager;
         this.cachedBookRepository = cachedBookRepository;
         this.objectMapper = objectMapper;
-        this.redisCacheService = redisCacheService; // Assign new dependency
+        this.redisCacheService = redisCacheService;
         
         // Disable cache if repository is not available
         if (this.cachedBookRepository == null) {
@@ -318,17 +316,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
             saveBookToLocalCache(bookId, book);
         }
 
-        // Step 4: Update Redis Cache
-        if (redisCacheService != null) {
-            redisCacheService.cacheBook(bookId, book);
-        }
+        // Step 4: Update Redis Cache & Database Cache (Asynchronously)
+        // The putReactive method handles updating Redis, database, and other relevant caches asynchronously.
+        // This ensures that the synchronous part of put() remains fast, delegating I/O bound cache
+        // updates (like Redis and DB) to a non-blocking reactive flow.
+        putReactive(bookId, book).subscribe();
         
-        // Step 5: Update database cache if enabled
-        // This is handled asynchronously using reactive programming
-        // The putReactive method below will also handle Redis, so this call is fine
-        putReactive(bookId, book).subscribe(); // This will eventually call the reactive Redis put
-        
-        // Step 6: Update S3 cache
+        // Step 5: Update S3 cache
         // This is done by GoogleBooksService when fetching from the API
         // We don't need to do it again here
         

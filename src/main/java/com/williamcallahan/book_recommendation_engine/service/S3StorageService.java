@@ -10,7 +10,6 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.ResponseBytes;
@@ -67,7 +66,6 @@ public class S3StorageService {
      * @param publicCdnUrl Optional CDN URL for public access to files
      * @param serverUrl Optional server URL for DigitalOcean Spaces
      */
-    @Autowired
     public S3StorageService(S3Client s3Client, 
                             @Value("${s3.bucket-name:${S3_BUCKET}}") String bucketName,
                             @Value("${s3.cdn-url:${S3_CDN_URL:#{null}}}") String publicCdnUrl,

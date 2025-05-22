@@ -18,7 +18,6 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
@@ -56,7 +55,6 @@ public class RecommendationService {
      * 
      * @implNote Uses both GoogleBooksService for searches and BookCacheFacadeService for book details
      */
-    @Autowired
     public RecommendationService(GoogleBooksService googleBooksService, BookCacheFacadeService bookCacheFacadeService) {
         this.googleBooksService = googleBooksService;
         this.bookCacheFacadeService = bookCacheFacadeService;

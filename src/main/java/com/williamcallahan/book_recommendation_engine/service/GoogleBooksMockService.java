@@ -28,7 +28,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -82,7 +81,6 @@ public class GoogleBooksMockService {
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     
-    @Autowired
     public GoogleBooksMockService(ObjectMapper objectMapper, ResourceLoader resourceLoader) {
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;

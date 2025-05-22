@@ -16,7 +16,6 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
 import org.springframework.messaging.core.MessageSendingOperations;
@@ -41,7 +40,6 @@ public class CoverUpdateNotifierService {
      * @param messagingTemplate Template for sending WebSocket messages
      * @param webSocketConfig WebSocket broker configuration
      */
-    @Autowired
     public CoverUpdateNotifierService(@Lazy MessageSendingOperations<String> messagingTemplate,
                                       WebSocketMessageBrokerConfigurer webSocketConfig) {
         this.messagingTemplate = messagingTemplate;

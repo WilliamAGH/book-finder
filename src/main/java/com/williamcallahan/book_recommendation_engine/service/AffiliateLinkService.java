@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 
 /**
  * Service class responsible for generating affiliate links and tracking their usage
@@ -51,11 +52,15 @@ public class AffiliateLinkService {
     @Value("${affiliate.amazon.associate-tag:williamagh-20}")
     private String defaultAmazonAssociateTag;
 
+    private final RedisCacheService redisCacheService;
+
     /**
      * Constructs the AffiliateLinkService and initializes Micrometer counters
      * @param meterRegistry The MeterRegistry for creating counters
+     * @param redisCacheService The RedisCacheService for caching
      */
-    public AffiliateLinkService(MeterRegistry meterRegistry) {
+    public AffiliateLinkService(MeterRegistry meterRegistry, RedisCacheService redisCacheService) {
+        this.redisCacheService = redisCacheService;
         this.barnesAndNobleLinksGenerated = meterRegistry.counter("affiliate.links.generated", "type", "barnesandnoble");
         this.bookshopLinksGenerated = meterRegistry.counter("affiliate.links.generated", "type", "bookshop");
         this.audibleLinksGenerated = meterRegistry.counter("affiliate.links.generated", "type", "audible");
@@ -186,11 +191,30 @@ public class AffiliateLinkService {
      */
     public String generateAmazonLink(String isbn, String title, String amazonAssociateTag) {
         String actualTag = (amazonAssociateTag == null || amazonAssociateTag.isEmpty()) ? defaultAmazonAssociateTag : amazonAssociateTag;
+        boolean redisAvailable = redisCacheService.isRedisAvailable();
+        String cacheKey = "affiliate:amazon:" + (isbn != null && !isbn.isEmpty() ? isbn : title) + ":" + actualTag;
+        if (redisAvailable) {
+            Optional<String> cached = redisCacheService.getCachedString(cacheKey);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
         if (isbn != null && !isbn.isEmpty()) {
-            String searchUrl = String.format("https://www.amazon.com/s?k=%s", isbn);
+            String searchUrl;
+            try {
+                String encodedIsbn = URLEncoder.encode(isbn, StandardCharsets.UTF_8.toString());
+                searchUrl = String.format("https://www.amazon.com/s?k=%s", encodedIsbn);
+            } catch (UnsupportedEncodingException e) {
+                logger.error("Error encoding ISBN for Amazon search: {}", e.getMessage(), e);
+                amazonEncodingErrors.increment();
+                searchUrl = "https://www.amazon.com/";
+            }
             if (actualTag != null && !actualTag.isEmpty()) {
                 searchUrl += String.format("&ref=nosim&tag=%s", actualTag);
                 amazonLinksGenerated.increment();
+            }
+            if (redisAvailable) {
+                redisCacheService.cacheString(cacheKey, searchUrl);
             }
             return searchUrl;
         }
@@ -202,6 +226,9 @@ public class AffiliateLinkService {
                     searchUrl += String.format("&ref=nosim&tag=%s", actualTag);
                     amazonLinksGenerated.increment();
                 }
+                if (redisAvailable) {
+                    redisCacheService.cacheString(cacheKey, searchUrl);
+                }
                 return searchUrl;
             } catch (UnsupportedEncodingException e) {
                 logger.error("Error encoding title for Amazon search: {}", e.getMessage(), e);
@@ -211,7 +238,11 @@ public class AffiliateLinkService {
         }
         if (actualTag != null && !actualTag.isEmpty()) {
             amazonLinksGenerated.increment();
-            return String.format("https://www.amazon.com/?tag=%s", actualTag);
+            String searchUrl = String.format("https://www.amazon.com/?tag=%s", actualTag);
+            if (redisAvailable) {
+                redisCacheService.cacheString(cacheKey, searchUrl);
+            }
+            return searchUrl;
         }
         return "https://www.amazon.com/";
     }

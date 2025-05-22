@@ -42,27 +42,25 @@ public class BookSimilarityService {
     private final BookReactiveCacheService bookReactiveCacheService; // To fetch source book for fallback
     private final WebClient embeddingClient;
     private final boolean embeddingServiceEnabled;
+    private final String embeddingServiceUrl;
 
     @Value("${app.cache.enabled:true}") // May influence DB vector search
     private boolean cacheEnabled;
 
-    @Value("${app.embedding.service.url:#{null}}")
-    private String embeddingServiceUrl;
-
-    @Autowired
     public BookSimilarityService(
             @Autowired(required = false) CachedBookRepository cachedBookRepository,
             GoogleBooksService googleBooksService,
             BookReactiveCacheService bookReactiveCacheService,
+            @Value("${app.embedding.service.url:#{null}}") String embeddingServiceUrl,
             WebClient.Builder webClientBuilder,
             @Value("${app.feature.embedding-service.enabled:false}") boolean embeddingServiceEnabled) {
         this.cachedBookRepository = cachedBookRepository;
         this.googleBooksService = googleBooksService;
         this.bookReactiveCacheService = bookReactiveCacheService;
         this.embeddingServiceEnabled = embeddingServiceEnabled;
-        this.embeddingClient = webClientBuilder.baseUrl(
-            this.embeddingServiceUrl != null ? this.embeddingServiceUrl : "http://localhost:8080/api/embedding"
-        ).build();
+        this.embeddingServiceUrl = embeddingServiceUrl;
+        String baseUrl = embeddingServiceUrl != null ? embeddingServiceUrl : "http://localhost:8080/api/embedding";
+        this.embeddingClient = webClientBuilder.baseUrl(baseUrl).build();
         
         if (this.cachedBookRepository == null) {
             this.cacheEnabled = false; // If DB is not there, vector search is not possible.
@@ -116,19 +114,19 @@ public class BookSimilarityService {
                                 }
                                 return Mono.<List<Book>>empty(); // Explicitly Mono<List<Book>>
                             })
-                            .switchIfEmpty(fallbackToGoogleSimilarBooks(bookId)); // Removed count as googleBooksService.getSimilarBooks doesn't use it directly
+                            .switchIfEmpty(fallbackToGoogleSimilarBooks(bookId, count)); // Removed count as googleBooksService.getSimilarBooks doesn't use it directly
                     }
-                    return fallbackToGoogleSimilarBooks(bookId);
+                    return fallbackToGoogleSimilarBooks(bookId, count);
                 })
                 .onErrorResume(e -> {
                     logger.warn("Error retrieving similar books from database for book ID {}: {}. Falling back to Google.", bookId, e.getMessage());
-                    return fallbackToGoogleSimilarBooks(bookId);
+                    return fallbackToGoogleSimilarBooks(bookId, count);
                 });
         }
-        return fallbackToGoogleSimilarBooks(bookId);
+        return fallbackToGoogleSimilarBooks(bookId, count);
     }
 
-    private Mono<List<Book>> fallbackToGoogleSimilarBooks(String bookId) {
+    private Mono<List<Book>> fallbackToGoogleSimilarBooks(String bookId, int count) {
         logger.info("Falling back to GoogleBooksService for similar books for ID: {}", bookId);
         return bookReactiveCacheService.getBookByIdReactive(bookId) // Use injected reactive cache service
             .flatMap(sourceBook -> {
@@ -136,7 +134,8 @@ public class BookSimilarityService {
                     logger.warn("Source book for similar search (Google fallback) not found (ID: {}), returning empty list.", bookId);
                     return Mono.just(Collections.<Book>emptyList());
                 }
-                return this.googleBooksService.getSimilarBooks(sourceBook);
+                return this.googleBooksService.getSimilarBooks(sourceBook)
+                    .map(list -> list.stream().limit(count).collect(Collectors.toList()));
             })
             .switchIfEmpty(Mono.fromSupplier(() -> {
                  logger.warn("getBookByIdReactive returned empty for ID {} during similar books fallback.", bookId);

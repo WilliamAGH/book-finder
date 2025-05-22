@@ -19,7 +19,6 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -33,6 +32,7 @@ import java.util.List;
 import java.util.Date;
 import java.text.SimpleDateFormat;
 import java.text.ParseException;
+import java.util.Objects; // Added import
 
 @Service
 public class OpenLibraryBookDataService {
@@ -40,7 +40,6 @@ public class OpenLibraryBookDataService {
     private static final Logger logger = LoggerFactory.getLogger(OpenLibraryBookDataService.class);
     private final WebClient webClient;
 
-    @Autowired
     public OpenLibraryBookDataService(WebClient.Builder webClientBuilder,
                                    @Value("${openlibrary.data.api.url}") String openLibraryApiUrl) {
         this.webClient = webClientBuilder.baseUrl(openLibraryApiUrl).build();
@@ -121,17 +120,12 @@ public class OpenLibraryBookDataService {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .flatMapMany(responseNode -> {
-                    if (responseNode.has("docs") && responseNode.get("docs").isArray()) {
-                        List<Book> books = new ArrayList<>();
-                        for (JsonNode docNode : responseNode.get("docs")) {
-                            Book book = parseOpenLibrarySearchDoc(docNode);
-                            if (book != null) {
-                                books.add(book);
-                            }
-                        }
-                        return Flux.fromIterable(books);
+                    if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
+                        return Flux.empty();
                     }
-                    return Flux.empty();
+                    return Flux.fromIterable(responseNode.get("docs"))
+                               .map(this::parseOpenLibrarySearchDoc)
+                               .filter(Objects::nonNull);
                 })
                 .doOnError(e -> logger.error("Error searching books by title '{}' from OpenLibrary: {}", title, e.getMessage()))
                 .onErrorResume(e -> {
