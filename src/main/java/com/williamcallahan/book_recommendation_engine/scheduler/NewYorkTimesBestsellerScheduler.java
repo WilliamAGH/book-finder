@@ -28,7 +28,6 @@ import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -47,6 +46,7 @@ import java.util.stream.Collectors;
 public class NewYorkTimesBestsellerScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesBestsellerScheduler.class);
+    private static final int ISBN_PROCESSING_BATCH_SIZE = 5; // Used for estimating calls
 
     private final NewYorkTimesService newYorkTimesService;
     private final GoogleBooksService googleBooksService;
@@ -65,9 +65,6 @@ public class NewYorkTimesBestsellerScheduler {
     private String s3BucketName;
 
     // Rate limiting for Google Books API calls within this scheduler
-    @Value("${app.nyt.scheduler.google.books.api.rate-limit-per-second:1}")
-    private int googleBooksApiRateLimitPerSecond;
-
     @Value("${app.nyt.scheduler.google.books.api.max-calls-per-job:200}")
     private int googleBooksApiMaxCallsPerJob;
 
@@ -83,7 +80,6 @@ public class NewYorkTimesBestsellerScheduler {
      * @param bookDataAggregatorService Service for merging book data from multiple sources
      * @param openLibraryBookDataService Service for OpenLibrary data
      */
-    @Autowired
     public NewYorkTimesBestsellerScheduler(NewYorkTimesService newYorkTimesService,
                                            GoogleBooksService googleBooksService,
                                            S3StorageService s3StorageService,
@@ -120,8 +116,9 @@ public class NewYorkTimesBestsellerScheduler {
         int googleBooksApiCallsThisRun = 0; // Local variable for thread-safety
 
         try {
-            // TODO: Implement a more robust rate limiting strategy (e.g., Resilience4j RateLimiter or Reactor delayElements)
-            // For now, a simple Thread.sleep is used.
+            // Rate limiting for Google Books API calls is handled internally by GoogleBooksService 
+            // (via Resilience4j on searchBooks) and its batch processing methods (e.g., delayElement in fetchGoogleBookIdsForMultipleIsbns).
+            // The googleBooksApiMaxCallsPerJob property serves as a high-level guard for this scheduler job.
 
             JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview();
             if (nytOverview == null || !nytOverview.has("results") || !nytOverview.get("results").has("lists")) {
@@ -169,23 +166,18 @@ public class NewYorkTimesBestsellerScheduler {
             if (!isbnsToFetchGoogleId.isEmpty() && googleBooksApiCallsThisRun < googleBooksApiMaxCallsPerJob) {
                 logger.info("Attempting to batch fetch Google Book IDs for {} unique ISBNs.", isbnsToFetchGoogleId.size());
                 try {
-                    // Use a fraction of maxCalls for this batch operation
-                    int callsForThisBatch = Math.min(isbnsToFetchGoogleId.size() / 10 + 1, googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun); // Heuristic
-                    // The new service method handles its own rate limiting internally via Resilience4j on searchBooks
+                    // Estimate calls for this batch operation for the job's total call count.
+                    // Actual API calls and rate limiting are handled within GoogleBooksService.
+                    int estimatedCallsForThisBatch = Math.min(isbnsToFetchGoogleId.size() / ISBN_PROCESSING_BATCH_SIZE + 1, googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun); // Rough estimate
+                    
+                    // GoogleBooksService.fetchGoogleBookIdsForMultipleIsbns internally uses Resilience4j via its calls to searchBooks 
+                    // and manages delays between its own batches.
                     isbnToGoogleIdMap = googleBooksService.fetchGoogleBookIdsForMultipleIsbns(isbnsToFetchGoogleId, null)
                                                        .blockOptional(java.time.Duration.ofMinutes(5)) // Generous timeout for batch
                                                        .orElse(Collections.emptyMap());
-                    googleBooksApiCallsThisRun += callsForThisBatch; // Approximate calls made
-                    logger.info("Batch fetched {} Google Book IDs.", isbnToGoogleIdMap.size());
+                    googleBooksApiCallsThisRun += estimatedCallsForThisBatch; // Update job's call count
+                    logger.info("Batch fetched {} Google Book IDs. Estimated API calls for this step: {}", isbnToGoogleIdMap.size(), estimatedCallsForThisBatch);
 
-                    if (googleBooksApiRateLimitPerSecond > 0 && callsForThisBatch > 0) {
-                        try {
-                            Thread.sleep(1000L * callsForThisBatch / googleBooksApiRateLimitPerSecond); // Basic rate limiting
-                        } catch (InterruptedException ie) {
-                            logger.warn("Rate limiting sleep interrupted during Google Book ID fetching.");
-                            Thread.currentThread().interrupt();
-                        }
-                    }
                 } catch (Exception e) {
                     logger.error("Error during batch fetching Google Book IDs: {}", e.getMessage(), e);
                 }
@@ -243,18 +235,12 @@ public class NewYorkTimesBestsellerScheduler {
                                                               .orElse(Collections.emptyList());
                     fetchedBooks.forEach(book -> fullGoogleBooksDataMap.put(book.getId(), book));
                     
-                    int callsMadeForFullData = Math.min(googleBookIdsForFullFetch.size(), googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun);
-                    googleBooksApiCallsThisRun += callsMadeForFullData;
-                    logger.info("Batch fetched full data for {} Google Books. Estimated API calls for this step: {}", fullGoogleBooksDataMap.size(), callsMadeForFullData);
+                    // Estimate calls for this operation for the job's total call count.
+                    // Actual API calls and rate limiting are handled by BookDataOrchestrator used by fetchMultipleBooksByIdsTiered.
+                    int estimatedCallsForFullData = Math.min(googleBookIdsForFullFetch.size(), googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun); // Each ID could be a cache miss
+                    googleBooksApiCallsThisRun += estimatedCallsForFullData;
+                    logger.info("Batch fetched full data for {} Google Books. Estimated API calls for this step: {}", fullGoogleBooksDataMap.size(), estimatedCallsForFullData);
 
-                    if (googleBooksApiRateLimitPerSecond > 0 && callsMadeForFullData > 0) {
-                        try {
-                            Thread.sleep(1000L * callsMadeForFullData / googleBooksApiRateLimitPerSecond); // Basic rate limiting
-                        } catch (InterruptedException ie) {
-                            logger.warn("Rate limiting sleep interrupted during full Google Books data fetching.");
-                            Thread.currentThread().interrupt();
-                        }
-                    }
                 } catch (Exception e) {
                     logger.error("Error during batch fetching full Google Books data: {}", e.getMessage(), e);
                 }

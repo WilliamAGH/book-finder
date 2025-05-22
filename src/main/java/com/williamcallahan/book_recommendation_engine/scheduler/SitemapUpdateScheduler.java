@@ -16,7 +16,6 @@ package com.williamcallahan.book_recommendation_engine.scheduler;
 import com.williamcallahan.book_recommendation_engine.service.BookSitemapService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 @Component
@@ -30,7 +29,6 @@ public class SitemapUpdateScheduler {
      * 
      * @param bookSitemapService Service for generating and managing sitemaps
      */
-    @Autowired
     public SitemapUpdateScheduler(BookSitemapService bookSitemapService) {
         this.bookSitemapService = bookSitemapService;
     }
