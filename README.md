@@ -21,6 +21,8 @@ Spring Boot application for book lookup and recommendations using OpenAI and Goo
 | `mvn test` | Run tests only |
 | `mvn spring-boot:run -Dspring.profiles.active=nodb` | Run without database |
 | `mvn spring-boot:run -Dspring.profiles.active=prod` | Run in production mode |
+| `mvn spring-boot:run -Dspring-boot.run.profiles=jsontoredis -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=false -Dspring.devtools.enabled=false -Dspring.devtools.add-properties=false"` | Run S3-to-Redis JSON migration (disable DevTools & property defaults) |
+| `java -Dspring.profiles.active=jsontoredis -Dspring.devtools.restart.enabled=false -Dspring.devtools.enabled=false -Dspring.devtools.add-properties=false -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar` | Run packaged JAR migration (disable DevTools & property defaults) |
 | `mvn dependency:tree` | Display dependencies |
 | `mvn clean package` | Build JAR |
 

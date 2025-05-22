@@ -66,12 +66,18 @@ This utility migrates JSON data from S3 (Google Books, NYT Bestsellers) to a Red
 2.  **Activate Profile & Run**:
     *   **Using Maven**:
         ```bash
-        mvn spring-boot:run -Dspring-boot.run.profiles=jsontoredis
-        ```
+mvn spring-boot:run \
+  -Dspring-boot.run.profiles=jsontoredis \
+  -Dspring-boot.run.jvmArguments="\
+    -Dspring.devtools.restart.enabled=false \
+    -Dspring.devtools.enabled=false \
+    -Dspring.devtools.add-properties=false\
+  "
+```
     *   **Using a packaged JAR**:
         ```bash
-        java -jar -Dspring.profiles.active=jsontoredis target/book_recommendation_engine-0.0.1-SNAPSHOT.jar
-        ```
+java -jar -Dspring.profiles.active=jsontoredis -Dspring.devtools.restart.enabled=false -Dspring.devtools.add-properties=false target/book_recommendation_engine-0.0.1-SNAPSHOT.jar
+```
         (Replace `target/book_recommendation_engine-0.0.1-SNAPSHOT.jar` with the actual path to your built JAR.)
 
 **Process:**

@@ -40,7 +40,7 @@ spring:
   
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
-    type: ${SPRING_CACHE_TYPE:simple}
+    type: ${SPRING_CACHE_TYPE:caffeine} # Defaulting to Caffeine for L1 in-memory cache
   
   # Redis configuration - optional, only used if cache type is redis
   redis:
@@ -50,6 +50,11 @@ spring:
     connect-timeout: 2000
     lettuce:
       shutdown-timeout: 0
+      pool:
+        max-active: 8 # Default for GenericObjectPoolConfig, consider tuning for production
+        max-idle: 8   # Default
+        min-idle: 0   # Default
+        max-wait: -1ms # Block indefinitely if pool exhausted, consider a specific timeout
 
   web:
     resources:
@@ -71,6 +76,8 @@ spring:
 app:
   cache:
     enabled: true
+    book: # Corresponds to app.redis.cache.book.ttl
+      ttl: 24h # Default TTL for book cache entries
   
   # External embedding service URL (optional)
   # If not provided, a simple placeholder embedding will be used

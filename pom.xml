@@ -380,12 +380,27 @@
                                         </execute>
                                     </action>
                                 </pluginExecution>
-                            </pluginExecutions>
-                        </lifecycleMappingMetadata>
-                    </configuration>
-                </plugin>
-            </plugins>
-        </pluginManagement>
+                               <pluginExecution>
+                                   <pluginExecutionFilter>
+                                       <groupId>org.apache.maven.plugins</groupId>
+                                       <artifactId>maven-antrun-plugin</artifactId>
+                                       <versionRange>[3.0.0,)</versionRange>
+                                       <goals>
+                                           <goal>run</goal>
+                                       </goals>
+                                   </pluginExecutionFilter>
+                                   <action>
+                                       <execute>
+                                           <runOnConfiguration>true</runOnConfiguration>
+                                       </execute>
+                                   </action>
+                               </pluginExecution>
+                           </pluginExecutions>
+                       </lifecycleMappingMetadata>
+                   </configuration>
+               </plugin>
+           </plugins>
+       </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -515,29 +530,23 @@
                 </executions>
             </plugin>
             <plugin>
-                <artifactId>maven-clean-plugin</artifactId>
-                <version>3.3.2</version>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.0.0</version> <!-- Using a common version, can be updated if needed -->
                 <executions>
                     <execution>
-                        <id>clean-images-before-build</id>
+                        <id>clean-images-before-build-antrun</id>
                         <phase>initialize</phase>
                         <goals>
-                            <goal>clean</goal>
+                            <goal>run</goal>
                         </goals>
                         <configuration>
-                            <filesets>
-                                <fileset>
-                                    <directory>${project.build.directory}/classes/static/covers</directory>
-                                    <includes>
-                                        <include>**/*.jpg</include>
-                                        <include>**/*.jpeg</include>
-                                        <include>**/*.png</include>
-                                        <include>**/*.gif</include>
-                                    </includes>
-                                    <followSymlinks>false</followSymlinks>
-                                </fileset>
-                            </filesets>
-                            <failOnError>true</failOnError> <!-- Ensure failure if cleaning doesn't work -->
+                            <target>
+                                <echo message="Cleaning image files from ${project.build.directory}/classes/static/covers"/>
+                                <delete verbose="true" failonerror="false" quiet="true">
+                                    <fileset dir="${project.build.directory}/classes/static/covers" includes="**/*.jpg, **/*.jpeg, **/*.png, **/*.gif"/>
+                                </delete>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>
