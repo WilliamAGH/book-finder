@@ -46,20 +46,19 @@ public class CacheMaintenanceService {
     @Value("${app.cache.enabled:true}")
     private boolean cacheEnabled;
 
-    @Autowired
     public CacheMaintenanceService(
             ConcurrentHashMap<String, Book> bookDetailCache, // Injected
-            @Autowired(required = false) CachedBookRepository cachedBookRepository,
             CacheManager cacheManager,
-            RedisCacheService redisCacheService) {
+            RedisCacheService redisCacheService,
+            @Autowired(required = false) CachedBookRepository cachedBookRepository) {
         this.bookDetailCache = bookDetailCache;
         this.cachedBookRepository = cachedBookRepository;
         this.cacheManager = cacheManager;
         this.redisCacheService = redisCacheService;
 
-        if (this.cachedBookRepository == null) {
-            this.cacheEnabled = false;
-             logger.info("CacheMaintenanceService: Database cache (CachedBookRepository) is not available.");
+        boolean dbCacheAvailable = this.cachedBookRepository != null;
+        if (!dbCacheAvailable) {
+            logger.info("CacheMaintenanceService: Database cache (CachedBookRepository) is not available.");
         }
     }
 

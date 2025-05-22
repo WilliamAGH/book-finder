@@ -22,7 +22,6 @@ import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrat
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksCachingStrategy;
 import com.williamcallahan.book_recommendation_engine.service.RedisCacheService;
-// import com.williamcallahan.book_recommendation_engine.service.similarity.BookSimilarityService; // Not used directly
 import com.williamcallahan.book_recommendation_engine.types.PgVector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,7 +29,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient; // If embedding client is used here
+import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -45,7 +44,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import com.github.benmanes.caffeine.cache.Cache;
 import java.util.stream.Collectors;
 
 @Service
@@ -60,11 +59,9 @@ public class BookReactiveCacheService {
     private final CacheManager cacheManager;
     private final ObjectMapper objectMapper;
     private final DuplicateBookService duplicateBookService;
-    private final CachedBookRepository cachedBookRepository; // Optional
-    private final ConcurrentHashMap<String, Book> bookDetailCache; // Shared or passed from Facade
-
-    // For embedding, decide if this service calls BookSimilarityService or has its own client
-    private final WebClient embeddingClient; // Assuming it might still be needed for cacheBookReactive's embedding part
+    private final CachedBookRepository cachedBookRepository;
+    private final Cache<String, Book> bookDetailCache;
+    private final WebClient embeddingClient;
     private final boolean embeddingServiceEnabled;
     
     @Value("${app.cache.enabled:true}")
@@ -73,8 +70,6 @@ public class BookReactiveCacheService {
     @Value("${app.embedding.service.url:#{null}}")
     private String embeddingServiceUrl;
 
-
-    @Autowired
     public BookReactiveCacheService(
             GoogleBooksCachingStrategy googleBooksCachingStrategy,
             BookDataOrchestrator bookDataOrchestrator,
@@ -83,9 +78,9 @@ public class BookReactiveCacheService {
             ObjectMapper objectMapper,
             DuplicateBookService duplicateBookService,
             @Autowired(required = false) CachedBookRepository cachedBookRepository,
-            ConcurrentHashMap<String, Book> bookDetailCache, // Injected from a central place (e.g. Facade or a config bean)
-            WebClient.Builder webClientBuilder, // For embeddingClient
-            @Value("${app.feature.embedding-service.enabled:false}") boolean embeddingServiceEnabled 
+            Cache<String, Book> bookDetailCache,
+            WebClient.Builder webClientBuilder,
+            @Value("${app.feature.embedding-service.enabled:false}") boolean embeddingServiceEnabled
     ) {
         this.googleBooksCachingStrategy = googleBooksCachingStrategy;
         this.bookDataOrchestrator = bookDataOrchestrator;
@@ -97,8 +92,6 @@ public class BookReactiveCacheService {
         this.bookDetailCache = bookDetailCache;
         this.embeddingServiceEnabled = embeddingServiceEnabled;
 
-        // Initialize embeddingClient if still used directly in this service
-        // Otherwise, this would be in BookSimilarityService
         this.embeddingClient = webClientBuilder.baseUrl(
             this.embeddingServiceUrl != null ? this.embeddingServiceUrl : "http://localhost:8080/api/embedding"
         ).build();
@@ -110,7 +103,7 @@ public class BookReactiveCacheService {
     }
 
     public Mono<Book> getBookByIdReactive(String id) {
-        Book cachedBookInMemory = bookDetailCache.get(id);
+        Book cachedBookInMemory = bookDetailCache.getIfPresent(id);
         if (cachedBookInMemory != null) {
             logger.info("In-memory cache hit for book ID: {}", id);
             return Mono.just(cachedBookInMemory);
@@ -193,7 +186,7 @@ public class BookReactiveCacheService {
                     return Mono.just(Collections.emptyList());
                 }
                 return Flux.fromIterable(cachedBookIds)
-                           .flatMap(this::getBookByIdReactive) // Uses the method from this class
+                           .flatMap(this::getBookByIdReactive)
                            .filter(Objects::nonNull)
                            .collectList();
             }
@@ -220,7 +213,7 @@ public class BookReactiveCacheService {
                 
                 Mono<Void> cacheIndividualBooksMono = Flux.fromIterable(booksToProcess)
                         .filter(book -> book != null && book.getId() != null)
-                        .flatMap(this::cacheBookReactive) // Uses the method from this class
+                        .flatMap(this::cacheBookReactive)
                         .then(); 
                 
                 return cacheIndividualBooksMono.thenReturn(finalPaginatedBooks);
@@ -287,7 +280,7 @@ public class BookReactiveCacheService {
         Optional<CachedBook> primaryBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
 
         if (primaryBookOpt.isPresent()) {
-            CachedBook primaryCachedBook = primaryBookOpt.get();
+            final CachedBook primaryCachedBook = primaryBookOpt.get();
             logger.info("Found existing primary book (ID: {}) for new book (Title: {}). Will not create new cache entry. Attempting rich merge.",
                         primaryCachedBook.getId(), book.getTitle());
             
@@ -296,11 +289,13 @@ public class BookReactiveCacheService {
                     if (Boolean.TRUE.equals(wasUpdated)) { 
                         return Mono.fromCallable(() -> cachedBookRepository.save(primaryCachedBook))
                             .subscribeOn(Schedulers.boundedElastic())
-                            .doOnSuccess(savedBook -> {
-                                logger.info("Updated primary cached book ID: {} with data from new book via rich merge.", savedBook.getId());
-                                redisCacheService.cacheBookReactive(savedBook.getGoogleBooksId(), savedBook.toBook()).subscribe();
-                            })
+                            .doOnSuccess(savedBook -> 
+                                logger.info("Updated primary cached book ID: {} with data from new book via rich merge.", savedBook.getId())
+                            )
                             .doOnError(e -> logger.error("Error updating primary cached book ID {} after rich merge: {}", primaryCachedBook.getId(), e.getMessage()))
+                            .flatMap(savedBook -> 
+                                redisCacheService.cacheBookReactive(savedBook.getGoogleBooksId(), savedBook.toBook())
+                            )
                             .then();
                     } else {
                         logger.debug("No data from new book was merged into primary book ID: {} via rich merge.", primaryCachedBook.getId());
@@ -314,23 +309,25 @@ public class BookReactiveCacheService {
                     .subscribeOn(Schedulers.boundedElastic())
                     .flatMap(existingOpt -> {
                         if (existingOpt.isPresent()) {
+                            final CachedBook existingCachedBook = existingOpt.get();
                             logger.info("Book with Google ID {} already in cache (found by direct ID lookup). Attempting rich merge.", book.getId());
-                            CachedBook existingCachedBook = existingOpt.get();
                             return performRichMergeAndUpdate(existingCachedBook, book)
                                 .flatMap(wasUpdated -> {
                                     if (Boolean.TRUE.equals(wasUpdated)) {
                                         return Mono.fromCallable(() -> cachedBookRepository.save(existingCachedBook))
                                             .subscribeOn(Schedulers.boundedElastic())
-                                            .doOnSuccess(savedBook -> {
-                                                logger.info("Updated existing cached book (ID: {}) via direct ID lookup and rich merge.", savedBook.getId());
-                                                redisCacheService.cacheBookReactive(savedBook.getGoogleBooksId(), savedBook.toBook()).subscribe();
-                                            })
+                                            .doOnSuccess(savedBook ->
+                                                logger.info("Updated existing cached book (ID: {}) via direct ID lookup and rich merge.", savedBook.getId())
+                                            )
+                                            .flatMap(savedBook -> 
+                                                redisCacheService.cacheBookReactive(savedBook.getGoogleBooksId(), savedBook.toBook())
+                                            )
                                             .then();
                                     }
                                     return Mono.empty();
                                 });
                         }
-                        return generateEmbeddingReactive(book) // This will call the local/similarity service's method
+                        return generateEmbeddingReactive(book)
                             .flatMap(embedding -> {
                                 try {
                                     String rawJsonString = book.getRawJsonResponse();
@@ -341,11 +338,15 @@ public class BookReactiveCacheService {
                                     JsonNode rawJsonNode = objectMapper.readTree(rawJsonString);
                                     CachedBook cachedBookToSave = CachedBook.fromBook(book, rawJsonNode, new PgVector(embedding));
                                     return Mono.fromCallable(() -> cachedBookRepository.save(cachedBookToSave))
-                                        .doOnSuccess(savedBook -> {
-                                            logger.info("Successfully cached new book ID: {} Title: {}", savedBook.getId(), savedBook.getTitle());
-                                            redisCacheService.cacheBookReactive(savedBook.getGoogleBooksId(), savedBook.toBook()).subscribe();
-                                        })
-                                        .doOnError(e -> logger.error("Error saving new book ID {} to cache: {}", book.getId(), e.getMessage()));
+                                        .subscribeOn(Schedulers.boundedElastic())
+                                        .doOnSuccess(savedBook -> 
+                                            logger.info("Successfully cached new book ID: {} Title: {}", savedBook.getId(), savedBook.getTitle())
+                                        )
+                                        .doOnError(e -> logger.error("Error saving new book ID {} to cache: {}", book.getId(), e.getMessage()))
+                                        .flatMap(savedBook -> 
+                                            redisCacheService.cacheBookReactive(savedBook.getGoogleBooksId(), savedBook.toBook())
+                                        )
+                                        .then();
                                 } catch (Exception e) {
                                     logger.error("Error processing/creating CachedBook for new entry ID {}: {}", book.getId(), e.getMessage());
                                     return Mono.error(e);
@@ -356,16 +357,12 @@ public class BookReactiveCacheService {
                         logger.error("Error during caching process for new book ID {}: {}", book.getId(), e.getMessage());
                         return Mono.empty(); 
                     })
-                    .then() 
+                    .then()
             );
         }
     }
     
-    // This method might call BookSimilarityService or have the logic directly if embedding client is here
     private Mono<float[]> generateEmbeddingReactive(Book book) {
-        // Placeholder: In a real scenario, this would call BookSimilarityService.generateEmbeddingReactive(book)
-        // or use the local embeddingClient if it's kept in this class.
-        // For now, assuming it uses the local client for simplicity of this step.
         try {
             StringBuilder textBuilder = new StringBuilder();
             textBuilder.append(book.getTitle() != null ? book.getTitle() : "").append(" ");

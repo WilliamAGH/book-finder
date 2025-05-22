@@ -39,26 +39,25 @@ public class BookSyncCacheService {
     @Value("${app.cache.enabled:true}")
     private boolean cacheEnabled;
 
-    @Autowired
     public BookSyncCacheService(RedisCacheService redisCacheService,
-                                @Autowired(required = false) CachedBookRepository cachedBookRepository,
-                                BookReactiveCacheService bookReactiveCacheService) {
+                                BookReactiveCacheService bookReactiveCacheService,
+                                @Autowired(required = false) CachedBookRepository cachedBookRepository) {
         this.redisCacheService = redisCacheService;
         this.cachedBookRepository = cachedBookRepository;
         this.bookReactiveCacheService = bookReactiveCacheService;
 
         if (this.cachedBookRepository == null) {
-            this.cacheEnabled = false; // If DB is not there, main cacheEnabled might be affected.
-                                     // This logic might need refinement based on overall cache strategy.
+            this.cacheEnabled = false; // If DB is not there, main cacheEnabled might be affected
+                                     // This logic might need refinement based on overall cache strategy
             logger.info("BookSyncCacheService: Database cache (CachedBookRepository) is not available.");
         }
     }
 
     /**
-     * Retrieves a book by its Google Books ID using a multi-level synchronous cache approach.
-     * This method is called by the Facade which might have @Cacheable.
-     * Cache hierarchy: In-memory (ConcurrentHashMap), Redis, Database.
-     * If a book is found in a slower cache (Redis, Database), faster caches are populated.
+     * Retrieves a book by its Google Books ID using a multi-level synchronous cache approach
+     * This method is called by the Facade which might have @Cacheable
+     * Cache hierarchy: In-memory (ConcurrentHashMap), Redis, Database
+     * If a book is found in a slower cache (Redis, Database), faster caches are populated
      * Returns null if the book is not found in any of these synchronous cache layers
      *
      * @param id The Google Books ID of the book to retrieve
