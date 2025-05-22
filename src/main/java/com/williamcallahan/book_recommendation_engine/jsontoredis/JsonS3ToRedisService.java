@@ -292,6 +292,8 @@ public class JsonS3ToRedisService {
             }
         } catch (Exception e) {
             log.error("Error fetching or processing NYT data from S3 key {}: {}", nytBestsellersKey, e.getMessage(), e);
+            // Propagate the error to indicate failure of this phase
+            throw new RuntimeException("Failed to merge NYT bestseller data due to: " + e.getMessage(), e);
         }
 
         // After processing the NYT file, move it

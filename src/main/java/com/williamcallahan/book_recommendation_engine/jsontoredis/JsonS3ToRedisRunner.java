@@ -66,7 +66,9 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
             log.info("S3 JSON to Redis migration process completed by runner.");
         } catch (Exception e) {
             log.error("S3 JSON to Redis migration process failed with an error: {}", e.getMessage(), e);
-            // Depending on requirements, you might want to exit or handle this differently
+            // Rethrow the exception to ensure the application exits with an error status,
+            // indicating the batch job failed
+            throw e; 
         }
 
         // Optionally, shut down the application after migration if this runner's sole purpose is the migration

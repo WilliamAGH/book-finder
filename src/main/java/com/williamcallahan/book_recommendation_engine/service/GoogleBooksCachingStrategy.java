@@ -84,7 +84,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
             CacheManager cacheManager,
             @Autowired(required = false) CachedBookRepository cachedBookRepository,
             ObjectMapper objectMapper,
-            RedisCacheService redisCacheService) { // New parameter
+            @Autowired(required = false) RedisCacheService redisCacheService) { // New parameter, now optional
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.s3RetryService = s3RetryService;
         this.cacheManager = cacheManager;
@@ -184,11 +184,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     private Optional<Book> checkRedisCache(String bookId) {
-        Optional<Book> redisBookOpt = redisCacheService.getBookById(bookId);
-        if (redisBookOpt.isPresent()) {
-            logger.debug("Redis cache hit for book ID: {}", bookId);
-            updateFasterCaches(bookId, redisBookOpt.get()); // Update in-memory, Spring, local disk
-            return redisBookOpt;
+        if (redisCacheService != null) {
+            Optional<Book> redisBookOpt = redisCacheService.getBookById(bookId);
+            if (redisBookOpt.isPresent()) {
+                logger.debug("Redis cache hit for book ID: {}", bookId);
+                updateFasterCaches(bookId, redisBookOpt.get()); // Update in-memory, Spring, local disk
+                return redisBookOpt;
+            }
         }
         return Optional.empty();
     }
@@ -201,7 +203,9 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                     Book dbBook = dbCachedBook.get().toBook();
                     logger.debug("Database cache hit for book ID: {}", bookId);
                     updateFasterCaches(bookId, dbBook); // Update in-memory, Spring, local disk
-                    redisCacheService.cacheBook(bookId, dbBook); // Also update Redis
+                    if (redisCacheService != null) {
+                        redisCacheService.cacheBook(bookId, dbBook); // Also update Redis
+                    }
                     return Optional.of(dbBook);
                 }
             } catch (Exception e) {
@@ -315,7 +319,9 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
 
         // Step 4: Update Redis Cache
-        redisCacheService.cacheBook(bookId, book);
+        if (redisCacheService != null) {
+            redisCacheService.cacheBook(bookId, book);
+        }
         
         // Step 5: Update database cache if enabled
         // This is handled asynchronously using reactive programming
@@ -361,7 +367,10 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
 
         // Step 4: Update Redis Cache reactively
-        Mono<Void> redisPutMono = redisCacheService.cacheBookReactive(bookId, book);
+        Mono<Void> redisPutMono = Mono.empty();
+        if (redisCacheService != null) {
+            redisPutMono = redisCacheService.cacheBookReactive(bookId, book);
+        }
         
         // Step 5: Update database cache if enabled
         Mono<Void> dbPutMono = Mono.empty();
@@ -433,7 +442,9 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
         
         // Step 4: Remove from Redis cache
-        redisCacheService.evictBook(bookId);
+        if (redisCacheService != null) {
+            redisCacheService.evictBook(bookId);
+        }
 
         // Step 5: Remove from database cache
         if (cacheEnabled && cachedBookRepository != null) {
@@ -485,7 +496,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
 
         // Step 3.5: Check Redis cache
-        if (redisCacheService.getBookById(bookId).isPresent()) {
+        if (redisCacheService != null && redisCacheService.getBookById(bookId).isPresent()) {
             return true;
         }
         
@@ -540,9 +551,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
 
         // Step 3.5: Check Redis cache
-        Optional<Book> redisBookOpt = redisCacheService.getBookById(bookId);
-        if (redisBookOpt.isPresent()) {
-            return redisBookOpt;
+        if (redisCacheService != null) {
+            Optional<Book> redisBookOpt = redisCacheService.getBookById(bookId);
+            if (redisBookOpt.isPresent()) {
+                return redisBookOpt;
+            }
         }
         
         // Step 4: Check database cache

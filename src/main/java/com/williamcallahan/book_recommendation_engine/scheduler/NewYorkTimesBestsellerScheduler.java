@@ -22,8 +22,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataAggregatorService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
-import com.williamcallahan.book_recommendation_engine.service.OpenLibraryBookDataService; // Added import
-// import com.williamcallahan.book_recommendation_engine.service.LongitoodBookDataService; // Removed import
+import com.williamcallahan.book_recommendation_engine.service.OpenLibraryBookDataService;
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
 
@@ -54,8 +53,7 @@ public class NewYorkTimesBestsellerScheduler {
     private final S3StorageService s3StorageService;
     private final ObjectMapper objectMapper;
     private final BookDataAggregatorService bookDataAggregatorService;
-    private final OpenLibraryBookDataService openLibraryBookDataService; // Added
-    // private final LongitoodBookDataService longitoodBookDataService; // Removed
+    private final OpenLibraryBookDataService openLibraryBookDataService;
 
     @Value("${app.nyt.scheduler.cron:0 0 4 * * SUN}") // Default: Sunday at 4 AM
     private String cronExpression;
@@ -73,7 +71,7 @@ public class NewYorkTimesBestsellerScheduler {
     @Value("${app.nyt.scheduler.google.books.api.max-calls-per-job:200}")
     private int googleBooksApiMaxCallsPerJob;
 
-    private int googleBooksApiCallsThisRun = 0;
+    // private int googleBooksApiCallsThisRun = 0; // Removed for thread-safety, will be a local variable
 
     /**
      * Constructs the NewYorkTimesBestsellerScheduler with required dependencies
@@ -84,7 +82,6 @@ public class NewYorkTimesBestsellerScheduler {
      * @param objectMapper JSON serialization/deserialization utility
      * @param bookDataAggregatorService Service for merging book data from multiple sources
      * @param openLibraryBookDataService Service for OpenLibrary data
-     * @param longitoodBookDataService Service for Longitood data - REMOVED
      */
     @Autowired
     public NewYorkTimesBestsellerScheduler(NewYorkTimesService newYorkTimesService,
@@ -92,14 +89,13 @@ public class NewYorkTimesBestsellerScheduler {
                                            S3StorageService s3StorageService,
                                            ObjectMapper objectMapper,
                                            BookDataAggregatorService bookDataAggregatorService,
-                                           OpenLibraryBookDataService openLibraryBookDataService) { // Removed longitoodBookDataService
+                                           OpenLibraryBookDataService openLibraryBookDataService) {
         this.newYorkTimesService = newYorkTimesService;
         this.googleBooksService = googleBooksService;
         this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;
         this.bookDataAggregatorService = bookDataAggregatorService;
         this.openLibraryBookDataService = openLibraryBookDataService;
-        // this.longitoodBookDataService = longitoodBookDataService; // Removed
     }
 
     /**
@@ -121,9 +117,12 @@ public class NewYorkTimesBestsellerScheduler {
         }
 
         logger.info("Starting New York Times Bestseller processing job.");
-        googleBooksApiCallsThisRun = 0; // Reset counter for this job run
+        int googleBooksApiCallsThisRun = 0; // Local variable for thread-safety
 
         try {
+            // TODO: Implement a more robust rate limiting strategy (e.g., Resilience4j RateLimiter or Reactor delayElements)
+            // For now, a simple Thread.sleep is used.
+
             JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview();
             if (nytOverview == null || !nytOverview.has("results") || !nytOverview.get("results").has("lists")) {
                 logger.error("Failed to fetch valid NYT bestseller overview or overview is empty.");
@@ -178,6 +177,15 @@ public class NewYorkTimesBestsellerScheduler {
                                                        .orElse(Collections.emptyMap());
                     googleBooksApiCallsThisRun += callsForThisBatch; // Approximate calls made
                     logger.info("Batch fetched {} Google Book IDs.", isbnToGoogleIdMap.size());
+
+                    if (googleBooksApiRateLimitPerSecond > 0 && callsForThisBatch > 0) {
+                        try {
+                            Thread.sleep(1000L * callsForThisBatch / googleBooksApiRateLimitPerSecond); // Basic rate limiting
+                        } catch (InterruptedException ie) {
+                            logger.warn("Rate limiting sleep interrupted during Google Book ID fetching.");
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                 } catch (Exception e) {
                     logger.error("Error during batch fetching Google Book IDs: {}", e.getMessage(), e);
                 }
@@ -227,16 +235,26 @@ public class NewYorkTimesBestsellerScheduler {
             if (!googleBookIdsForFullFetch.isEmpty() && googleBooksApiCallsThisRun < googleBooksApiMaxCallsPerJob) {
                 logger.info("Attempting to batch fetch full data for {} unique Google Book IDs.", googleBookIdsForFullFetch.size());
                 try {
-                    // The fetchMultipleBooksByIdsTiered uses BookDataOrchestrator which has its own resilience.
-                    // The number of actual API calls depends on S3 cache hits within the orchestrator.
+                    // The fetchMultipleBooksByIdsTiered uses BookDataOrchestrator which has its own resilience
+                    // The number of actual API calls depends on S3 cache hits within the orchestrator
                     List<Book> fetchedBooks = googleBooksService.fetchMultipleBooksByIdsTiered(new ArrayList<>(googleBookIdsForFullFetch))
                                                               .collectList()
                                                               .blockOptional(java.time.Duration.ofMinutes(10)) // Generous timeout
                                                               .orElse(Collections.emptyList());
                     fetchedBooks.forEach(book -> fullGoogleBooksDataMap.put(book.getId(), book));
-                    // Estimating calls is hard here due to S3 caching in orchestrator. Assume some calls were made.
-                    googleBooksApiCallsThisRun += Math.min(googleBookIdsForFullFetch.size(), googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun);
-                    logger.info("Batch fetched full data for {} Google Books.", fullGoogleBooksDataMap.size());
+                    
+                    int callsMadeForFullData = Math.min(googleBookIdsForFullFetch.size(), googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun);
+                    googleBooksApiCallsThisRun += callsMadeForFullData;
+                    logger.info("Batch fetched full data for {} Google Books. Estimated API calls for this step: {}", fullGoogleBooksDataMap.size(), callsMadeForFullData);
+
+                    if (googleBooksApiRateLimitPerSecond > 0 && callsMadeForFullData > 0) {
+                        try {
+                            Thread.sleep(1000L * callsMadeForFullData / googleBooksApiRateLimitPerSecond); // Basic rate limiting
+                        } catch (InterruptedException ie) {
+                            logger.warn("Rate limiting sleep interrupted during full Google Books data fetching.");
+                            Thread.currentThread().interrupt();
+                        }
+                    }
                 } catch (Exception e) {
                     logger.error("Error during batch fetching full Google Books data: {}", e.getMessage(), e);
                 }
@@ -274,8 +292,8 @@ public class NewYorkTimesBestsellerScheduler {
                     } catch (Exception e) {
                         logger.error("Failed to update individual book JSON {} in S3: {}", s3KeyForIndividualBook, e.getMessage(), e);
                     }
-                } else if (effectiveIsbn != null) { // No Google ID found, try OpenLibrary/Longitood by ISBN
-                    logger.info("No Google Book ID found for ISBN {}. Attempting fallback to OpenLibrary/Longitood.", effectiveIsbn);
+                } else if (effectiveIsbn != null) { // No Google ID found, try OpenLibrary by ISBN
+                    logger.info("No Google Book ID found for ISBN {}. Attempting fallback to OpenLibrary.", effectiveIsbn);
                     List<JsonNode> fallbackSources = new ArrayList<>();
                     fallbackSources.add(bookContext.nytBookApiNode()); // Always include NYT data
 
