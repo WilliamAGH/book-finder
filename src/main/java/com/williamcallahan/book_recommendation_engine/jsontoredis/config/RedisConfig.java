@@ -26,10 +26,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 
 @Profile("jsontoredis")
 @Configuration("jsonS3ToRedis_RedisConfig")
@@ -103,7 +100,7 @@ public class RedisConfig {
                      log.warn("REDIS_SERVER URL ({}) provided but could not parse host. Falling back to properties.", urlToLog);
                 }
             } catch (IllegalArgumentException e) {
-                log.error("Invalid REDIS_SERVER URL format: {}. Falling back to host/port properties.", this.redisUrl, e);
+                log.error("Invalid REDIS_SERVER URL format: {}. Falling back to host/port properties.", urlToLog, e);
                 // Reset to property-based values if URL parsing failed mid-way
                 host = this.redisHost;
                 port = (this.redisPortProperty == 0 ? DEFAULT_REDIS_PORT : this.redisPortProperty);
@@ -119,21 +116,15 @@ public class RedisConfig {
                 .connectionTimeoutMillis(timeout)
                 .socketTimeoutMillis(timeout);
 
-        if (ssl) { // Restore custom SSL context
+        if (ssl) {
+            // Use default JVM trust store for proper certificate validation
             try {
                 SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
-                sslContext.init(null, new TrustManager[]{
-                        new X509TrustManager() {
-                            public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-                            public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-                            public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                        }
-                }, new SecureRandom());
-                clientConfigBuilder
-                        .sslSocketFactory(sslContext.getSocketFactory())
-                        .hostnameVerifier((hostname, session) -> true);
+                sslContext.init(null, null, new SecureRandom()); // Use default trust store
+                clientConfigBuilder.sslSocketFactory(sslContext.getSocketFactory());
+                log.debug("Using secure SSL configuration with default trust store for Redis connection");
             } catch (Exception e) {
-                log.warn("Failed to initialize custom SSL context for Redis, proceeding with default SSL settings: {}", e.getMessage(), e);
+                log.warn("Failed to initialize secure SSL context for Redis, proceeding with default SSL settings: {}", e.getMessage(), e);
             }
         }
 

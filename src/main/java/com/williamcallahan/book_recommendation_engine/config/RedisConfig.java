@@ -65,7 +65,9 @@ public class RedisConfig {
         JedisClientConfiguration.JedisClientConfigurationBuilder builder = JedisClientConfiguration.builder();
         builder.connectTimeout(Duration.ofMillis(timeout));
         
-        if (useSsl) {
+        // Enable SSL if either property flag OR scheme dictates
+        boolean effectiveSsl = useSsl || "rediss".equalsIgnoreCase(redisUrl != null ? URI.create(redisUrl).getScheme() : null);
+        if (effectiveSsl) {
             builder.useSsl();
         }
         
@@ -80,7 +82,9 @@ public class RedisConfig {
         LettuceClientConfiguration.LettuceClientConfigurationBuilder builder = LettuceClientConfiguration.builder();
         builder.commandTimeout(Duration.ofMillis(timeout));
         
-        if (useSsl) {
+        // Enable SSL if either property flag OR scheme dictates
+        boolean effectiveSsl = useSsl || "rediss".equalsIgnoreCase(redisUrl != null ? URI.create(redisUrl).getScheme() : null);
+        if (effectiveSsl) {
             builder.useSsl();
         }
         

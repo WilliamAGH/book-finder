@@ -20,10 +20,18 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.retry.annotation.EnableRetry;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration;
 
 @SpringBootApplication(exclude = {
     OpenAiAudioSpeechAutoConfiguration.class,
     OpenAiAudioTranscriptionAutoConfiguration.class,
+    OpenAiChatAutoConfiguration.class,
+    OpenAiEmbeddingAutoConfiguration.class,
+    OpenAiImageAutoConfiguration.class,
+    OpenAiModerationAutoConfiguration.class,
     // Disable default Spring Security auto-configuration to allow public access
     org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
     org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration.class,

@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.io.PushbackInputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
@@ -95,61 +96,49 @@ public class JsonS3ToRedisService {
                             return;
                         }
                         String destinationS3Key = null; // Declare destinationS3Key outside the inner try
-                        try (PushbackInputStream pbis = new PushbackInputStream(is, 2)) {
-                            byte[] signature = new byte[2];
-                            int bytesRead = pbis.read(signature);
-                            pbis.unread(signature, 0, bytesRead); // Push back the read bytes
+                        Map.Entry<InputStream, Boolean> streamEntry = handleCompressedInputStream(is, s3Key);
+                        try (InputStream streamToRead = streamEntry.getKey()) {
+                            Map<String, Object> bookData = objectMapper.readValue(streamToRead, new TypeReference<Map<String, Object>>() {});
 
-                            boolean gzipDetected = (bytesRead == 2 && signature[0] == (byte) 0x1f && signature[1] == (byte) 0x8b);
+                            String isbn13 = extractIsbn13FromGoogleBooks(bookData);
+                            String redisKey;
 
-                            try (InputStream streamToRead = gzipDetected ? new GZIPInputStream(pbis) : pbis) {
-                                if (gzipDetected) {
-                                    log.debug("Detected GZIP compressed content for S3 key: {}", s3Key);
+                            if (isbn13 != null && !isbn13.isEmpty()) {
+                                redisKey = "book:" + isbn13;
+                            } else {
+                                String googleBooksId = (String) bookData.get("id");
+                                if (googleBooksId != null && !googleBooksId.isEmpty()) {
+                                    redisKey = "book:id:" + googleBooksId;
+                                    log.warn("ISBN-13 not found for S3 key {}, using Google Books ID for Redis key: {}", s3Key, redisKey);
                                 } else {
-                                    log.debug("Content for S3 key {} is not GZIP compressed or stream is too short to tell.", s3Key);
+                                    log.error("No usable identifier (ISBN-13 or Google Books ID) found for S3 key {}. Skipping.", s3Key);
+                                    skippedNoIdCount.incrementAndGet();
+                                    return;
                                 }
-                                Map<String, Object> bookData = objectMapper.readValue(streamToRead, new TypeReference<Map<String, Object>>() {});
+                            }
 
-                                String isbn13 = extractIsbn13FromGoogleBooks(bookData);
-                                String redisKey;
-
-                                if (isbn13 != null && !isbn13.isEmpty()) {
-                                    redisKey = "book:" + isbn13;
+                            // Merge with existing Redis record if present
+                            String existingJson = redisJsonService.jsonGet(redisKey, "$"); // Reverted to use "$"
+                            Map<String, Object> mergedMap;
+                            if (existingJson != null && !existingJson.trim().isEmpty() && !existingJson.equalsIgnoreCase("null")) {
+                                com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(existingJson);
+                                if (rootNode.isArray() && rootNode.size() > 0) {
+                                    com.fasterxml.jackson.databind.JsonNode actualObjectNode = rootNode.get(0);
+                                    Map<String, Object> existingMap = objectMapper.convertValue(actualObjectNode, new TypeReference<Map<String, Object>>() {});
+                                    mergedMap = mergeMaps(existingMap, bookData);
                                 } else {
-                                    String googleBooksId = (String) bookData.get("id");
-                                    if (googleBooksId != null && !googleBooksId.isEmpty()) {
-                                        redisKey = "book:id:" + googleBooksId;
-                                        log.warn("ISBN-13 not found for S3 key {}, using Google Books ID for Redis key: {}", s3Key, redisKey);
-                                    } else {
-                                        log.error("No usable identifier (ISBN-13 or Google Books ID) found for S3 key {}. Skipping.", s3Key);
-                                        skippedNoIdCount.incrementAndGet();
-                                        return;
-                                    }
-                                }
-
-                                // Merge with existing Redis record if present
-                                String existingJson = redisJsonService.jsonGet(redisKey, "$"); // Reverted to use "$"
-                                Map<String, Object> mergedMap;
-                                if (existingJson != null && !existingJson.trim().isEmpty() && !existingJson.equalsIgnoreCase("null")) {
-                                    com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(existingJson);
-                                    if (rootNode.isArray() && rootNode.size() > 0) {
-                                        com.fasterxml.jackson.databind.JsonNode actualObjectNode = rootNode.get(0);
-                                        Map<String, Object> existingMap = objectMapper.convertValue(actualObjectNode, new TypeReference<Map<String, Object>>() {});
-                                        mergedMap = mergeMaps(existingMap, bookData);
-                                    } else {
-                                        log.warn("Expected JSON array from redisJsonService.jsonGet for key {}, but got: {}. Treating as new data.", redisKey, existingJson);
-                                        mergedMap = bookData;
-                                    }
-                                } else {
+                                    log.warn("Expected JSON array from redisJsonService.jsonGet for key {}, but got: {}. Treating as new data.", redisKey, existingJson);
                                     mergedMap = bookData;
                                 }
-                                String mergedJsonString = objectMapper.writeValueAsString(mergedMap);
-                                redisJsonService.jsonSet(redisKey, "$", mergedJsonString);
-                                
-                                // Move processed S3 object
-                                destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
+                            } else {
+                                mergedMap = bookData;
                             }
-                        } // pbis and streamToRead are closed here
+                            String mergedJsonString = objectMapper.writeValueAsString(mergedMap);
+                            redisJsonService.jsonSet(redisKey, "$", mergedJsonString);
+                            
+                            // Move processed S3 object
+                            destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
+                        } // streamToRead is closed here
                         if (destinationS3Key != null) { // Now destinationS3Key is in scope
                             s3Service.moveObject(s3Key, destinationS3Key);
                             log.debug("Moved processed S3 object {} to {}", s3Key, destinationS3Key);
@@ -219,24 +208,10 @@ public class JsonS3ToRedisService {
                 return;
             }
 
-            // Use PushbackInputStream to peek at the first two bytes for GZIP magic number
-            try (PushbackInputStream pbisNyt = new PushbackInputStream(s3InputStream, 2)) {
-                byte[] signatureNyt = new byte[2];
-                int bytesReadNyt = pbisNyt.read(signatureNyt);
-                pbisNyt.unread(signatureNyt, 0, bytesReadNyt); // Push back the read bytes
-
-                boolean gzipDetectedNyt = (bytesReadNyt == 2 && signatureNyt[0] == (byte) 0x1f && signatureNyt[1] == (byte) 0x8b);
-
-                try (InputStream finalNytInputStream = gzipDetectedNyt ? new GZIPInputStream(pbisNyt) : pbisNyt) {
-                    if (gzipDetectedNyt) {
-                        log.debug("Detected GZIP compressed content for NYT S3 key: {}", nytBestsellersKey);
-                    } else {
-                        log.debug("Content for NYT S3 key {} is not GZIP compressed or stream is too short to tell.", nytBestsellersKey);
-                    }
-                    
-                    nytData = objectMapper.readValue(finalNytInputStream, new TypeReference<Map<String, Object>>() {});
-                }
-            } // pbisNyt and finalNytInputStream are closed here
+            Map.Entry<InputStream, Boolean> nytStreamEntry = handleCompressedInputStream(s3InputStream, nytBestsellersKey);
+            try (InputStream finalNytInputStream = nytStreamEntry.getKey()) {
+                nytData = objectMapper.readValue(finalNytInputStream, new TypeReference<Map<String, Object>>() {});
+            } // finalNytInputStream is closed here
 
             if (nytData != null && nytData.containsKey("results")) {
                 Map<String, Object> results = (Map<String, Object>) nytData.get("results");
@@ -419,6 +394,32 @@ public class JsonS3ToRedisService {
     }
 
     /**
+     * Helper method to handle potentially GZIP-compressed input streams
+     * 
+     * @param inputStream The original input stream from S3
+     * @param s3Key The S3 key for logging purposes
+     * @return A Map.Entry containing the properly configured input stream and whether GZIP was detected
+     * @throws IOException If an I/O error occurs
+     */
+    private Map.Entry<InputStream, Boolean> handleCompressedInputStream(InputStream inputStream, String s3Key) throws IOException {
+        try (PushbackInputStream pbis = new PushbackInputStream(inputStream, 2)) {
+            byte[] signature = new byte[2];
+            int bytesRead = pbis.read(signature);
+            pbis.unread(signature, 0, bytesRead); // Push back the read bytes
+
+            boolean gzipDetected = (bytesRead == 2 && signature[0] == (byte) 0x1f && signature[1] == (byte) 0x8b);
+
+            if (gzipDetected) {
+                log.debug("Detected GZIP compressed content for S3 key: {}", s3Key);
+                return Map.entry(new GZIPInputStream(pbis), true);
+            } else {
+                log.debug("Content for S3 key {} is not GZIP compressed or stream is too short to tell.", s3Key);
+                return Map.entry(pbis, false);
+            }
+        }
+    }
+
+    /**
      * Recursively merges incoming book data into existing data without overwriting existing values
      *
      * @param existing The existing book data
@@ -436,8 +437,13 @@ public class JsonS3ToRedisService {
                 Object existingValue = existing.get(key);
                 if (existingValue instanceof Map && newValue instanceof Map) {
                     existing.put(key, mergeMaps((Map<String, Object>) existingValue, (Map<String, Object>) newValue));
+                } else if (existingValue instanceof List && newValue instanceof List) {
+                    // Create a new list with all elements from both lists
+                    List<Object> mergedList = new ArrayList<>((List<Object>) existingValue);
+                    mergedList.addAll((List<Object>) newValue);
+                    existing.put(key, mergedList);
                 }
-                // Skip conflicts for non-map values
+                // Skip conflicts for non-map, non-list values
             }
         }
         return existing;
