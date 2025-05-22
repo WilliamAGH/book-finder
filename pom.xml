@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.5</version>
+        <version>3.4.6</version>
         <relativePath/>
     </parent>
     <groupId>com.williamcallahan</groupId>
@@ -136,19 +136,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
-        <!-- Using the version that comes with Spring Boot -->
-        <dependency>
-            <groupId>io.lettuce</groupId>
-            <artifactId>lettuce-core</artifactId>
-        </dependency>
-        <!-- Lettuce Modules extension for Redis JSON support -->
-        <dependency>
-            <groupId>com.redis</groupId>
-            <artifactId>lettucemod-spring</artifactId>
-            <version>4.3.0</version>
-            <!-- Changed to lettucemod-spring for better Spring integration -->
-            <!-- Removed exclusion of lettuce-core to allow lettucemod to use the Spring Boot managed version -->
-        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
@@ -259,6 +246,12 @@
             <groupId>redis.clients</groupId>
             <artifactId>jedis</artifactId>
             <version>6.0.0</version>
+        </dependency>
+        <!-- RediSearch Java client for full-text search -->
+        <dependency>
+            <groupId>com.redislabs</groupId>
+            <artifactId>jredisearch</artifactId>
+            <version>2.2.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
