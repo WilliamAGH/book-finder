@@ -20,7 +20,6 @@ import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -46,7 +45,6 @@ public class LongitoodServiceImpl implements LongitoodService {
      *
      * @param webClient The WebClient for making HTTP requests to the Longitood API
      */
-    @Autowired
     public LongitoodServiceImpl(WebClient webClient) {
         this.webClient = webClient;
     }

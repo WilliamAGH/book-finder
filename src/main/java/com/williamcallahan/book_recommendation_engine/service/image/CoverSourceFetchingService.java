@@ -20,7 +20,6 @@ import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -58,7 +57,6 @@ public class CoverSourceFetchingService {
      * @param googleBooksService Service for Google Books API
      * @param coverCacheManager Manager for in-memory caches
      */
-    @Autowired
     public CoverSourceFetchingService(
             LocalDiskCoverCacheService localDiskCoverCacheService,
             S3BookCoverService s3BookCoverService,
