@@ -105,8 +105,11 @@ public class S3Service {
             ResponseInputStream<GetObjectResponse> s3ObjectStream = s3Client.getObject(getReq);
             log.info("Successfully retrieved S3 object stream for key: {}", key);
             return s3ObjectStream;
+        } catch (IllegalStateException ise) {
+            log.error("IllegalStateException (e.g., connection pool shut down) while getting S3 object for key {}: {}", key, ise.getMessage(), ise);
+            throw new RuntimeException("Failed to get S3 object content for key " + key + " due to IllegalStateException.", ise);
         } catch (Exception e) {
-            log.error("Error getting S3 object content for key {}: {}", key, e.getMessage(), e);
+            log.error("Generic error getting S3 object content for key {}: {}", key, e.getMessage(), e);
             throw new RuntimeException("Failed to get S3 object content for key " + key, e);
         }
     }
@@ -130,11 +133,11 @@ public class S3Service {
     }
 
     /**
-     * Moves an S3 object to a new key within the same bucket.
-     * This is typically a copy then delete operation.
+     * Moves an S3 object to a new key within the same bucket
+     * This is typically a copy then delete operation
      *
-     * @param sourceKey      The current key of the object.
-     * @param destinationKey The new key for the object.
+     * @param sourceKey      The current key of the object
+     * @param destinationKey The new key for the object
      */
     public void moveObject(String sourceKey, String destinationKey) {
         log.debug("Moving S3 object from {} to {} in bucket {}", sourceKey, destinationKey, bucketName);

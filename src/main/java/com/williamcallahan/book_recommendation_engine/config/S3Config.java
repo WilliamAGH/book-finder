@@ -52,7 +52,7 @@ public class S3Config {
      *
      * @return Configured S3Client instance or null if disabled/misconfigured
      */
-    @Bean
+    @Bean(destroyMethod = "close") // Ensure Spring calls close() on S3Client shutdown
     public S3Client s3Client() {
         if (!s3Enabled) {
             logger.info("S3 integration is disabled via s3.enabled=false. S3Client bean will not be created.");

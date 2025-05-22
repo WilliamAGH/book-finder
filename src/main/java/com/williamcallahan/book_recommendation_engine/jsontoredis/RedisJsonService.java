@@ -7,7 +7,7 @@
  * - Provides JSON storage and retrieval operations using Redis
  * - Supports setting and getting JSON at specific paths
  * - Includes Redis server health check via ping
- * - Uses Lettuce client for Redis communication
+ * - Uses Jedis client for Redis communication
  * - Designed for integration with S3-to-Redis migration process
  */
 package com.williamcallahan.book_recommendation_engine.jsontoredis;
@@ -24,7 +24,7 @@ import org.springframework.stereotype.Service;
 @Profile("jsontoredis")
 public class RedisJsonService {
 
-    private final JedisPooled jedis; // Changed to JedisPooled
+    private final JedisPooled jedis;
     private static final Logger log = LoggerFactory.getLogger(RedisJsonService.class);
 
     public RedisJsonService(@Qualifier("jsonS3ToRedisJedisPooled") JedisPooled jedis) { // Changed to inject JedisPooled
@@ -38,16 +38,21 @@ public class RedisJsonService {
      * @param jsonString The JSON string value to set
      */
     public void jsonSet(String key, String pathString, String jsonString) {
-        Path2 path = Path2.of(pathString);
-        jedis.jsonSet(key, path, jsonString); 
-        log.debug("Set JSON for key {} at path {}", key, pathString);
+        try {
+            Path2 path = Path2.of(pathString);
+            jedis.jsonSet(key, path, jsonString);
+            log.debug("Set JSON for key {} at path {}", key, pathString);
+        } catch (Exception e) {
+            log.error("Error setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
+            // Consider rethrowing a custom exception or a JedisException if callers need to react
+        }
     }
 
     /**
-     * Gets a JSON value from a given key and path.
+     * Gets a JSON value from a given key and path
      * @param key The Redis key
      * @param pathString The JSON path string
-     * @return A string representing the JSON result. Returns null if key/path not found or error.
+     * @return A string representing the JSON result. Returns null if key/path not found or error
      */
     public String jsonGet(String key, String pathString) {
         log.debug("Getting JSON for key {} at path {}", key, pathString);
@@ -68,7 +73,7 @@ public class RedisJsonService {
             // For now, keeping it simple with toString().
             return result.toString();
         } catch (Exception e) {
-            log.warn("Error getting JSON for key {} at path {}: {}. Returning null.", key, pathString, e.getMessage());
+            log.warn("Error getting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
             return null;
         }
     }
@@ -94,6 +99,11 @@ public class RedisJsonService {
      * @return The server's response to PING, typically "PONG"
      */
     public String ping() {
-        return jedis.ping();
+        try {
+            return jedis.ping();
+        } catch (Exception e) {
+            log.error("Error pinging Redis: {}", e.getMessage(), e);
+            throw e; // Rethrow the exception to be handled by the caller
+        }
     }
 }
