@@ -41,7 +41,7 @@ public class OpenLibraryBookDataService {
     private final WebClient webClient;
 
     public OpenLibraryBookDataService(WebClient.Builder webClientBuilder,
-                                   @Value("${openlibrary.data.api.url}") String openLibraryApiUrl) {
+                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl) {
         this.webClient = webClientBuilder.baseUrl(openLibraryApiUrl).build();
     }
 

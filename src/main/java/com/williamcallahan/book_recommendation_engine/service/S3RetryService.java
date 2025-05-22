@@ -17,12 +17,14 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 @Service
+@ConditionalOnProperty(name = "s3.enabled", havingValue = "true", matchIfMissing = false)
 public class S3RetryService {
     private static final Logger logger = LoggerFactory.getLogger(S3RetryService.class);
 

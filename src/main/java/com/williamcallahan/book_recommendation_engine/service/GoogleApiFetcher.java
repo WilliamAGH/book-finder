@@ -40,7 +40,7 @@ public class GoogleApiFetcher {
     @Value("${google.books.api.base-url}")
     private String googleBooksApiUrl;
 
-    @Value("${googlebooks.api.key:#{null}}") // Allow API key to be optional
+    @Value("${google.books.api.key:#{null}}") // Allow API key to be optional
     private String googleBooksApiKey;
 
     /**
@@ -66,7 +66,7 @@ public class GoogleApiFetcher {
             // Depending on strictness, could return Mono.error or proceed without key
         }
         String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
-                .pathSegment("v1", "volumes", bookId)
+                .pathSegment("volumes", bookId)
                 .queryParamIfPresent("key", Optional.ofNullable(googleBooksApiKey).filter(key -> !key.isEmpty()))
                 .build(false) // Changed to false to allow UriComponentsBuilder to encode
                 .toUriString();
@@ -123,7 +123,7 @@ public class GoogleApiFetcher {
      */
     public Mono<JsonNode> fetchVolumeByIdUnauthenticated(String bookId) {
         String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
-                .pathSegment("v1", "volumes", bookId)
+                .pathSegment("volumes", bookId)
                 // No API key for unauthenticated calls
                 .build(false) // Changed to false to allow UriComponentsBuilder to encode
                 .toUriString();
@@ -212,7 +212,7 @@ public class GoogleApiFetcher {
      */
     private Mono<JsonNode> searchVolumesInternal(String query, int startIndex, String orderBy, String langCode, boolean authenticated) {
         UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
-                .pathSegment("v1", "volumes")
+                .pathSegment("volumes")
                 .queryParam("q", query) // builder will safely encode
                 .queryParam("startIndex", startIndex)
                 .queryParam("maxResults", 40); // Standard maxResults

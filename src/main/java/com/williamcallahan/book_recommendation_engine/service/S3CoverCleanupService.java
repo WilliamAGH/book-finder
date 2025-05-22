@@ -17,6 +17,7 @@ import com.williamcallahan.book_recommendation_engine.service.image.ImageProcess
 import com.williamcallahan.book_recommendation_engine.types.DryRunSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
@@ -25,6 +26,7 @@ import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
+@ConditionalOnProperty(name = "s3.enabled", havingValue = "true", matchIfMissing = false)
 public class S3CoverCleanupService {
 
     private static final Logger logger = LoggerFactory.getLogger(S3CoverCleanupService.class);
