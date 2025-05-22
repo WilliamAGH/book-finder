@@ -17,11 +17,16 @@ package com.williamcallahan.book_recommendation_engine.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.jedis.JedisClientConfiguration;
 import org.springframework.data.redis.connection.jedis.JedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -32,8 +37,6 @@ import java.time.Duration;
 @Configuration
 @Profile("!test") // Exclude from tests unless specifically needed
 public class RedisConfig {
-
-    // private static final Logger log = LoggerFactory.getLogger(RedisConfig.class); // Unused
 
     @Value("${spring.redis.host:localhost}")
     private String redisHost;
@@ -54,11 +57,43 @@ public class RedisConfig {
     private int timeout;
 
     @Bean
+    @Primary
     public JedisConnectionFactory jedisConnectionFactory() {
+        // Use the helper method to create Redis configuration
+        RedisStandaloneConfiguration redisConfig = createRedisStandaloneConfiguration();
+        
+        JedisClientConfiguration.JedisClientConfigurationBuilder builder = JedisClientConfiguration.builder();
+        builder.connectTimeout(Duration.ofMillis(timeout));
+        
+        if (useSsl) {
+            builder.useSsl();
+        }
+        
+        return new JedisConnectionFactory(redisConfig, builder.build());
+    }
+
+    @Bean
+    public ReactiveRedisConnectionFactory reactiveRedisConnectionFactory() {
+        // Create the same Redis configuration as used for Jedis
+        RedisStandaloneConfiguration redisConfig = createRedisStandaloneConfiguration();
+        
+        LettuceClientConfiguration.LettuceClientConfigurationBuilder builder = LettuceClientConfiguration.builder();
+        builder.commandTimeout(Duration.ofMillis(timeout));
+        
+        if (useSsl) {
+            builder.useSsl();
+        }
+        
+        return new LettuceConnectionFactory(redisConfig, builder.build());
+    }
+
+    // Helper method to create Redis configuration (DRY principle)
+    private RedisStandaloneConfiguration createRedisStandaloneConfiguration() {
+        RedisStandaloneConfiguration redisConfig = new RedisStandaloneConfiguration();
+        
         if (redisUrl != null && !redisUrl.isEmpty()) {
             try {
-                // Create connection using URL
-                RedisStandaloneConfiguration redisConfig = new RedisStandaloneConfiguration();
+                // Parse URL configuration
                 URI uri = new URI(redisUrl);
                 redisConfig.setHostName(uri.getHost());
                 redisConfig.setPort(uri.getPort() != -1 ? uri.getPort() : 6379);
@@ -71,37 +106,20 @@ public class RedisConfig {
                 } else if (redisPassword != null && !redisPassword.isEmpty()) {
                     redisConfig.setPassword(redisPassword);
                 }
-                
-                JedisClientConfiguration.JedisClientConfigurationBuilder builder = JedisClientConfiguration.builder();
-                builder.connectTimeout(Duration.ofMillis(timeout));
-                
-                if (useSsl) {
-                    builder.useSsl();
-                }
-                
-                return new JedisConnectionFactory(redisConfig, builder.build());
             } catch (URISyntaxException e) {
                 throw new IllegalStateException("Invalid Redis URL: " + maskCredentials(redisUrl), e);
             }
         } else {
-            // Create connection using host/port
-            RedisStandaloneConfiguration redisConfig = new RedisStandaloneConfiguration();
+            // Use host/port configuration
             redisConfig.setHostName(redisHost);
             redisConfig.setPort(redisPort);
             
             if (redisPassword != null && !redisPassword.isEmpty()) {
                 redisConfig.setPassword(redisPassword);
             }
-            
-            JedisClientConfiguration.JedisClientConfigurationBuilder builder = JedisClientConfiguration.builder();
-            builder.connectTimeout(Duration.ofMillis(timeout));
-            
-            if (useSsl) {
-                builder.useSsl();
-            }
-            
-            return new JedisConnectionFactory(redisConfig, builder.build());
         }
+        
+        return redisConfig;
     }
     
     // Utility method to mask credentials in logs
@@ -125,6 +143,14 @@ public class RedisConfig {
         template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
         template.setHashKeySerializer(new StringRedisSerializer());
         template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
+        template.afterPropertiesSet();
+        return template;
+    }
+
+    @Bean
+    public StringRedisTemplate stringRedisTemplate(JedisConnectionFactory jedisConnectionFactory) {
+        StringRedisTemplate template = new StringRedisTemplate();
+        template.setConnectionFactory(jedisConnectionFactory);
         template.afterPropertiesSet();
         return template;
     }

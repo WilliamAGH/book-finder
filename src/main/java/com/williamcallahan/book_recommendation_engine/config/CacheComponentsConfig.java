@@ -13,16 +13,27 @@
 package com.williamcallahan.book_recommendation_engine.config;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Cache;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Configuration
 public class CacheComponentsConfig {
 
     @Bean
-    public ConcurrentHashMap<String, Book> bookDetailCache() {
+    public Cache<String, Book> bookDetailCache() {
+        return Caffeine.newBuilder()
+                .maximumSize(20_000) // Example: Configure as per requirements
+                .expireAfterAccess(Duration.ofHours(6)) // Example: Configure as per requirements
+                .build();
+    }
+
+    @Bean
+    public ConcurrentHashMap<String, Book> bookDetailCacheMap() {
         return new ConcurrentHashMap<>();
     }
 }

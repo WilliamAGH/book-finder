@@ -21,9 +21,7 @@ public class S3HealthIndicator implements ReactiveHealthIndicator {
     private final boolean s3Enabled;
     private static final Duration S3_TIMEOUT = Duration.ofSeconds(5);
 
-    @Autowired
     public S3HealthIndicator(
-            // Allow s3Client to be optional, as it might not be created if S3 is disabled/misconfigured
             @Autowired(required = false) S3Client s3Client,
             @Value("${s3.bucket-name:}") String bucketName,
             @Value("${s3.enabled:false}") boolean s3Enabled) {
@@ -77,4 +75,4 @@ public class S3HealthIndicator implements ReactiveHealthIndicator {
                         .withDetail("message", ex.getMessage())
                         .build()));
     }
-} 
+}
