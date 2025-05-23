@@ -22,7 +22,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrat
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksCachingStrategy;
 import com.williamcallahan.book_recommendation_engine.service.RedisCacheService;
-import com.williamcallahan.book_recommendation_engine.types.PgVector;
+import com.williamcallahan.book_recommendation_engine.types.RedisVector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -336,7 +336,7 @@ public class BookReactiveCacheService {
                                         rawJsonString = objectMapper.writeValueAsString(book);
                                     }
                                     JsonNode rawJsonNode = objectMapper.readTree(rawJsonString);
-                                    CachedBook cachedBookToSave = CachedBook.fromBook(book, rawJsonNode, new PgVector(embedding));
+                                    CachedBook cachedBookToSave = CachedBook.fromBook(book, rawJsonNode, RedisVector.of(embedding));
                                     return Mono.fromCallable(() -> cachedBookRepository.save(cachedBookToSave))
                                         .subscribeOn(Schedulers.boundedElastic())
                                         .doOnSuccess(savedBook -> 

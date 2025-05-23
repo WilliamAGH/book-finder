@@ -84,7 +84,12 @@ public class BookSyncCacheService {
                     logger.debug("Database cache hit for book ID (sync): {}", id);
                     // The Spring Cache on the facade will handle in-memory caching
                     // Populate Redis if found in DB and not in Redis
-                    redisCacheService.cacheBook(id, dbBook); // Also populate Redis
+                    try {
+                        redisCacheService.cacheBook(id, dbBook); // Also populate Redis
+                    } catch (Exception e) {
+                        logger.warn("Failed to populate Redis cache for book ID {} from DB: {}", id, e.getMessage());
+                        // Continue - the book was still found in DB
+                    }
                     return dbBook;
                 }
             } catch (Exception e) {

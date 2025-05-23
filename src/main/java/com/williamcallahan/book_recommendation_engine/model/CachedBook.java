@@ -1,5 +1,5 @@
 /**
- * Persistent entity for storing book data in database
+ * Data model for storing book data in Redis cache
  *
  * @author William Callahan
  *
@@ -8,6 +8,7 @@
  * - Tracks access patterns and embedding vectors for similarity search
  * - Contains conversion methods between Book and CachedBook
  * - Used for reducing API calls and improving performance
+ * - Stored as JSON objects in Redis
  */
 
 package com.williamcallahan.book_recommendation_engine.model;
@@ -15,122 +16,55 @@ package com.williamcallahan.book_recommendation_engine.model;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import com.williamcallahan.book_recommendation_engine.types.PgVector;
-import com.williamcallahan.book_recommendation_engine.types.PgVectorConverter;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
-import org.hibernate.annotations.CreationTimestamp;
+import com.williamcallahan.book_recommendation_engine.types.RedisVector;
 
-import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Map; // For qualifiers
-import java.util.HashMap; // For qualifiers initialization
-@Entity
-@Table(name = "cached_books")
+import java.util.Map;
+import java.util.HashMap;
+
 @Data
 @NoArgsConstructor
 public class CachedBook {
 
-    @Id
     private String id;
-
-    @Column(name = "google_books_id", nullable = false)
     private String googleBooksId;
-
-    @Column(nullable = false, length = 1000)
     private String title;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
     private List<String> authors;
-
-    @Column(columnDefinition = "text")
     private String description;
-
-    @Column(name = "cover_image_url")
     private String coverImageUrl;
-
-    @Column(length = 20)
     private String isbn10;
-
-    @Column(length = 20)
     private String isbn13;
-
-    @Column(name = "published_date")
     private LocalDateTime publishedDate;
-
-    @ElementCollection(fetch = FetchType.EAGER)
-    @CollectionTable(name = "cached_book_categories", joinColumns = @JoinColumn(name = "book_id"))
-    @Column(name = "category", length = 255) // plain TEXT is fine; columnDefinition not needed
     private List<String> categories;
-
-    @Column(name = "average_rating")
     private BigDecimal averageRating;
-
-    @Column(name = "ratings_count")
     private Integer ratingsCount;
-
-    @Column(name = "page_count")
     private Integer pageCount;
-
-    @Column(length = 10)
     private String language;
-
-    @Column(length = 255)
     private String publisher;
-
-    @Column(name = "info_link")
     private String infoLink;
-
-    @Column(name = "preview_link")
     private String previewLink;
-
-    @Column(name = "purchase_link")
     private String purchaseLink;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
     private JsonNode rawData;
 
     /**
      * Vector embedding for semantic similarity searches
      *
      * Features:
-     * - Custom PgVector type wraps float arrays for the embedding
-     * - Stored in PostgreSQL vector column in production
-     * - Stored as TEXT in H2 for testing compatibility
-     * - Used with vector_similarity functions for recommendations
+     * - Custom RedisVector type wraps float arrays for the embedding
+     * - Stored in Redis as JSON
+     * - Used with Redis vector similarity functions for recommendations
      */
-    @Convert(converter = PgVectorConverter.class)
-    private PgVector embedding;
+    private RedisVector embedding;
 
-    @CreationTimestamp
-    @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
-
-    @Column(name = "last_accessed", nullable = false)
     private LocalDateTime lastAccessed;
-
-    @Column(name = "access_count", nullable = false)
     private Integer accessCount;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", name = "cached_recommendation_ids")
     private List<String> cachedRecommendationIds;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
     private Map<String, Object> qualifiers;
-
-    // For simplicity, storing EditionInfo as JSONB. Requires EditionInfo to be Jackson-compatible.
-    // If complex queries on editions are needed, a separate @OneToMany entity might be better.
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "other_editions", columnDefinition = "jsonb")
     private List<Book.EditionInfo> otherEditions;
-
 
     /**
      * Convert from Book to CachedBook entity
@@ -140,7 +74,7 @@ public class CachedBook {
      * @param embedding Vector embedding for similarity search
      * @return New CachedBook entity ready for persistence
      */
-    public static CachedBook fromBook(Book book, JsonNode rawData, PgVector embedding) {
+    public static CachedBook fromBook(Book book, JsonNode rawData, RedisVector embedding) {
         CachedBook cachedBook = new CachedBook();
         cachedBook.setId(book.getId());
         cachedBook.setGoogleBooksId(book.getId());

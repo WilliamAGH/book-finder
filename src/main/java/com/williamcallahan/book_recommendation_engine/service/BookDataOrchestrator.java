@@ -274,6 +274,10 @@ public class BookDataOrchestrator {
                     olBooks.forEach(book -> queryQualifiers.forEach(book::addQualifier));
                 }
                 return olBooks;
+            })
+            .onErrorResume(e -> {
+                logger.error("Error during OpenLibrary search for query '{}': {}", query, e.getMessage(), e);
+                return Mono.just(Collections.emptyList());
             });
 
         return primarySearchMono
