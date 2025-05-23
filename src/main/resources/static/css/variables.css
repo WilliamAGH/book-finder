@@ -186,6 +186,10 @@
   --dropdown-item-hover-text: var(--text-color-primary);
   --dropdown-item-active-bg: rgba(var(--brand-secondary-rgb), 0.2);
   --dropdown-item-active-text: var(--brand-secondary-light);
+
+  --footer-background-color: var(--input-bg); /* Was --grey-900 in light, now uses a dark theme bg */
+  --footer-text-color: var(--text-color-secondary); /* Was --grey-200 in light, now uses a light grey for dark bg */
+  --section-bg-color: var(--input-bg); /* Was --grey-100 in light, now uses a dark theme bg for sections */
   
   --navbar-bg-dark: var(--bg-color); /* Navbar matches very dark page background */
 
