@@ -96,7 +96,6 @@ public class OpenLibraryBookDataService {
      */
     @RateLimiter(name = "openLibraryDataService")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
-    @TimeLimiter(name = "openLibraryDataService")
     public Flux<Book> searchBooksByTitle(String title) {
         if (title == null || title.trim().isEmpty()) {
             logger.warn("Title is null or empty. Cannot search books on OpenLibrary.");

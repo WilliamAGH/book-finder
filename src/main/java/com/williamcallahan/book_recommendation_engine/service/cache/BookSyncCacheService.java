@@ -56,7 +56,7 @@ public class BookSyncCacheService {
     /**
      * Retrieves a book by its Google Books ID using a multi-level synchronous cache approach
      * This method is called by the Facade which might have @Cacheable
-     * Cache hierarchy: In-memory (ConcurrentHashMap), Redis, Database
+     * Cache hierarchy: Spring Cache (handled by facade) → Redis → Database
      * If a book is found in a slower cache (Redis, Database), faster caches are populated
      * Returns null if the book is not found in any of these synchronous cache layers
      *
@@ -98,7 +98,7 @@ public class BookSyncCacheService {
             }
         }
         
-        logger.debug("Book ID {} not found in BookSyncCacheService synchronous caches (In-Memory, Redis, DB). Returning null.", id);
+        logger.debug("Book ID {} not found in BookSyncCacheService synchronous caches (Redis, DB). Returning null.", id);
         return null;
     }
 

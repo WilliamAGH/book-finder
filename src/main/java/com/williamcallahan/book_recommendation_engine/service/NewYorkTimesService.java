@@ -52,7 +52,7 @@ public class NewYorkTimesService {
     public NewYorkTimesService(S3StorageService s3StorageService,
                                ObjectMapper objectMapper,
                                WebClient.Builder webClientBuilder,
-                               @Value("${app.nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
+                               @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
                                @Value("${nyt.api.key}") String nytApiKey) {
         this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;

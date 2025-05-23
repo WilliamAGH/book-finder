@@ -30,6 +30,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -44,7 +45,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import com.github.benmanes.caffeine.cache.Cache;
 import java.util.stream.Collectors;
 
 @Service
@@ -60,7 +60,6 @@ public class BookReactiveCacheService {
     private final ObjectMapper objectMapper;
     private final DuplicateBookService duplicateBookService;
     private final CachedBookRepository cachedBookRepository;
-    private final Cache<String, Book> bookDetailCache;
     private final WebClient embeddingClient;
     private final boolean embeddingServiceEnabled;
     
@@ -78,7 +77,6 @@ public class BookReactiveCacheService {
             ObjectMapper objectMapper,
             DuplicateBookService duplicateBookService,
             @Autowired(required = false) CachedBookRepository cachedBookRepository,
-            Cache<String, Book> bookDetailCache,
             WebClient.Builder webClientBuilder,
             @Value("${app.feature.embedding-service.enabled:false}") boolean embeddingServiceEnabled
     ) {
@@ -89,7 +87,6 @@ public class BookReactiveCacheService {
         this.objectMapper = objectMapper;
         this.duplicateBookService = duplicateBookService;
         this.cachedBookRepository = cachedBookRepository;
-        this.bookDetailCache = bookDetailCache;
         this.embeddingServiceEnabled = embeddingServiceEnabled;
 
         this.embeddingClient = webClientBuilder.baseUrl(
@@ -103,17 +100,12 @@ public class BookReactiveCacheService {
     }
 
     public Mono<Book> getBookByIdReactive(String id) {
-        Book cachedBookInMemory = bookDetailCache.getIfPresent(id);
-        if (cachedBookInMemory != null) {
-            logger.info("In-memory cache hit for book ID: {}", id);
-            return Mono.just(cachedBookInMemory);
-        }
-
-        logger.info("In-memory cache miss for book ID: {}, delegating to GoogleBooksCachingStrategy.", id);
+        // Note: Spring Cache (Caffeine) is handled by @Cacheable on BookCacheFacadeService.getBookByIdReactive()
+        // This method delegates to GoogleBooksCachingStrategy which follows the correct cache hierarchy
+        logger.info("BookReactiveCacheService.getBookByIdReactive called for ID: {}, delegating to GoogleBooksCachingStrategy.", id);
         return googleBooksCachingStrategy.getReactive(id)
             .doOnSuccess(book -> {
                 if (book != null) {
-                    bookDetailCache.put(id, book);
                     logger.info("BookReactiveCacheService.getBookByIdReactive: Successfully retrieved book ID {} via strategy.", id);
                 } else {
                     logger.info("BookReactiveCacheService.getBookByIdReactive: Book ID {} not found via strategy.", id);
@@ -177,11 +169,12 @@ public class BookReactiveCacheService {
         String cacheKey = generateSearchCacheKey(query, startIndex, maxResults, publishedYear, langCode, orderBy);
         org.springframework.cache.Cache searchCache = this.cacheManager.getCache(BOOK_SEARCH_RESULTS_CACHE_NAME);
 
+        // First check Spring Cache (Caffeine)
         if (searchCache != null) {
             @SuppressWarnings("unchecked")
             List<String> cachedBookIds = (List<String>) searchCache.get(cacheKey, List.class);
             if (cachedBookIds != null) {
-                logger.info("Search cache HIT for key: {}", cacheKey);
+                logger.info("Spring search cache HIT for key: {}", cacheKey);
                 if (cachedBookIds.isEmpty()) {
                     return Mono.just(Collections.emptyList());
                 }
@@ -192,8 +185,26 @@ public class BookReactiveCacheService {
             }
         }
 
-        logger.info("Search cache MISS for key: {}. Delegating to BookDataOrchestrator.", cacheKey);
-        return fetchProcessAndCacheSearch(query, startIndex, maxResults, publishedYear, langCode, orderBy, cacheKey, searchCache);
+        // Then check Redis cache
+        return redisCacheService.getCachedSearchResultsReactive(cacheKey)
+            .flatMap(redisBookIds -> {
+                logger.info("Redis search cache HIT for key: {}", cacheKey);
+                // Also populate Spring cache for faster future access
+                if (searchCache != null) {
+                    searchCache.put(cacheKey, redisBookIds);
+                }
+                if (redisBookIds.isEmpty()) {
+                    return Mono.just(Collections.<Book>emptyList());
+                }
+                return Flux.fromIterable(redisBookIds)
+                           .flatMap(bookId -> getBookByIdReactive(bookId))
+                           .filter(Objects::nonNull)
+                           .collectList();
+            })
+            .switchIfEmpty(
+                fetchProcessAndCacheSearch(query, startIndex, maxResults, publishedYear, langCode, orderBy, cacheKey, searchCache)
+                    .doFirst(() -> logger.info("All search caches MISS for key: {}. Delegating to BookDataOrchestrator.", cacheKey))
+            );
     }
 
     private Mono<List<Book>> fetchProcessAndCacheSearch(String query, int startIndex, int maxResults, Integer publishedYear, String langCode, String orderBy, String cacheKey, org.springframework.cache.Cache searchCache) {
@@ -253,13 +264,21 @@ public class BookReactiveCacheService {
     }
 
     private void cacheSearchResults(org.springframework.cache.Cache searchCache, String cacheKey, List<Book> booksToCacheIdsFor) {
-        if (searchCache != null && this.cacheEnabled) {
+        if (this.cacheEnabled) {
             List<String> bookIdsToCache = booksToCacheIdsFor.stream()
                                                           .map(Book::getId)
                                                           .filter(Objects::nonNull)
                                                           .collect(Collectors.toList());
-            searchCache.put(cacheKey, bookIdsToCache);
-            logger.info("Cached search key '{}' with {} book IDs.", cacheKey, bookIdsToCache.size());
+            
+            // Cache in Spring Cache (Caffeine)
+            if (searchCache != null) {
+                searchCache.put(cacheKey, bookIdsToCache);
+                logger.info("Cached search key '{}' with {} book IDs in Spring cache.", cacheKey, bookIdsToCache.size());
+            }
+            
+            // Also cache in Redis for persistence across restarts
+            redisCacheService.cacheSearchResults(cacheKey, bookIdsToCache);
+            logger.info("Cached search key '{}' with {} book IDs in Redis.", cacheKey, bookIdsToCache.size());
         }
     }
 
@@ -386,9 +405,34 @@ public class BookReactiveCacheService {
                 return embeddingClient.post()
                     .bodyValue(Collections.singletonMap("text", text))
                     .retrieve()
+                    .onStatus(httpStatus -> httpStatus.is4xxClientError(), response -> {
+                        logger.warn("Client error when generating embedding for book ID {}: HTTP {}", 
+                            book.getId(), response.statusCode());
+                        // Optionally, you could return response.bodyToMono(String.class).map(ErrorDetails::new) etc.
+                        return Mono.error(new WebClientResponseException(
+                            "Client error from embedding service", 
+                            response.statusCode().value(), 
+                            response.statusCode().toString(), 
+                            response.headers().asHttpHeaders(), 
+                            null, 
+                            null
+                        ));
+                    })
+                    .onStatus(httpStatus -> httpStatus.is5xxServerError(), response -> {
+                        logger.error("Server error when generating embedding for book ID {}: HTTP {}", 
+                            book.getId(), response.statusCode());
+                        return Mono.error(new RuntimeException("Embedding service unavailable: Server error " + response.statusCode()));
+                    })
                     .bodyToMono(float[].class)
                     .onErrorResume(e -> {
-                        logger.warn("Error generating embedding from service for book ID {}: {}. Falling back to placeholder.", book.getId(), e.getMessage());
+                        if (e instanceof WebClientResponseException) {
+                            WebClientResponseException wcre = (WebClientResponseException) e;
+                            logger.error("WebClientResponseException generating embedding for book ID {}: HTTP {} - {}. Falling back to placeholder.", 
+                                book.getId(), wcre.getStatusCode(), wcre.getMessage());
+                        } else {
+                            logger.warn("Non-WebClient error generating embedding from service for book ID {}: {}. Falling back to placeholder.", 
+                                book.getId(), e.getMessage());
+                        }
                         return Mono.just(createPlaceholderEmbedding(text));
                     });
             }

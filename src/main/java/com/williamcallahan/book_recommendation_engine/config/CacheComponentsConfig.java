@@ -50,7 +50,8 @@ public class CacheComponentsConfig {
                 .maximumSize(20_000)
                 .expireAfterAccess(Duration.ofHours(6))
                 .recordStats()); // Enable statistics recording for metrics
-        cacheManager.setCacheNames(List.of("books")); // Set cache names for @Cacheable annotations
+        cacheManager.setCacheNames(List.of("books", "nytBestsellersCurrent")); // Set cache names for @Cacheable annotations
+        cacheManager.setAsyncCacheMode(true); // Enable async cache mode for reactive methods
         return cacheManager;
     }
 }

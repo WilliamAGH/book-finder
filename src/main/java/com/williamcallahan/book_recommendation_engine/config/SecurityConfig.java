@@ -123,6 +123,9 @@ public class SecurityConfig {
                     connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
                 }
 
+                // Add Google Books domain for cover images
+                imgSrcDirective.append("https://books.google.com ");
+
                 // Add book covers CDN domain
                 if (bookCoversCdnDomain != null && !bookCoversCdnDomain.isEmpty()) {
                     imgSrcDirective.append(bookCoversCdnDomain).append(" ");

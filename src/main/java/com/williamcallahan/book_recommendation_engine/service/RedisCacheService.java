@@ -40,6 +40,7 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -49,6 +50,7 @@ public class RedisCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisCacheService.class);
     private static final String BOOK_CACHE_PREFIX = "book:";
+    private static final String SEARCH_CACHE_PREFIX = "search:";
 
     private final AtomicBoolean redisCurrentlyAvailable = new AtomicBoolean(false);
     private volatile long lastAvailabilityCheckTimestamp = 0L;
@@ -362,5 +364,119 @@ public class RedisCacheService {
             logger.error("Error scanning Redis for book keys: {}", e.getMessage(), e);
             return Collections.emptySet();
         }
+    }
+
+    // ===== SEARCH RESULT CACHING METHODS =====
+
+    private String getKeyForSearch(String searchKey) {
+        return SEARCH_CACHE_PREFIX + searchKey;
+    }
+
+    /**
+     * Retrieves cached search results from Redis by search key
+     * @param searchKey The search cache key
+     * @return Optional containing list of book IDs if found, otherwise empty
+     */
+    public Optional<List<String>> getCachedSearchResults(String searchKey) {
+        if (!isRedisAvailable() || searchKey == null || searchKey.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            String searchResultsJson = stringRedisTemplate.opsForValue().get(getKeyForSearch(searchKey));
+            if (searchResultsJson != null) {
+                @SuppressWarnings("unchecked")
+                List<String> bookIds = objectMapper.readValue(searchResultsJson, List.class);
+                logger.debug("Redis search cache HIT for key: {}", searchKey);
+                return Optional.of(bookIds);
+            }
+            logger.debug("Redis search cache MISS for key: {}", searchKey);
+        } catch (JsonProcessingException e) {
+            logger.error("Error deserializing search results from Redis for key {}: {}", searchKey, e.getMessage(), e);
+        } catch (Exception e) {
+            logger.error("Error getting search results from Redis for key {}: {}", searchKey, e.getMessage(), e);
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Reactively retrieves cached search results from Redis by search key
+     * @param searchKey The search cache key
+     * @return Mono emitting list of book IDs if found, otherwise empty
+     */
+    public Mono<List<String>> getCachedSearchResultsReactive(String searchKey) {
+        if (!isRedisAvailable() || searchKey == null || searchKey.isEmpty()) {
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> {
+                    String searchResultsJson = stringRedisTemplate.opsForValue().get(getKeyForSearch(searchKey));
+                    if (searchResultsJson != null) {
+                        @SuppressWarnings("unchecked")
+                        List<String> bookIds = objectMapper.readValue(searchResultsJson, List.class);
+                        return Optional.of(bookIds);
+                    }
+                    return Optional.<List<String>>empty();
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(optionalResults -> {
+                    if (optionalResults.isPresent()) {
+                        logger.debug("Redis search cache HIT (reactive) for key: {}", searchKey);
+                        return Mono.just(optionalResults.get());
+                    }
+                    logger.debug("Redis search cache MISS (reactive) for key: {}", searchKey);
+                    return Mono.empty();
+                })
+                .onErrorResume(JsonProcessingException.class, e -> {
+                    logger.error("Error deserializing search results from Redis (reactive) for key {}: {}", searchKey, e.getMessage(), e);
+                    return Mono.empty();
+                })
+                .onErrorResume(Exception.class, e -> {
+                    logger.error("Error getting search results from Redis (reactive) for key {}: {}", searchKey, e.getMessage(), e);
+                    return Mono.empty();
+                });
+    }
+
+    /**
+     * Caches search results in Redis with affiliate TTL (shorter than book TTL)
+     * @param searchKey The search cache key
+     * @param bookIds List of book IDs to cache
+     */
+    public void cacheSearchResults(String searchKey, List<String> bookIds) {
+        if (!isRedisAvailable() || searchKey == null || searchKey.isEmpty() || bookIds == null) {
+            return;
+        }
+        try {
+            String searchResultsJson = objectMapper.writeValueAsString(bookIds);
+            stringRedisTemplate.opsForValue().set(getKeyForSearch(searchKey), searchResultsJson, affiliateTtl);
+            logger.debug("Cached search results for key {} with {} book IDs in Redis", searchKey, bookIds.size());
+        } catch (JsonProcessingException e) {
+            logger.error("Error serializing search results for Redis cache for key {}: {}", searchKey, e.getMessage(), e);
+        } catch (Exception e) {
+            logger.error("Error caching search results in Redis for key {}: {}", searchKey, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Reactively caches search results in Redis with affiliate TTL
+     * @param searchKey The search cache key
+     * @param bookIds List of book IDs to cache
+     * @return Mono<Void> completing when the caching operation is finished
+     */
+    public Mono<Void> cacheSearchResultsReactive(String searchKey, List<String> bookIds) {
+        if (!isRedisAvailable() || searchKey == null || searchKey.isEmpty() || bookIds == null) {
+            return Mono.empty();
+        }
+        return Mono.fromRunnable(() -> {
+                    try {
+                        String searchResultsJson = objectMapper.writeValueAsString(bookIds);
+                        stringRedisTemplate.opsForValue().set(getKeyForSearch(searchKey), searchResultsJson, affiliateTtl);
+                        logger.debug("Cached search results (reactive) for key {} with {} book IDs in Redis", searchKey, bookIds.size());
+                    } catch (JsonProcessingException e) {
+                        logger.error("Error serializing search results for Redis cache (reactive) for key {}: {}", searchKey, e.getMessage(), e);
+                    } catch (Exception e) {
+                        logger.error("Error caching search results in Redis (reactive) for key {}: {}", searchKey, e.getMessage(), e);
+                    }
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
     }
 }

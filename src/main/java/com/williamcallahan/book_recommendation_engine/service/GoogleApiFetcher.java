@@ -36,6 +36,7 @@ public class GoogleApiFetcher {
 
     private final WebClient webClient;
     private final ApiRequestMonitor apiRequestMonitor;
+    private final ApiCircuitBreakerService circuitBreakerService;
 
     @Value("${google.books.api.base-url}")
     private String googleBooksApiUrl;
@@ -48,10 +49,14 @@ public class GoogleApiFetcher {
      * 
      * @param webClientBuilder WebClient builder 
      * @param apiRequestMonitor API request tracking service
+     * @param circuitBreakerService Circuit breaker for API rate limiting
      */
-    public GoogleApiFetcher(WebClient.Builder webClientBuilder, ApiRequestMonitor apiRequestMonitor) {
+    public GoogleApiFetcher(WebClient.Builder webClientBuilder, 
+                           ApiRequestMonitor apiRequestMonitor,
+                           ApiCircuitBreakerService circuitBreakerService) {
         this.webClient = webClientBuilder.build();
         this.apiRequestMonitor = apiRequestMonitor;
+        this.circuitBreakerService = circuitBreakerService;
     }
 
     /**
@@ -61,6 +66,12 @@ public class GoogleApiFetcher {
      * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdAuthenticated(String bookId) {
+        // Check circuit breaker first
+        if (!circuitBreakerService.isApiCallAllowed()) {
+            logger.warn("Circuit breaker is OPEN - blocking authenticated API call for book ID: {}", bookId);
+            return Mono.empty();
+        }
+        
         if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
             logger.warn("Authenticated API call attempted for bookId {} without an API key. This call will likely fail or be rate-limited.", bookId);
             // Depending on strictness, could return Mono.error or proceed without key
@@ -101,14 +112,25 @@ public class GoogleApiFetcher {
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))
-                .doOnSuccess(response -> apiRequestMonitor.recordSuccessfulRequest(endpoint))
+                .doOnSuccess(response -> {
+                    apiRequestMonitor.recordSuccessfulRequest(endpoint);
+                    circuitBreakerService.recordSuccess();
+                })
                 .onErrorResume(e -> {
                     // Log specific WebClientResponseException details if available
                     if (e instanceof WebClientResponseException wcre) {
                         logger.error("Error fetching book {} from Google API (Authenticated) after retries: HTTP Status {}, Body: {}", 
                             bookId, wcre.getStatusCode(), wcre.getResponseBodyAsString(), wcre);
+                        
+                        // Record circuit breaker failure based on error type
+                        if (wcre.getStatusCode().value() == 429) {
+                            circuitBreakerService.recordRateLimitFailure();
+                        } else {
+                            circuitBreakerService.recordGeneralFailure();
+                        }
                     } else {
                         logger.error("Error fetching book {} from Google API (Authenticated) after retries: {}", bookId, e.getMessage(), e);
+                        circuitBreakerService.recordGeneralFailure();
                     }
                     apiRequestMonitor.recordFailedRequest(endpoint, e.getMessage());
                     return Mono.empty();
@@ -181,6 +203,12 @@ public class GoogleApiFetcher {
      * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesAuthenticated(String query, int startIndex, String orderBy, String langCode) {
+        // Check circuit breaker first
+        if (!circuitBreakerService.isApiCallAllowed()) {
+            logger.warn("Circuit breaker is OPEN - blocking authenticated search API call for query: {}", query);
+            return Mono.empty();
+        }
+        
         if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
             logger.warn("Authenticated search API call attempted for query '{}' without an API key.", query);
         }
@@ -262,14 +290,31 @@ public class GoogleApiFetcher {
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))
-                .doOnSuccess(response -> apiRequestMonitor.recordSuccessfulRequest(endpoint))
+                .doOnSuccess(response -> {
+                    apiRequestMonitor.recordSuccessfulRequest(endpoint);
+                    if (authenticated) {
+                        circuitBreakerService.recordSuccess();
+                    }
+                })
                 .onErrorResume(e -> {
                     if (e instanceof WebClientResponseException wcre) {
                         logger.error("Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries: HTTP Status {}, Body: {}",
                             authStatus, query, startIndex, wcre.getStatusCode(), wcre.getResponseBodyAsString(), wcre);
+                        
+                        // Record circuit breaker failure for authenticated calls
+                        if (authenticated) {
+                            if (wcre.getStatusCode().value() == 429) {
+                                circuitBreakerService.recordRateLimitFailure();
+                            } else {
+                                circuitBreakerService.recordGeneralFailure();
+                            }
+                        }
                     } else {
                         logger.error("Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries: {}",
                             authStatus, query, startIndex, e.getMessage(), e);
+                        if (authenticated) {
+                            circuitBreakerService.recordGeneralFailure();
+                        }
                     }
                     apiRequestMonitor.recordFailedRequest(endpoint, e.getMessage());
                     return Mono.empty();

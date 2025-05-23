@@ -16,6 +16,7 @@ package com.williamcallahan.book_recommendation_engine.controller;
 import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
 import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarmingScheduler;
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
+import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,16 +41,19 @@ public class AdminController {
     private final String configuredQuarantinePrefix;
     private final NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler;
     private final BookCacheWarmingScheduler bookCacheWarmingScheduler;
+    private final ApiCircuitBreakerService apiCircuitBreakerService;
 
     public AdminController(@Autowired(required = false) S3CoverCleanupService s3CoverCleanupService,
                            @Autowired(required = false) NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler,
                            BookCacheWarmingScheduler bookCacheWarmingScheduler,
+                           ApiCircuitBreakerService apiCircuitBreakerService,
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
                            @Value("${app.s3.cleanup.quarantine-prefix:images/non-covers-pages/}") String configuredQuarantinePrefix) {
         this.s3CoverCleanupService = s3CoverCleanupService;
         this.newYorkTimesBestsellerScheduler = newYorkTimesBestsellerScheduler;
         this.bookCacheWarmingScheduler = bookCacheWarmingScheduler;
+        this.apiCircuitBreakerService = apiCircuitBreakerService;
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
         this.configuredQuarantinePrefix = configuredQuarantinePrefix;
@@ -223,6 +227,45 @@ public class AdminController {
             return ResponseEntity.ok(successMessage);
         } catch (Exception e) {
             String errorMessage = "Failed to trigger book cache warming job: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
+        }
+    }
+
+    /**
+     * Gets the current status of the API circuit breaker.
+     *
+     * @return A ResponseEntity containing the circuit breaker status
+     */
+    @GetMapping(value = "/circuit-breaker/status", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> getCircuitBreakerStatus() {
+        logger.info("Admin endpoint /admin/circuit-breaker/status invoked.");
+        try {
+            String status = apiCircuitBreakerService.getCircuitStatus();
+            logger.info("Circuit breaker status retrieved: {}", status);
+            return ResponseEntity.ok(status);
+        } catch (Exception e) {
+            String errorMessage = "Failed to get circuit breaker status: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
+        }
+    }
+
+    /**
+     * Manually resets the API circuit breaker to CLOSED state.
+     *
+     * @return A ResponseEntity indicating the outcome of the reset
+     */
+    @PostMapping(value = "/circuit-breaker/reset", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> resetCircuitBreaker() {
+        logger.info("Admin endpoint /admin/circuit-breaker/reset invoked.");
+        try {
+            apiCircuitBreakerService.reset();
+            String successMessage = "Successfully reset API circuit breaker to CLOSED state.";
+            logger.info(successMessage);
+            return ResponseEntity.ok(successMessage);
+        } catch (Exception e) {
+            String errorMessage = "Failed to reset circuit breaker: " + e.getMessage();
             logger.error(errorMessage, e);
             return ResponseEntity.internalServerError().body(errorMessage);
         }

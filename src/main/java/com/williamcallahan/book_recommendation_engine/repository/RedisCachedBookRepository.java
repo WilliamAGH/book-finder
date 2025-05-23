@@ -23,6 +23,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Repository;
 
 import java.util.*;
@@ -204,6 +206,19 @@ public class RedisCachedBookRepository implements CachedBookRepository {
             String bookJson = objectMapper.writeValueAsString(entity);
             redisCacheService.cacheString(getCachedBookKey(entity.getId()), bookJson);
 
+            // Remove stale indexes first
+            findById(entity.getId()).ifPresent(previous -> {
+                if (previous.getGoogleBooksId() != null && !previous.getGoogleBooksId().equals(entity.getGoogleBooksId())) {
+                    stringRedisTemplate.delete(getGoogleBooksIdIndexKey(previous.getGoogleBooksId()));
+                }
+                if (previous.getIsbn10() != null && !previous.getIsbn10().equals(entity.getIsbn10())) {
+                    stringRedisTemplate.delete(getIsbn10IndexKey(previous.getIsbn10()));
+                }
+                if (previous.getIsbn13() != null && !previous.getIsbn13().equals(entity.getIsbn13())) {
+                    stringRedisTemplate.delete(getIsbn13IndexKey(previous.getIsbn13()));
+                }
+            });
+
             // Update indexes
             if (entity.getGoogleBooksId() != null) {
                 redisCacheService.cacheString(getGoogleBooksIdIndexKey(entity.getGoogleBooksId()), entity.getId());
@@ -380,11 +395,27 @@ public class RedisCachedBookRepository implements CachedBookRepository {
 
         List<CachedBook> books = new ArrayList<>();
         try {
-            Set<String> keys = stringRedisTemplate.keys(CACHED_BOOK_PREFIX + "*");
-            if (keys != null) {
+            Set<String> keys = new HashSet<>();
+            org.springframework.data.redis.connection.RedisConnectionFactory connectionFactory = stringRedisTemplate.getConnectionFactory();
+            if (connectionFactory != null) {
+                try (Cursor<byte[]> cursor = connectionFactory.getConnection().commands().scan(ScanOptions.scanOptions().match(CACHED_BOOK_PREFIX + "*").count(1000).build())) {
+                    if (cursor != null) {
+                        cursor.forEachRemaining(keyBytes -> keys.add(new String(keyBytes)));
+                    }
+                } catch (Exception e) {
+                    logger.error("Error during Redis SCAN operation: {}", e.getMessage(), e);
+                    // Depending on desired behavior, you might rethrow or return empty/partial list
+                }
+            } else {
+                logger.warn("Redis connection factory is null, cannot perform SCAN.");
+            }
+            if (!keys.isEmpty()) {
                 for (String key : keys) {
-                    String bookId = key.substring(CACHED_BOOK_PREFIX.length());
-                    findById(bookId).ifPresent(books::add);
+                    // Ensure the key actually belongs to this repository's prefix, as SCAN can return other keys if not careful with patterns
+                    if (key.startsWith(CACHED_BOOK_PREFIX)) {
+                         String bookId = key.substring(CACHED_BOOK_PREFIX.length());
+                         findById(bookId).ifPresent(books::add);
+                    }
                 }
             }
         } catch (Exception e) {

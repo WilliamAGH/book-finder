@@ -236,8 +236,8 @@ public class BookDataOrchestrator {
         if (newNonNullFields > oldNonNullFields) {
             return true;
         }
-        logger.debug("shouldUpdateS3: Defaulting to update for S3 key {} as raw JSON differs and simple heuristics didn't prevent it.", s3KeyContext);
-        return true; 
+        logger.debug("shouldUpdateS3: Defaulting to keep existing data for S3 key {} as heuristics didn't determine new data was better.", s3KeyContext);
+        return false; 
     }
 
     private int countNonNullKeyFields(Book book) {
