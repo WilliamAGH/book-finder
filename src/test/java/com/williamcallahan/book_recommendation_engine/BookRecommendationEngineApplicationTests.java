@@ -1,6 +1,6 @@
 package com.williamcallahan.book_recommendation_engine;
 
-import com.williamcallahan.book_recommendation_engine.repository.JpaCachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -17,18 +17,18 @@ import org.springframework.test.context.ActiveProfiles;
  * - Validates application configuration.
  * - Serves as a smoke test for the entire application.
  *
- * Note on Database: For this context loading test, `JpaCachedBookRepository` is mocked
- * using `@MockBean`. This prevents the test from requiring a live database connection or
- * dealing with JPA entity schema generation, allowing for a faster and more isolated context check.
- * The general test environment uses an H2 in-memory database configured via `application-test.properties`
- * and `schema.sql`. This test is explicitly set to use the "test" profile via `@ActiveProfiles("test")`.
+ * Note on Database: For this context loading test, `CachedBookRepository` is mocked
+ * using `@MockBean`. This prevents the test from requiring a live Redis connection,
+ * allowing for a faster and more isolated context check.
+ * The general test environment uses Redis configured via `application-test.properties`.
+ * This test is explicitly set to use the "test" profile via `@ActiveProfiles("test")`.
  */
 @SpringBootTest
-@ActiveProfiles("test") // Ensure the "test" profile and its H2 configuration are active
+@ActiveProfiles("test") // Ensure the "test" profile and its Redis configuration are active
 class BookRecommendationEngineApplicationTests {
 
     @MockitoBean
-    private JpaCachedBookRepository jpaCachedBookRepository;
+    private CachedBookRepository cachedBookRepository;
 
     /**
      * Verifies that the Spring application context loads successfully
