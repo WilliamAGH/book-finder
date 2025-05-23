@@ -311,6 +311,12 @@
       "description": "New York Times API key"
     },
     {
+      "name": "nyt.api.base-url",
+      "type": "java.lang.String",
+      "description": "Base URL for New York Times API",
+      "defaultValue": "https://api.nytimes.com/svc/books/v3"
+    },
+    {
       "name": "nyt.api.secret",
       "type": "java.lang.String",
       "description": "New York Times API secret"

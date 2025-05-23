@@ -7,7 +7,7 @@ spring:
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
     type: ${SPRING_CACHE_TYPE:caffeine} # Defaulting to Caffeine for L1 in-memory cache
-    cache-names: books,bookCovers,searchResults,bookRequests,searchRequests,bookSearchResults
+    cache-names: books,bookCovers,searchResults,bookRequests,searchRequests,bookSearchResults,nytBestsellersCurrent
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Default spec for all caches
   
@@ -50,10 +50,22 @@ app:
       password: ${APP_ADMIN_PASSWORD}
     user:
       password: ${APP_USER_PASSWORD}
+    headers:
+      content-security-policy:
+        enabled: true
   cache:
     enabled: true
     book: # Corresponds to app.redis.cache.book.ttl
       ttl: 24h # Default TTL for book cache entries
+  cover-cache:
+    dir: book-covers # Directory name for serving cached cover images
+  book:
+    covers:
+      cdn-domain: ${S3_CDN_URL:https://book-finder.sfo3.digitaloceanspaces.com}
+      additional-domains: ${BOOK_COVERS_ADDITIONAL_DOMAINS:}
+  clicky:
+    enabled: ${CLICKY_ENABLED:true}
+    site-id: ${CLICKY_SITE_ID:101484793}
   
   # External embedding service URL (optional)
   # If not provided, a simple placeholder embedding will be used
@@ -87,6 +99,7 @@ google:
 # New York Times API configuration
 nyt:
   api:
+    base-url: ${NYT_API_BASE_URL:https://api.nytimes.com/svc/books/v3}
     key: ${NYT_API_KEY:}
 
 # OpenLibrary API configuration
@@ -142,7 +155,7 @@ spring:
       on-profile: prod
   # Production-specific cache configuration with optimized settings
   cache:
-    cache-names: books,bookSearchResults
+    cache-names: books,bookSearchResults,nytBestsellersCurrent
     caffeine:
       spec: "maximumSize=2000,expireAfterWrite=12h,recordStats" # Optimized for production
 logging:
