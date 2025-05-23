@@ -14,11 +14,13 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -36,6 +38,7 @@ import java.util.stream.Collectors;
 import reactor.core.scheduler.Schedulers;
 
 @Service
+@Conditional(S3EnvironmentCondition.class)
 public class NewYorkTimesService {
     private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesService.class);
 
@@ -44,16 +47,17 @@ public class NewYorkTimesService {
     private final WebClient webClient;
     private final String nytApiBaseUrl;
 
-    @Value("${nyt.api.key}")
-    private String nytApiKey;
+    private final String nytApiKey;
 
     public NewYorkTimesService(S3StorageService s3StorageService,
                                ObjectMapper objectMapper,
                                WebClient.Builder webClientBuilder,
-                               @Value("${app.nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl) {
+                               @Value("${app.nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
+                               @Value("${nyt.api.key}") String nytApiKey) {
         this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;
         this.nytApiBaseUrl = nytApiBaseUrl;
+        this.nytApiKey = nytApiKey;
         this.webClient = webClientBuilder.baseUrl(nytApiBaseUrl).build();
     }
 
@@ -61,24 +65,22 @@ public class NewYorkTimesService {
      * Fetches the full bestseller list overview directly from the New York Times API
      * This is intended for use by the scheduler
      *
-     * @return JsonNode representing the API response, or null on error
+     * @return Mono<JsonNode> representing the API response, or empty on error
      */
-    public JsonNode fetchBestsellerListOverview() {
+    public Mono<JsonNode> fetchBestsellerListOverview() {
         String overviewUrl = "/lists/overview.json?api-key=" + nytApiKey;
         logger.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
-        try {
-            return webClient.mutate()
-                    .baseUrl(nytApiBaseUrl)
-                    .build()
-                    .get()
-                    .uri(overviewUrl)
-                    .retrieve()
-                    .bodyToMono(JsonNode.class)
-                    .block();
-        } catch (Exception e) {
-            logger.error("Error fetching NYT bestseller list overview from API: {}", e.getMessage(), e);
-            return null;
-        }
+        return webClient.mutate()
+                .baseUrl(nytApiBaseUrl)
+                .build()
+                .get()
+                .uri(overviewUrl)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .onErrorResume(e -> {
+                    logger.error("Error fetching NYT bestseller list overview from API: {}", e.getMessage(), e);
+                    return Mono.empty();
+                });
     }
 
 
@@ -190,7 +192,7 @@ public class NewYorkTimesService {
             }
             if (id == null || id.trim().isEmpty()) {
                  logger.warn("Book with title '{}' by {} has no valid ISBNs. Using placeholder ID.", bp.title(), bp.author());
-                 id = "MISSING_ID_" + System.currentTimeMillis() + "_" + (bp.title() != null ? bp.title().replaceAll("[^a-zA-Z0-9]+", "_") : "UNTITLED"); 
+                 id = "MISSING_ID_" + (bp.title() != null ? bp.title().replaceAll("[^a-zA-Z0-9]+", "_") : "UNTITLED") + "_" + (bp.author() != null ? bp.author().replaceAll("[^a-zA-Z0-9]+", "_") : "UNKNOWN");
             }
         }
         book.setId(id);

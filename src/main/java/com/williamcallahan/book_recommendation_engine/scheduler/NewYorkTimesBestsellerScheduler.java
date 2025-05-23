@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataAggregatorService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
@@ -29,6 +30,7 @@ import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -43,6 +45,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Component
+@Conditional(S3EnvironmentCondition.class)
 public class NewYorkTimesBestsellerScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesBestsellerScheduler.class);
@@ -120,7 +123,7 @@ public class NewYorkTimesBestsellerScheduler {
             // (via Resilience4j on searchBooks) and its batch processing methods (e.g., delayElement in fetchGoogleBookIdsForMultipleIsbns).
             // The googleBooksApiMaxCallsPerJob property serves as a high-level guard for this scheduler job.
 
-            JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview();
+            JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview().block();
             if (nytOverview == null || !nytOverview.has("results") || !nytOverview.get("results").has("lists")) {
                 logger.error("Failed to fetch valid NYT bestseller overview or overview is empty.");
                 return;

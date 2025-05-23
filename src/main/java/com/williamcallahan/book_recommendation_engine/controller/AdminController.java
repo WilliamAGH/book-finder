@@ -18,6 +18,7 @@ import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarming
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -40,8 +41,8 @@ public class AdminController {
     private final NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler;
     private final BookCacheWarmingScheduler bookCacheWarmingScheduler;
 
-    public AdminController(S3CoverCleanupService s3CoverCleanupService,
-                           NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler,
+    public AdminController(@Autowired(required = false) S3CoverCleanupService s3CoverCleanupService,
+                           @Autowired(required = false) NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler,
                            BookCacheWarmingScheduler bookCacheWarmingScheduler,
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
@@ -69,6 +70,12 @@ public class AdminController {
     public ResponseEntity<String> triggerS3CoverCleanupDryRun(
             @RequestParam(name = "prefix", required = false) String prefixOptional,
             @RequestParam(name = "limit", required = false) Integer limitOptional) {
+        
+        if (s3CoverCleanupService == null) {
+            String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body(errorMessage);
+        }
         
         String prefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
         int requestedLimit     = limitOptional != null ? limitOptional : defaultBatchLimit;
@@ -132,6 +139,12 @@ public class AdminController {
             @RequestParam(name = "limit", required = false) Integer limitOptional,
             @RequestParam(name = "quarantinePrefix", required = false) String quarantinePrefixOptional) {
 
+        if (s3CoverCleanupService == null) {
+            String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}");
+        }
+
         String sourcePrefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
         int batchLimitToUse = limitOptional != null ? limitOptional : defaultBatchLimit;
         String quarantinePrefixToUse = quarantinePrefixOptional != null ? quarantinePrefixOptional : configuredQuarantinePrefix;
@@ -173,6 +186,13 @@ public class AdminController {
     @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> triggerNytBestsellerProcessing() {
         logger.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
+        
+        if (newYorkTimesBestsellerScheduler == null) {
+            String errorMessage = "New York Times Bestseller Scheduler is not available. S3 integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body(errorMessage);
+        }
+        
         try {
             // It's good practice to run schedulers asynchronously if they are long-running,
             // but for a manual trigger, a direct call might be acceptable depending on execution time.

@@ -11,8 +11,9 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
+import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -45,7 +46,7 @@ import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 
 @Service
-@ConditionalOnProperty(name = "s3.enabled", havingValue = "true", matchIfMissing = false)
+@Conditional(S3EnvironmentCondition.class)
 public class S3StorageService {
     private static final Logger logger = LoggerFactory.getLogger(S3StorageService.class);
     private static final String GOOGLE_BOOKS_API_CACHE_DIRECTORY = "books/v1/";
