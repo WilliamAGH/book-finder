@@ -3,44 +3,6 @@ spring:
     allow-bean-definition-overriding: true
   profiles:
     default: prod # Default to prod if no other profile is active
-  # Conditional datasource configuration
-  # Set SPRING_DATASOURCE_URL to empty string to disable the database
-  datasource:
-    url: ${SPRING_DATASOURCE_URL:}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
-    driver-class-name: org.postgresql.Driver
-    # Prevent application from failing if no database is available
-    hikari:
-      connection-timeout: 2000
-      initialization-fail-timeout: -1 # Negative value means fail fast if DB is not available
-      maximum-pool-size: 3 # Default for common, can be overridden by profiles
-  
-  # SQL initialization configuration
-  sql:
-    init:
-      # Only initialize if URL is provided
-      mode: ${SPRING_SQL_INIT_MODE:never}
-  
-  # JPA configuration - only used when database URL is provided
-  jpa:
-    # Set explicit dialect to prevent auto-detection issues
-    database-platform: ${SPRING_JPA_DATABASE_PLATFORM:org.hibernate.dialect.PostgreSQLDialect}
-    # Generate database schema only if datasource is available
-    # Set to none to disable automatic schema generation
-    hibernate:
-      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
-    properties:
-      hibernate:
-        "[format_sql]": true
-        jdbc:
-          lob:
-            "[non_contextual_creation]": true
-    # Only validate schema if explicitly enabled
-    generate-ddl: ${SPRING_JPA_GENERATE_DDL:false}  
-    show-sql: false
-    # This property will prevent JPA from initializing before PostgreSQL is available
-    open-in-view: false
   
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
@@ -101,7 +63,7 @@ app:
 
 # S3 configuration
 s3:
-  enabled: ${S3_ENABLED:true}
+  enabled: ${S3_ENABLED:false}
   access-key-id: ${S3_ACCESS_KEY_ID:}
   secret-access-key: ${S3_SECRET_ACCESS_KEY:}
   server-url: ${S3_SERVER_URL:}
@@ -156,19 +118,6 @@ spring:
       enabled: true
     livereload:
       enabled: true
-  # Dev-specific properties
-  datasource:
-    url: "" # Explicitly empty
-    driver-class-name: "" # Explicitly empty
-    # hikari:
-    #   maximum-pool-size: 1 # Default to 1 if absolutely needed, but aim for no init
-    #   minimum-idle: 1      # Default to 1 if absolutely needed
-  jpa:
-    show-sql: true # Show SQL in dev
-    hibernate:
-      ddl-auto: none # More lenient ddl-auto for dev
-    generate-ddl: false
-    # database-platform: "" # Optionally, we could clear this too, but empty URL/driver should suffice
   # Dev-specific cache configuration
   cache:
     caffeine:
@@ -180,25 +129,17 @@ logging:
 app:
   environment:
     mode: development # Custom property for dev mode
+  security:
+    admin:
+      password: ${APP_ADMIN_PASSWORD:devAdminPass}
+    user:
+      password: ${APP_USER_PASSWORD:devUserPass}
 
 ---
 spring:
   config:
     activate:
       on-profile: prod
-  # Prod-specific properties
-  datasource:
-    url: "" # Explicitly empty
-    driver-class-name: "" # Explicitly empty
-    # hikari:
-    #   maximum-pool-size: 1 # Default to 1 if absolutely needed
-    #   minimum-idle: 1      # Default to 1 if absolutely needed
-    # Consider more robust production settings for HikariCP
-  jpa:
-    show-sql: false
-    hibernate:
-      ddl-auto: none # Validate schema in prod, or 'none' if managed externally
-    generate-ddl: false
   # Production-specific cache configuration with optimized settings
   cache:
     cache-names: books,bookSearchResults
@@ -216,48 +157,15 @@ spring:
   config:
     activate:
       on-profile: test
-  datasource:
-    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: ""
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: none
-    defer-datasource-initialization: true
-  sql:
-    init:
-      mode: always
+  cache:
+    type: simple
 logging:
   level:
     root: WARN
     "[com.williamcallahan.book_recommendation_engine]": INFO
     "[org.springframework]": WARN
-    "[org.hibernate]": WARN
-    "[org.springframework.test]": WARN
 s3:
   cdn-url: https://book-finder.sfo3.digitaloceanspaces.com
-
----
-spring:
-  config:
-    activate:
-      on-profile: nodb
-  datasource:
-    url: ""
-    driver-class-name: ""
-    hikari:
-      maximum-pool-size: 0
-      minimum-idle: 0
-  jpa:
-    hibernate:
-      ddl-auto: none
-    show-sql: false
-    open-in-view: false
-    generate-ddl: false
-  cache:
-    type: simple
 app:
   cache:
     enabled: true
