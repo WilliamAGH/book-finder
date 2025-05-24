@@ -4,6 +4,15 @@ spring:
   profiles:
     default: prod # Default to prod if no other profile is active
   
+  mvc:
+    async:
+      request-timeout: 60000 # Set overall async request timeout to 60 seconds
+
+  # Disable Spring Cloud compatibility verifier
+  cloud:
+    compatibility-verifier:
+      enabled: false
+  
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
     type: ${SPRING_CACHE_TYPE:caffeine} # Defaulting to Caffeine for L1 in-memory cache
@@ -11,21 +20,21 @@ spring:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Default spec for all caches
   
-  # Redis configuration - optional, only used if cache type is redis
+  # Redis configuration - used by our custom JedisPooled configuration
   data:
     redis:
-      url: ${REDIS_SERVER:}
       host: ${SPRING_REDIS_HOST:localhost}
       port: ${SPRING_REDIS_PORT:6379}
-      # Skip Redis if not available
-      connect-timeout: 2000
-      lettuce:
-        shutdown-timeout: 0
+      password: ${SPRING_REDIS_PASSWORD:#{null}}
+      ssl:
+        enabled: ${SPRING_REDIS_SSL:false}
+      timeout: 10000
+      jedis:
         pool:
-          max-active: 8 # Default for GenericObjectPoolConfig, consider tuning for production
-          max-idle: 8   # Default
-          min-idle: 0   # Default
-          max-wait: -1ms # Block indefinitely if pool exhausted, consider a specific timeout
+          max-active: 16 # Aligned with RedisConfig.java
+          max-idle: 8    # Aligned with RedisConfig.java
+          min-idle: 2    # Aligned with RedisConfig.java
+          max-wait: 5000 # Aligned with RedisConfig.java - 5 second timeout
 
   web:
     resources:
@@ -41,9 +50,6 @@ spring:
         # period: 7d 
         # use-cache-control-header: true # Ensure Cache-Control header is used
 
-  codec: # Correctly nested under spring
-    max-in-memory-size: 10MB # Configure global max buffer size for WebClient
-
 app:
   security:
     admin:
@@ -57,6 +63,13 @@ app:
     enabled: true
     book: # Corresponds to app.redis.cache.book.ttl
       ttl: 24h # Default TTL for book cache entries
+    # Cache Warming configuration
+    warming:
+      enabled: false # Disabled to reduce Google API daily quota usage
+      # cron: 0 0 3 * * ? # Default cron if enabled
+      # rate-limit-per-minute: 3 # Default rate limit if enabled
+      # max-books-per-run: 10 # Default max books if enabled
+      # recently-viewed-days: 7 # Default days for recent views if enabled
   cover-cache:
     dir: book-covers # Directory name for serving cached cover images
   book:
@@ -66,16 +79,18 @@ app:
   clicky:
     enabled: ${CLICKY_ENABLED:true}
     site-id: ${CLICKY_SITE_ID:101484793}
+    cache-duration-minutes: ${CLICKY_CACHE_DURATION_MINUTES:60}
   
-  # External embedding service URL (optional)
-  # If not provided, a simple placeholder embedding will be used
+  # Embedding service configuration
   embedding:
     service:
-      url: ${EMBEDDING_SERVICE_URL:}
+      enabled: ${EMBEDDING_SERVICE_ENABLED:false}
+      url: ${EMBEDDING_SERVICE_URL:http://localhost:11434}
+    provider: ${EMBEDDING_PROVIDER:local}  # Options: openai, local, ollama
 
 # S3 configuration
 s3:
-  enabled: ${S3_ENABLED:false}
+  enabled: ${S3_ENABLED:true}
   access-key-id: ${S3_ACCESS_KEY_ID:}
   secret-access-key: ${S3_SECRET_ACCESS_KEY:}
   server-url: ${S3_SERVER_URL:}
@@ -116,8 +131,11 @@ sitemap:
 # Common Logging (can be overridden by profiles)
 logging:
   level:
-    root: INFO # Default root level
-    "[com.williamcallahan.book_recommendation_engine]": INFO
+    root: INFO
+    # Suppress noisy Redis connection logging during cleanup operations
+    '[org.springframework.data.redis.core.RedisConnectionUtils]': WARN
+    '[redis.clients.jedis]': WARN # Default root level
+    '[com.williamcallahan.book_recommendation_engine]': INFO
     "[org.springframework.cache]": WARN
     "[org.hibernate]": WARN
 
@@ -139,6 +157,8 @@ logging:
   level:
     '[org.springframework.boot.devtools]': WARN  # suppress DevTools internal logs
     "[org.springframework.web]": INFO # Changed from DEBUG
+    "[org.springframework.data.redis]": DEBUG
+    "[redis.clients.jedis]": DEBUG
 app:
   environment:
     mode: development # Custom property for dev mode
@@ -196,6 +216,13 @@ spring:
   devtools:
     restart:
       enabled: false
+
+# JSON to Redis migration configuration
+jsontoredis:
+  s3:
+    google-books-prefix: ${JSONTOREDIS_S3_GOOGLE_BOOKS_PREFIX:books/v1/}
+    nyt-bestsellers-key: ${JSONTOREDIS_S3_NYT_BESTSELLERS_KEY:nyt-bestsellers/current.json}
+
 logging:
   level:
     '[com.williamcallahan.book_recommendation_engine.jsontoredis]': INFO
