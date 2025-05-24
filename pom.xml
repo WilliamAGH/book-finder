@@ -86,6 +86,11 @@
     </dependencyManagement>
     <dependencies>
         <dependency>
+            <groupId>org.springframework.shell</groupId>
+            <artifactId>spring-shell-starter</artifactId>
+            <version>2.0.1.RELEASE</version>
+        </dependency>
+        <dependency>
             <groupId>ro.isdc.wro4j</groupId>
             <artifactId>wro4j-core</artifactId>
             <version>${wro4j.version}</version>
@@ -118,6 +123,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -484,9 +493,12 @@
                         </goals>
                         <configuration>
                             <target>
-                                <echo message="Cleaning image files from ${project.build.directory}/classes/static/covers"/>
+                                <echo message="Cleaning image files from ${project.build.directory}/classes/static/covers and ${project.build.directory}/classes/static/images"/>
                                 <delete verbose="true" failonerror="false" quiet="true">
                                     <fileset dir="${project.build.directory}/classes/static/covers" includes="**/*.jpg, **/*.jpeg, **/*.png, **/*.gif"/>
+                                </delete>
+                                <delete verbose="true" failonerror="false" quiet="true">
+                                    <fileset dir="${project.build.directory}/classes/static/images" includes="**/*"/>
                                 </delete>
                             </target>
                         </configuration>
