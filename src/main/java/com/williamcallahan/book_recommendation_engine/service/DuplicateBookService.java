@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.util.stream.Collectors;
@@ -80,7 +81,7 @@ public class DuplicateBookService {
                     return candidateAuthorsLower.equals(bookAuthorsLower);
                 })
                 .collect(Collectors.toList());
-        }, this.taskExecutor);
+        }, this.taskExecutor != null ? this.taskExecutor : ForkJoinPool.commonPool());
     }
 
     /**

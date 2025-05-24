@@ -88,10 +88,13 @@ public class BookCacheWarmingScheduler {
 
         logger.info("Starting scheduled book cache warming");
 
+        // Retrieve books synchronously for test interaction
+        CompletableFuture<List<Book>> recentlyViewedFuture = recentlyViewedService.getRecentlyViewedBooksAsync();
+
         // Execute asynchronously without blocking the scheduler thread
         CompletableFuture.runAsync(() -> {
             try {
-                recentlyViewedService.getRecentlyViewedBooksAsync()
+                recentlyViewedFuture
                     .thenApply(books -> books.stream()
                         .map(Book::getId)
                         .filter(id -> id != null && !id.isEmpty() && !recentlyWarmedBooks.contains(id))
