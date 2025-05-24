@@ -202,9 +202,21 @@
       "defaultValue": "24h"
     },
     {
+      "name": "app.embedding.service.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable embedding service",
+      "defaultValue": false
+    },
+    {
       "name": "app.embedding.service.url",
       "type": "java.lang.String",
       "description": "URL for external embedding service"
+    },
+    {
+      "name": "app.embedding.provider",
+      "type": "java.lang.String",
+      "description": "Embedding provider (openai, local)",
+      "defaultValue": "local"
     },
     {
       "name": "app.environment.mode",
@@ -409,6 +421,12 @@
       "name": "app.clicky.site-id",
       "type": "java.lang.String",
       "description": "Clicky analytics site ID"
+    },
+    {
+      "name": "app.clicky.cache-duration-minutes",
+      "type": "java.lang.Integer",
+      "description": "Cache duration in minutes for self-hosted Clicky script",
+      "defaultValue": 60
     },
     {
       "name": "app.book.covers.cdn-domain",
