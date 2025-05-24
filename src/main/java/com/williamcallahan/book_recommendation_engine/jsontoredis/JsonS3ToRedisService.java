@@ -403,9 +403,34 @@ public class JsonS3ToRedisService {
                 String redisKey;
                 Map<String, Object> existingData = null;
                 
-                // Use the enhanced RedisBookSearchService to find existing records
-                Optional<RedisBookSearchService.BookSearchResult> existingRecordOpt = 
-                    redisBookSearchService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
+                // Use the enhanced RedisBookSearchService to find existing records with timeout protection
+                Optional<RedisBookSearchService.BookSearchResult> existingRecordOpt;
+                try {
+                    log.debug("Searching for existing book with ISBN-13: {}, ISBN-10: {}, Google ID: {}", s3Isbn13, s3Isbn10, s3GoogleId);
+                    
+                    // Add timeout protection for Redis search to prevent hanging
+                    CompletableFuture<Optional<RedisBookSearchService.BookSearchResult>> searchFuture = 
+                        CompletableFuture.supplyAsync(() -> {
+                            try {
+                                return redisBookSearchService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
+                            } catch (Exception e) {
+                                log.warn("Redis search failed for identifiers (ISBN-13: {}, ISBN-10: {}, Google ID: {}): {}", 
+                                        s3Isbn13, s3Isbn10, s3GoogleId, e.getMessage());
+                                return Optional.<RedisBookSearchService.BookSearchResult>empty();
+                            }
+                        }, mvcTaskExecutor);
+                    
+                    existingRecordOpt = searchFuture.get(5, TimeUnit.SECONDS); // 5 second timeout
+                    
+                } catch (java.util.concurrent.TimeoutException e) {
+                    log.warn("Redis search timed out for book with ISBN-13: {}, ISBN-10: {}, Google ID: {}. Creating new UUID.", 
+                            s3Isbn13, s3Isbn10, s3GoogleId);
+                    existingRecordOpt = Optional.empty();
+                } catch (Exception e) {
+                    log.warn("Redis search failed for book with ISBN-13: {}, ISBN-10: {}, Google ID: {}. Error: {}. Creating new UUID.", 
+                            s3Isbn13, s3Isbn10, s3GoogleId, e.getMessage());
+                    existingRecordOpt = Optional.empty();
+                }
                 
                 if (existingRecordOpt.isPresent()) {
                     RedisBookSearchService.BookSearchResult existingRecord = existingRecordOpt.get();
