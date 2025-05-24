@@ -5,6 +5,7 @@
  *
  * Features:
  * - Creates S3Client bean conditionally based on environment variables
+ * - Creates S3AsyncClient bean for non-blocking S3 operations
  * - Supports custom endpoint URL for MinIO or local S3 compatible services
  * - Handles graceful degradation when configuration is incomplete
  * - Prevents application startup with misconfigured credentials
@@ -22,7 +23,9 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
+import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
 import software.amazon.awssdk.services.s3.S3Configuration;
 
 import java.net.URI;
@@ -67,7 +70,8 @@ public class S3Config {
 
             ApacheHttpClient.Builder httpClientBuilder = ApacheHttpClient.builder()
                     .connectionTimeout(Duration.ofSeconds(10))
-                    .socketTimeout(Duration.ofSeconds(30));
+                    .socketTimeout(Duration.ofSeconds(30))
+                    .maxConnections(100); // Increased max connections from 50
 
             S3Configuration s3Configuration = S3Configuration.builder()
                     .pathStyleAccessEnabled(true) // Often needed for MinIO/custom endpoints
@@ -84,6 +88,48 @@ public class S3Config {
         } catch (Exception e) {
             logger.error("Failed to create S3Client bean due to configuration error: {}", e.getMessage(), e);
             return null; // Prevent application startup with a broken S3 client
+        }
+    }
+
+    /**
+     * Creates and configures S3AsyncClient bean for non-blocking AWS S3 interactions
+     * - Uses Netty NIO async HTTP client for true non-blocking I/O
+     * - Optimized for high-concurrency operations like bulk migrations
+     * - Shares the same configuration as the synchronous S3Client
+     *
+     * @return Configured S3AsyncClient instance or null if misconfigured
+     */
+    @Bean(destroyMethod = "close")
+    public S3AsyncClient s3AsyncClient() {
+        if (accessKeyId == null || accessKeyId.isEmpty() || secretAccessKey == null || secretAccessKey.isEmpty() || s3ServerUrl == null || s3ServerUrl.isEmpty()) {
+            logger.warn("S3 credentials (access-key-id, secret-access-key, or server-url) are not fully configured. S3AsyncClient bean will not be created.");
+            return null;
+        }
+        
+        try {
+            logger.info("Configuring S3AsyncClient with server URL: {}, region: {}, connectionTimeout: {}s, readTimeout: {}s",
+                    s3ServerUrl, s3Region, 10, 60);
+
+            NettyNioAsyncHttpClient.Builder httpClientBuilder = NettyNioAsyncHttpClient.builder()
+                    .connectionTimeout(Duration.ofSeconds(10))
+                    .readTimeout(Duration.ofSeconds(60))
+                    .maxConcurrency(100); // Allow more concurrent connections for bulk operations
+
+            S3Configuration s3Configuration = S3Configuration.builder()
+                    .pathStyleAccessEnabled(true) // Often needed for MinIO/custom endpoints
+                    .build();
+
+            return S3AsyncClient.builder()
+                    .region(Region.of(s3Region))
+                    .endpointOverride(URI.create(s3ServerUrl))
+                    .credentialsProvider(StaticCredentialsProvider.create(
+                            AwsBasicCredentials.create(accessKeyId, secretAccessKey)))
+                    .httpClientBuilder(httpClientBuilder)
+                    .serviceConfiguration(s3Configuration)
+                    .build();
+        } catch (Exception e) {
+            logger.error("Failed to create S3AsyncClient bean due to configuration error: {}", e.getMessage(), e);
+            return null;
         }
     }
 }
