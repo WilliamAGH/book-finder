@@ -22,8 +22,11 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.http.apache.ApacheHttpClient;
+import software.amazon.awssdk.services.s3.S3Configuration;
 
 import java.net.URI;
+import java.time.Duration;
 
 @Configuration
 @Conditional(S3EnvironmentCondition.class)
@@ -59,12 +62,24 @@ public class S3Config {
         }
         
         try {
-            logger.info("Configuring S3Client with server URL: {} and region: {}", s3ServerUrl, s3Region);
+            logger.info("Configuring S3Client with server URL: {}, region: {}, connectionTimeout: {}s, socketTimeout: {}s",
+                    s3ServerUrl, s3Region, 10, 30);
+
+            ApacheHttpClient.Builder httpClientBuilder = ApacheHttpClient.builder()
+                    .connectionTimeout(Duration.ofSeconds(10))
+                    .socketTimeout(Duration.ofSeconds(30));
+
+            S3Configuration s3Configuration = S3Configuration.builder()
+                    .pathStyleAccessEnabled(true) // Often needed for MinIO/custom endpoints
+                    .build();
+
             return S3Client.builder()
                     .region(Region.of(s3Region))
                     .endpointOverride(URI.create(s3ServerUrl))
                     .credentialsProvider(StaticCredentialsProvider.create(
                             AwsBasicCredentials.create(accessKeyId, secretAccessKey)))
+                    .httpClientBuilder(httpClientBuilder)
+                    .serviceConfiguration(s3Configuration)
                     .build();
         } catch (Exception e) {
             logger.error("Failed to create S3Client bean due to configuration error: {}", e.getMessage(), e);

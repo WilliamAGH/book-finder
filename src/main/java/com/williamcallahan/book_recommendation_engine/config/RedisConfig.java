@@ -54,7 +54,7 @@ public class RedisConfig {
     @Value("${spring.redis.timeout:10000}")
     private int timeout;
 
-    @Value("${spring.redis.jedis.pool.max-active:16}")
+    @Value("${spring.redis.jedis.pool.max-active:100}")
     private int maxActive;
 
     @Value("${spring.redis.jedis.pool.max-idle:8}")
@@ -83,7 +83,6 @@ public class RedisConfig {
             hostAndPort.getHost(), hostAndPort.getPort(),
             poolConfig.getMaxTotal(), poolConfig.getMaxIdle(), poolConfig.getMinIdle(),
             clientConfig.isSsl(), clientConfig.getPassword() != null);
-        
         // Create the pooled client and validate connectivity with a ping
         JedisPooled jedis = new JedisPooled(hostAndPort, clientConfig, poolConfig);
         try {
@@ -152,9 +151,9 @@ public class RedisConfig {
         poolConfig.setMaxIdle(maxIdle);
         poolConfig.setMinIdle(minIdle);
         // Connection validation for reliability
-        poolConfig.setTestOnBorrow(true);
-        poolConfig.setTestOnReturn(true);
-        poolConfig.setTestWhileIdle(true);
+        poolConfig.setTestOnBorrow(true); // Checks connection before it's given to an application thread
+        poolConfig.setTestOnReturn(false); // Avoid overhead of checking on return; testOnBorrow is generally preferred
+        poolConfig.setTestWhileIdle(true); // Periodically checks idle connections
         // Async-friendly blocking behavior
         poolConfig.setBlockWhenExhausted(true);
         poolConfig.setMaxWait(Duration.ofMillis(maxWait)); // Timeout from application.yml

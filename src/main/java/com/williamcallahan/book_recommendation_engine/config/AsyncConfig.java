@@ -115,8 +115,8 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
     @Bean("migrationTaskExecutor")
     public AsyncTaskExecutor migrationTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(10);
-        executor.setMaxPoolSize(50);
+        executor.setCorePoolSize(5); // Reduced from 10
+        executor.setMaxPoolSize(10); // Reduced from 50
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("migration-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
