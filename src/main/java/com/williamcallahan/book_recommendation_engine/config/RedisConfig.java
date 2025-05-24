@@ -71,7 +71,7 @@ public class RedisConfig {
      *
      * @return Configured JedisPooled instance
      */
-    @Bean
+    @Bean(destroyMethod = "close")
     @Primary
     public JedisPooled jedisPooled() {
         HostAndPort hostAndPort = createHostAndPort();
@@ -130,7 +130,7 @@ public class RedisConfig {
                     }
                 }
             } catch (URISyntaxException e) {
-                // Fall through to configuration password
+                logger.warn("Failed to parse Redis URL for password extraction: {}", e.getMessage());
             }
         }
         return redisPassword;

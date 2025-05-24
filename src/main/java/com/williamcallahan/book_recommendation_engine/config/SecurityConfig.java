@@ -120,9 +120,9 @@ public class SecurityConfig {
         http
             .securityMatcher("/actuator/**")
             .authorizeHttpRequests(auth -> auth
-                .anyRequest().permitAll()
+                .anyRequest().hasRole("ADMIN") // Restrict to ADMIN role
             )
-            .csrf(csrf -> csrf.disable());
+            .csrf(csrf -> csrf.disable()); // CSRF is typically disabled for actuator endpoints
         return http.build();
     }
 
