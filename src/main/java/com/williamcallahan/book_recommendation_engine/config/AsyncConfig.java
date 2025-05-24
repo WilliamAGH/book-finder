@@ -77,15 +77,15 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
     }
 
     /**
-     * Creates and configures a dedicated thread pool task executor for CPU-intensive image processing.
+     * Creates and configures a dedicated thread pool task executor for CPU-intensive image processing
      *
-     * @return Configured AsyncTaskExecutor for image processing tasks.
+     * @return Configured AsyncTaskExecutor for image processing tasks
      *
      * Features:
-     * - Core pool size based on available processors.
-     * - Max pool size also based on available processors (can be slightly higher for burst).
-     * - Smaller queue capacity as tasks are expected to be CPU-bound and long-running.
-     * - Descriptive thread naming pattern for monitoring.
+     * - Core pool size based on available processors
+     * - Max pool size also based on available processors (can be slightly higher for burst)
+     * - Smaller queue capacity as tasks are expected to be CPU-bound and long-running
+     * - Descriptive thread naming pattern for monitoring
      * - Fallback to caller thread when saturated (CallerRunsPolicy)
      */
     @Bean("imageProcessingExecutor")
@@ -98,6 +98,29 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
         executor.setThreadNamePrefix("image-proc-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60); // Wait up to 60 seconds for tasks to complete
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * Dedicated thread pool task executor for migration tasks
+     * Features:
+     * - Core pool of 10 threads for migration workloads
+     * - Max pool of 50 threads for high throughput
+     * - Queue capacity of 200 tasks before rejecting new requests
+     * - Descriptive thread naming for monitoring
+     * - Fallback to caller thread when saturated (CallerRunsPolicy)
+     */
+    @Bean("migrationTaskExecutor")
+    public AsyncTaskExecutor migrationTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10);
+        executor.setMaxPoolSize(50);
+        executor.setQueueCapacity(200);
+        executor.setThreadNamePrefix("migration-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
@@ -129,7 +152,7 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
     }
 
     /**
-     * Handles uncaught exceptions thrown from @Async void methods.
+     * Handles uncaught exceptions thrown from @Async void methods
      */
     @Override
     public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {

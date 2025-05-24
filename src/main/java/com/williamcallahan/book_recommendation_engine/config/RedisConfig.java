@@ -84,7 +84,15 @@ public class RedisConfig {
             poolConfig.getMaxTotal(), poolConfig.getMaxIdle(), poolConfig.getMinIdle(),
             clientConfig.isSsl(), clientConfig.getPassword() != null);
         
-        return new JedisPooled(hostAndPort, clientConfig, poolConfig);
+        // Create the pooled client and validate connectivity with a ping
+        JedisPooled jedis = new JedisPooled(hostAndPort, clientConfig, poolConfig);
+        try {
+            String pong = jedis.ping();
+            logger.info("Redis ping successful on startup: {}", pong);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to ping Redis during startup: " + e.getMessage(), e);
+        }
+        return jedis;
     }
 
     private HostAndPort createHostAndPort() {
