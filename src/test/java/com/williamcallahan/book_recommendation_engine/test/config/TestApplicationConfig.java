@@ -39,6 +39,11 @@ public class TestApplicationConfig {
     public JedisPooled jedisPooled() {
         JedisPooled mockJedisPooled = Mockito.mock(JedisPooled.class);
         Mockito.when(mockJedisPooled.ping()).thenReturn("PONG");
+        // Mock common Redis operations
+        Mockito.when(mockJedisPooled.get(Mockito.anyString())).thenReturn(null);
+        Mockito.when(mockJedisPooled.set(Mockito.anyString(), Mockito.anyString())).thenReturn("OK");
+        Mockito.when(mockJedisPooled.del(Mockito.anyString())).thenReturn(1L);
+        Mockito.when(mockJedisPooled.exists(Mockito.anyString())).thenReturn(false);
         return mockJedisPooled;
     }
 }
