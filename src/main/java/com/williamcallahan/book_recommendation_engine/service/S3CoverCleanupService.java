@@ -163,10 +163,10 @@ public class S3CoverCleanupService {
                     ? allS3Objects.subList(0, batchLimit)
                     : allS3Objects;
                 logger.info("Processing {} objects for move action.", objectsToMove.size());
+                totalScanned.set(objectsToMove.size());
                 List<CompletableFuture<Void>> futures = objectsToMove.stream()
                     .map(obj -> {
                         String sourceKey = obj.key();
-                        totalScanned.incrementAndGet();
                         if (obj.size() == null || obj.size() == 0) {
                             logger.warn("S3 object {} is empty or size is unknown. Skipping.", sourceKey);
                             return CompletableFuture.<Void>completedFuture(null);

@@ -23,6 +23,8 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,8 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import jakarta.annotation.PreDestroy;
 import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
@@ -52,7 +56,7 @@ public class S3StorageService {
     private static final Logger logger = LoggerFactory.getLogger(S3StorageService.class);
     private static final String GOOGLE_BOOKS_API_CACHE_DIRECTORY = "books/v1/";
 
-
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private final S3Client s3Client;
     private final String bucketName;
     private final String publicCdnUrl;
@@ -81,25 +85,50 @@ public class S3StorageService {
     }
 
     /**
+     * Graceful shutdown of S3 service operations
+     * Prevents new operations from starting during shutdown
+     */
+    @PreDestroy
+    public void shutdown() {
+        logger.info("Shutting down S3StorageService - disabling new operations");
+        shuttingDown.set(true);
+    }
+
+    /**
      * Checks if the S3Client is available and not shut down.
      * This is especially important during application restarts when the client may be closed.
      *
      * @return true if the client is available and operational, false otherwise
      */
     private boolean isS3ClientAvailable() {
-        if (s3Client == null) {
+        if (s3Client == null || shuttingDown.get()) {
             return false;
         }
         try {
-            // Try to get the service name to check if client is still operational
-            s3Client.serviceName();
+            // Lightweight health check: verify bucket accessibility
+            s3Client.headBucket(HeadBucketRequest.builder()
+                .bucket(bucketName)
+                .build());
             return true;
+        } catch (NoSuchBucketException e) {
+            // Bucket doesn't exist but client is operational
+            logger.info("S3Client is operational, but bucket '{}' does not exist or is not accessible.", bucketName);
+            return true; // Client is working, bucket might be an issue for operations but not client health itself.
+        } catch (S3Exception e) {
+            // AWS S3 error (e.g. permission or connectivity)
+            logger.warn("S3 health check failed (AWS S3 Error Code: {}): {}", e.awsErrorDetails().errorCode(), e.awsErrorDetails().errorMessage());
+            return false;
         } catch (IllegalStateException e) {
             if (e.getMessage() != null && e.getMessage().contains("Connection pool shut down")) {
                 logger.warn("S3Client connection pool has been shut down. This typically occurs during application restart.");
                 return false;
             }
-            throw e;
+            // Re-throw other IllegalStateExceptions as they might indicate a different issue
+            throw e; 
+        } catch (Exception e) {
+            // Catch any other unexpected exceptions during the health check
+            logger.warn("Unexpected error during S3Client health check: {}", e.getMessage(), e);
+            return false;
         }
     }
 

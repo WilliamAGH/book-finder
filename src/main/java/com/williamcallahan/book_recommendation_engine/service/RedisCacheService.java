@@ -46,6 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import jakarta.annotation.PreDestroy;
 
 @Service
 @Conditional(RedisEnvironmentCondition.class)
@@ -79,6 +80,17 @@ public class RedisCacheService {
         this.mvcTaskExecutor = mvcTaskExecutor;
         this.bookTtl = DurationStyle.detectAndParse(bookTtlStr);
         this.affiliateTtl = DurationStyle.detectAndParse(affiliateTtlStr);
+    }
+
+    /**
+     * Graceful shutdown of Redis cache service
+     * Disables caching to prevent new operations during shutdown
+     */
+    @PreDestroy
+    public void shutdown() {
+        logger.info("Shutting down RedisCacheService - disabling cache operations");
+        this.redisCacheEnabled = false;
+        this.redisCurrentlyAvailable.set(false);
     }
 
     /**

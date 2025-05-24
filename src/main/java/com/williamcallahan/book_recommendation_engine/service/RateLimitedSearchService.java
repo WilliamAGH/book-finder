@@ -21,7 +21,6 @@ import com.williamcallahan.book_recommendation_engine.service.event.SearchResult
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -31,6 +30,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class RateLimitedSearchService {
@@ -134,163 +135,184 @@ public class RateLimitedSearchService {
     }
 
     /**
-     * Starts background search using alternating API strategy
+     * Starts background search using alternating API strategy. Returns a CompletableFuture that completes when the background search is done.
      */
-    @Async
-    public void startBackgroundSearch(String query, int maxResults, Integer publishedYear, 
+    // @Async removed, returns CompletableFuture now
+    public CompletableFuture<Void> startBackgroundSearch(String query, int maxResults, Integer publishedYear,
                                     String langCode, String orderBy, String queryHash, int initialResultCount) {
-        try {
-            logger.info("Starting background search for query: '{}', hash: {}", query, queryHash);
-            
-            // Determine which API to try first based on alternating strategy
-            boolean useGoogleFirst = (apiSourceCounter.getAndIncrement() % 2) == 0;
-            
-            List<Book> allResults = new ArrayList<>();
-            Set<String> seenBookIds = new HashSet<>();
-            
-            // Try primary API source
-            String primarySource = useGoogleFirst ? "GOOGLE_BOOKS" : "OPEN_LIBRARY";
-            String secondarySource = useGoogleFirst ? "OPEN_LIBRARY" : "GOOGLE_BOOKS";
-            
-            List<Book> primaryResults = searchFromSource(query, maxResults, primarySource, queryHash);
-            if (primaryResults != null && !primaryResults.isEmpty()) {
-                List<Book> deduplicatedPrimary = deduplicateAndMerge(primaryResults, seenBookIds);
-                allResults.addAll(deduplicatedPrimary);
-                
-                // Send update for primary source results
+        
+        final List<Book> apiResultsThisRun = Collections.synchronizedList(new ArrayList<>());
+        final Set<String> seenBookIdsThisRun = ConcurrentHashMap.newKeySet();
+
+        logger.info("Starting background search for query: '{}', hash: {}", query, queryHash);
+        
+        boolean useGoogleFirst = (apiSourceCounter.getAndIncrement() % 2) == 0;
+        String primarySource = useGoogleFirst ? "GOOGLE_BOOKS" : "OPEN_LIBRARY";
+        String secondarySource = useGoogleFirst ? "OPEN_LIBRARY" : "GOOGLE_BOOKS";
+        
+        CompletableFuture<List<Book>> primaryProcessedFuture = 
+            searchFromSourceAsync(query, maxResults, primarySource, queryHash)
+            .thenComposeAsync(primaryRawResults -> {
+                if (primaryRawResults != null && !primaryRawResults.isEmpty()) {
+                    return deduplicateAndMergeAsync(primaryRawResults, seenBookIdsThisRun);
+                }
+                return CompletableFuture.completedFuture(Collections.emptyList());
+            });
+
+        return primaryProcessedFuture.thenComposeAsync(deduplicatedPrimary -> {
+            if (deduplicatedPrimary != null && !deduplicatedPrimary.isEmpty()) {
+                apiResultsThisRun.addAll(deduplicatedPrimary);
                 eventPublisher.publishEvent(new SearchResultsUpdatedEvent(
                     query, deduplicatedPrimary, primarySource, 
-                    initialResultCount + allResults.size(), queryHash, false));
+                    initialResultCount + apiResultsThisRun.size(), queryHash, false));
             }
-            
-            // Try secondary API source only if circuit breaker allows and we need more results
-            if (allResults.size() < maxResults && circuitBreakerService.isApiCallAllowed().join()) {
-                List<Book> secondaryResults = searchFromSource(query, maxResults - allResults.size(), secondarySource, queryHash);
-                if (secondaryResults != null && !secondaryResults.isEmpty()) {
-                    List<Book> deduplicatedSecondary = deduplicateAndMerge(secondaryResults, seenBookIds);
-                    allResults.addAll(deduplicatedSecondary);
-                    
-                    // Send update for secondary source results
-                    eventPublisher.publishEvent(new SearchResultsUpdatedEvent(
-                        query, deduplicatedSecondary, secondarySource, 
-                        initialResultCount + allResults.size(), queryHash, false));
-                }
+
+            if (apiResultsThisRun.size() < maxResults) {
+                return circuitBreakerService.isApiCallAllowed().thenComposeAsync(allowed -> {
+                    if (allowed) {
+                        return searchFromSourceAsync(query, maxResults - apiResultsThisRun.size(), secondarySource, queryHash)
+                            .thenComposeAsync(secondaryRawResults -> {
+                                if (secondaryRawResults != null && !secondaryRawResults.isEmpty()) {
+                                    return deduplicateAndMergeAsync(secondaryRawResults, seenBookIdsThisRun);
+                                }
+                                return CompletableFuture.completedFuture(Collections.emptyList());
+                            })
+                            .thenAcceptAsync(deduplicatedSecondary -> {
+                                if (deduplicatedSecondary != null && !deduplicatedSecondary.isEmpty()) {
+                                    apiResultsThisRun.addAll(deduplicatedSecondary);
+                                    eventPublisher.publishEvent(new SearchResultsUpdatedEvent(
+                                        query, deduplicatedSecondary, secondarySource, 
+                                        initialResultCount + apiResultsThisRun.size(), queryHash, false));
+                                }
+                            });
+                    } else {
+                        logger.info("Circuit breaker is open, skipping secondary source {} for query: '{}'", secondarySource, query);
+                        eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.RATE_LIMITED, 
+                           secondarySource + " rate limited (skipped)", queryHash, secondarySource));
+                        return CompletableFuture.completedFuture(null); 
+                    }
+                });
             }
-            
-            // Send completion event
+            return CompletableFuture.completedFuture(null); 
+        }).thenRunAsync(() -> {
             eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.COMPLETE, 
                 "Search completed", queryHash));
-                
-            logger.info("Background search completed for query: '{}'. Found {} additional results", query, allResults.size());
-            
-        } catch (Exception e) {
-            logger.error("Error during background search for query: '{}': {}", query, e.getMessage(), e);
+            logger.info("Background search completed for query: '{}'. Found {} additional results from APIs.", query, apiResultsThisRun.size());
+        }).exceptionally(e -> {
+            logger.error("Error during background search execution for query: '{}': {}", query, e.getMessage(), e);
             eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.ERROR, 
                 "Search error: " + e.getMessage(), queryHash));
-        } finally {
+            return null; 
+        }).whenComplete((unused, throwable) -> {
             activeSearches.remove(queryHash);
-        }
+            logger.debug("Background search for query hash {} removed from active searches.", queryHash);
+        });
     }
-
+    
     /**
-     * Asynchronously starts the background search process as a CompletableFuture.
-     * @param query the search query
-     * @param maxResults maximum number of results desired
-     * @param publishedYear optional year filter
-     * @param langCode optional language filter
-     * @param orderBy optional sort order
-     * @param queryHash unique hash of the query parameters
-     * @param initialResultCount number of initial cached results
-     * @return CompletableFuture that completes when background search is scheduled/executed
+     * Asynchronously starts the background search process.
+     * This method now calls the refactored startBackgroundSearch which returns a CompletableFuture.
      */
     public CompletableFuture<Void> startBackgroundSearchAsync(String query, int maxResults, Integer publishedYear,
             String langCode, String orderBy, String queryHash, int initialResultCount) {
-        return CompletableFuture.runAsync(() -> startBackgroundSearch(query, maxResults, publishedYear, langCode, orderBy, queryHash, initialResultCount));
+        return CompletableFuture.supplyAsync(() -> 
+            startBackgroundSearch(query, maxResults, publishedYear, langCode, orderBy, queryHash, initialResultCount)
+        ).thenCompose(Function.identity()); // Flatten CompletableFuture<CompletableFuture<Void>>
     }
 
     /**
-     * Searches from a specific API source
+     * Searches from a specific API source asynchronously.
      */
-    private List<Book> searchFromSource(String query, int maxResults, String source, String queryHash) {
-        try {
+    private CompletableFuture<List<Book>> searchFromSourceAsync(String query, int maxResults, String source, String queryHash) {
+        return circuitBreakerService.isApiCallAllowed().thenComposeAsync(allowed -> {
+            if (!allowed) {
+                logger.info("Circuit breaker is open, skipping {} search for query: '{}'", source, query);
+                eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.RATE_LIMITED, 
+                    source + " rate limited", queryHash, source));
+                return CompletableFuture.completedFuture(Collections.emptyList());
+            }
+
+            Mono<List<Book>> resultsMono;
             if ("GOOGLE_BOOKS".equals(source)) {
-                if (!circuitBreakerService.isApiCallAllowed().join()) {
-                    logger.info("Circuit breaker is open, skipping Google Books search for query: '{}'", query);
-                    eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.RATE_LIMITED, 
-                        "Google Books rate limited", queryHash, source));
-                    return Collections.emptyList();
-                }
-                
                 eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.SEARCHING_GOOGLE, 
                     "Searching Google Books...", queryHash, source));
-                    
-                return bookDataOrchestrator.searchBooksTiered(query, null, maxResults, null)
-                    .block(); // Convert to blocking for @Async method
-                    
+                resultsMono = bookDataOrchestrator.searchBooksTiered(query, null, maxResults, null);
             } else if ("OPEN_LIBRARY".equals(source)) {
-                if (!circuitBreakerService.isApiCallAllowed().join()) {
-                    logger.info("Circuit breaker is open, skipping OpenLibrary search for query: '{}'", query);
-                    eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.RATE_LIMITED, 
-                        "OpenLibrary rate limited", queryHash, source));
-                    return Collections.emptyList();
-                }
-                
                 eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.SEARCHING_OPENLIBRARY, 
                     "Searching OpenLibrary...", queryHash, source));
-                    
-                return openLibraryBookDataService.searchBooksByTitle(query)
-                    .collectList()
-                    .block(); // Convert to blocking for @Async method
+                resultsMono = openLibraryBookDataService.searchBooksByTitle(query).collectList();
+            } else {
+                logger.warn("Unknown search source: {}", source);
+                resultsMono = Mono.just(Collections.emptyList());
             }
-        } catch (Exception e) {
-            logger.error("Error searching from source {}: {}", source, e.getMessage(), e);
+            
+            return resultsMono
+                .map(list -> (List<Book>) list) 
+                .toFuture() 
+                .exceptionally(e -> { 
+                    logger.error("Error searching from source {} during reactive execution: {}", source, e.getMessage(), e);
+                    eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.ERROR, 
+                        "Error searching " + source, queryHash, source));
+                    return Collections.emptyList();
+                });
+        }).exceptionally(e -> { 
+            logger.error("Error checking circuit breaker or chaining for source {}: {}", source, e.getMessage(), e);
             eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.ERROR, 
-                "Error searching " + source, queryHash, source));
-        }
-        
-        return Collections.emptyList();
+                "Error with circuit breaker for " + source, queryHash, source));
+            return Collections.emptyList();
+        });
     }
 
     /**
-     * Deduplicates and merges books using existing DuplicateBookService logic
+     * Deduplicates and merges books asynchronously using existing DuplicateBookService logic.
      */
-    private List<Book> deduplicateAndMerge(List<Book> books, Set<String> seenBookIds) {
+    private CompletableFuture<List<Book>> deduplicateAndMergeAsync(List<Book> books, Set<String> seenBookIds) {
         if (books == null || books.isEmpty()) {
-            return Collections.emptyList();
+            return CompletableFuture.completedFuture(Collections.emptyList());
         }
         
         eventPublisher.publishEvent(new SearchProgressEvent("", SearchProgressEvent.SearchStatus.DEDUPLICATING, 
             "Processing results...", "", ""));
         
-        List<Book> deduplicated = new ArrayList<>();
-        
+        List<Book> potentialBooks = new ArrayList<>();
         for (Book book : books) {
-            if (book == null || book.getId() == null) {
-                continue;
-            }
-            
-            // Check if we've already seen this book ID
-            if (seenBookIds.contains(book.getId())) {
-                continue;
-            }
-            
-            // Use existing deduplication logic
-            duplicateBookService.populateDuplicateEditionsAsync(book).join();
-            
-            seenBookIds.add(book.getId());
-            deduplicated.add(book);
-            
-            // Cache the book for future searches
-            try {
-                bookCacheFacadeService.cacheBook(book);
-            } catch (Exception e) {
-                logger.warn("Failed to cache book {}: {}", book.getId(), e.getMessage());
+            if (book != null && book.getId() != null && !seenBookIds.contains(book.getId())) {
+                potentialBooks.add(book);
             }
         }
-        
-        return deduplicated;
-    }
 
+        if (potentialBooks.isEmpty()) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+
+        List<CompletableFuture<Book>> bookProcessingFutures = new ArrayList<>();
+        for (Book book : potentialBooks) {
+            bookProcessingFutures.add(
+                duplicateBookService.populateDuplicateEditionsAsync(book) // Assuming this returns CompletableFuture<Void>
+                    .thenApplyAsync(v -> {
+                        // book object is modified by populateDuplicateEditionsAsync
+                        seenBookIds.add(book.getId()); // Add after successful processing
+                        try {
+                            bookCacheFacadeService.cacheBook(book);
+                        } catch (Exception e) {
+                            logger.warn("Failed to cache book {}: {}", book.getId(), e.getMessage());
+                        }
+                        return book; // Return the processed book
+                    })
+                    .exceptionally(ex -> {
+                        logger.warn("Error during populateDuplicateEditionsAsync for book {}: {}", book.getId(), ex.getMessage(), ex);
+                        return null; // Will be filtered out
+                    })
+            );
+        }
+
+        return CompletableFuture.allOf(bookProcessingFutures.toArray(new CompletableFuture[0]))
+            .thenApplyAsync(v -> bookProcessingFutures.stream()
+                                    .map(CompletableFuture::join) // Safe after allOf
+                                    .filter(Objects::nonNull)
+                                    .collect(Collectors.toList()));
+    }
+    
     /**
      * Generates a consistent hash for query parameters
      */

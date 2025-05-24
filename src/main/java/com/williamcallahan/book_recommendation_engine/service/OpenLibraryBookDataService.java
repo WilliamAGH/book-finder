@@ -204,8 +204,10 @@ public class OpenLibraryBookDataService {
 
             if (parsedDate == null) {
                 logger.warn("Could not parse OpenLibrary publish_date '{}' for ISBN {} with any of the attempted formats.", publishedDateStr, originalIsbn);
+            } else {
+                // Convert Date to LocalDate
+                book.setPublishedDate(parsedDate.toInstant().atZone(java.time.ZoneId.systemDefault()).toLocalDate());
             }
-            book.setPublishedDate(parsedDate);
         }
 
 

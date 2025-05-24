@@ -28,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 @Service
-@SuppressWarnings("deprecation")
 @Conditional(S3EnvironmentCondition.class)
 public class S3RetryService {
     private static final Logger logger = LoggerFactory.getLogger(S3RetryService.class);
@@ -225,8 +224,8 @@ public class S3RetryService {
                                         ObjectNode mergedQualifiers = (ObjectNode) existingQualifiers;
                                         
                                         // Copy all fields from new qualifiers to existing qualifiers
-                                        newQualifiers.fields().forEachRemaining(entry -> {
-                                            mergedQualifiers.set(entry.getKey(), entry.getValue());
+                                        newQualifiers.fieldNames().forEachRemaining(fieldName -> {
+                                            mergedQualifiers.set(fieldName, newQualifiers.get(fieldName));
                                         });
                                         
                                         // Update the merged node with merged qualifiers
