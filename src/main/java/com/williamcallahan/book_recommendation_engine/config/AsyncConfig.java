@@ -12,16 +12,27 @@
 
 package com.williamcallahan.book_recommendation_engine.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.scheduling.annotation.AsyncConfigurer;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.lang.NonNull;
 
+import java.lang.reflect.Method;
+import java.util.concurrent.Executor;
+
 @Configuration
-public class AsyncConfig implements WebMvcConfigurer {
+@EnableAsync
+public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
+
+    private static final Logger logger = LoggerFactory.getLogger(AsyncConfig.class);
 
     /**
      * Configures asynchronous request handling for Spring MVC
@@ -85,5 +96,33 @@ public class AsyncConfig implements WebMvcConfigurer {
         executor.setAwaitTerminationSeconds(60); // Wait up to 60 seconds for tasks to complete
         executor.initialize();
         return executor;
+    }
+
+    /**
+     * Primary executor for @Async methods. Named 'taskExecutor' so Spring picks it up by default.
+     */
+    @Override
+    @Bean(name = "taskExecutor")
+    public Executor getAsyncExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(10);
+        executor.setMaxPoolSize(50);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("Async-");
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * Handles uncaught exceptions thrown from @Async void methods.
+     */
+    @Override
+    public AsyncUncaughtExceptionHandler getAsyncUncaughtExceptionHandler() {
+        return new AsyncUncaughtExceptionHandler() {
+            @Override
+            public void handleUncaughtException(@NonNull Throwable ex, @NonNull Method method, @NonNull Object... params) {
+                logger.error("Uncaught async exception in method {} with params {}", method.getName(), params, ex);
+            }
+        };
     }
 }
