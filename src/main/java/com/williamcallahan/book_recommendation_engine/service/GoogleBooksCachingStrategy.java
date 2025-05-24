@@ -340,15 +340,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                         if (existingOpt.isPresent()) {
                             CachedBook existing = existingOpt.get();
                             CachedBook updated = updateCachedBook(existing, book);
-                            return Mono.fromCallable(() -> cachedBookRepository.save(updated))
-                                .subscribeOn(Schedulers.boundedElastic())
+                            return Mono.fromFuture(cachedBookRepository.saveAsync(updated))
                                 .then();
                         } else {
                             try {
                                 JsonNode rawJsonNode = objectMapper.readTree(book.getRawJsonResponse());
                                 CachedBook newCached = CachedBook.fromBook(book, rawJsonNode, null); 
-                                return Mono.fromCallable(() -> cachedBookRepository.save(newCached))
-                                    .subscribeOn(Schedulers.boundedElastic())
+                                return Mono.fromFuture(cachedBookRepository.saveAsync(newCached))
                                     .then();
                             } catch (Exception e) {
                                 logger.error("Error creating new CachedBook for ID {}: {}", bookId, e.getMessage());

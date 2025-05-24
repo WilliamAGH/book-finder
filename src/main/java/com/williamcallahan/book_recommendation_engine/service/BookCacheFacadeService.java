@@ -299,7 +299,7 @@ public class BookCacheFacadeService {
         CompletableFuture<Void> dbEviction = CompletableFuture.runAsync(() -> {
             if (dbCacheEnabled) {
                 try {
-                    cachedBookRepository.findByGoogleBooksId(id).ifPresent(cb -> cachedBookRepository.deleteById(cb.getId()));
+                    cachedBookRepository.findByGoogleBooksId(id).ifPresent(cb -> cachedBookRepository.deleteByIdAsync(cb.getId()).join());
                     logger.info("Evicted book ID {} from DB cache.", id);
                 } catch (Exception e) {
                     logger.error("Error evicting book ID {} from DB cache: {}", id, e.getMessage());

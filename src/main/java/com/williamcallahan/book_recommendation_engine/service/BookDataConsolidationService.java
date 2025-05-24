@@ -264,10 +264,15 @@ public class BookDataConsolidationService {
         logger.info("Finished iterating allKeys. Found {} conceptual books to process based on {} distinct Redis keys.", booksToConsolidate.size(), allKeys.size());
         summary.processedConceptualBooks = booksToConsolidate.size();
 
+        // Collect all async operations
+        List<CompletableFuture<Void>> allAsyncOperations = new ArrayList<>();
+        Map<String, CachedBook> booksByDefinitiveId = new HashMap<>();
+        Map<String, String> bookUuidsByDefinitiveId = new HashMap<>();
+        
+        // First pass: prepare all books and collect async operations
         for (Map.Entry<String, List<CachedBook>> entry : booksToConsolidate.entrySet()) {
             String definitiveIdForGroup = entry.getKey(); // This is ISBN13/ISBN10/GoogleID
             List<CachedBook> bookVersions = entry.getValue();
-            Set<String> originalRedisKeysForGroup = originalKeysMap.get(definitiveIdForGroup);
 
             try {
                 CachedBook finalBook = mergeBookVersions(bookVersions, definitiveIdForGroup);
@@ -286,13 +291,55 @@ public class BookDataConsolidationService {
                     logger.info("Generated new UUID {} for definitive ID {}", bookUuid, definitiveIdForGroup);
                 }
                 
-                // Ensure the book has a slug (blocking async call)
-                bookSlugService.ensureBookHasSlugAsync(finalBook).join();
+                // Store for later processing
+                booksByDefinitiveId.put(definitiveIdForGroup, finalBook);
+                bookUuidsByDefinitiveId.put(definitiveIdForGroup, bookUuid);
+                
+                // Add slug generation to async operations
+                CompletableFuture<Void> slugFuture = bookSlugService.ensureBookHasSlugAsync(finalBook)
+                    .thenAccept(result -> logger.debug("Slug ensured for book {}", bookUuid));
+                allAsyncOperations.add(slugFuture);
 
                 if (!dryRun) {
-                    // Save the consolidated book under book:UUID_V7_ID
-                    cachedBookRepository.save(finalBook); // This uses TARGET_PREFIX (book:) and finalBook.getId() (UUID)
-                    
+                    // Add save operation to async operations
+                    CompletableFuture<Void> saveFuture = cachedBookRepository.saveAsync(finalBook)
+                        .thenAccept(result -> logger.debug("Book saved with UUID {}", bookUuid));
+                    allAsyncOperations.add(saveFuture);
+                }
+
+            } catch (Exception e) {
+                logger.error("Error preparing book for consolidation for definitive ID {}: {}", definitiveIdForGroup, e.getMessage(), e);
+                summary.errors.add("Error consolidating for " + definitiveIdForGroup + ": " + e.getMessage());
+            }
+        }
+        
+        // Wait for all async operations to complete
+        CompletableFuture<Void> allOperations = CompletableFuture.allOf(
+            allAsyncOperations.toArray(new CompletableFuture[0])
+        );
+        
+        try {
+            allOperations.join(); // Wait for all async operations
+            logger.info("All async operations completed. Proceeding with synchronous cleanup.");
+        } catch (Exception e) {
+            logger.error("Error waiting for async operations to complete: {}", e.getMessage(), e);
+            summary.errors.add("Error in async operations: " + e.getMessage());
+        }
+        
+        // Second pass: perform synchronous operations after all async work is done
+        for (Map.Entry<String, List<CachedBook>> entry : booksToConsolidate.entrySet()) {
+            String definitiveIdForGroup = entry.getKey();
+            List<CachedBook> bookVersions = entry.getValue();
+            Set<String> originalRedisKeysForGroup = originalKeysMap.get(definitiveIdForGroup);
+            CachedBook finalBook = booksByDefinitiveId.get(definitiveIdForGroup);
+            String bookUuid = bookUuidsByDefinitiveId.get(definitiveIdForGroup);
+            
+            if (finalBook == null || bookUuid == null) {
+                continue; // Skip if there was an error in first pass
+            }
+
+            try {
+                if (!dryRun) {
                     // Update secondary indexes to point to the new UUID
                     updateSecondaryIndexes(finalBook);
 
@@ -310,12 +357,12 @@ public class BookDataConsolidationService {
                     logger.info("[DRY RUN] Would consolidate data for definitive ID {} into UUID {}", definitiveIdForGroup, bookUuid);
                     logger.info("[DRY RUN] Final book data: {}", objectMapper.writeValueAsString(finalBook));
                     logger.info("[DRY RUN] Would delete original keys: {}", originalRedisKeysForGroup);
-                     if (bookVersions.size() > 1) summary.recordsMerged++; else summary.recordsMigrated++;
+                    if (bookVersions.size() > 1) summary.recordsMerged++; else summary.recordsMigrated++;
                 }
 
             } catch (Exception e) {
-                logger.error("Error consolidating book for definitive ID {}: {}", definitiveIdForGroup, e.getMessage(), e);
-                summary.errors.add("Error consolidating for " + definitiveIdForGroup + ": " + e.getMessage());
+                logger.error("Error in cleanup phase for definitive ID {}: {}", definitiveIdForGroup, e.getMessage(), e);
+                summary.errors.add("Error in cleanup for " + definitiveIdForGroup + ": " + e.getMessage());
             }
         }
 

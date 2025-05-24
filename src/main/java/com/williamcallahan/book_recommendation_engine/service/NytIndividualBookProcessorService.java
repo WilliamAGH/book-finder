@@ -430,7 +430,7 @@ public class NytIndividualBookProcessorService {
                 cachedBook.setLastUpdated(java.time.Instant.now());
 
                 final CachedBook bookToSave = cachedBook;
-                return CompletableFuture.runAsync(() -> cachedBookRepository.save(bookToSave), mvcTaskExecutor);
+                return cachedBookRepository.saveAsync(bookToSave).thenRun(() -> {});
             }, mvcTaskExecutor);
         }, mvcTaskExecutor).exceptionally(e -> {
             logger.error("Error persisting book to Redis - Primary ID: {}, Title: {}: {}", primaryId, titleForLoggingPersist, e.getMessage(), e);

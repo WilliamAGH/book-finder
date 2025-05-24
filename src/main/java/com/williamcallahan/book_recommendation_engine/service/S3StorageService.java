@@ -121,7 +121,7 @@ public class S3StorageService {
         } catch (IllegalStateException e) {
             if (e.getMessage() != null && e.getMessage().contains("Connection pool shut down")) {
                 logger.warn("S3Client connection pool has been shut down. This typically occurs during application restart.");
-                return false;
+                throw new PoolShutdownException("S3Client connection pool has been shut down", e);
             }
             // Re-throw other IllegalStateExceptions as they might indicate a different issue
             throw e; 
@@ -350,7 +350,7 @@ public class S3StorageService {
             } catch (IllegalStateException e) {
                 if (e.getMessage() != null && e.getMessage().contains("Connection pool shut down")) {
                     logger.error("S3 connection pool was shut down during upload to key {}: {}", keyName, e.getMessage());
-                    throw new RuntimeException("S3 connection pool shut down during operation for key " + keyName, e);
+                    throw new PoolShutdownException("S3 connection pool shut down during operation for key " + keyName, e);
                 }
                 throw e;
             } catch (Exception e) { 
@@ -607,6 +607,7 @@ public class S3StorageService {
             } catch (IllegalStateException ise) {
                 if (ise.getMessage() != null && ise.getMessage().toLowerCase().contains("connection pool shut down")) {
                     logger.error("CRITICAL: HTTP Connection pool shutdown during S3 deleteObject for key {}: {}",key, ise.getMessage(), ise);
+                    throw new PoolShutdownException("HTTP Connection pool shutdown during S3 deleteObject for key " + key, ise);
                 } else {
                     logger.error("IllegalStateException during S3 deleteObject for key {}: {}",key, ise.getMessage(), ise);
                 }

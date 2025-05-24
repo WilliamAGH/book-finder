@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 @Service
 public class LocalDiskCoverCacheService {
 
@@ -395,33 +396,40 @@ public class LocalDiskCoverCacheService {
             return;
         }
         logger.info("Starting cleanup of old cached book covers in {} older than {} days", cacheDir, maxCacheAgeDays);
-        try {
-            long cutoffTime = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxCacheAgeDays);
-            final int[] deleteCount = {0};
+        
+        // Execute cleanup asynchronously to avoid blocking scheduler thread
+        CompletableFuture.runAsync(() -> {
+            try {
+                long cutoffTime = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxCacheAgeDays);
+                final AtomicInteger deleteCount = new AtomicInteger(0);
 
-            Files.list(cacheDir)
-                    .filter(Files::isRegularFile)
-                    .filter(p -> {
-                        try {
-                            return Files.getLastModifiedTime(p).toMillis() < cutoffTime;
-                        } catch (IOException e) {
-                            logger.warn("Could not get last modified time for {}, skipping in cleanup", p, e);
-                            return false;
-                        }
-                    })
-                    .forEach(p -> {
-                        try {
-                            Files.delete(p);
-                            deleteCount[0]++;
-                            logger.debug("Deleted old cached cover: {}", p.getFileName());
-                        } catch (IOException e) {
-                            logger.warn("Failed to delete old cached cover: {}", p.getFileName(), e);
-                        }
-                    });
-            logger.info("Completed cleanup of old cached book covers. Deleted {} files", deleteCount[0]);
-        } catch (IOException e) {
-            logger.error("Error during cleanup of cached book covers in {}", cacheDir, e);
-        }
+                Files.list(cacheDir)
+                        .filter(Files::isRegularFile)
+                        .filter(p -> {
+                            try {
+                                return Files.getLastModifiedTime(p).toMillis() < cutoffTime;
+                            } catch (IOException e) {
+                                logger.warn("Could not get last modified time for {}, skipping in cleanup", p, e);
+                                return false;
+                            }
+                        })
+                        .forEach(p -> {
+                            try {
+                                Files.delete(p);
+                                deleteCount.incrementAndGet();
+                                logger.debug("Deleted old cached cover: {}", p.getFileName());
+                            } catch (IOException e) {
+                                logger.warn("Failed to delete old cached cover: {}", p.getFileName(), e);
+                            }
+                        });
+                logger.info("Completed cleanup of old cached book covers. Deleted {} files", deleteCount.get());
+            } catch (IOException e) {
+                logger.error("Error during cleanup of cached book covers in {}", cacheDir, e);
+            }
+        }, mvcTaskExecutor).exceptionally(ex -> {
+            logger.error("Unexpected error in async cleanup task", ex);
+            return null;
+        });
     }
 
     /**
