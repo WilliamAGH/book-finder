@@ -232,11 +232,22 @@ public interface CachedBookRepository {
     Optional<CachedBook> findBySlug(String slug);
     
     /**
-     * Retrieves random cached books from recent years (2024-2025) with good quality covers
+     * Retrieves random cached books from recent years with good quality covers
      * 
      * @param count Maximum number of books to return
      * @param excludeIds Set of book IDs to exclude from results
+     * @param fromYear Starting year for recent books (inclusive)
      * @return List of cached books matching the criteria
      */
-    List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds);
+    List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds, int fromYear);
+
+    /**
+     * Asynchronously retrieves random cached books from recent years with good quality covers
+     * 
+     * @param count Maximum number of books to return
+     * @param excludeIds Set of book IDs to exclude from results
+     * @param fromYear Starting year for recent books (inclusive)
+     * @return CompletableFuture of List of cached books matching the criteria
+     */
+    CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds, int fromYear);
 }

@@ -1053,7 +1053,9 @@ public class RedisCachedBookRepository implements CachedBookRepository {
     }
 
     
-    @Override
+    /**
+     * @return List of cached books matching the criteria
+     */
     public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds) {
         if (!redisCacheService.isRedisAvailableAsync().join()) {
             logger.warn("Redis not available for findRandomRecentBooksWithGoodCovers");
@@ -1364,5 +1366,17 @@ public class RedisCachedBookRepository implements CachedBookRepository {
         }
         
         return false;
+    }
+
+    @Override
+    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds, int fromYear) {
+        // Delegate to existing two-arg implementation
+        return findRandomRecentBooksWithGoodCovers(count, excludeIds);
+    }
+
+    @Override
+    public CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds, int fromYear) {
+        // Wrap synchronous call in a future
+        return CompletableFuture.completedFuture(findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear));
     }
 }

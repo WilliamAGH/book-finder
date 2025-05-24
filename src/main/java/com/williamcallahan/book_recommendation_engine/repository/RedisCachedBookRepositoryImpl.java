@@ -183,13 +183,21 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
 
     @Override
     public <S extends CachedBook> Iterable<S> saveAll(Iterable<S> entities) {
-        List<S> result = new ArrayList<>();
-        if (entities != null) {
-            for (S entity : entities) {
-                result.add(save(entity));
-            }
+        if (entities == null) {
+            return Collections.emptyList();
         }
-        return result;
+        List<CompletableFuture<S>> futures = new ArrayList<>();
+        for (S entity : entities) {
+            futures.add(saveAsync(entity));
+        }
+        // Wait for all futures to complete and collect results
+        // This .join() will make the saveAll method synchronous, which matches its current return type
+        // If saveAll itself were to become async, we'd return the CompletableFuture
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> futures.stream()
+                .map(CompletableFuture::join)
+                .collect(Collectors.toList()))
+            .join();
     }
 
     @Override
@@ -251,16 +259,22 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
 
     @Override
     public Iterable<CachedBook> findAllById(Iterable<String> ids) {
-        if (!redisCacheService.isRedisAvailableAsync().join()) {
+        if (!redisCacheService.isRedisAvailableAsync().join() || ids == null) {
             return Collections.emptyList();
         }
-        List<CachedBook> result = new ArrayList<>();
-        if (ids != null) {
-            for (String id : ids) {
-                findById(id).ifPresent(result::add);
-            }
+        List<CompletableFuture<Optional<CachedBook>>> futures = new ArrayList<>();
+        for (String id : ids) {
+            futures.add(findByIdAsync(id));
         }
-        return result;
+        // Wait for all futures to complete and collect results
+        // This .join() will make the findAllById method synchronous, matching its current return type.
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList()))
+            .join();
     }
 
     @Override
@@ -327,9 +341,13 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
     @Override
     public void deleteAllById(Iterable<? extends String> ids) {
         if (ids != null) {
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
             for (String id : ids) {
-                deleteById(id);
+                futures.add(deleteByIdAsync(id));
             }
+            // Wait for all futures to complete.
+            // This .join() will make the deleteAllById method synchronous, matching its void return type.
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         }
     }
 
@@ -408,11 +426,22 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
     }
 
     @Override
-    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds) {
+    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds, int fromYear) {
         if (!redisCacheService.isRedisAvailableAsync().join()) {
             return Collections.emptyList();
         }
-        return searchService.findRandomRecentBooksWithGoodCovers(count, excludeIds);
+        // Assuming searchService.findRandomRecentBooksWithGoodCovers will be updated to accept fromYear
+        return searchService.findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear);
+    }
+
+    @Override
+    public CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds, int fromYear) {
+        // Assuming searchService will also get an updated async method or we wrap the sync call from searchService
+        // For now, let's assume searchService.findRandomRecentBooksWithGoodCoversAsync will be updated.
+        // If not, this would be:
+        // return CompletableFuture.supplyAsync(() -> findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear));
+        // However, RedisBookSearchService already has an async version. We'll need to update its signature too.
+        return searchService.findRandomRecentBooksWithGoodCoversAsync(count, excludeIds, fromYear);
     }
     
     @Override

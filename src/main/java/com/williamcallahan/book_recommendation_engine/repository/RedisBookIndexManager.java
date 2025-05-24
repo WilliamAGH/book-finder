@@ -36,6 +36,11 @@ public class RedisBookIndexManager {
     private static final String GOOGLE_BOOKS_ID_INDEX_PREFIX = "gbid_idx:";
     private static final long INDEX_TTL_SECONDS = 24 * 60 * 60;
 
+    /**
+     * The name of the primary RediSearch index for books.
+     */
+    public static final String PRIMARY_INDEX_NAME = "idx:books";
+
     private final JedisPooled jedisPooled;
 
     public RedisBookIndexManager(JedisPooled jedisPooled) {

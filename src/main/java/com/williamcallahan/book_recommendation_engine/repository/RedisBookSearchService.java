@@ -42,6 +42,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.springframework.scheduling.annotation.Async;
 
+// for vector search and byte manipulation
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Comparator;
+import java.util.Locale; // for toLowerCase
+
 @SuppressWarnings("unused")
 @Service
 public class RedisBookSearchService {
@@ -91,38 +97,145 @@ public class RedisBookSearchService {
      * @param limit maximum number of similar books to return
      * @return list of similar books ranked by similarity score
      */
+    // Helper method to convert float array to byte array for RediSearch
+    // RediSearch expects vector data as a blob of float32s.
+    private byte[] floatArrayToByteArray(float[] floats) {
+        if (floats == null) return new byte[0];
+        ByteBuffer byteBuffer = ByteBuffer.allocate(floats.length * Float.BYTES);
+        // Ensure Little Endian byte order, common for many systems and C-based libraries like RediSearch
+        byteBuffer.order(ByteOrder.LITTLE_ENDIAN);
+        for (float f : floats) {
+            byteBuffer.putFloat(f);
+        }
+        return byteBuffer.array();
+    }
+
+    // Helper to escape values for TAG queries.
+    // TAG fields are indexed on specific separators (default: ,).
+    // If tag values themselves contain these separators or RediSearch special characters, they need escaping.
+    private String escapeTagQuery(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        // Basic escaping for common characters in tags.
+        // Adjust based on actual tag content and RediSearch version/behavior.
+        // Common characters to escape: , . < > { } [ ] " ' : ; ! @ # $ % ^ & * ( ) - + = ~
+        // For simplicity, only a few common ones are handled here. More robust escaping might be needed.
+        return value.replace("-", "\\-")
+                    .replace(" ", "\\ ") // If tags can have spaces and are not quoted
+                    .replace(":", "\\:")
+                    .replace("{", "\\{")
+                    .replace("}", "\\}")
+                    .replace("[", "\\[")
+                    .replace("]", "\\]")
+                    .replace("|", "\\|")
+                    .replace("@", "\\@");
+    }
+
     public List<CachedBook> findSimilarBooksById(String bookId, int limit) {
         Optional<CachedBook> targetBookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
-                                                .flatMap(redisBookAccessor::deserializeBook);
+                .flatMap(redisBookAccessor::deserializeBook);
 
         if (!targetBookOpt.isPresent()) {
             logger.warn("Target book with ID {} not found for similarity search.", bookId);
             return Collections.emptyList();
         }
         CachedBook target = targetBookOpt.get();
-        RedisVector targetVec = target.getEmbedding();
+        RedisVector targetEmbedding = target.getEmbedding();
 
-        // Use streaming approach to avoid loading all books into memory
-        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
-            if (targetVec != null && targetVec.getDimension() > 0) {
-                return allBooksStream
-                        .filter(book -> !bookId.equals(book.getId()))
-                        .filter(book -> {
-                            RedisVector vec = book.getEmbedding();
-                            return vec != null && vec.getDimension() == targetVec.getDimension();
-                        })
-                        .map(book -> new AbstractMap.SimpleEntry<>(book, targetVec.cosineSimilarity(book.getEmbedding())))
-                        .sorted((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()))
-                        .limit(limit)
-                        .map(Map.Entry::getKey)
-                        .collect(Collectors.toList());
+        List<CachedBook> similarBooks = new ArrayList<>();
+
+        // Attempt vector search if embedding is valid
+        if (targetEmbedding != null && targetEmbedding.getValues() != null && targetEmbedding.getDimension() > 0) {
+            logger.debug("Attempting vector similarity search for book ID: {}", bookId);
+            try {
+                byte[] vectorBlob = floatArrayToByteArray(targetEmbedding.getValues());
+                // KNN search query: find K nearest neighbors to the vector $BLOB in the @embedding field
+                // Exclude the source document itself by checking ID.
+                // The $ indicates we want the full document JSON. 'dist' is the distance.
+                String knnQueryString = String.format(Locale.ROOT, "*=>[KNN %d @embedding $VEC AS dist IF @id != \"%s\"]", limit + 1, escapeTagQuery(bookId));
+
+                Query query = new Query(knnQueryString)
+                        .addParam("VEC", vectorBlob)
+                        .returnFields("dist", "$") // $ is the root JSON object
+                        .setSortBy("dist", true) // true for ASC (closer is better)
+                        .dialect(2); // Dialect 2+ for KNN
+
+                SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
+
+                for (Document doc : searchResult.getDocuments()) {
+                    String json = doc.getString("$");
+                    // String docId = doc.getId().substring(CACHED_BOOK_PREFIX.length()); // Assuming key is "book:ID"
+                    // if (bookId.equals(docId)) continue; // Double check exclusion if IF clause not fully reliable or for older Redis versions
+
+                    if (json != null) {
+                        redisBookAccessor.deserializeBook(json).ifPresent(similarBooks::add);
+                    }
+                    if (similarBooks.size() >= limit) break;
+                }
+                logger.info("Found {} similar books using vector search for book ID: {}", similarBooks.size(), bookId);
+                if (!similarBooks.isEmpty()) {
+                    return similarBooks; // Already sorted by distance by RediSearch
+                }
+            } catch (Exception e) {
+                logger.error("Error during vector similarity search for book ID {}: {}. Falling back to attribute search.", bookId, e.getMessage(), e);
+                // Clear any partial results from failed vector search
+                similarBooks.clear();
             }
-            return allBooksStream
-                    .filter(book -> !bookId.equals(book.getId()))
-                    .filter(book -> hasSimilarAttributes(target, book))
-                    .limit(limit)
-                    .collect(Collectors.toList());
         }
+
+        // Fallback to attribute-based search if vector search fails or no embeddings
+        // Or if vector search returned no results and we still want to try attribute based.
+        if (similarBooks.isEmpty()) {
+            logger.debug("Attempting attribute-based similarity search for book ID: {}", bookId);
+            StringBuilder attributeQuery = new StringBuilder();
+            List<String> conditions = new ArrayList<>();
+
+            if (target.getAuthors() != null && !target.getAuthors().isEmpty()) {
+                String authorsCondition = target.getAuthors().stream()
+                        .map(this::escapeTagQuery)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.joining("|"));
+                if (!authorsCondition.isEmpty()) {
+                    conditions.add("@author:{" + authorsCondition + "}");
+                }
+            }
+
+            if (target.getCategories() != null && !target.getCategories().isEmpty()) {
+                String categoriesCondition = target.getCategories().stream()
+                        .map(this::escapeTagQuery)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.joining("|"));
+                if (!categoriesCondition.isEmpty()) {
+                    conditions.add("@category:{" + categoriesCondition + "}");
+                }
+            }
+
+            if (!conditions.isEmpty()) {
+                attributeQuery.append("(").append(String.join(" | ", conditions)).append(")"); // Books matching any of target's authors OR categories
+                attributeQuery.append(" (-@id:{" + escapeTagQuery(bookId) + "})"); // Exclude the target book itself
+
+                Query query = new Query(attributeQuery.toString())
+                        .limit(0, limit)
+                        .returnFields("$");
+
+                try {
+                    SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
+                    for (Document doc : searchResult.getDocuments()) {
+                        String json = doc.getString("$");
+                        if (json != null) {
+                            redisBookAccessor.deserializeBook(json).ifPresent(similarBooks::add);
+                        }
+                    }
+                    logger.info("Found {} similar books using attribute search for book ID: {}", similarBooks.size(), bookId);
+                } catch (Exception e) {
+                    logger.error("Error during attribute-based similarity search for book ID {}: {}", bookId, e.getMessage(), e);
+                }
+            } else {
+                logger.warn("No attributes (authors/categories) available for attribute-based search for book ID: {}", bookId);
+            }
+        }
+        return similarBooks;
     }
 
     /**
@@ -187,7 +300,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 100);
             
-            SearchResult searchResult = safeFtSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
             List<CachedBook> results = new ArrayList<>();
             
             for (Document doc : searchResult.getDocuments()) {
@@ -208,17 +321,14 @@ public class RedisBookSearchService {
                 logger.debug("Found {} books using RediSearch for title: '{}'", results.size(), title);
                 return results;
             }
+            // If RediSearch returns no results, or if an exception occurred (handled by safeFtSearch returning empty),
+            // return empty list. Do not fall back to streamAllBooks.
+            logger.debug("RediSearch found no results for title '{}' or an error occurred, returning empty list.", title);
+            return Collections.emptyList();
         } catch (Exception e) {
-            logger.warn("RediSearch failed for title '{}', falling back to streaming scan: {}", title, e.getMessage());
-        }
-        
-        // Fallback to streaming approach if RediSearch fails
-        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
-            return allBooksStream
-                    .filter(book -> !idToExclude.equals(book.getId()))
-                    .filter(book -> book.getTitle() != null &&
-                                  book.getTitle().toLowerCase().equals(title.toLowerCase()))
-                    .collect(Collectors.toList());
+            // This catch block is for unexpected errors not caught by safeFtSearch, though unlikely.
+            logger.error("Unexpected error in findByTitleIgnoreCaseAndIdNot for title '{}': {}", title, e.getMessage(), e);
+            return Collections.emptyList();
         }
     }
     
@@ -286,8 +396,8 @@ public class RedisBookSearchService {
                 .limit(0, 1);
 
         try {
-            logger.debug("Executing RediSearch query on idx:books for slug query: @slug:{{}}", escapedSlug);
-            SearchResult searchResult = safeFtSearch("idx:books", query);
+            logger.debug("Executing RediSearch query on {} for slug query: @slug:{{}}", RedisBookIndexManager.PRIMARY_INDEX_NAME, escapedSlug);
+            SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -307,17 +417,18 @@ public class RedisBookSearchService {
      *
      * @param count maximum number of books to return
      * @param excludeIds set of book IDs to exclude from results
+     * @param fromYear Starting year for recent books (inclusive)
      * @return randomized list of recent books with quality covers
      */
-    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds) {
-        List<CachedBook> searchResults = tryRedisSearchQueryForRecentGoodCovers(count, excludeIds);
+    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds, int fromYear) {
+        List<CachedBook> searchResults = tryRedisSearchQueryForRecentGoodCovers(count, excludeIds, fromYear);
         if (!searchResults.isEmpty()) {
-            logger.info("Found {} books using RediSearch for recent good covers.", searchResults.size());
+            logger.info("Found {} books using RediSearch for recent good covers from year {}.", searchResults.size(), fromYear);
             return searchResults;
         }
         
-        logger.info("RediSearch query returned no results for recent good covers, using fallback scan method.");
-        return findRandomRecentBooksFallback(count, excludeIds);
+        logger.info("RediSearch query returned no results for recent good covers. Not falling back to scan method.");
+        return Collections.emptyList(); // Do not fall back to findRandomRecentBooksFallback
     }
     
     /**
@@ -326,14 +437,15 @@ public class RedisBookSearchService {
      *
      * @param count desired number of books
      * @param excludeIds book IDs to exclude
+     * @param fromYear Starting year for recent books (inclusive)
      * @return list of books matching search criteria
      */
-    private List<CachedBook> tryRedisSearchQueryForRecentGoodCovers(int count, Set<String> excludeIds) {
+    private List<CachedBook> tryRedisSearchQueryForRecentGoodCovers(int count, Set<String> excludeIds, int fromYear) {
         try {
-            // Get current and next year dynamically
-            int currentYear = LocalDate.now().getYear();
-            int nextYear = currentYear + 1;
-            String yearQuery = String.format("(@publishedDate:{%d} | @publishedDate:{%d})", currentYear, nextYear);
+            // Use fromYear and the year after for the range
+            int endYear = fromYear + 1;
+            // Use the numeric publishedYear field for range query
+            String yearQuery = String.format(Locale.ROOT, "(@publishedYear:[%d %d])", fromYear, endYear);
             
             // Build include patterns from configuration
             String includePatterns = Arrays.stream(QUALITY_COVER_PATTERNS)
@@ -352,26 +464,34 @@ public class RedisBookSearchService {
             
             List<CachedBook> results = new ArrayList<>();
             try {
-                SearchResult searchResult = safeFtSearch("idx:books", searchQuery);
+                SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, searchQuery);
                 results.addAll(processSearchResultsForRecentGoodCovers(searchResult, count, excludeIds, "book:"));
                 if (results.size() >= count) {
                     return results.stream().limit(count).collect(Collectors.toList());
                 }
             } catch (Exception e) {
-                logger.debug("idx:books search failed for recent good covers: {}", e.getMessage());
+                logger.debug("{} search failed for recent good covers: {}", RedisBookIndexManager.PRIMARY_INDEX_NAME, e.getMessage());
             }
             
-            if (results.size() < count) {
-                try {
-                    SearchResult searchResultVector = safeFtSearch("idx:cached_books_vector", searchQuery);
-                    results.addAll(processSearchResultsForRecentGoodCovers(searchResultVector, count - results.size(), excludeIds, "book:"));
-                    if (results.size() >= count) {
-                        return results.stream().limit(count).collect(Collectors.toList());
-                    }
-                } catch (Exception e) {
-                    logger.debug("idx:cached_books_vector search failed for recent good covers: {}", e.getMessage());
-                }
-            }
+            // The schema 'optimized_redisearch_schema.redis' only defines 'idx:books'.
+            // If 'idx:cached_books_vector' was a separate, older index for vectors,
+            // and now 'idx:books' includes vectors, this second search might be redundant or incorrect.
+            // For now, assuming 'idx:books' is the sole, consolidated index as per the optimized schema.
+            // If 'idx:cached_books_vector' is still relevant and distinct, this logic might need to be preserved.
+            // Based on the provided optimized schema, 'idx:books' contains the vector field.
+            // Thus, searching a different index for the same query might not be intended unless it has different data.
+            // Removing the second search against 'idx:cached_books_vector' for now to align with the single optimized index.
+            // if (results.size() < count) {
+            //     try {
+            //         SearchResult searchResultVector = safeFtSearch("idx:cached_books_vector", searchQuery); // Potentially change this if it's also PRIMARY_INDEX_NAME or remove
+            //         results.addAll(processSearchResultsForRecentGoodCovers(searchResultVector, count - results.size(), excludeIds, "book:"));
+            //         if (results.size() >= count) {
+            //             return results.stream().limit(count).collect(Collectors.toList());
+            //         }
+            //     } catch (Exception e) {
+            //         logger.debug("idx:cached_books_vector search failed for recent good covers: {}", e.getMessage());
+            //     }
+            // }
             return results.stream().limit(count).collect(Collectors.toList());
             
         } catch (Exception e) {
@@ -436,22 +556,8 @@ public class RedisBookSearchService {
      * @param excludeIds book IDs to exclude
      * @return filtered list of recent books with quality covers
      */
-    private List<CachedBook> findRandomRecentBooksFallback(int count, Set<String> excludeIds) {
-        logger.info("Using streaming fallback method for finding random recent books with good covers.");
-        List<CachedBook> candidateBooks = new ArrayList<>();
-        int maxCandidates = count * 5; // Collect more candidates than needed for better randomness
-        
-        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
-            candidateBooks = allBooksStream
-                    .filter(book -> excludeIds == null || !excludeIds.contains(book.getId()))
-                    .filter(book -> isRecentPublication(book) && hasHighQualityCover(book) && !isBestseller(book))
-                    .limit(maxCandidates) // Limit early to control memory usage
-                    .collect(Collectors.toList());
-        }
-        
-        Collections.shuffle(candidateBooks);
-        return candidateBooks.stream().limit(count).collect(Collectors.toList());
-    }
+    // findRandomRecentBooksFallback is no longer called, so it can be removed.
+    // private List<CachedBook> findRandomRecentBooksFallback(int count, Set<String> excludeIds) { ... }
     
     /**
      * Asynchronous version of findRandomRecentBooksWithGoodCovers
@@ -461,12 +567,12 @@ public class RedisBookSearchService {
      * - logs and propagates exceptions correctly
      */
     @Async
-    public CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds) {
+    public CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds, int fromYear) {
         try {
-            List<CachedBook> result = findRandomRecentBooksWithGoodCovers(count, excludeIds);
+            List<CachedBook> result = findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear);
             return CompletableFuture.completedFuture(result);
         } catch (Exception ex) {
-            logger.error("Async findRandomRecentBooksWithGoodCovers failed for count {}", count, ex);
+            logger.error("Async findRandomRecentBooksWithGoodCovers failed for count {} fromYear {}", count, fromYear, ex);
             CompletableFuture<List<CachedBook>> failed = new CompletableFuture<>();
             failed.completeExceptionally(ex);
             return failed;
@@ -590,7 +696,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 1);
             
-            SearchResult searchResult = safeFtSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -602,8 +708,10 @@ public class RedisBookSearchService {
             logger.debug("RediSearch failed for ISBN-13 '{}', falling back to scan: {}", isbn13, e.getMessage());
         }
         
-        // Fallback to streaming scan
-        return findByIdentifierFallback("ISBN_13", isbn13);
+        // Fallback to streaming scan removed. If RediSearch fails (handled by safeFtSearch)
+        // or finds nothing, return Optional.empty().
+        logger.debug("RediSearch found no result for ISBN-13 '{}' or an error occurred.", isbn13);
+        return Optional.empty();
     }
     
     /**
@@ -625,7 +733,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 1);
             
-            SearchResult searchResult = safeFtSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -637,8 +745,9 @@ public class RedisBookSearchService {
             logger.debug("RediSearch failed for ISBN-10 '{}', falling back to scan: {}", isbn10, e.getMessage());
         }
         
-        // Fallback to streaming scan
-        return findByIdentifierFallback("ISBN_10", isbn10);
+        // Fallback to streaming scan removed.
+        logger.debug("RediSearch found no result for ISBN-10 '{}' or an error occurred.", isbn10);
+        return Optional.empty();
     }
     
     /**
@@ -660,7 +769,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 1);
             
-            SearchResult searchResult = safeFtSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch(RedisBookIndexManager.PRIMARY_INDEX_NAME, query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -672,8 +781,9 @@ public class RedisBookSearchService {
             logger.debug("RediSearch failed for Google Books ID '{}', falling back to scan: {}", googleBooksId, e.getMessage());
         }
         
-        // Fallback to streaming scan
-        return findByGoogleBooksIdFallback(googleBooksId);
+        // Fallback to streaming scan removed.
+        logger.debug("RediSearch found no result for Google Books ID '{}' or an error occurred.", googleBooksId);
+        return Optional.empty();
     }
     
     /**
@@ -684,23 +794,8 @@ public class RedisBookSearchService {
      * @param identifierValue The identifier value to search for
      * @return Optional containing the book if found
      */
-    private Optional<CachedBook> findByIdentifierFallback(String identifierType, String identifierValue) {
-        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
-            String idType = identifierType.toUpperCase();
-            switch (idType) {
-                case "ISBN_13":
-                    return allBooksStream
-                            .filter(book -> identifierValue.equals(book.getIsbn13()))
-                            .findFirst();
-                case "ISBN_10":
-                    return allBooksStream
-                            .filter(book -> identifierValue.equals(book.getIsbn10()))
-                            .findFirst();
-                default:
-                    return Optional.empty();
-            }
-        }
-    }
+    // findByIdentifierFallback is no longer called, so it can be removed.
+    // private Optional<CachedBook> findByIdentifierFallback(String identifierType, String identifierValue) { ... }
     
     /**
      * Fallback method to find book by Google Books ID when RediSearch is unavailable
@@ -708,13 +803,8 @@ public class RedisBookSearchService {
      * @param googleBooksId The Google Books ID to search for
      * @return Optional containing the book if found
      */
-    private Optional<CachedBook> findByGoogleBooksIdFallback(String googleBooksId) {
-        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
-            return allBooksStream
-                    .filter(book -> googleBooksId.equals(book.getGoogleBooksId()))
-                    .findFirst();
-        }
-    }
+    // findByGoogleBooksIdFallback is no longer called, so it can be removed.
+    // private Optional<CachedBook> findByGoogleBooksIdFallback(String googleBooksId) { ... }
     
     /**
      * Cleans and deserializes book JSON data, handling various nesting structures
@@ -796,60 +886,6 @@ public class RedisBookSearchService {
     public Optional<BookSearchResult> findExistingBook(String isbn13, String isbn10, String googleBooksId) {
         long startTime = System.currentTimeMillis();
         logger.debug("REDIS_DEBUG: Starting findExistingBook search for ISBN-13: {}, ISBN-10: {}, Google ID: {}", isbn13, isbn10, googleBooksId);
-        
-        // TEMPORARILY SKIP SECONDARY INDEX LOOKUPS FOR DEBUGGING
-        // Try secondary index lookup first
-        /*
-        if (isbn13 != null && !isbn13.isEmpty()) {
-            long step1Start = System.currentTimeMillis();
-            Optional<String> bookIdOpt = indexManager.getBookIdByIsbn13(isbn13);
-            long step1End = System.currentTimeMillis();
-            logger.debug("REDIS_DEBUG: ISBN-13 index lookup took {}ms", (step1End - step1Start));
-            if (bookIdOpt.isPresent()) {
-                String bookId = bookIdOpt.get();
-                Optional<CachedBook> bookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
-                    .flatMap(redisBookAccessor::deserializeBook);
-                if (bookOpt.isPresent()) {
-                    CachedBook book = bookOpt.get();
-                    String redisKey = "book:" + book.getId();
-                    logger.debug("Found book by ISBN-13 secondary index: {} with key: {}", isbn13, redisKey);
-                    return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
-                }
-            }
-        }
-        
-        // Try ISBN-10 secondary index lookup
-        if (isbn10 != null && !isbn10.isEmpty()) {
-            Optional<String> bookIdOpt2 = indexManager.getBookIdByIsbn10(isbn10);
-            if (bookIdOpt2.isPresent()) {
-                String bookId = bookIdOpt2.get();
-                Optional<CachedBook> bookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
-                    .flatMap(redisBookAccessor::deserializeBook);
-                if (bookOpt.isPresent()) {
-                    CachedBook book = bookOpt.get();
-                    String redisKey = "book:" + book.getId();
-                    logger.debug("Found book by ISBN-10 secondary index: {} with key: {}", isbn10, redisKey);
-                    return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
-                }
-            }
-        }
-
-        // Try Google Books ID secondary index lookup
-        if (googleBooksId != null && !googleBooksId.isEmpty()) {
-            Optional<String> bookIdOpt3 = indexManager.getBookIdByGoogleBooksId(googleBooksId);
-            if (bookIdOpt3.isPresent()) {
-                String bookId = bookIdOpt3.get();
-                Optional<CachedBook> bookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
-                    .flatMap(redisBookAccessor::deserializeBook);
-                if (bookOpt.isPresent()) {
-                    CachedBook book = bookOpt.get();
-                    String redisKey = "book:" + book.getId();
-                    logger.debug("Found book by Google Books ID secondary index: {} with key: {}", googleBooksId, redisKey);
-                    return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
-                }
-            }
-        }
-        */
         
         // Try ISBN-13 first (most reliable)
         if (isbn13 != null && !isbn13.isEmpty()) {

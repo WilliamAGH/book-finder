@@ -240,9 +240,20 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
      * @param excludeIds Set of book IDs to exclude from results
      * @return Empty list
      */
-    @Override
     public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds) {
         logger.debug("NoOp: findRandomRecentBooksWithGoodCovers called, returning empty list.");
         return Collections.emptyList();
+    }
+
+    @Override
+    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds, int fromYear) {
+        // Delegate to two-arg version (noop returns empty list)
+        return findRandomRecentBooksWithGoodCovers(count, excludeIds);
+    }
+
+    @Override
+    public CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds, int fromYear) {
+        // Delegate to synchronous version
+        return CompletableFuture.completedFuture(findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear));
     }
 }
