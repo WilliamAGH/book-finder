@@ -4,7 +4,7 @@
  * @author William Callahan
  *
  * Features:
- * - Migrates Google Books data from S3 to Redis JSON
+ * - Migrates Google Books data from S3 JSON to Redis JSON
  * - Merges NYT Bestseller data with existing book records
  * - Uses ISBN-13 as primary identifier for books
  * - Handles fallback to Google Books ID when ISBN is unavailable
@@ -23,9 +23,7 @@ import com.williamcallahan.book_recommendation_engine.util.BookDataFlattener;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
-import com.williamcallahan.book_recommendation_engine.repository.RedisBookSearchService;
 import com.williamcallahan.book_recommendation_engine.repository.RedisBookIndexManager;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,6 +33,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.core.task.AsyncTaskExecutor;
+import com.williamcallahan.book_recommendation_engine.repository.RedisBookSearchService;
+import com.williamcallahan.book_recommendation_engine.service.BookDeduplicationService;
 
 import java.io.InputStream;
 import java.io.PushbackInputStream;
@@ -56,6 +56,7 @@ import java.util.function.Supplier;
 import java.util.stream.IntStream;
 import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeoutException;
 import java.time.Instant;
 import java.time.Duration;
 import java.util.Collections;
@@ -71,7 +72,7 @@ public class JsonS3ToRedisService {
     // Reliability configuration
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final long INITIAL_RETRY_DELAY_MS = 1000;
-    private static final int BATCH_SIZE = 10;
+    private static final int BATCH_SIZE = 5; // Reduced from 10 to 5
     private static final int CIRCUIT_BREAKER_THRESHOLD = 10;
     private static final Duration CIRCUIT_BREAKER_RESET_TIMEOUT = Duration.ofMinutes(5);
 
@@ -81,6 +82,7 @@ public class JsonS3ToRedisService {
     private final CachedBookRepository cachedBookRepository;
     private final RedisBookSearchService redisBookSearchService;
     private final RedisBookIndexManager indexManager;
+    private final BookDeduplicationService deduplicationService;
     private final AsyncTaskExecutor migrationTaskExecutor;
 
     // S3 paths will be accessed via s3Service getters
@@ -100,12 +102,14 @@ public class JsonS3ToRedisService {
                                 CachedBookRepository cachedBookRepository,
                                 RedisBookSearchService redisBookSearchService,
                                 RedisBookIndexManager indexManager,
-                                @Qualifier("migrationTaskExecutor") AsyncTaskExecutor migrationTaskExecutor) {
+                                @Qualifier("migrationTaskExecutor") AsyncTaskExecutor migrationTaskExecutor,
+                                BookDeduplicationService deduplicationService) {
         this.s3Service = s3Service;
         this.redisJsonService = redisJsonService;
         this.objectMapper = objectMapper;
         this.cachedBookRepository = cachedBookRepository;
         this.redisBookSearchService = redisBookSearchService;
+        this.deduplicationService = deduplicationService;
         this.indexManager = indexManager;
         this.migrationTaskExecutor = migrationTaskExecutor;
         this.googleBooksPrefix = s3Service.getGoogleBooksPrefix();
@@ -197,18 +201,18 @@ public class JsonS3ToRedisService {
                             }
                             
                             // Extract identifiers for deduplication
-                            String s3Isbn13 = extractIsbn13(unifiedDocument);
-                            String s3Isbn10 = extractIsbn10(unifiedDocument);
-                            String s3GoogleId = extractGoogleBooksId(unifiedDocument);
-                            String title = extractTitle(unifiedDocument);
+                            String s3Isbn13 = UniversalBookDataExtractor.extractIsbn13(unifiedDocument);
+                            String s3Isbn10 = UniversalBookDataExtractor.extractIsbn10(unifiedDocument);
+                            String s3GoogleId = UniversalBookDataExtractor.extractGoogleBooksId(unifiedDocument);
+                            String title = UniversalBookDataExtractor.extractTitle(unifiedDocument);
 
                             String finalRecordUuid;
                             String redisKey;
                             Map<String, Object> existingData = null;
                             
-                            // Use the enhanced RedisBookSearchService to find existing records
+                            // Use the centralized deduplication service to find existing records
                             Optional<RedisBookSearchService.BookSearchResult> existingRecordOpt = 
-                                redisBookSearchService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
+                                deduplicationService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
                             
                             if (existingRecordOpt.isPresent()) {
                                 RedisBookSearchService.BookSearchResult existingRecord = existingRecordOpt.get();
@@ -336,6 +340,7 @@ public class JsonS3ToRedisService {
      * Process a single batch of files in parallel
      */
     private CompletableFuture<Void> processBatchAsync(List<String> batch) {
+        final long batchStart = System.currentTimeMillis();
         int batchNumber = (migrationProgress.getProcessed() + migrationProgress.getFailed() + migrationProgress.getSkipped()) / BATCH_SIZE + 1;
         log.info("Processing batch {} ({} files): {}", batchNumber, batch.size(), 
                 batch.stream().limit(3).collect(Collectors.joining(", ")) + 
@@ -347,7 +352,8 @@ public class JsonS3ToRedisService {
         
         return CompletableFuture.allOf(fileFutures.toArray(new CompletableFuture[0]))
                 .thenRun(() -> {
-                    log.info("Completed batch {} - Progress: {}/{} files", batchNumber, 
+                    long elapsed = System.currentTimeMillis() - batchStart;
+                    log.info("Completed batch {} in {}ms - Progress: {}/{} files", batchNumber, elapsed, 
                             migrationProgress.getProcessed() + migrationProgress.getFailed() + migrationProgress.getSkipped(),
                             migrationProgress.getTotal());
                     migrationProgress.logProgress();
@@ -358,16 +364,22 @@ public class JsonS3ToRedisService {
      * Process a single file asynchronously with retry
      */
     private CompletableFuture<Void> processFileAsync(String s3Key) {
-        return CompletableFuture.runAsync(() -> {
+        CompletableFuture<Void> cf = CompletableFuture.runAsync(() -> {
             try {
                 processGoogleBooksFile(s3Key);
             } catch (Exception e) {
-                log.error("Failed to process file {}: {}", s3Key, e.getMessage());
+                log.error("Failed to process file {}: {}", s3Key, e.getMessage(), e);
                 migrationProgress.incrementFailed();
                 errorAggregator.addError("processFile", s3Key, e.getClass().getSimpleName(), e.getMessage(), e);
-                // Don't propagate error to allow other files to continue
             }
         }, migrationTaskExecutor);
+        return cf.orTimeout(60, TimeUnit.SECONDS)
+            .exceptionally(ex -> {
+                log.error("[PROCESS_FILE_TIMEOUT] File {} timed out: {}", s3Key, ex.getMessage(), ex);
+                migrationProgress.incrementFailed();
+                errorAggregator.addError("processFileTimeout", s3Key, ex.getClass().getSimpleName(), ex.getMessage(), ex);
+                return null;
+            });
     }
     
     /**
@@ -383,8 +395,12 @@ public class JsonS3ToRedisService {
      * Process a single Google Books file
      */
     private void processGoogleBooksFile(String s3Key) {
-        log.info("Processing S3 file: {}", s3Key);
-        try (InputStream rawIs = s3Service.getObjectContent(s3Key).join()) {
+        log.info("Starting processing for S3 file: {}", s3Key);
+        long fileProcessingStartTime = System.currentTimeMillis();
+        
+        CompletableFuture<InputStream> s3ObjectFuture = s3Service.getObjectContent(s3Key);
+        try (InputStream rawIs = s3ObjectFuture.get(45, TimeUnit.SECONDS)) { // Added 45s timeout
+            log.info("[S3_GET_SUCCESS] Fetched S3 object {} in {}ms", s3Key, System.currentTimeMillis() - fileProcessingStartTime);
             PushbackInputStream is = new PushbackInputStream(rawIs, 1);
             int firstByte = is.read();
             if (firstByte == -1) {
@@ -395,116 +411,136 @@ public class JsonS3ToRedisService {
             is.unread(firstByte);
             
             String destinationS3Key = null;
+            long parseStartTime = System.currentTimeMillis();
             Map.Entry<InputStream, Boolean> streamEntry = handleCompressedInputStream(is, s3Key);
             try (InputStream streamToRead = streamEntry.getKey()) {
                 Map<String, Object> bookData = objectMapper.readValue(streamToRead, new TypeReference<Map<String, Object>>() {});
+                log.info("[JSON_PARSE_SUCCESS] Parsed JSON for S3 object {} in {}ms", s3Key, System.currentTimeMillis() - parseStartTime);
 
                 String s3Isbn13 = UniversalBookDataExtractor.extractIsbn13(bookData);
                 String s3Isbn10 = UniversalBookDataExtractor.extractIsbn10(bookData);
                 String s3GoogleId = UniversalBookDataExtractor.extractGoogleBooksId(bookData);
 
+                log.info("[EXTRACT_IDS_SUCCESS] Extracted identifiers for S3 object {}: ISBN13={}, ISBN10={}, GoogleID={}", s3Key, s3Isbn13, s3Isbn10, s3GoogleId);
+
                 String finalRecordUuid;
                 String redisKey;
                 Map<String, Object> existingData = null;
                 
-                // Direct synchronous search for existing records with timing
-                log.info("REDIS_DEBUG: Starting search for existing book with ISBN-13: {}, ISBN-10: {}, Google ID: {}", s3Isbn13, s3Isbn10, s3GoogleId);
+                log.info("[REDIS_LOOKUP_START] Starting findExistingBook search for S3 object {}: ISBN13={}, ISBN10={}, GoogleID={}", s3Key, s3Isbn13, s3Isbn10, s3GoogleId);
                 long searchStartTime = System.currentTimeMillis();
-                Optional<RedisBookSearchService.BookSearchResult> existingRecordOpt;
-                try {
-                    existingRecordOpt = redisBookSearchService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
-                } catch (Exception e) {
-                    log.warn("Redis search failed for identifiers (ISBN-13: {}, ISBN-10: {}, Google ID: {}): {}", 
-                            s3Isbn13, s3Isbn10, s3GoogleId, e.getMessage());
-                    existingRecordOpt = Optional.empty();
+                Optional<String> bookIdOpt = Optional.empty();
+
+                if (s3Isbn13 != null && !s3Isbn13.isEmpty()) {
+                    bookIdOpt = indexManager.getBookIdByIsbn13(s3Isbn13);
+                }
+
+                if (!bookIdOpt.isPresent() && s3Isbn10 != null && !s3Isbn10.isEmpty()) {
+                    bookIdOpt = indexManager.getBookIdByIsbn10(s3Isbn10);
+                }
+
+                if (!bookIdOpt.isPresent() && s3GoogleId != null && !s3GoogleId.isEmpty()) {
+                    bookIdOpt = indexManager.getBookIdByGoogleBooksId(s3GoogleId);
                 }
                 long searchEndTime = System.currentTimeMillis();
-                log.info("REDIS_DEBUG: Completed search in {}ms. Found existing record: {}", 
-                         (searchEndTime - searchStartTime), existingRecordOpt.isPresent());
-                
-                if (existingRecordOpt.isPresent()) {
-                    RedisBookSearchService.BookSearchResult existingRecord = existingRecordOpt.get();
-                    finalRecordUuid = existingRecord.getUuid();
-                    redisKey = existingRecord.getRedisKey();
-                    
-                    // Convert CachedBook to Map for merging
-                    CachedBook existingBook = existingRecord.getBook();
-                    existingData = objectMapper.convertValue(existingBook, new TypeReference<Map<String, Object>>() {});
-                    
-                    String bookTitle = UniversalBookDataExtractor.extractTitle(bookData);
-                    log.info("Book '{}' found with existing UUID: {} (ISBN-13: {}, ISBN-10: {}, Google ID: {})", 
-                            bookTitle, finalRecordUuid, s3Isbn13, s3Isbn10, s3GoogleId);
-                    
-                    // Ensure the UUID in the data matches the key
-                    if (existingData != null) {
-                        existingData.put("id", finalRecordUuid);
+                log.info("[REDIS_LOOKUP_END] Completed findExistingBook search for S3 object {} in {}ms. Found: {}", s3Key, (searchEndTime - searchStartTime), bookIdOpt.isPresent());
+
+                if (bookIdOpt.isPresent()) {
+                    String bookId = bookIdOpt.get();
+                    redisKey = "book:" + bookId;
+                    if (redisJsonService.keyExists(redisKey)) {
+                        log.info("[REDIS_KEY_EXISTS] Found existing book by index lookup for S3 object {}. Key: {}", s3Key, redisKey);
+                        finalRecordUuid = bookId;
+                    } else {
+                        log.warn("[REDIS_KEY_MISSING] Index lookup found bookId {} for S3 object {} but key {} does not exist in Redis. Creating new UUID.", bookId, s3Key, redisKey);
+                        finalRecordUuid = UuidUtil.getTimeOrderedEpoch().toString(); // Create new UUID if indexed key is missing
+                        redisKey = "book:" + finalRecordUuid;
                     }
                 } else {
+                    log.info("[REDIS_NEW_BOOK] No existing book found in index for S3 object {}. Assigning new UUID.", s3Key);
                     finalRecordUuid = UuidUtil.getTimeOrderedEpoch().toString();
                     redisKey = "book:" + finalRecordUuid;
-                    String bookTitle = UniversalBookDataExtractor.extractTitle(bookData);
-                    log.info("Book '{}' assigned new UUID: {} (ISBN-13: {}, ISBN-10: {}, Google ID: {})", 
-                            bookTitle, finalRecordUuid, s3Isbn13, s3Isbn10, s3GoogleId);
-                    existingData = null;
                 }
 
+                // Book found by index or new book
                 Map<String, Object> mergedMap;
-                if (existingData != null) {
-                    // Merge existing data with new data from S3
-                    mergedMap = mergeMaps(existingData, bookData);
-                    log.debug("Merged existing record with new S3 data for key {}", redisKey);
+                long redisGetStartTime = System.currentTimeMillis();
+                if (redisJsonService.keyExists(redisKey) && bookIdOpt.isPresent()) { // Only try to get if it was found via index and key exists
+                    String existingJson = redisJsonService.jsonGet(redisKey, "$");
+                    log.info("[REDIS_GET_EXISTING_DATA] Attempted to get existing JSON for S3 object {} (key {}) in {}ms. Found: {}", s3Key, redisKey, (System.currentTimeMillis() - redisGetStartTime), (existingJson != null && !existingJson.isEmpty()));
+                    if (existingJson != null && !existingJson.isEmpty()) {
+                        existingData = objectMapper.readValue(existingJson, new TypeReference<Map<String, Object>>() {});
+                        mergedMap = mergeMaps(existingData, bookData); // mergeMaps should be robust
+                        log.info("Book '{}' (S3 object {}) - UUID: {} - Action: UPDATED - Redis Key: {}", 
+                            UniversalBookDataExtractor.extractTitle(bookData), s3Key, finalRecordUuid, redisKey);
+                    } else {
+                        mergedMap = bookData;
+                        log.warn("[REDIS_GET_EMPTY] Existing book for S3 object {} found in index (key {}) but no JSON data retrieved. Treating as new.", s3Key, redisKey);
+                        log.info("Book '{}' (S3 object {}) - UUID: {} - Action: CREATED (after empty get) - Redis Key: {}", 
+                            UniversalBookDataExtractor.extractTitle(bookData), s3Key, finalRecordUuid, redisKey);
+                    }
                 } else {
                     mergedMap = bookData;
+                    log.info("Book '{}' (S3 object {}) - UUID: {} - Action: CREATED - Redis Key: {}", 
+                        UniversalBookDataExtractor.extractTitle(bookData), s3Key, finalRecordUuid, redisKey);
                 }
-                // Ensure the 'id' field in the JSON content is the canonical UUIDv7
+                
                 mergedMap.put("id", finalRecordUuid); 
-
                 String mergedJsonString = objectMapper.writeValueAsString(mergedMap);
+                
+                long redisSetStartTime = System.currentTimeMillis();
                 boolean success = redisJsonService.jsonSet(redisKey, "$", mergedJsonString);
+                log.info("[REDIS_SET_ATTEMPT] Attempted to set JSON for S3 object {} (key {}) in {}ms. Success: {}", s3Key, redisKey, (System.currentTimeMillis() - redisSetStartTime), success);
                 
                 if (success) {
-                    // Consolidated log showing UUID and action taken
-                    String action = existingData != null ? "UPDATED" : "CREATED";
-                    String bookTitle = UniversalBookDataExtractor.extractTitle(bookData);
-                    log.info("Book '{}' - UUID: {} - Action: {} - Redis Key: {}", 
-                            bookTitle, finalRecordUuid, action, redisKey);
-
-                    // Update secondary indexes for fast lookup
+                    long indexUpdateStartTime = System.currentTimeMillis();
                     CachedBook indexBook = new CachedBook();
                     indexBook.setId(finalRecordUuid);
                     indexBook.setIsbn13(s3Isbn13);
                     indexBook.setIsbn10(s3Isbn10);
                     indexBook.setGoogleBooksId(s3GoogleId);
-                    Optional<CachedBook> oldBookOpt = existingRecordOpt.map(RedisBookSearchService.BookSearchResult::getBook);
-                    indexManager.updateAllIndexes(indexBook, oldBookOpt);
+                    indexManager.updateAllIndexes(indexBook, Optional.empty());
+                    log.info("[REDIS_INDEX_UPDATE_SUCCESS] Updated indexes for S3 object {} (key {}) in {}ms", s3Key, redisKey, (System.currentTimeMillis() - indexUpdateStartTime));
 
-                    // Move processed S3 object only if Redis write was successful
                     destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
                 } else {
                     String bookTitle = UniversalBookDataExtractor.extractTitle(bookData);
-                    log.error("Book '{}' - UUID: {} - Action: FAILED - Redis Key: {}", 
-                            bookTitle, finalRecordUuid, redisKey);
+                    log.error("[REDIS_SET_FAILED] Book '{}' (S3 object {}) - UUID: {} - Action: FAILED_REDIS_SET - Redis Key: {}", 
+                            bookTitle, s3Key, finalRecordUuid, redisKey);
                     migrationProgress.incrementFailed();
-                    return;
+                    errorAggregator.addError("processGoogleBooksFile_RedisSet", s3Key, "RedisJsonSetFailed", "redisJsonService.jsonSet returned false", null);
+                    return; // Critical failure, stop processing this file
                 }
-            }
+            } // End of try-with-resources for streamToRead
             
             if (destinationS3Key != null) {
-                s3Service.moveObject(s3Key, destinationS3Key);
-                log.debug("Moved processed S3 object {} to {}", s3Key, destinationS3Key);
+                long s3MoveStartTime = System.currentTimeMillis();
+                s3Service.moveObject(s3Key, destinationS3Key).get(30, TimeUnit.SECONDS); // Added 30s timeout for move
+                log.info("[S3_MOVE_SUCCESS] Moved processed S3 object {} to {} in {}ms", s3Key, destinationS3Key, (System.currentTimeMillis() - s3MoveStartTime));
             } else {
-                log.warn("Could not determine destination key for {}, file not moved.", s3Key);
+                log.warn("[S3_MOVE_SKIPPED] Could not determine destination key for S3 object {}, file not moved.", s3Key);
             }
 
             migrationProgress.incrementProcessed();
+            log.info("Successfully processed S3 file: {} in {}ms", s3Key, System.currentTimeMillis() - fileProcessingStartTime);
             if (migrationProgress.getProcessed() % 100 == 0) {
-                log.info("Ingested and moved {} Google Books records so far...", migrationProgress.getProcessed());
+                migrationProgress.logProgress(); // Log overall progress periodically
             }
-        } catch (Exception e) {
-            log.error("Error processing S3 object {}: {}", s3Key, e.getMessage(), e);
+        } catch (TimeoutException e) {
+            log.error("[TIMEOUT_ERROR] Timeout processing S3 object {}: {}", s3Key, e.getMessage(), e);
             migrationProgress.incrementFailed();
-            errorAggregator.addError("processGoogleBooksFile", s3Key, e.getClass().getSimpleName(), e.getMessage(), e);
-            throw new RuntimeException("Failed to process file: " + s3Key, e);
+            errorAggregator.addError("processGoogleBooksFile_Timeout", s3Key, e.getClass().getSimpleName(), "Operation timed out", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("[INTERRUPTED_ERROR] Interrupted while processing S3 object {}: {}", s3Key, e.getMessage(), e);
+            migrationProgress.incrementFailed();
+            errorAggregator.addError("processGoogleBooksFile_Interrupted", s3Key, e.getClass().getSimpleName(), "Thread interrupted", e);
+        } catch (Exception e) {
+            log.error("[GENERAL_ERROR] Error processing S3 object {}: {}", s3Key, e.getMessage(), e);
+            migrationProgress.incrementFailed();
+            errorAggregator.addError("processGoogleBooksFile_General", s3Key, e.getClass().getSimpleName(), e.getMessage(), e);
+        } finally {
+            log.debug("Finished processing attempt for S3 file: {}", s3Key);
         }
     }
 
@@ -581,7 +617,7 @@ public class JsonS3ToRedisService {
         merged.setDescription(incoming.getDescription() != null ? incoming.getDescription() : existing.getDescription());
         merged.setCoverImageUrl(incoming.getCoverImageUrl() != null ? incoming.getCoverImageUrl() : existing.getCoverImageUrl());
         merged.setLanguage(incoming.getLanguage() != null ? incoming.getLanguage() : existing.getLanguage());
-        merged.setIsbn10(incoming.getIsbn10() != null ? incoming.getIsbn10() : existing.getIsbn10());
+        merged.setIsbn10(incoming.getIsbn10() != null ? incoming.getIsbn10() : existing.getIsbn13());
         merged.setIsbn13(incoming.getIsbn13() != null ? incoming.getIsbn13() : existing.getIsbn13());
         merged.setPageCount(incoming.getPageCount() != null ? incoming.getPageCount() : existing.getPageCount());
         merged.setAverageRating(incoming.getAverageRating() != null ? incoming.getAverageRating() : existing.getAverageRating());
@@ -611,19 +647,29 @@ public class JsonS3ToRedisService {
         for (Map.Entry<String, Object> entry : incoming.entrySet()) {
             String key = entry.getKey();
             Object newValue = entry.getValue();
-            if (!existing.containsKey(key) || existing.get(key) == null) {
-                existing.put(key, newValue);
-            } else {
-                Object existingValue = existing.get(key);
-                if (existingValue instanceof Map && newValue instanceof Map) {
-                    existing.put(key, mergeMaps((Map<String, Object>) existingValue, (Map<String, Object>) newValue));
-                } else if (existingValue instanceof List && newValue instanceof List) {
-                    // Create a new list with all elements from both lists
-                    List<Object> mergedList = new ArrayList<>((List<Object>) existingValue);
-                    mergedList.addAll((List<Object>) newValue);
-                    existing.put(key, mergedList);
+            
+            if (newValue != null) {
+                // Special handling for nested structures to preserve all data
+                if ("_metadata".equals(key)) {
+                    // Merge metadata
+                    Map<String, Object> existingMeta = (Map<String, Object>) existing.getOrDefault("_metadata", new HashMap<>());
+                    Map<String, Object> newMeta = (Map<String, Object>) newValue;
+                    Map<String, Object> mergedMeta = new HashMap<>(existingMeta);
+                    mergedMeta.putAll(newMeta);
+                    existing.put(key, mergedMeta);
+                } else if ("nyt_bestseller_info".equals(key)) {
+                    // NYT data should be preserved/updated
+                    existing.put(key, newValue);
+                } else if ("openLibrary".equals(key)) {
+                    // OpenLibrary data should be preserved/updated
+                    existing.put(key, newValue);
+                } else if ("goodreads".equals(key)) {
+                    // Goodreads data should be preserved/updated
+                    existing.put(key, newValue);
+                } else {
+                    // For all other fields, newer data takes precedence
+                    existing.put(key, newValue);
                 }
-                // Skip conflicts for non-map, non-list values
             }
         }
         return existing;
@@ -832,326 +878,6 @@ public class JsonS3ToRedisService {
     }
     
     /**
-     * Adds flattened fields from Google Books volumeInfo, saleInfo, accessInfo
-     * for easier Redis queries while preserving the original nested structure
-     */
-    @SuppressWarnings("unchecked")
-    private void addFlattenedGoogleBooksFields(Map<String, Object> unifiedDoc, Map<String, Object> googleBooksData) {
-        // Extract from volumeInfo
-        if (googleBooksData.containsKey("volumeInfo")) {
-            Map<String, Object> volumeInfo = (Map<String, Object>) googleBooksData.get("volumeInfo");
-            
-            // Core fields
-            if (volumeInfo.containsKey("title")) {
-                unifiedDoc.put("title", volumeInfo.get("title"));
-            }
-            if (volumeInfo.containsKey("subtitle")) {
-                unifiedDoc.put("subtitle", volumeInfo.get("subtitle"));
-            }
-            if (volumeInfo.containsKey("authors")) {
-                unifiedDoc.put("authors", volumeInfo.get("authors"));
-            }
-            if (volumeInfo.containsKey("description")) {
-                unifiedDoc.put("description", volumeInfo.get("description"));
-            }
-            if (volumeInfo.containsKey("categories")) {
-                unifiedDoc.put("categories", volumeInfo.get("categories"));
-            }
-            if (volumeInfo.containsKey("publisher")) {
-                unifiedDoc.put("publisher", volumeInfo.get("publisher"));
-            }
-            if (volumeInfo.containsKey("publishedDate")) {
-                unifiedDoc.put("publishedDate", volumeInfo.get("publishedDate"));
-            }
-            if (volumeInfo.containsKey("language")) {
-                unifiedDoc.put("language", volumeInfo.get("language"));
-            }
-            if (volumeInfo.containsKey("pageCount")) {
-                unifiedDoc.put("pageCount", volumeInfo.get("pageCount"));
-            }
-            if (volumeInfo.containsKey("averageRating")) {
-                unifiedDoc.put("averageRating", volumeInfo.get("averageRating"));
-            }
-            if (volumeInfo.containsKey("ratingsCount")) {
-                unifiedDoc.put("ratingsCount", volumeInfo.get("ratingsCount"));
-            }
-            if (volumeInfo.containsKey("maturityRating")) {
-                unifiedDoc.put("maturityRating", volumeInfo.get("maturityRating"));
-            }
-            
-            // Handle imageLinks
-            if (volumeInfo.containsKey("imageLinks")) {
-                Map<String, Object> imageLinks = (Map<String, Object>) volumeInfo.get("imageLinks");
-                if (imageLinks.containsKey("thumbnail")) {
-                    unifiedDoc.put("coverImageUrl", imageLinks.get("thumbnail"));
-                }
-                if (imageLinks.containsKey("small")) {
-                    unifiedDoc.put("coverImageSmall", imageLinks.get("small"));
-                }
-                if (imageLinks.containsKey("medium")) {
-                    unifiedDoc.put("coverImageMedium", imageLinks.get("medium"));
-                }
-                if (imageLinks.containsKey("large")) {
-                    unifiedDoc.put("coverImageLarge", imageLinks.get("large"));
-                }
-            }
-            
-            // Handle industry identifiers (ISBN)
-            if (volumeInfo.containsKey("industryIdentifiers")) {
-                List<Map<String, Object>> identifiers = (List<Map<String, Object>>) volumeInfo.get("industryIdentifiers");
-                for (Map<String, Object> identifier : identifiers) {
-                    String type = (String) identifier.get("type");
-                    String value = (String) identifier.get("identifier");
-                    if ("ISBN_10".equals(type)) {
-                        unifiedDoc.put("isbn10", value);
-                    } else if ("ISBN_13".equals(type)) {
-                        unifiedDoc.put("isbn13", value);
-                    }
-                }
-            }
-        }
-        
-        // Extract from saleInfo
-        if (googleBooksData.containsKey("saleInfo")) {
-            Map<String, Object> saleInfo = (Map<String, Object>) googleBooksData.get("saleInfo");
-            if (saleInfo.containsKey("saleability")) {
-                unifiedDoc.put("saleability", saleInfo.get("saleability"));
-            }
-            if (saleInfo.containsKey("isEbook")) {
-                unifiedDoc.put("isEbook", saleInfo.get("isEbook"));
-            }
-            if (saleInfo.containsKey("listPrice") && saleInfo.get("listPrice") instanceof Map) {
-                Map<String, Object> listPrice = (Map<String, Object>) saleInfo.get("listPrice");
-                if (listPrice.containsKey("amount")) {
-                    unifiedDoc.put("listPrice", listPrice.get("amount"));
-                }
-            }
-        }
-        
-        // Extract from accessInfo
-        if (googleBooksData.containsKey("accessInfo")) {
-            Map<String, Object> accessInfo = (Map<String, Object>) googleBooksData.get("accessInfo");
-            if (accessInfo.containsKey("publicDomain")) {
-                unifiedDoc.put("publicDomain", accessInfo.get("publicDomain"));
-            }
-            if (accessInfo.containsKey("textToSpeechPermission")) {
-                unifiedDoc.put("textToSpeechPermission", accessInfo.get("textToSpeechPermission"));
-            }
-            if (accessInfo.containsKey("webReaderLink")) {
-                unifiedDoc.put("webReaderLink", accessInfo.get("webReaderLink"));
-            }
-        }
-        
-        // Use Google Books ID as googleBooksId
-        if (googleBooksData.containsKey("id")) {
-            unifiedDoc.put("googleBooksId", googleBooksData.get("id"));
-        }
-        
-        // Extract preview and info links from volumeInfo
-        if (googleBooksData.containsKey("volumeInfo")) {
-            Map<String, Object> volumeInfo = (Map<String, Object>) googleBooksData.get("volumeInfo");
-            if (volumeInfo.containsKey("previewLink")) {
-                unifiedDoc.put("previewLink", volumeInfo.get("previewLink"));
-            }
-            if (volumeInfo.containsKey("infoLink")) {
-                unifiedDoc.put("infoLink", volumeInfo.get("infoLink"));
-            }
-        }
-    }
-    
-    /**
-     * Extract ISBN-13 from unified document structure
-     */
-    private String extractIsbn13(Map<String, Object> unifiedDoc) {
-        return UniversalBookDataExtractor.extractIsbn13(unifiedDoc);
-    }
-    
-    /**
-     * Extract ISBN-10 from unified document structure
-     */
-    private String extractIsbn10(Map<String, Object> unifiedDoc) {
-        return UniversalBookDataExtractor.extractIsbn10(unifiedDoc);
-    }
-    
-    /**
-     * Extract Google Books ID from unified document structure
-     */
-    private String extractGoogleBooksId(Map<String, Object> unifiedDoc) {
-        return UniversalBookDataExtractor.extractGoogleBooksId(unifiedDoc);
-    }
-    
-    /**
-     * Extract title from unified document structure
-     */
-    private String extractTitle(Map<String, Object> unifiedDoc) {
-        return UniversalBookDataExtractor.extractTitle(unifiedDoc);
-    }
-    
-    
-    /**
-     * Add flattened fields from OpenLibrary data
-     */
-    @SuppressWarnings("unchecked")
-    private void addFlattenedOpenLibraryFields(Map<String, Object> unifiedDoc, Map<String, Object> openLibraryData) {
-        // Extract title
-        if (openLibraryData.containsKey("title")) {
-            unifiedDoc.put("title", openLibraryData.get("title"));
-        }
-        
-        // Extract authors (can be array of strings or objects)
-        if (openLibraryData.containsKey("authors")) {
-            Object authorsObj = openLibraryData.get("authors");
-            if (authorsObj instanceof List) {
-                List<?> authorsList = (List<?>) authorsObj;
-                List<String> authorNames = new ArrayList<>();
-                for (Object author : authorsList) {
-                    if (author instanceof Map) {
-                        Map<String, Object> authorMap = (Map<String, Object>) author;
-                        if (authorMap.containsKey("name")) {
-                            authorNames.add((String) authorMap.get("name"));
-                        }
-                    } else if (author instanceof String) {
-                        authorNames.add((String) author);
-                    }
-                }
-                unifiedDoc.put("authors", authorNames);
-            }
-        }
-        
-        // Extract description
-        if (openLibraryData.containsKey("description")) {
-            Object desc = openLibraryData.get("description");
-            if (desc instanceof String) {
-                unifiedDoc.put("description", desc);
-            } else if (desc instanceof Map) {
-                Map<String, Object> descMap = (Map<String, Object>) desc;
-                if (descMap.containsKey("value")) {
-                    unifiedDoc.put("description", descMap.get("value"));
-                }
-            }
-        }
-        
-        // Extract ISBNs
-        if (openLibraryData.containsKey("isbn_13")) {
-            List<?> isbn13List = (List<?>) openLibraryData.get("isbn_13");
-            if (isbn13List != null && !isbn13List.isEmpty()) {
-                unifiedDoc.put("isbn13", isbn13List.get(0).toString());
-            }
-        }
-        if (openLibraryData.containsKey("isbn_10")) {
-            List<?> isbn10List = (List<?>) openLibraryData.get("isbn_10");
-            if (isbn10List != null && !isbn10List.isEmpty()) {
-                unifiedDoc.put("isbn10", isbn10List.get(0).toString());
-            }
-        }
-        
-        // Extract covers
-        if (openLibraryData.containsKey("covers")) {
-            List<?> covers = (List<?>) openLibraryData.get("covers");
-            if (covers != null && !covers.isEmpty()) {
-                String coverId = covers.get(0).toString();
-                unifiedDoc.put("openLibraryCoverUrl", "https://covers.openlibrary.org/b/id/" + coverId + "-L.jpg");
-                unifiedDoc.put("coverImageUrl", "https://covers.openlibrary.org/b/id/" + coverId + "-L.jpg");
-            }
-        }
-        
-        // Extract publication date
-        if (openLibraryData.containsKey("publish_date")) {
-            unifiedDoc.put("publishedDate", openLibraryData.get("publish_date"));
-        }
-        
-        // Extract publisher
-        if (openLibraryData.containsKey("publishers")) {
-            List<?> publishers = (List<?>) openLibraryData.get("publishers");
-            if (publishers != null && !publishers.isEmpty()) {
-                unifiedDoc.put("publisher", publishers.get(0).toString());
-            }
-        }
-        
-        // Extract page count
-        if (openLibraryData.containsKey("number_of_pages")) {
-            unifiedDoc.put("pageCount", openLibraryData.get("number_of_pages"));
-        }
-        
-        // Extract subjects as categories
-        if (openLibraryData.containsKey("subjects")) {
-            unifiedDoc.put("categories", openLibraryData.get("subjects"));
-        }
-        
-        // Store OpenLibrary ID
-        if (openLibraryData.containsKey("key")) {
-            String key = (String) openLibraryData.get("key");
-            unifiedDoc.put("openLibraryId", key);
-        }
-    }
-    
-    /**
-     * Add flattened fields from NYT bestseller data
-     */
-    private void addFlattenedNYTFields(Map<String, Object> unifiedDoc, Map<String, Object> nytData) {
-        // Extract title
-        if (nytData.containsKey("title")) {
-            unifiedDoc.put("title", nytData.get("title"));
-        }
-        
-        // Extract author
-        if (nytData.containsKey("author")) {
-            String author = (String) nytData.get("author");
-            unifiedDoc.put("authors", List.of(author));
-        }
-        
-        // Extract description
-        if (nytData.containsKey("description")) {
-            unifiedDoc.put("description", nytData.get("description"));
-        }
-        
-        // Extract ISBNs
-        if (nytData.containsKey("primary_isbn13")) {
-            unifiedDoc.put("isbn13", nytData.get("primary_isbn13"));
-        }
-        if (nytData.containsKey("primary_isbn10")) {
-            unifiedDoc.put("isbn10", nytData.get("primary_isbn10"));
-        }
-        
-        // Extract publisher
-        if (nytData.containsKey("publisher")) {
-            unifiedDoc.put("publisher", nytData.get("publisher"));
-        }
-        
-        // Store NYT bestseller info in structured format
-        Map<String, Object> nytInfo = new HashMap<>();
-        if (nytData.containsKey("rank")) {
-            nytInfo.put("rank", nytData.get("rank"));
-        }
-        if (nytData.containsKey("weeks_on_list")) {
-            nytInfo.put("weeks_on_list", nytData.get("weeks_on_list"));
-        }
-        if (nytData.containsKey("list_name")) {
-            nytInfo.put("list_name", nytData.get("list_name"));
-        }
-        if (nytData.containsKey("bestsellers_date")) {
-            nytInfo.put("bestseller_date", nytData.get("bestsellers_date"));
-        }
-        
-        if (!nytInfo.isEmpty()) {
-            unifiedDoc.put("nyt_bestseller_info", nytInfo);
-        }
-        
-        // Extract cover image
-        if (nytData.containsKey("book_image")) {
-            unifiedDoc.put("coverImageUrl", nytData.get("book_image"));
-        }
-        
-        // Extract links
-        if (nytData.containsKey("amazon_product_url")) {
-            unifiedDoc.put("purchaseLink", nytData.get("amazon_product_url"));
-        }
-        if (nytData.containsKey("book_review_link")) {
-            unifiedDoc.put("reviewLink", nytData.get("book_review_link"));
-        }
-    }
-    
-    /**
      * Merges two unified documents, preserving data from all sources
      * while giving priority to newer data
      */
@@ -1204,7 +930,7 @@ public class JsonS3ToRedisService {
         private final List<ErrorDetail> errors = Collections.synchronizedList(new ArrayList<>());
         private final Map<String, AtomicInteger> errorCountsByType = new ConcurrentHashMap<>();
         
-        public void addError(String operation, String key, String errorType, String message, Exception exception) {
+        public void addError(String operation, String key, String errorType, String message, Throwable exception) {
             errors.add(new ErrorDetail(operation, key, errorType, message, exception));
             errorCountsByType.computeIfAbsent(errorType, k -> new AtomicInteger(0)).incrementAndGet();
         }
@@ -1244,7 +970,7 @@ public class JsonS3ToRedisService {
             public final Instant timestamp;
             public final String stackTrace;
             
-            public ErrorDetail(String operation, String key, String errorType, String message, Exception exception) {
+            public ErrorDetail(String operation, String key, String errorType, String message, Throwable exception) {
                 this.operation = operation;
                 this.key = key;
                 this.errorType = errorType;
@@ -1253,7 +979,7 @@ public class JsonS3ToRedisService {
                 this.stackTrace = exception != null ? getStackTraceString(exception) : null;
             }
             
-            private static String getStackTraceString(Exception e) {
+            private static String getStackTraceString(Throwable e) {
                 StringBuilder sb = new StringBuilder();
                 sb.append(e.getClass().getName()).append(": ").append(e.getMessage()).append("\n");
                 for (StackTraceElement element : e.getStackTrace()) {
