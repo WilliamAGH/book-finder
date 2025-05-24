@@ -12,6 +12,7 @@
  * - Maintains separate S3 paths for lists and individual books
  * - Supports configurable job parameters through application properties
  */
+
 package com.williamcallahan.book_recommendation_engine.scheduler;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -149,13 +150,6 @@ public class NewYorkTimesBestsellerScheduler {
      * Respects configured rate limits for API calls
      */
     @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
-    public void scheduledProcessNewYorkTimesBestsellers() {
-        processNewYorkTimesBestsellers();
-    }
-
-    /**
-     * Internal method that performs the actual New York Times bestseller processing
-     */
     public void processNewYorkTimesBestsellers() {
         if (!schedulerEnabled) {
             logger.info("New York Times Bestseller Scheduler is disabled.");
@@ -468,7 +462,6 @@ public class NewYorkTimesBestsellerScheduler {
                 });
 
             logger.info("Finished New York Times Bestseller processing job.");
-
         } catch (Exception e) {
             logger.error("Error during New York Times Bestseller processing job: {}", e.getMessage(), e);
             // This single catch block will handle all exceptions from the try block.
