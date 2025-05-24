@@ -18,6 +18,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 @Repository
 public interface CachedBookRepository {
 
@@ -160,4 +161,21 @@ public interface CachedBookRepository {
      * @return A list of cached books matching the criteria
      */
     List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude);
+
+    /**
+     * Retrieves a cached book by its SEO-friendly slug.
+     *
+     * @param slug The slug to search for.
+     * @return Optional containing the cached book if found, empty otherwise.
+     */
+    Optional<CachedBook> findBySlug(String slug);
+    
+    /**
+     * Retrieves random cached books from recent years (2024-2025) with good quality covers
+     * 
+     * @param count Maximum number of books to return
+     * @param excludeIds Set of book IDs to exclude from results
+     * @return List of cached books matching the criteria
+     */
+    List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds);
 }

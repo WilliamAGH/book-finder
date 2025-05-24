@@ -22,6 +22,7 @@ import org.springframework.stereotype.Repository;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 @Repository
 @ConditionalOnExpression("'${spring.datasource.url:}'.length() == 0")
 public class NoOpCachedBookRepository implements CachedBookRepository {
@@ -186,6 +187,31 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     @Override
     public List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude) {
         logger.debug("NoOp: findByTitleIgnoreCaseAndIdNot called with title '{}' and excludeId '{}', returning empty list.", title, idToExclude);
+        return Collections.emptyList();
+    }
+
+    /**
+     * No-op implementation of findBySlug
+     * 
+     * @param slug The slug to search for
+     * @return Empty Optional
+     */
+    @Override
+    public Optional<CachedBook> findBySlug(String slug) {
+        logger.debug("NoOp: findBySlug called with slug '{}', returning empty Optional.", slug);
+        return Optional.empty();
+    }
+    
+    /**
+     * No-op implementation of findRandomRecentBooksWithGoodCovers
+     * 
+     * @param count Maximum number of books to return
+     * @param excludeIds Set of book IDs to exclude from results
+     * @return Empty list
+     */
+    @Override
+    public List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds) {
+        logger.debug("NoOp: findRandomRecentBooksWithGoodCovers called, returning empty list.");
         return Collections.emptyList();
     }
 }
