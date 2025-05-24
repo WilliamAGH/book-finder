@@ -10,6 +10,7 @@
  * - Supports extraction of qualifiers from search queries
  * - Contains robust error handling for malformed JSON or missing fields
  */
+
 package com.williamcallahan.book_recommendation_engine.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,7 +28,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Arrays;
 
-
+@SuppressWarnings("deprecation")
 public class BookJsonParser {
 
     private static final Logger logger = LoggerFactory.getLogger(BookJsonParser.class);

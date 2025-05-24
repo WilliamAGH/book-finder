@@ -10,26 +10,29 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.service.similarity;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.cache.BookReactiveCacheService; // To get source book
+import com.williamcallahan.book_recommendation_engine.service.cache.BookReactiveCacheService; 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,14 +40,16 @@ public class BookSimilarityService {
 
     private static final Logger logger = LoggerFactory.getLogger(BookSimilarityService.class);
 
-    private final CachedBookRepository cachedBookRepository; // Optional
-    private final GoogleBooksService googleBooksService; // For fallback
-    private final BookReactiveCacheService bookReactiveCacheService; // To fetch source book for fallback
+    private final CachedBookRepository cachedBookRepository; 
+    private final GoogleBooksService googleBooksService; 
+    private final BookReactiveCacheService bookReactiveCacheService; 
     private final WebClient embeddingClient;
     private final boolean embeddingServiceEnabled;
     private final String embeddingServiceUrl;
+    private final AsyncTaskExecutor mvcTaskExecutor;
 
-    @Value("${app.cache.enabled:true}") // May influence DB vector search
+
+    @Value("${app.cache.enabled:true}") 
     private boolean cacheEnabled;
 
     public BookSimilarityService(
@@ -53,7 +58,8 @@ public class BookSimilarityService {
             BookReactiveCacheService bookReactiveCacheService,
             @Value("${app.embedding.service.url:#{null}}") String embeddingServiceUrl,
             WebClient.Builder webClientBuilder,
-            @Value("${app.feature.embedding-service.enabled:false}") boolean embeddingServiceEnabled) {
+            @Value("${app.feature.embedding-service.enabled:false}") boolean embeddingServiceEnabled,
+            @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor) {
         this.cachedBookRepository = cachedBookRepository;
         this.googleBooksService = googleBooksService;
         this.bookReactiveCacheService = bookReactiveCacheService;
@@ -61,74 +67,116 @@ public class BookSimilarityService {
         this.embeddingServiceUrl = embeddingServiceUrl;
         String baseUrl = embeddingServiceUrl != null ? embeddingServiceUrl : "http://localhost:8080/api/embedding";
         this.embeddingClient = webClientBuilder.baseUrl(baseUrl).build();
+        this.mvcTaskExecutor = mvcTaskExecutor;
         
         if (this.cachedBookRepository == null) {
-            this.cacheEnabled = false; // If DB is not there, vector search is not possible.
+            this.cacheEnabled = false; 
             logger.info("BookSimilarityService: Database cache (CachedBookRepository) is not available. Vector similarity search disabled.");
         }
     }
 
+    /**
+     * @deprecated Use {@link #getSimilarBooksReactive(String, int)} for reactive or {@link #getSimilarBooksAsync(String, int)} for async behavior.
+     */
+    @Deprecated
     public List<Book> getSimilarBooks(String bookId, int count) {
-        if (cacheEnabled && cachedBookRepository != null) {
-            try {
-                Optional<CachedBook> sourceCachedBookOpt = cachedBookRepository.findByGoogleBooksId(bookId);
-                if (sourceCachedBookOpt.isPresent()) {
-                    List<CachedBook> similarCachedBooks = cachedBookRepository.findSimilarBooksById(sourceCachedBookOpt.get().getId(), count);
-                    if (!similarCachedBooks.isEmpty()) {
-                        logger.info("Found {} similar books using vector similarity for book ID: {}",
-                                similarCachedBooks.size(), bookId);
-                        return similarCachedBooks.stream()
-                                .map(CachedBook::toBook)
-                                .collect(Collectors.toList());
-                    }
-                }
-            } catch (Exception e) {
-                logger.warn("Error retrieving similar books from database: {}", e.getMessage());
-            }
-        }
-
-        logger.info("No vector similarity data for book ID: {}, using GoogleBooksService category/author matching", bookId);
-        // Fetch source book reactively and block. This might be an area for improvement if strict sync is needed without block.
-        Book sourceBook = bookReactiveCacheService.getBookByIdReactive(bookId).block(Duration.ofSeconds(5));
-
-        if (sourceBook == null) {
-            logger.warn("Source book for similar search not found (ID: {}), returning empty list.", bookId);
+        logger.warn("Deprecated synchronous getSimilarBooks called. Consider using getSimilarBooksAsync() or getSimilarBooksReactive().");
+        try {
+            return getSimilarBooksAsync(bookId, count).join(); // Blocking for deprecated method
+        } catch (Exception e) {
+            logger.error("Error in synchronous getSimilarBooks for bookId {}: {}", bookId, e.getMessage(), e);
+            Thread.currentThread().interrupt();
             return Collections.emptyList();
         }
-        // googleBooksService.getSimilarBooks itself returns a Mono, so block here.
-        return googleBooksService.getSimilarBooks(sourceBook).blockOptional().orElse(Collections.emptyList());
+    }
+
+    @Async("mvcTaskExecutor")
+    public CompletableFuture<List<Book>> getSimilarBooksAsync(String bookId, int count) {
+        if (cacheEnabled && cachedBookRepository != null) {
+            return CompletableFuture.supplyAsync(() -> cachedBookRepository.findByGoogleBooksId(bookId), mvcTaskExecutor)
+                .thenComposeAsync(sourceCachedBookOpt -> {
+                    if (sourceCachedBookOpt.isPresent()) {
+                        return CompletableFuture.supplyAsync(() -> 
+                                cachedBookRepository.findSimilarBooksById(sourceCachedBookOpt.get().getId(), count), mvcTaskExecutor)
+                            .thenComposeAsync(similarCachedBooks -> {
+                                if (!similarCachedBooks.isEmpty()) {
+                                    logger.info("Found {} similar books using vector similarity for book ID: {}",
+                                            similarCachedBooks.size(), bookId);
+                                    List<Book> books = similarCachedBooks.stream()
+                                            .map(CachedBook::toBook)
+                                            .collect(Collectors.toList());
+                                    return CompletableFuture.completedFuture(books);
+                                }
+                                // If DB vector search yields no results, fall back to Google.
+                                return fallbackToGoogleSimilarBooksAsync(bookId, count);
+                            }, mvcTaskExecutor);
+                    }
+                    // If source book not in DB, fall back to Google.
+                    return fallbackToGoogleSimilarBooksAsync(bookId, count);
+                }, mvcTaskExecutor)
+                .exceptionally(e -> {
+                    logger.warn("Error retrieving similar books from database for book ID {}: {}. Falling back to Google.", bookId, e.getMessage());
+                    // Ensure fallbackToGoogleSimilarBooksAsync is also called here in case of exception
+                    return fallbackToGoogleSimilarBooksAsync(bookId, count).join(); // .join() here as exceptionally expects a List<Book> not CF<List<Book>>
+                                                                                // This is okay if the fallback itself is robust.
+                                                                                // A better approach might be to ensure fallbackToGoogleSimilarBooksAsync is chained properly
+                                                                                // or to rethrow and handle at a higher level if that's preferred.
+                                                                                // For now, matching the reactive version's onErrorResume behavior.
+                });
+        }
+        return fallbackToGoogleSimilarBooksAsync(bookId, count);
+    }
+    
+    private CompletableFuture<List<Book>> fallbackToGoogleSimilarBooksAsync(String bookId, int count) {
+        logger.info("Falling back to GoogleBooksService for similar books for ID: {}", bookId);
+        return bookReactiveCacheService.getBookByIdReactive(bookId)
+            .toFuture()
+            .thenComposeAsync(sourceBook -> {
+                if (sourceBook == null) {
+                    logger.warn("Source book for similar search (Google fallback) not found (ID: {}), returning empty list.", bookId);
+                    return CompletableFuture.completedFuture(Collections.<Book>emptyList());
+                }
+                return googleBooksService.getSimilarBooks(sourceBook)
+                    .defaultIfEmpty(Collections.emptyList()) // Ensure we don't get null from Mono
+                    .map(list -> list.stream().limit(count).collect(Collectors.toList()))
+                    .toFuture();
+            }, mvcTaskExecutor)
+            .exceptionally(ex -> {
+                logger.warn("Exception in fallbackToGoogleSimilarBooksAsync for bookId {}: {}", bookId, ex.getMessage());
+                return Collections.emptyList();
+            });
     }
 
     public Mono<List<Book>> getSimilarBooksReactive(String bookId, int count) {
         if (cacheEnabled && cachedBookRepository != null) {
             return Mono.fromCallable(() -> cachedBookRepository.findByGoogleBooksId(bookId))
-                .subscribeOn(Schedulers.boundedElastic())
+                .subscribeOn(Schedulers.fromExecutor(mvcTaskExecutor)) // Use injected executor
                 .flatMap(sourceCachedBookOpt -> {
                     if (sourceCachedBookOpt.isPresent()) {
                         return Mono.fromCallable(() -> cachedBookRepository.findSimilarBooksById(sourceCachedBookOpt.get().getId(), count))
-                            .subscribeOn(Schedulers.boundedElastic())
+                            .subscribeOn(Schedulers.fromExecutor(mvcTaskExecutor)) // Use injected executor
                             .flatMap(similarCachedBooks -> {
                                 if (!similarCachedBooks.isEmpty()) {
                                     logger.info("Found {} similar books using vector similarity for book ID: {}", similarCachedBooks.size(), bookId);
                                     return Mono.just(similarCachedBooks.stream().map(CachedBook::toBook).collect(Collectors.toList()));
                                 }
-                                return Mono.<List<Book>>empty(); // Explicitly Mono<List<Book>>
+                                return Mono.<List<Book>>empty(); 
                             })
-                            .switchIfEmpty(fallbackToGoogleSimilarBooks(bookId, count)); // Removed count as googleBooksService.getSimilarBooks doesn't use it directly
+                            .switchIfEmpty(fallbackToGoogleSimilarBooksReactive(bookId, count)); 
                     }
-                    return fallbackToGoogleSimilarBooks(bookId, count);
+                    return fallbackToGoogleSimilarBooksReactive(bookId, count);
                 })
                 .onErrorResume(e -> {
                     logger.warn("Error retrieving similar books from database for book ID {}: {}. Falling back to Google.", bookId, e.getMessage());
-                    return fallbackToGoogleSimilarBooks(bookId, count);
+                    return fallbackToGoogleSimilarBooksReactive(bookId, count);
                 });
         }
-        return fallbackToGoogleSimilarBooks(bookId, count);
+        return fallbackToGoogleSimilarBooksReactive(bookId, count);
     }
 
-    private Mono<List<Book>> fallbackToGoogleSimilarBooks(String bookId, int count) {
+    private Mono<List<Book>> fallbackToGoogleSimilarBooksReactive(String bookId, int count) {
         logger.info("Falling back to GoogleBooksService for similar books for ID: {}", bookId);
-        return bookReactiveCacheService.getBookByIdReactive(bookId) // Use injected reactive cache service
+        return bookReactiveCacheService.getBookByIdReactive(bookId) 
             .flatMap(sourceBook -> {
                 if (sourceBook == null) {
                     logger.warn("Source book for similar search (Google fallback) not found (ID: {}), returning empty list.", bookId);
@@ -161,7 +209,7 @@ public class BookSimilarityService {
 
             if (text.isEmpty()) {
                 logger.warn("Cannot generate embedding for book ID {} as constructed text is empty.", book.getId());
-                return Mono.just(new float[384]); // Placeholder dimension
+                return Mono.just(new float[1536]); 
             }
 
             if (this.embeddingServiceEnabled && this.embeddingServiceUrl != null) {
@@ -178,12 +226,12 @@ public class BookSimilarityService {
             return Mono.just(createPlaceholderEmbedding(text));
         } catch (Exception e) {
             logger.error("Unexpected error in generateEmbeddingReactive for book ID {}: {}", book.getId(), e.getMessage(), e);
-            return Mono.just(new float[384]); // Placeholder dimension
+            return Mono.just(new float[1536]); 
         }
     }
 
-    public float[] createPlaceholderEmbedding(String text) { // Made public if BookReactiveCacheService needs it directly
-        float[] placeholder = new float[384]; // Ensure consistent dimension
+    public float[] createPlaceholderEmbedding(String text) { 
+        float[] placeholder = new float[1536]; 
         if (text == null || text.isEmpty()) return placeholder;
         int hash = text.hashCode();
         for (int i = 0; i < placeholder.length; i++) {
