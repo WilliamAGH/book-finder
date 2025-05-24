@@ -3,9 +3,11 @@
  * 
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import java.util.concurrent.CompletableFuture;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
@@ -25,15 +27,16 @@ import org.springframework.http.MediaType;
 import java.util.List;
 import java.util.ArrayList;
 import static org.mockito.Mockito.when;
-import static org.mockito.ArgumentMatchers.anyString; // For mocking getSimilarBooks
-import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBooks
-import static org.mockito.ArgumentMatchers.any; // For mocking any objects
-import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
-import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
-import reactor.core.publisher.Mono; // For mocking reactive service
+import static org.mockito.ArgumentMatchers.anyString; // for mocking getSimilarBooks
+import static org.mockito.ArgumentMatchers.anyInt; // for mocking getSimilarBooks
+import static org.mockito.ArgumentMatchers.any; // for mocking any objects
+import static org.mockito.ArgumentMatchers.eq; // for mocking specific values
+import static org.mockito.ArgumentMatchers.isNull; // for mocking null argument
+import reactor.core.publisher.Mono; // for mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+
 @WebFluxTest(value = HomeController.class,
     excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
@@ -167,7 +170,7 @@ class HomeControllerTest {
         cachedRecentBook.setAuthors(List.of("Author B"));
         cachedRecentBook.setCoverImageUrl("http://example.com/recent-cover.jpg");
         cachedRecentBook.setPublishedDate(java.time.LocalDateTime.now().minusMonths(6));
-        when(cachedBookRepository.findAll()).thenReturn(List.of(cachedRecentBook));
+        when(cachedBookRepository.findAllAsync()).thenReturn(CompletableFuture.completedFuture(List.of(cachedRecentBook)));
         // Act & Assert
         webTestClient.get().uri("/")
             .accept(MediaType.TEXT_HTML)
