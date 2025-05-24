@@ -20,12 +20,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.Pipeline;
+import java.util.concurrent.atomic.AtomicBoolean;
+import redis.clients.jedis.exceptions.JedisException;
 
 import java.util.Optional;
+import com.williamcallahan.book_recommendation_engine.util.RedisHelper;
+
 @Service
 public class RedisBookIndexManager {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisBookIndexManager.class);
+    private static final AtomicBoolean indexUpdateFailureLogged = new AtomicBoolean(false);
     private static final String ISBN10_INDEX_PREFIX = "isbn10_idx:";
     private static final String ISBN13_INDEX_PREFIX = "isbn13_idx:";
     private static final String GOOGLE_BOOKS_ID_INDEX_PREFIX = "gbid_idx:";
@@ -96,6 +101,10 @@ public class RedisBookIndexManager {
             pipeline.sync();
             logger.debug("Updated indexes for book ID: {} (atomic pipeline)", bookId);
             
+        } catch (JedisException e) {
+            if (indexUpdateFailureLogged.compareAndSet(false, true)) {
+                logger.warn("Redis index update connection failure for book ID {}: {}. Further index update errors will be suppressed.", bookId, e.getMessage());
+            }
         } catch (Exception e) {
             logger.error("Error updating indexes for book ID {}: {}", bookId, e.getMessage(), e);
         }
@@ -166,13 +175,16 @@ public class RedisBookIndexManager {
         }
     }
 
+    /**
+     * Looks up primary book ID using index key
+     */
     private Optional<String> getIndexEntry(String indexKey) {
-        try {
-            String bookId = jedisPooled.get(indexKey);
-            return Optional.ofNullable(bookId);
-        } catch (Exception e) {
-            logger.error("Error getting index entry {}: {}", indexKey, e.getMessage(), e);
-            return Optional.empty();
-        }
+        String operationName = "get(" + indexKey + ")";
+        return RedisHelper.executeWithTiming(
+            logger,
+            () -> Optional.ofNullable(jedisPooled.get(indexKey)),
+            operationName,
+            Optional.empty()
+        );
     }
 }

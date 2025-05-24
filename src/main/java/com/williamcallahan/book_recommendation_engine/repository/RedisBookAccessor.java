@@ -23,6 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.exceptions.JedisConnectionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import java.util.Optional;
 import java.util.List;
@@ -31,6 +33,8 @@ import java.util.HashSet;
 import java.util.stream.Stream;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.scheduling.annotation.Async;
+import java.util.Collections;
+
 @Service
 public class RedisBookAccessor {
 
@@ -39,6 +43,9 @@ public class RedisBookAccessor {
 
     private final JedisPooled jedisPooled;
     private final ObjectMapper objectMapper;
+
+    // Throttle connection failures for SCAN
+    private static final AtomicBoolean scanConnectionFailureLogged = new AtomicBoolean(false);
 
     public RedisBookAccessor(JedisPooled jedisPooled, ObjectMapper objectMapper) {
         this.jedisPooled = jedisPooled;
@@ -109,15 +116,15 @@ public class RedisBookAccessor {
                 }
                 return Optional.empty(); // String type but null value
             } else if ("ReJSON-RL".equalsIgnoreCase(type) || "json".equalsIgnoreCase(type)) {
-                // It's a JSON type, findJsonById (for strings) should not handle it.
-                // Let findJsonByIdWithRedisJsonFallback attempt to read it as JSON.
+                // It's a JSON type, findJsonById (for strings) should not handle it
+                // Let findJsonByIdWithRedisJsonFallback attempt to read it as JSON
                 logger.debug("Key {} is RedisJSON type ({}). findJsonById returning empty to allow fallback.", key, type);
                 return Optional.empty();
             } else {
-                // Unexpected type. Log it. Consider if deletion is appropriate or should be handled by a maintenance task.
+                // Unexpected type. Log it. Consider if deletion is appropriate or should be handled by a maintenance task
                 logger.warn("Key {} is of unexpected type: {}. Not a string or known JSON type.", key, type);
-                // Optional: Delete if this state is considered unrecoverable and problematic for other operations.
-                // For now, we won't delete, to be conservative and prevent data loss if type() was misleading.
+                // Optional: Delete if this state is considered unrecoverable and problematic for other operations
+                // For now, we won't delete, to be conservative and prevent data loss if type() was misleading
                 // try {
                 //     jedisPooled.del(key);
                 //     logger.info("Deleted key {} with unexpected type: {}", key, type);
@@ -131,7 +138,7 @@ public class RedisBookAccessor {
             // (e.g., if type check was somehow bypassed or if type() returned "string" for a non-string key - unlikely).
             if (jde.getMessage() != null && jde.getMessage().startsWith("WRONGTYPE")) {
                 logger.warn("WRONGTYPE JedisDataException for key {} (likely a non-string type). Letting fallback handle. Message: {}", key, jde.getMessage());
-                // DO NOT DELETE. The key might be a valid RedisJSON object.
+                // DO NOT DELETE - The key might be a valid RedisJSON object
             } else {
                 logger.error("Jedis data exception for key {}: {}", key, jde.getMessage(), jde);
             }
@@ -355,6 +362,11 @@ public class RedisBookAccessor {
             } while (!"0".equals(cursor));
             
             logger.debug("SCAN found {} raw keys matching pattern {}.", keys.size(), scanPattern);
+        } catch (JedisConnectionException e) {
+            if (scanConnectionFailureLogged.compareAndSet(false, true)) {
+                logger.warn("Redis SCAN connection failure for pattern {}: {}. Further SCAN errors will be suppressed.", scanPattern, e.getMessage());
+            }
+            return Collections.emptySet();
         } catch (Exception e) {
             logger.error("Error during Redis SCAN operation with pattern {}: {}", scanPattern, e.getMessage(), e);
         }
