@@ -116,7 +116,7 @@ public class BookCoverManagementServiceSmokeTest {
         book3_newToSystem.setCoverImageUrl(null);
         
         // Set up expected return values
-        when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any()))
+        when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(), eq(true)))
             .thenReturn(reactor.core.publisher.Mono.just(mockCoverImages));
         
         logger.info("Test setup complete. Cache directory is: {}", cacheDirString);
@@ -166,7 +166,7 @@ public class BookCoverManagementServiceSmokeTest {
 
         // Initial call
         com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = 
-            bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+            bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book, true)
                 .block(Duration.ofSeconds(5));
                 
         String initialUrl = (initialCoverImages != null && initialCoverImages.getPreferredUrl() != null) 
@@ -180,7 +180,7 @@ public class BookCoverManagementServiceSmokeTest {
 
         // Call again to see if the URL has been updated by background processing
         com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = 
-            bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+            bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book, true)
                 .block(Duration.ofSeconds(5));
                 
         String finalUrl = (finalCoverImages != null && finalCoverImages.getPreferredUrl() != null) 

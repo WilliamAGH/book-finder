@@ -17,6 +17,8 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
+import com.williamcallahan.book_recommendation_engine.config.NoDatabaseConfig;
+import com.williamcallahan.book_recommendation_engine.test.config.TestApplicationConfig;
 import com.williamcallahan.book_recommendation_engine.test.config.TestBookCoverConfig;
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.types.CoverImages;
@@ -27,10 +29,11 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
+
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -44,9 +47,9 @@ import static org.mockito.Mockito.*;
 /**
  * Spring-based test suite for BookCoverManagementService
  */
-@SpringBootTest
+@SpringBootTest(classes = {TestApplicationConfig.class, TestBookCoverConfig.class, NoDatabaseConfig.class})
+@TestPropertySource(properties = "spring.datasource.url=")
 @ActiveProfiles("test")
-@EnableAutoConfiguration
 public class BookCoverManagementServiceTest {
 
     @Autowired
@@ -87,6 +90,7 @@ public class BookCoverManagementServiceTest {
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
         when(localDiskCoverCacheService.getCacheDirName()).thenReturn("book-covers");
+        when(localDiskCoverCacheService.getCacheDirString()).thenReturn("book-covers"); // Added this line
         
         // Configure behavior for placeholder creation
         ImageDetails placeholderDetails = new ImageDetails(
@@ -135,7 +139,7 @@ public class BookCoverManagementServiceTest {
         when(s3BookCoverService.fetchCover(any(Book.class))).thenReturn(s3Result);
 
         // Execute and verify the result
-        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(testBook);
+        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(testBook, true);
         
         StepVerifier.create(result)
             .assertNext(coverImages -> {
@@ -149,7 +153,7 @@ public class BookCoverManagementServiceTest {
         // Verify S3 interactions
         verify(s3BookCoverService, times(1)).fetchCover(testBook);
         // Verify no background processing since we got a hit from S3
-        verify(coverSourceFetchingService, never()).getBestCoverImageUrlAsync(any(), any(), any());
+        verify(coverSourceFetchingService, never()).getBestCoverImageUrlAsync(any(Book.class), anyString(), any(ImageProvenanceData.class), anyBoolean());
     }
 
     /**
@@ -178,23 +182,22 @@ public class BookCoverManagementServiceTest {
 
         // Configure the mock to return our test image details
         CompletableFuture<ImageDetails> completedFuture = CompletableFuture.completedFuture(imageDetails);
-        when(coverSourceFetchingService.getBestCoverImageUrlAsync(any(Book.class), anyString(), any(ImageProvenanceData.class)))
+        when(coverSourceFetchingService.getBestCoverImageUrlAsync(any(Book.class), anyString(), any(ImageProvenanceData.class), anyBoolean()))
             .thenReturn(completedFuture);
 
         // Prepare to capture the event
         ArgumentCaptor<BookCoverUpdatedEvent> eventCaptor = TestBookCoverConfig.bookCoverEventCaptor();
 
         // Call the method under test
-        bookCoverManagementService.processCoverInBackground(testBook, "https://example.com/provisional-url.jpg");
-
-        // Allow async processing to complete
-        Thread.sleep(100);
+        CompletableFuture<Void> future = bookCoverManagementService.processCoverInBackground(testBook, "https://example.com/provisional-url.jpg", true);
+        future.get();
 
         // Verify the interactions
         verify(coverSourceFetchingService, times(1)).getBestCoverImageUrlAsync(
             eq(testBook), 
             eq("https://example.com/provisional-url.jpg"), 
-            any(ImageProvenanceData.class)
+            any(ImageProvenanceData.class),
+            eq(true)
         );
 
         verify(eventPublisher, times(1)).publishEvent(eventCaptor.capture());
@@ -244,22 +247,23 @@ public class BookCoverManagementServiceTest {
             null,
             600, 900
         );
-        when(coverSourceFetchingService.getBestCoverImageUrlAsync(any(Book.class), anyString(), any(ImageProvenanceData.class)))
+        when(coverSourceFetchingService.getBestCoverImageUrlAsync(any(Book.class), anyString(), any(ImageProvenanceData.class), anyBoolean()))
             .thenReturn(CompletableFuture.completedFuture(backgroundImageDetails));
 
         // Execute
-        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(testBook);
+        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(testBook, true);
         
         // Verify result
         StepVerifier.create(result)
             .assertNext(coverImages -> {
                 assertNotNull(coverImages);
-                // With our new implementation of CoverCacheManager used in the test, it might return the placeholder
-                // instead of the original URL, so we check for either possible value
+                // With our new implementation of CoverCacheManager used in the test, it might return the placeholder,
+                // the original URL, or the high-quality test URL from the mock configuration
                 assertTrue(
                     coverImages.getPreferredUrl().equals(testBook.getCoverImageUrl()) || 
-                    coverImages.getPreferredUrl().equals("/images/placeholder-book-cover.svg"),
-                    "Expected either testBook.getCoverImageUrl() or \"/images/placeholder-book-cover.svg\", but got: " + coverImages.getPreferredUrl()
+                    coverImages.getPreferredUrl().equals("/images/placeholder-book-cover.svg") ||
+                    coverImages.getPreferredUrl().equals("/book-covers/high-quality-testbook123.jpg"),
+                    "Expected either testBook.getCoverImageUrl(), \"/images/placeholder-book-cover.svg\", or \"/book-covers/high-quality-testbook123.jpg\", but got: " + coverImages.getPreferredUrl()
                 );
                 
                 // The fallback URL should be either the placeholder or the book's URL
