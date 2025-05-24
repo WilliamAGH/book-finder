@@ -199,8 +199,8 @@ class BookCacheFacadeServiceTest {
     void updateBook_callsEvictAndCache() {
         // Use spy to verify method calls on the same instance
         BookCacheFacadeService spyFacade = spy(bookCacheFacadeService);
-        when(spyFacade.evictBook(testBookId)).thenReturn(CompletableFuture.completedFuture(null));
-        when(spyFacade.cacheBook(testBook)).thenReturn(CompletableFuture.completedFuture(null));
+        doReturn(CompletableFuture.completedFuture(null)).when(spyFacade).evictBook(testBookId);
+        doReturn(CompletableFuture.completedFuture(null)).when(spyFacade).cacheBook(testBook);
 
         spyFacade.updateBook(testBook).join();
 
