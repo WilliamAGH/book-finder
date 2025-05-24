@@ -36,6 +36,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 @Repository("redisCachedBookRepositoryImpl")
 @Primary
@@ -81,63 +82,102 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
     
 
     @Override
-    public <S extends CachedBook> S save(S entity) {
-        if (!redisCacheService.isRedisAvailableAsync().join() || entity == null) {
-            return entity;
-        }
+    public <S extends CachedBook> CompletableFuture<S> saveAsync(S entity) {
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable || entity == null) {
+                    return CompletableFuture.completedFuture(entity);
+                }
 
-        boolean isNewEntity = entity.getId() == null || entity.getId().trim().isEmpty() || !UuidUtil.isUuid(entity.getId());
-        String originalId = entity.getId();
+                boolean isNewEntity = entity.getId() == null || entity.getId().trim().isEmpty() || !UuidUtil.isUuid(entity.getId());
+                String originalId = entity.getId();
 
-        if (isNewEntity) {
-            entity.setId(UuidUtil.getTimeOrderedEpoch().toString());
-            logger.info("Generated new UUIDv7 {} for CachedBook. Original ID was: '{}'", entity.getId(), originalId);
-        }
-        String bookId = entity.getId();
-        String bookKey = getCachedBookKeyWithPrefix(bookId);
-        String lockKey = bookKey + ":lock";
-        boolean acquired = false;
+                if (isNewEntity) {
+                    entity.setId(UuidUtil.getTimeOrderedEpoch().toString());
+                    logger.info("Generated new UUIDv7 {} for CachedBook. Original ID was: '{}'", entity.getId(), originalId);
+                }
+                
+                String bookId = entity.getId();
+                String bookKey = getCachedBookKeyWithPrefix(bookId);
+                String lockKey = bookKey + ":lock";
 
-        Optional<CachedBook> oldBookOpt = Optional.empty();
-        if (!isNewEntity) {
-            oldBookOpt = bookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
-                                     .flatMap(bookAccessor::deserializeBook);
-        }
+                return acquireLockAsync(lockKey)
+                    .thenCompose(lockAcquired -> {
+                        CompletableFuture<Optional<CachedBook>> oldBookFuture;
+                        if (!isNewEntity) {
+                            oldBookFuture = CompletableFuture.supplyAsync(() -> 
+                                bookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
+                                           .flatMap(bookAccessor::deserializeBook)
+                            );
+                        } else {
+                            oldBookFuture = CompletableFuture.completedFuture(Optional.empty());
+                        }
 
-        try {
+                        return oldBookFuture.thenCompose(oldBookOpt -> {
+                            return CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    String bookJson = bookAccessor.serializeBook(entity);
+                                    if (bookJson == null) {
+                                        logger.error("Failed to serialize book with ID: {}. Save operation aborted", bookId);
+                                        return entity;
+                                    }
+                                    bookAccessor.saveJson(bookId, bookJson, DEFAULT_BOOK_TTL_SECONDS);
+                                    indexManager.updateAllIndexes(entity, oldBookOpt);
+
+                                    logger.debug("Saved CachedBook with ID: {}", bookId);
+                                    return entity;
+                                } catch (Exception e) {
+                                    logger.error("Error saving CachedBook {}: {}", bookId, e.getMessage(), e);
+                                    return entity;
+                                }
+                            }).whenComplete((result, throwable) -> {
+                                if (lockAcquired) {
+                                    releaseLockAsync(lockKey);
+                                }
+                            });
+                        });
+                    });
+            });
+    }
+
+    private CompletableFuture<Boolean> acquireLockAsync(String lockKey) {
+        return CompletableFuture.supplyAsync(() -> {
             for (int i = 0; i < 50; i++) {
-                String result = jedisPooled.set(lockKey, "locked", SetParams.setParams().nx().ex(10));
-                acquired = "OK".equals(result);
-                if (acquired) break;
-                Thread.sleep(100);
+                try {
+                    String result = jedisPooled.set(lockKey, "locked", SetParams.setParams().nx().ex(10));
+                    if ("OK".equals(result)) {
+                        return true;
+                    }
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    logger.error("Interrupted while acquiring lock for key: {}", lockKey);
+                    return false;
+                } catch (Exception e) {
+                    logger.error("Error acquiring lock for key {}: {}", lockKey, e.getMessage());
+                    return false;
+                }
             }
-            if (!acquired) {
-                logger.warn("Could not acquire lock for book key: {}, proceeding without lock (risk of race condition)", bookKey);
-            }
+            logger.warn("Could not acquire lock for key: {}, proceeding without lock (risk of race condition)", lockKey);
+            return false;
+        });
+    }
 
-            String bookJson = bookAccessor.serializeBook(entity);
-            if (bookJson == null) {
-                logger.error("Failed to serialize book with ID: {}. Save operation aborted", bookId);
-                return entity;
-            }
-            bookAccessor.saveJson(bookId, bookJson, DEFAULT_BOOK_TTL_SECONDS);
-            indexManager.updateAllIndexes(entity, oldBookOpt);
-
-            logger.debug("Saved CachedBook with ID: {}", bookId);
-            return entity;
-
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.error("Interrupted while acquiring lock for book {}: {}", bookId, e.getMessage());
-            return entity;
-        } catch (Exception e) {
-            logger.error("Error saving CachedBook {}: {}", bookId, e.getMessage(), e);
-            return entity;
-        } finally {
-            if (acquired) {
+    private CompletableFuture<Void> releaseLockAsync(String lockKey) {
+        return CompletableFuture.runAsync(() -> {
+            try {
                 jedisPooled.del(lockKey);
+            } catch (Exception e) {
+                logger.error("Error releasing lock for key {}: {}", lockKey, e.getMessage());
             }
-        }
+        });
+    }
+
+    @Override
+    @Deprecated
+    public <S extends CachedBook> S save(S entity) {
+        logger.warn("Using deprecated synchronous save() method. Consider migrating to saveAsync() for better performance.");
+        return saveAsync(entity).join();
     }
 
     @Override
@@ -152,20 +192,42 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
     }
 
     @Override
-    public Optional<CachedBook> findById(String id) {
-        if (!redisCacheService.isRedisAvailableAsync().join() || id == null) {
-            return Optional.empty();
-        }
-        return bookAccessor.findJsonByIdWithRedisJsonFallback(id)
-                           .flatMap(bookAccessor::deserializeBook);
+    public CompletableFuture<Optional<CachedBook>> findByIdAsync(String id) {
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable || id == null) {
+                    return CompletableFuture.completedFuture(Optional.empty());
+                }
+                return CompletableFuture.supplyAsync(() -> 
+                    bookAccessor.findJsonByIdWithRedisJsonFallback(id)
+                               .flatMap(bookAccessor::deserializeBook)
+                );
+            });
     }
 
     @Override
+    @Deprecated
+    public Optional<CachedBook> findById(String id) {
+        logger.warn("Using deprecated synchronous findById() method. Consider migrating to findByIdAsync() for better performance.");
+        return findByIdAsync(id).join();
+    }
+
+    @Override
+    public CompletableFuture<Boolean> existsByIdAsync(String id) {
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable || id == null) {
+                    return CompletableFuture.completedFuture(false);
+                }
+                return CompletableFuture.supplyAsync(() -> bookAccessor.exists(id));
+            });
+    }
+
+    @Override
+    @Deprecated
     public boolean existsById(String id) {
-        if (!redisCacheService.isRedisAvailableAsync().join() || id == null) {
-            return false;
-        }
-        return bookAccessor.exists(id);
+        logger.warn("Using deprecated synchronous existsById() method. Consider migrating to existsByIdAsync() for better performance.");
+        return existsByIdAsync(id).join();
     }
 
     @Override
