@@ -86,7 +86,7 @@ public class JsonS3ToRedisEnhancedRunner implements CommandLineRunner {
     private void startProgressMonitoring() {
         scheduler.scheduleAtFixedRate(() -> {
             if (migrationRunning.get()) {
-                JsonS3ToRedisService.MigrationProgress progress = 
+                MigrationProgress progress = 
                     jsonS3ToRedisService.getMigrationProgress();
                 
                 log.info("Progress Update - {}% complete | Processed: {} | Failed: {} | Skipped: {} | Elapsed: {}",
@@ -104,7 +104,7 @@ public class JsonS3ToRedisEnhancedRunner implements CommandLineRunner {
      * Print final migration statistics
      */
     private void printFinalStatistics() {
-        JsonS3ToRedisService.MigrationProgress progress = 
+        MigrationProgress progress = 
             jsonS3ToRedisService.getMigrationProgress();
         
         log.info("=== Final Migration Statistics ===");
@@ -119,7 +119,7 @@ public class JsonS3ToRedisEnhancedRunner implements CommandLineRunner {
         log.info("Total time: {}", progress.getElapsedTime());
         
         // Error summary
-        JsonS3ToRedisService.ErrorAggregator errorAggregator = 
+        MigrationErrorAggregator errorAggregator = 
             jsonS3ToRedisService.getErrorAggregator();
         if (!errorAggregator.getErrors().isEmpty()) {
             log.warn("Total errors encountered: {}", errorAggregator.getErrors().size());

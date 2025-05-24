@@ -29,12 +29,15 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
 
     private final JsonS3ToRedisService jsonS3ToRedisService;
     private final RedisJsonService redisJsonService; // For initial ping test
+    private final S3Service s3Service; // For S3 availability check
 
     public JsonS3ToRedisRunner(
             @Qualifier("jsonS3ToRedis_JsonS3ToRedisService") JsonS3ToRedisService jsonS3ToRedisService,
-            @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService) {
+            @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService,
+            @Qualifier("jsonS3ToRedis_S3Service") S3Service s3Service) {
         this.jsonS3ToRedisService = jsonS3ToRedisService;
         this.redisJsonService = redisJsonService;
+        this.s3Service = s3Service;
     }
 
     /**
@@ -61,7 +64,16 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
             return; 
         }
 
-        // 2. Perform Migration
+        // 2. Test S3 Connection
+        log.info("Attempting to check S3 service availability...");
+        if (!s3Service.isS3Available()) {
+            log.error("S3 service is not available or bucket is not accessible. Migration will not proceed.");
+            log.error("Please ensure S3 (e.g., LocalStack or AWS S3) is running, accessible, and configured correctly (s3.server-url, s3.bucket-name, etc. in application.properties and relevant S3 environment variables).");
+            return;
+        }
+        log.info("S3 service is available. Proceeding with migration.");
+
+        // 3. Perform Migration
         log.info("Proceeding with S3 JSON to Redis migration.");
         try {
             jsonS3ToRedisService.performMigrationAsync().join();

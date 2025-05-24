@@ -16,10 +16,14 @@ package com.williamcallahan.book_recommendation_engine.jsontoredis;
 
 import com.williamcallahan.book_recommendation_engine.jsontoredis.S3Service;
 import com.williamcallahan.book_recommendation_engine.jsontoredis.RedisJsonService;
+import com.williamcallahan.book_recommendation_engine.jsontoredis.MigrationErrorAggregator;
+import com.williamcallahan.book_recommendation_engine.jsontoredis.MigrationProgress;
+import com.williamcallahan.book_recommendation_engine.jsontoredis.BookDocumentMerger;
 import com.williamcallahan.book_recommendation_engine.util.UuidUtil;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.UniversalBookDataExtractor;
 import com.williamcallahan.book_recommendation_engine.util.BookDataFlattener;
+import com.williamcallahan.book_recommendation_engine.util.ErrorHandlingUtils;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
@@ -72,7 +76,7 @@ public class JsonS3ToRedisService {
     // Reliability configuration
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final long INITIAL_RETRY_DELAY_MS = 1000;
-    private static final int BATCH_SIZE = 5; // Reduced from 10 to 5
+    private static final int BATCH_SIZE = 50; // Increased from 5 to 50 for faster processing
     private static final int CIRCUIT_BREAKER_THRESHOLD = 10;
     private static final Duration CIRCUIT_BREAKER_RESET_TIMEOUT = Duration.ofMinutes(5);
 
@@ -83,6 +87,7 @@ public class JsonS3ToRedisService {
     private final RedisBookSearchService redisBookSearchService;
     private final RedisBookIndexManager indexManager;
     private final BookDeduplicationService deduplicationService;
+    private final BookDocumentMerger documentMerger;
     private final AsyncTaskExecutor migrationTaskExecutor;
 
     // S3 paths will be accessed via s3Service getters
@@ -94,7 +99,7 @@ public class JsonS3ToRedisService {
     private final AtomicBoolean circuitBreakerOpen = new AtomicBoolean(false);
     private volatile Instant circuitBreakerOpenTime;
     private final MigrationProgress migrationProgress = new MigrationProgress();
-    private final ErrorAggregator errorAggregator = new ErrorAggregator();
+    private final MigrationErrorAggregator errorAggregator = new MigrationErrorAggregator();
 
     public JsonS3ToRedisService(@Qualifier("jsonS3ToRedis_S3Service") S3Service s3Service,
                                 @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService,
@@ -103,7 +108,8 @@ public class JsonS3ToRedisService {
                                 RedisBookSearchService redisBookSearchService,
                                 RedisBookIndexManager indexManager,
                                 @Qualifier("migrationTaskExecutor") AsyncTaskExecutor migrationTaskExecutor,
-                                BookDeduplicationService deduplicationService) {
+                                BookDeduplicationService deduplicationService,
+                                BookDocumentMerger documentMerger) {
         this.s3Service = s3Service;
         this.redisJsonService = redisJsonService;
         this.objectMapper = objectMapper;
@@ -112,6 +118,7 @@ public class JsonS3ToRedisService {
         this.deduplicationService = deduplicationService;
         this.indexManager = indexManager;
         this.migrationTaskExecutor = migrationTaskExecutor;
+        this.documentMerger = documentMerger;
         this.googleBooksPrefix = s3Service.getGoogleBooksPrefix();
         this.nytBestsellersKey = s3Service.getNytBestsellersKey();
         log.info("JsonS3ToRedisService initialized. Google Books S3 Prefix: {}, NYT Bestsellers S3 Key: {}", googleBooksPrefix, nytBestsellersKey);
@@ -307,11 +314,17 @@ public class JsonS3ToRedisService {
                     .filter(key -> !key.startsWith(googleBooksPrefix + "in-redis/"))
                     .collect(Collectors.toList());
             
+            // Also check for already processed files in the in-redis folder to get accurate count
+            List<String> processedFiles = bookKeys.stream()
+                    .filter(key -> JSON_FILE_PATTERN.matcher(key).matches())
+                    .filter(key -> key.startsWith(googleBooksPrefix + "in-redis/"))
+                    .collect(Collectors.toList());
+            
             migrationProgress.setTotalFiles(jsonFiles.size());
-            log.info("Found {} JSON files to process", jsonFiles.size());
+            log.info("Found {} JSON files to process ({} already processed)", jsonFiles.size(), processedFiles.size());
             
             if (jsonFiles.isEmpty()) {
-                log.info("No files to process in phase 1");
+                log.info("No files to process in phase 1 - all {} files already processed", processedFiles.size());
                 return CompletableFuture.completedFuture(null);
             }
             
@@ -327,11 +340,33 @@ public class JsonS3ToRedisService {
         List<List<String>> batches = partition(files, batchSize);
         log.info("Processing {} files in {} batches of size {}", files.size(), batches.size(), batchSize);
         
-        // Process batches sequentially to avoid overwhelming the system
-        return batches.stream()
+        // Process up to 5 batches in parallel to improve throughput while avoiding overwhelming the system
+        final int maxParallelBatches = 5;
+        return processBatchesInParallel(batches, maxParallelBatches);
+    }
+    
+    /**
+     * Process batches with controlled parallelism
+     */
+    private CompletableFuture<Void> processBatchesInParallel(List<List<String>> batches, int maxParallelBatches) {
+        if (batches.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        
+        // Process batches in chunks to control parallelism
+        List<List<List<String>>> batchChunks = partition(batches, maxParallelBatches);
+        
+        return batchChunks.stream()
                 .reduce(
                     CompletableFuture.completedFuture((Void) null),
-                    (prevFuture, batch) -> prevFuture.thenCompose(v -> processBatchAsync(batch)),
+                    (prevFuture, batchChunk) -> prevFuture.thenCompose(v -> {
+                        // Process this chunk of batches in parallel
+                        List<CompletableFuture<Void>> batchFutures = batchChunk.stream()
+                                .map(this::processBatchAsync)
+                                .collect(Collectors.toList());
+                        
+                        return CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0]));
+                    }),
                     (f1, f2) -> f1.thenCompose(v -> f2)
                 );
     }
@@ -373,7 +408,7 @@ public class JsonS3ToRedisService {
                 errorAggregator.addError("processFile", s3Key, e.getClass().getSimpleName(), e.getMessage(), e);
             }
         }, migrationTaskExecutor);
-        return cf.orTimeout(60, TimeUnit.SECONDS)
+        return cf.orTimeout(120, TimeUnit.SECONDS)
             .exceptionally(ex -> {
                 log.error("[PROCESS_FILE_TIMEOUT] File {} timed out: {}", s3Key, ex.getMessage(), ex);
                 migrationProgress.incrementFailed();
@@ -470,7 +505,7 @@ public class JsonS3ToRedisService {
                     log.info("[REDIS_GET_EXISTING_DATA] Attempted to get existing JSON for S3 object {} (key {}) in {}ms. Found: {}", s3Key, redisKey, (System.currentTimeMillis() - redisGetStartTime), (existingJson != null && !existingJson.isEmpty()));
                     if (existingJson != null && !existingJson.isEmpty()) {
                         existingData = objectMapper.readValue(existingJson, new TypeReference<Map<String, Object>>() {});
-                        mergedMap = mergeMaps(existingData, bookData); // mergeMaps should be robust
+                        mergedMap = documentMerger.mergeUnifiedDocuments(existingData, bookData);
                         log.info("Book '{}' (S3 object {}) - UUID: {} - Action: UPDATED - Redis Key: {}", 
                             UniversalBookDataExtractor.extractTitle(bookData), s3Key, finalRecordUuid, redisKey);
                     } else {
@@ -502,6 +537,11 @@ public class JsonS3ToRedisService {
                     indexManager.updateAllIndexes(indexBook, Optional.empty());
                     log.info("[REDIS_INDEX_UPDATE_SUCCESS] Updated indexes for S3 object {} (key {}) in {}ms", s3Key, redisKey, (System.currentTimeMillis() - indexUpdateStartTime));
 
+                    // Mark as processed immediately after Redis operations complete
+                    migrationProgress.incrementProcessed();
+                    log.info("[MIGRATION_PROGRESS] Successfully completed Redis operations for S3 file: {} - Progress: {}/{}", s3Key, 
+                            migrationProgress.getProcessed(), migrationProgress.getTotal());
+                    
                     destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
                 } else {
                     String bookTitle = UniversalBookDataExtractor.extractTitle(bookData);
@@ -514,15 +554,30 @@ public class JsonS3ToRedisService {
             } // End of try-with-resources for streamToRead
             
             if (destinationS3Key != null) {
-                long s3MoveStartTime = System.currentTimeMillis();
-                s3Service.moveObject(s3Key, destinationS3Key).get(30, TimeUnit.SECONDS); // Added 30s timeout for move
-                log.info("[S3_MOVE_SUCCESS] Moved processed S3 object {} to {} in {}ms", s3Key, destinationS3Key, (System.currentTimeMillis() - s3MoveStartTime));
+                // Make S3 move asynchronous and non-blocking to avoid hanging the migration
+                final String finalDestinationS3Key = destinationS3Key;
+                log.info("[S3_MOVE_START] Attempting to move S3 object {} to {} (async)", s3Key, finalDestinationS3Key);
+                s3Service.moveObject(s3Key, finalDestinationS3Key)
+                    .orTimeout(30, TimeUnit.SECONDS)
+                                         .whenComplete((result, throwable) -> {
+                         if (throwable != null) {
+                             if (throwable instanceof TimeoutException) {
+                                 log.error("[S3_MOVE_TIMEOUT] Timeout moving S3 object {} to {} after 30 seconds", s3Key, finalDestinationS3Key, throwable);
+                                 errorAggregator.addError("processGoogleBooksFile_S3MoveTimeout", s3Key, throwable.getClass().getSimpleName(), "S3 move timed out", throwable);
+                             } else {
+                                 log.error("[S3_MOVE_FAILED] Failed to move S3 object {} to {}: {}", s3Key, finalDestinationS3Key, throwable.getMessage(), throwable);
+                                 errorAggregator.addError("processGoogleBooksFile_S3MoveFailed", s3Key, throwable.getClass().getSimpleName(), "S3 move failed", throwable);
+                             }
+                         } else {
+                             log.info("[S3_MOVE_SUCCESS] Successfully moved S3 object {} to {} (async)", s3Key, finalDestinationS3Key);
+                         }
+                     });
             } else {
                 log.warn("[S3_MOVE_SKIPPED] Could not determine destination key for S3 object {}, file not moved.", s3Key);
             }
 
-            migrationProgress.incrementProcessed();
-            log.info("Successfully processed S3 file: {} in {}ms", s3Key, System.currentTimeMillis() - fileProcessingStartTime);
+            // Progress tracking moved to happen immediately after Redis operations complete
+            log.info("Successfully processed S3 file: {} in {}ms (total file processing time, including S3 move attempt)", s3Key, System.currentTimeMillis() - fileProcessingStartTime);
             if (migrationProgress.getProcessed() % 100 == 0) {
                 migrationProgress.logProgress(); // Log overall progress periodically
             }
@@ -675,54 +730,6 @@ public class JsonS3ToRedisService {
         return existing;
     }
     
-    /**
-     * Progress tracking for migration operations
-     */
-    public static class MigrationProgress {
-        private final AtomicInteger processedFiles = new AtomicInteger(0);
-        private final AtomicInteger failedFiles = new AtomicInteger(0);
-        private final AtomicInteger skippedFiles = new AtomicInteger(0);
-        private final AtomicInteger totalFiles = new AtomicInteger(0);
-        private final Instant startTime = Instant.now();
-        
-        public void incrementProcessed() { processedFiles.incrementAndGet(); }
-        public void incrementFailed() { failedFiles.incrementAndGet(); }
-        public void incrementSkipped() { skippedFiles.incrementAndGet(); }
-        public void setTotalFiles(int total) { totalFiles.set(total); }
-        
-        public int getProcessed() { return processedFiles.get(); }
-        public int getFailed() { return failedFiles.get(); }
-        public int getSkipped() { return skippedFiles.get(); }
-        public int getTotal() { return totalFiles.get(); }
-        
-        public double getProgressPercentage() {
-            int total = totalFiles.get();
-            if (total == 0) return 0.0;
-            int completed = processedFiles.get() + failedFiles.get() + skippedFiles.get();
-            return (double) completed / total * 100;
-        }
-        
-        public Duration getElapsedTime() {
-            return Duration.between(startTime, Instant.now());
-        }
-        
-        public void logProgress() {
-            log.info("Migration Progress: {}% complete - Processed: {}, Failed: {}, Skipped: {}, Total: {}, Elapsed: {}",
-                    String.format("%.2f", getProgressPercentage()), processedFiles.get(), failedFiles.get(), 
-                    skippedFiles.get(), totalFiles.get(), getElapsedTime());
-        }
-        
-        public Map<String, Object> toMap() {
-            return Map.of(
-                "processed", processedFiles.get(),
-                "failed", failedFiles.get(),
-                "skipped", skippedFiles.get(),
-                "total", totalFiles.get(),
-                "progressPercentage", getProgressPercentage(),
-                "elapsedTimeSeconds", getElapsedTime().getSeconds()
-            );
-        }
-    }
     
     /**
      * Retryable operation with exponential backoff
@@ -803,7 +810,7 @@ public class JsonS3ToRedisService {
     /**
      * Get error aggregator for detailed error reports
      */
-    public ErrorAggregator getErrorAggregator() {
+    public MigrationErrorAggregator getErrorAggregator() {
         return errorAggregator;
     }
     
@@ -923,74 +930,4 @@ public class JsonS3ToRedisService {
         return merged;
     }
     
-    /**
-     * Error aggregation for comprehensive error reporting
-     */
-    public static class ErrorAggregator {
-        private final List<ErrorDetail> errors = Collections.synchronizedList(new ArrayList<>());
-        private final Map<String, AtomicInteger> errorCountsByType = new ConcurrentHashMap<>();
-        
-        public void addError(String operation, String key, String errorType, String message, Throwable exception) {
-            errors.add(new ErrorDetail(operation, key, errorType, message, exception));
-            errorCountsByType.computeIfAbsent(errorType, k -> new AtomicInteger(0)).incrementAndGet();
-        }
-        
-        public List<ErrorDetail> getErrors() {
-            return new ArrayList<>(errors);
-        }
-        
-        public Map<String, Integer> getErrorCountsByType() {
-            Map<String, Integer> result = new HashMap<>();
-            errorCountsByType.forEach((k, v) -> result.put(k, v.get()));
-            return result;
-        }
-        
-        public void generateReport() {
-            log.error("=== Migration Error Report ===");
-            log.error("Total errors: {}", errors.size());
-            log.error("Error counts by type:");
-            errorCountsByType.forEach((type, count) -> 
-                log.error("  {}: {}", type, count.get())
-            );
-            
-            if (!errors.isEmpty()) {
-                log.error("First 10 errors:");
-                errors.stream().limit(10).forEach(error -> 
-                    log.error("  [{}] {} - {}: {}", 
-                        error.operation, error.key, error.errorType, error.message)
-                );
-            }
-        }
-        
-        public static class ErrorDetail {
-            public final String operation;
-            public final String key;
-            public final String errorType;
-            public final String message;
-            public final Instant timestamp;
-            public final String stackTrace;
-            
-            public ErrorDetail(String operation, String key, String errorType, String message, Throwable exception) {
-                this.operation = operation;
-                this.key = key;
-                this.errorType = errorType;
-                this.message = message;
-                this.timestamp = Instant.now();
-                this.stackTrace = exception != null ? getStackTraceString(exception) : null;
-            }
-            
-            private static String getStackTraceString(Throwable e) {
-                StringBuilder sb = new StringBuilder();
-                sb.append(e.getClass().getName()).append(": ").append(e.getMessage()).append("\n");
-                for (StackTraceElement element : e.getStackTrace()) {
-                    sb.append("  at ").append(element.toString()).append("\n");
-                    if (sb.length() > 1000) { // Limit stack trace size
-                        sb.append("  ... truncated ...");
-                        break;
-                    }
-                }
-                return sb.toString();
-            }
-        }
-    }
 }

@@ -31,6 +31,9 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -278,4 +281,32 @@ public class S3Service {
         }, migrationTaskExecutor);
     }
 
+    /**
+     * Checks if the S3 service is available and the configured bucket is accessible.
+     *
+     * @return true if S3 is available and the bucket is accessible, false otherwise.
+     */
+    public boolean isS3Available() {
+        if (s3Client == null) {
+            log.warn("S3Client is null, S3 service is considered unavailable.");
+            return false;
+        }
+        try {
+            HeadBucketRequest headBucketRequest = HeadBucketRequest.builder()
+                    .bucket(bucketName)
+                    .build();
+            s3Client.headBucket(headBucketRequest);
+            log.info("S3 service is available and bucket '{}' is accessible.", bucketName);
+            return true;
+        } catch (S3Exception e) {
+            // S3Exception is a common base class for S3-specific errors,
+            // including those related to bucket access or service issues.
+            log.warn("S3 service check failed for bucket '{}'. S3 might be unavailable or bucket does not exist/is not accessible. Error: {}", bucketName, e.getMessage());
+            return false;
+        } catch (Exception e) {
+            // Catching broader exceptions that might indicate network issues or other client-side problems
+            log.error("An unexpected error occurred while checking S3 availability for bucket '{}': {}", bucketName, e.getMessage(), e);
+            return false;
+        }
+    }
 }
