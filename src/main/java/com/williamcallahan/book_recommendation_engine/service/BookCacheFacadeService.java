@@ -1,10 +1,15 @@
 /**
- * Facade service that provides a unified interface for book caching operations.
- * This service acts as a central entry point for all book cache-related functionality,
- * coordinating between synchronous and reactive cache services, managing cache lifecycle,
- * and ensuring non-blocking operations for relevant public methods using CompletableFuture.
+ * Facade service that provides a unified interface for book caching operations
+ * Acts as a central entry point for all book cache-related functionality
+ * Coordinates between synchronous and reactive cache services
  *
  * @author William Callahan
+ *
+ * Features:
+ * - Unified interface for book caching operations
+ * - Coordinates between synchronous and reactive cache services
+ * - Manages cache lifecycle and non-blocking operations
+ * - Provides CompletableFuture-based async methods for public APIs
  */
 
 package com.williamcallahan.book_recommendation_engine.service;
@@ -185,20 +190,42 @@ public class BookCacheFacadeService {
             return CompletableFuture.completedFuture(true);
         }
 
-        return CompletableFuture.supplyAsync(() -> redisCacheService.isRedisAvailableAsync().join() && redisCacheService.getBookByIdAsync(id).join().isPresent())
-            .thenCompose(redisHasBook -> {
-                if (redisHasBook) return CompletableFuture.completedFuture(true);
-                if (dbCacheEnabled) {
-                    return CompletableFuture.supplyAsync(() -> {
-                        try {
-                            return cachedBookRepository.findByGoogleBooksId(id).isPresent();
-                        } catch (Exception e) {
-                            logger.warn("Error checking DB cache for book ID {}: {}", id, e.getMessage());
-                            return false;
-                        }
-                    });
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isRedisAvailable -> {
+                if (!isRedisAvailable) {
+                    // Redis not available, check DB cache if enabled
+                    if (dbCacheEnabled) {
+                        return CompletableFuture.supplyAsync(() -> {
+                            try {
+                                return cachedBookRepository.findByGoogleBooksId(id).isPresent();
+                            } catch (Exception e) {
+                                logger.warn("Error checking DB cache for book ID {} (Redis unavailable): {}", id, e.getMessage());
+                                return false;
+                            }
+                        });
+                    }
+                    return CompletableFuture.completedFuture(false); // Redis unavailable, DB not enabled or not checked
                 }
-                return CompletableFuture.completedFuture(false);
+
+                // Redis is available, check if book is in Redis
+                return redisCacheService.getBookByIdAsync(id)
+                    .thenCompose(optionalBook -> {
+                        if (optionalBook.isPresent()) {
+                            return CompletableFuture.completedFuture(true); // Book found in Redis
+                        }
+                        // Book not in Redis, check DB cache if enabled
+                        if (dbCacheEnabled) {
+                            return CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    return cachedBookRepository.findByGoogleBooksId(id).isPresent();
+                                } catch (Exception e) {
+                                    logger.warn("Error checking DB cache for book ID {} (not in Redis): {}", id, e.getMessage());
+                                    return false;
+                                }
+                            });
+                        }
+                        return CompletableFuture.completedFuture(false); // Not in Redis, DB not enabled or not checked
+                    });
             });
     }
 
@@ -212,7 +239,11 @@ public class BookCacheFacadeService {
             if (cachedValue != null) return CompletableFuture.completedFuture(Optional.of(cachedValue));
         }
 
-        return CompletableFuture.supplyAsync(() -> redisCacheService.isRedisAvailableAsync().join() ? redisCacheService.getBookByIdAsync(id).join() : Optional.<Book>empty())
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable) return CompletableFuture.completedFuture(Optional.<Book>empty());
+                return redisCacheService.getBookByIdAsync(id);
+            })
             .thenCompose(redisBook -> {
                 if (redisBook.isPresent()) return CompletableFuture.completedFuture(redisBook);
                 if (dbCacheEnabled) {
@@ -257,9 +288,13 @@ public class BookCacheFacadeService {
             booksSpringCache.evictIfPresent(id);
         }
 
-        CompletableFuture<Void> redisEviction = CompletableFuture.runAsync(() -> {
-            if (redisCacheService.isRedisAvailableAsync().join()) redisCacheService.evictBookAsync(id).join();
-        });
+        CompletableFuture<Void> redisEviction = redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (isAvailable) {
+                    return redisCacheService.evictBookAsync(id);
+                }
+                return CompletableFuture.completedFuture(null); // Do nothing if Redis is not available
+            });
 
         CompletableFuture<Void> dbEviction = CompletableFuture.runAsync(() -> {
             if (dbCacheEnabled) {

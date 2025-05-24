@@ -33,12 +33,14 @@ import reactor.core.scheduler.Schedulers;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function; // Added import
 import java.util.stream.Collectors;
 
 @Service
 public class BookSimilarityService {
 
     private static final Logger logger = LoggerFactory.getLogger(BookSimilarityService.class);
+    private static final int EMBEDDING_DIMENSION = 1536;
 
     private final CachedBookRepository cachedBookRepository; 
     private final GoogleBooksService googleBooksService; 
@@ -114,15 +116,13 @@ public class BookSimilarityService {
                     // If source book not in DB, fall back to Google.
                     return fallbackToGoogleSimilarBooksAsync(bookId, count);
                 }, mvcTaskExecutor)
-                .exceptionally(e -> {
-                    logger.warn("Error retrieving similar books from database for book ID {}: {}. Falling back to Google.", bookId, e.getMessage());
-                    // Ensure fallbackToGoogleSimilarBooksAsync is also called here in case of exception
-                    return fallbackToGoogleSimilarBooksAsync(bookId, count).join(); // .join() here as exceptionally expects a List<Book> not CF<List<Book>>
-                                                                                // This is okay if the fallback itself is robust.
-                                                                                // A better approach might be to ensure fallbackToGoogleSimilarBooksAsync is chained properly
-                                                                                // or to rethrow and handle at a higher level if that's preferred.
-                                                                                // For now, matching the reactive version's onErrorResume behavior.
-                });
+                .handle((result, ex) -> {
+                    if (ex != null) {
+                        logger.warn("Error retrieving similar books from database for book ID {}: {}. Falling back to Google.", bookId, ex.getMessage());
+                        return fallbackToGoogleSimilarBooksAsync(bookId, count);
+                    }
+                    return CompletableFuture.completedFuture(result);
+                }).thenComposeAsync(Function.identity(), mvcTaskExecutor);
         }
         return fallbackToGoogleSimilarBooksAsync(bookId, count);
     }
@@ -209,7 +209,7 @@ public class BookSimilarityService {
 
             if (text.isEmpty()) {
                 logger.warn("Cannot generate embedding for book ID {} as constructed text is empty.", book.getId());
-                return Mono.just(new float[1536]); 
+                return Mono.just(new float[EMBEDDING_DIMENSION]); 
             }
 
             if (this.embeddingServiceEnabled && this.embeddingServiceUrl != null) {
@@ -226,12 +226,12 @@ public class BookSimilarityService {
             return Mono.just(createPlaceholderEmbedding(text));
         } catch (Exception e) {
             logger.error("Unexpected error in generateEmbeddingReactive for book ID {}: {}", book.getId(), e.getMessage(), e);
-            return Mono.just(new float[1536]); 
+            return Mono.just(new float[EMBEDDING_DIMENSION]); 
         }
     }
 
     public float[] createPlaceholderEmbedding(String text) { 
-        float[] placeholder = new float[1536]; 
+        float[] placeholder = new float[EMBEDDING_DIMENSION]; 
         if (text == null || text.isEmpty()) return placeholder;
         int hash = text.hashCode();
         for (int i = 0; i < placeholder.length; i++) {

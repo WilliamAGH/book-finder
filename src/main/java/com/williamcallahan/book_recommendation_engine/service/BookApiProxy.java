@@ -31,6 +31,10 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class BookApiProxy {
@@ -49,6 +53,20 @@ public class BookApiProxy {
     private final String localCacheDirectory;
     private final boolean alwaysCheckS3First;
     private final boolean logApiCalls;
+
+    private final Executor ioExecutor = Executors.newFixedThreadPool(
+        Runtime.getRuntime().availableProcessors() * 2,
+        new ThreadFactory() {
+            private final AtomicInteger counter = new AtomicInteger();
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread thread = new Thread(r);
+                thread.setName("book-api-proxy-io-" + counter.incrementAndGet());
+                thread.setDaemon(true);
+                return thread;
+            }
+        }
+    );
 
     /**
      * Constructs the BookApiProxy with necessary dependencies
@@ -333,7 +351,7 @@ public class BookApiProxy {
             }
             logger.debug("Local cache MISS for bookId {} at path {}", bookId, bookFile);
             return Optional.empty();
-        });
+        }, ioExecutor);
     }
     
     /**
@@ -360,7 +378,7 @@ public class BookApiProxy {
                 // Depending on requirements, might want to throw a CompletionException here
                 // throw new CompletionException(e);
             }
-        });
+        }, ioExecutor);
     }
     
     /**
@@ -395,7 +413,7 @@ public class BookApiProxy {
             }
             logger.debug("Local cache MISS for search query '{}' at path {}", query, searchFile);
             return Optional.empty();
-        });
+        }, ioExecutor);
     }
     
     /**
@@ -427,6 +445,6 @@ public class BookApiProxy {
                 // Optionally, rethrow as a CompletionException if callers need to react to save failures
                 // throw new CompletionException(e);
             }
-        });
+        }, ioExecutor);
     }
 }
