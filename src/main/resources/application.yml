@@ -44,10 +44,7 @@ spring:
           max-idle: 8    # Aligned with RedisConfig.java
           min-idle: 2    # Aligned with RedisConfig.java
           max-wait: 5000 # Aligned with RedisConfig.java - 5 second timeout
-          # Connection validation for resilience
-          test-on-borrow: true
-          test-on-return: true
-          test-while-idle: true
+          # Connection validation for resilience (these properties are now handled in RedisConfig.java)
 
   web:
     resources:
