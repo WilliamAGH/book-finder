@@ -58,6 +58,7 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Objects;
 import reactor.core.scheduler.Schedulers;
+import java.util.concurrent.TimeUnit;
 
 @Controller
 public class HomeController {
@@ -328,7 +329,32 @@ public class HomeController {
                         .findRandomRecentBooksWithGoodCovers(count, excludeIds);
                     
                     if (recentCachedBooks.isEmpty()) {
-                        logger.info("No recent books with good covers found in cache");
+                        logger.info("No recent books with good covers found in cache, trying fallback query");
+                        // Fallback: use EXPLORE_QUERIES to get some books via API
+                        String fallbackQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
+                        logger.info("Using fallback query for homepage: '{}'", fallbackQuery);
+                        
+                        try {
+                            List<Book> fallbackBooks;
+                            try {
+                                fallbackBooks = bookCacheFacadeService.searchBooks(fallbackQuery, 1, count)
+                                    .get(10, TimeUnit.SECONDS);
+                            } catch (Exception e) {
+                                logger.warn("Fallback query timed out or failed: {}", e.getMessage());
+                                return Collections.<Book>emptyList();
+                            }
+
+                            if (fallbackBooks != null && !fallbackBooks.isEmpty()) {
+                                logger.info("Fallback query returned {} books for homepage", fallbackBooks.size());
+                                return fallbackBooks.stream()
+                                    .filter(book -> !excludeIds.contains(book.getId()))
+                                    .limit(count)
+                                    .collect(Collectors.toList());
+                            }
+                        } catch (Exception e) {
+                            logger.warn("Fallback query failed: {}", e.getMessage());
+                        }
+                        
                         return Collections.<Book>emptyList();
                     }
                     
