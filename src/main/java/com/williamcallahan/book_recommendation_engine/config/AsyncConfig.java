@@ -106,18 +106,18 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
     /**
      * Dedicated thread pool task executor for migration tasks
      * Features:
-     * - Core pool of 10 threads for migration workloads
+     * - Core pool of 20 threads for migration workloads
      * - Max pool of 50 threads for high throughput
-     * - Queue capacity of 200 tasks before rejecting new requests
+     * - Queue capacity of 500 tasks before rejecting new requests
      * - Descriptive thread naming for monitoring
      * - Fallback to caller thread when saturated (CallerRunsPolicy)
      */
     @Bean("migrationTaskExecutor")
     public AsyncTaskExecutor migrationTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(5); // Reduced from 10
-        executor.setMaxPoolSize(10); // Reduced from 50
-        executor.setQueueCapacity(200);
+        executor.setCorePoolSize(20); // Increased from 5 to 20
+        executor.setMaxPoolSize(50); // Increased from 10 to 50
+        executor.setQueueCapacity(500); // Increased from 200 to 500
         executor.setThreadNamePrefix("migration-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
