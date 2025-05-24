@@ -19,6 +19,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
@@ -43,6 +45,9 @@ class AffiliateLinkServiceTest {
 
     @Mock
     private MeterRegistry meterRegistry;
+
+    @Mock
+    private RedisCacheService redisCacheService;
     
     @Mock
     private Counter mockCounter;
@@ -76,6 +81,10 @@ class AffiliateLinkServiceTest {
         // Initialize default affiliate IDs using ReflectionTestUtils as they are @Value injected
         ReflectionTestUtils.setField(affiliateLinkService, "defaultBookshopAffiliateId", BOOKSHOP_AFFILIATE_ID);
         ReflectionTestUtils.setField(affiliateLinkService, "defaultAmazonAssociateTag", AMAZON_ASSOCIATE_TAG);
+
+        // Setup default behavior for RedisCacheService mock
+        when(redisCacheService.isRedisAvailableAsync()).thenReturn(CompletableFuture.completedFuture(false)); // Default to Redis not being available
+        when(redisCacheService.getCachedStringAsync(anyString())).thenReturn(CompletableFuture.completedFuture(Optional.empty())); // Default to cache miss
     }
 
     // Barnes & Noble Tests
@@ -90,7 +99,7 @@ class AffiliateLinkServiceTest {
         String encodedUrl = URLEncoder.encode(productUrl, StandardCharsets.UTF_8.toString());
         String expectedLink = String.format("https://www.anrdoezrs.net/click-%s-%s?url=%s&sid=%s",
                 CJ_PUBLISHER_ID, CJ_WEBSITE_ID, encodedUrl, TEST_ISBN);
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, CJ_PUBLISHER_ID, CJ_WEBSITE_ID));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, CJ_PUBLISHER_ID, CJ_WEBSITE_ID).join());
         verify(meterRegistry).counter("affiliate.links.generated", "type", "barnesandnoble");
         verify(mockCounter).increment();
     }
@@ -102,7 +111,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBarnesAndNobleLink_validIsbnNullCjPublisherId_returnsDirectSearchLink() {
         String expectedLink = "https://www.barnesandnoble.com/w/?ean=" + TEST_ISBN;
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, null, CJ_WEBSITE_ID));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, null, CJ_WEBSITE_ID).join());
     }
     
     /**
@@ -112,7 +121,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBarnesAndNobleLink_validIsbnEmptyCjPublisherId_returnsDirectSearchLink() {
         String expectedLink = "https://www.barnesandnoble.com/w/?ean=" + TEST_ISBN;
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, "", CJ_WEBSITE_ID));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, "", CJ_WEBSITE_ID).join());
     }
 
     /**
@@ -122,7 +131,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBarnesAndNobleLink_validIsbnNullCjWebsiteId_returnsDirectSearchLink() {
         String expectedLink = "https://www.barnesandnoble.com/w/?ean=" + TEST_ISBN;
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, CJ_PUBLISHER_ID, null));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, CJ_PUBLISHER_ID, null).join());
     }
 
     /**
@@ -132,7 +141,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBarnesAndNobleLink_validIsbnEmptyCjWebsiteId_returnsDirectSearchLink() {
         String expectedLink = "https://www.barnesandnoble.com/w/?ean=" + TEST_ISBN;
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, CJ_PUBLISHER_ID, ""));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, CJ_PUBLISHER_ID, "").join());
     }
 
     /**
@@ -142,7 +151,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBarnesAndNobleLink_validIsbnBothCjIdsNull_returnsDirectSearchLink() {
         String expectedLink = "https://www.barnesandnoble.com/w/?ean=" + TEST_ISBN;
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, null, null));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, null, null).join());
     }
     
     /**
@@ -152,7 +161,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBarnesAndNobleLink_validIsbnBothCjIdsEmpty_returnsDirectSearchLink() {
         String expectedLink = "https://www.barnesandnoble.com/w/?ean=" + TEST_ISBN;
-        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, "", ""));
+        assertEquals(expectedLink, affiliateLinkService.generateBarnesAndNobleLink(TEST_ISBN, "", "").join());
     }
 
     /**
@@ -161,7 +170,7 @@ class AffiliateLinkServiceTest {
      */
     @Test
     void generateBarnesAndNobleLink_nullIsbn_returnsBaseUrl() {
-        assertEquals("https://www.barnesandnoble.com/", affiliateLinkService.generateBarnesAndNobleLink(null, CJ_PUBLISHER_ID, CJ_WEBSITE_ID));
+        assertEquals("https://www.barnesandnoble.com/", affiliateLinkService.generateBarnesAndNobleLink(null, CJ_PUBLISHER_ID, CJ_WEBSITE_ID).join());
     }
 
     /**
@@ -170,7 +179,7 @@ class AffiliateLinkServiceTest {
      */
     @Test
     void generateBarnesAndNobleLink_emptyIsbn_returnsBaseUrl() {
-        assertEquals("https://www.barnesandnoble.com/", affiliateLinkService.generateBarnesAndNobleLink("", CJ_PUBLISHER_ID, CJ_WEBSITE_ID));
+        assertEquals("https://www.barnesandnoble.com/", affiliateLinkService.generateBarnesAndNobleLink("", CJ_PUBLISHER_ID, CJ_WEBSITE_ID).join());
     }
 
     // Test for encoding failure is tricky without deeper mocking of URLEncoder itself or refactoring the service
@@ -186,7 +195,7 @@ class AffiliateLinkServiceTest {
     @Test
     void generateBookshopLink_validIsbnAndAffiliateId_returnsAffiliateLink() {
         String expectedLink = String.format("https://bookshop.org/a/%s/%s", BOOKSHOP_AFFILIATE_ID, TEST_ISBN);
-        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, BOOKSHOP_AFFILIATE_ID));
+        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, BOOKSHOP_AFFILIATE_ID).join());
         verify(meterRegistry).counter("affiliate.links.generated", "type", "bookshop");
         verify(mockCounter, times(1)).increment(); // Called for Bookshop only
     }
@@ -199,7 +208,7 @@ s     */
     void generateBookshopLink_validIsbnNullAffiliateId_usesDefaultAffiliateId() {
         // Test with default ID from @Value (set in setUp)
         String expectedLink = String.format("https://bookshop.org/a/%s/%s", BOOKSHOP_AFFILIATE_ID, TEST_ISBN);
-        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, null));
+        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, null).join());
     }
     
     /**
@@ -209,7 +218,7 @@ s     */
     @Test
     void generateBookshopLink_validIsbnEmptyAffiliateId_usesDefaultAffiliateId() {
         String expectedLink = String.format("https://bookshop.org/a/%s/%s", BOOKSHOP_AFFILIATE_ID, TEST_ISBN);
-        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, ""));
+        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, "").join());
     }
     
     /**
@@ -220,7 +229,7 @@ s     */
     void generateBookshopLink_validIsbnNoDefaultAffiliateIdAndNullParam_returnsDirectProductLink() {
         ReflectionTestUtils.setField(affiliateLinkService, "defaultBookshopAffiliateId", null);
         String expectedLink = String.format("https://bookshop.org/book/%s", TEST_ISBN);
-        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, null));
+        assertEquals(expectedLink, affiliateLinkService.generateBookshopLink(TEST_ISBN, null).join());
     }
 
     /**
@@ -229,7 +238,7 @@ s     */
      */
     @Test
     void generateBookshopLink_nullIsbn_returnsBaseUrl() {
-        assertEquals("https://bookshop.org/", affiliateLinkService.generateBookshopLink(null, BOOKSHOP_AFFILIATE_ID));
+        assertEquals("https://bookshop.org/", affiliateLinkService.generateBookshopLink(null, BOOKSHOP_AFFILIATE_ID).join());
     }
 
     /**
@@ -238,7 +247,7 @@ s     */
      */
     @Test
     void generateBookshopLink_emptyIsbn_returnsBaseUrl() {
-        assertEquals("https://bookshop.org/", affiliateLinkService.generateBookshopLink("", BOOKSHOP_AFFILIATE_ID));
+        assertEquals("https://bookshop.org/", affiliateLinkService.generateBookshopLink("", BOOKSHOP_AFFILIATE_ID).join());
     }
 
     // Audible Tests
@@ -249,7 +258,7 @@ s     */
     @Test
     void generateAudibleLink_validAsinAndAssociateTag_returnsAffiliateLink() {
         String expectedLink = String.format("https://www.audible.com/pd/%s?tag=%s", TEST_ASIN, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, AMAZON_ASSOCIATE_TAG).join());
         verify(meterRegistry).counter("affiliate.links.generated", "type", "audible");
         verify(mockCounter, times(1)).increment(); // Called for Audible only
     }
@@ -261,7 +270,7 @@ s     */
     @Test
     void generateAudibleLink_validAsinNullAssociateTag_usesDefaultAssociateTag() {
         String expectedLink = String.format("https://www.audible.com/pd/%s?tag=%s", TEST_ASIN, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, null));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, null).join());
     }
     
     /**
@@ -271,7 +280,7 @@ s     */
     @Test
     void generateAudibleLink_validAsinEmptyAssociateTag_usesDefaultAssociateTag() {
         String expectedLink = String.format("https://www.audible.com/pd/%s?tag=%s", TEST_ASIN, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, ""));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, "").join());
     }
 
     /**
@@ -282,7 +291,7 @@ s     */
     void generateAudibleLink_validAsinNoDefaultAssociateTagAndNullParam_returnsDirectProductLink() {
         ReflectionTestUtils.setField(affiliateLinkService, "defaultAmazonAssociateTag", null);
         String expectedLink = String.format("https://www.audible.com/pd/%s", TEST_ASIN);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, null));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(TEST_ASIN, TEST_TITLE, null).join());
     }
 
     /**
@@ -294,7 +303,7 @@ s     */
     void generateAudibleLink_nullAsinValidTitleAndAssociateTag_returnsSearchLinkWithTag() throws UnsupportedEncodingException {
         String encodedTitle = URLEncoder.encode(TEST_TITLE, StandardCharsets.UTF_8.toString());
         String expectedLink = String.format("https://www.audible.com/search?keywords=%s&tag=%s", encodedTitle, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, AMAZON_ASSOCIATE_TAG).join());
     }
 
     /**
@@ -306,7 +315,7 @@ s     */
     void generateAudibleLink_nullAsinValidTitleNullAssociateTag_usesDefaultAssociateTagForSearch() throws UnsupportedEncodingException {
         String encodedTitle = URLEncoder.encode(TEST_TITLE, StandardCharsets.UTF_8.toString());
         String expectedLink = String.format("https://www.audible.com/search?keywords=%s&tag=%s", encodedTitle, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, null));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, null).join());
     }
     
     /**
@@ -318,7 +327,7 @@ s     */
     void generateAudibleLink_nullAsinValidTitleEmptyAssociateTag_usesDefaultAssociateTagForSearch() throws UnsupportedEncodingException {
         String encodedTitle = URLEncoder.encode(TEST_TITLE, StandardCharsets.UTF_8.toString());
         String expectedLink = String.format("https://www.audible.com/search?keywords=%s&tag=%s", encodedTitle, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, ""));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, "").join());
     }
 
     /**
@@ -331,7 +340,7 @@ s     */
         ReflectionTestUtils.setField(affiliateLinkService, "defaultAmazonAssociateTag", null);
         String encodedTitle = URLEncoder.encode(TEST_TITLE, StandardCharsets.UTF_8.toString());
         String expectedLink = String.format("https://www.audible.com/search?keywords=%s", encodedTitle);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, null));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, TEST_TITLE, null).join());
     }
 
     /**
@@ -341,7 +350,7 @@ s     */
     @Test
     void generateAudibleLink_nullAsinNullTitleWithAssociateTag_returnsGenericSearchWithTag() {
         String expectedLink = String.format("https://www.audible.com/search?tag=%s", AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, null, AMAZON_ASSOCIATE_TAG));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, null, AMAZON_ASSOCIATE_TAG).join());
     }
     
     /**
@@ -351,7 +360,7 @@ s     */
     @Test
     void generateAudibleLink_nullAsinEmptyTitleWithAssociateTag_returnsGenericSearchWithTag() {
         String expectedLink = String.format("https://www.audible.com/search?tag=%s", AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, "", AMAZON_ASSOCIATE_TAG));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, "", AMAZON_ASSOCIATE_TAG).join());
     }
 
     /**
@@ -361,7 +370,7 @@ s     */
     @Test
     void generateAudibleLink_nullAsinNullTitleNullAssociateTag_usesDefaultAssociateTagForGenericSearch() {
         String expectedLink = String.format("https://www.audible.com/search?tag=%s", AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, null, null));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, null, null).join());
     }
     
     /**
@@ -371,7 +380,7 @@ s     */
     @Test
     void generateAudibleLink_nullAsinNullTitleEmptyAssociateTag_usesDefaultAssociateTagForGenericSearch() {
         String expectedLink = String.format("https://www.audible.com/search?tag=%s", AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, null, ""));
+        assertEquals(expectedLink, affiliateLinkService.generateAudibleLink(null, null, "").join());
     }
 
     /**
@@ -381,7 +390,7 @@ s     */
     @Test
     void generateAudibleLink_nullAsinNullTitleNoDefaultAssociateTagAndNullParam_returnsGenericSearchWithoutTag() {
         ReflectionTestUtils.setField(affiliateLinkService, "defaultAmazonAssociateTag", null);
-        assertEquals("https://www.audible.com/search", affiliateLinkService.generateAudibleLink(null, null, null));
+        assertEquals("https://www.audible.com/search", affiliateLinkService.generateAudibleLink(null, null, null).join());
     }
     
     // Test for encoding failure in Audible link generation (similar to B&N, would require refactor or deeper mocking)
@@ -393,21 +402,21 @@ s     */
      */
     @Test
     void generateAmazonLink_validIsbnAndAssociateTag_returnsAffiliateLink() {
-        String expectedLink = String.format("https://www.amazon.com/dp/%s?tag=%s", TEST_ISBN, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAmazonLink(TEST_ISBN, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
-        verify(meterRegistry).counter("affiliate.links.generated", "type", "amazon");
-        verify(mockCounter, times(1)).increment();
+        String expectedLink = String.format("https://www.amazon.com/s?k=%s&ref=nosim&tag=%s", TEST_ISBN, AMAZON_ASSOCIATE_TAG);
+        assertEquals(expectedLink, affiliateLinkService.generateAmazonLink(TEST_ISBN, null, AMAZON_ASSOCIATE_TAG).join()); // Using null for title as ISBN is primary
+        // Assuming this is the first test for amazon links or mocks are reset, verify general amazon link counter
+        verify(meterRegistry).counter("affiliate.links.generated", "type", "amazon"); 
+        verify(mockCounter).increment(); // Verify the shared mockCounter is incremented
     }
 
     /**
-     * Tests Amazon link generation with null ISBN, valid title, and associate tag
      * Verifies generation of search link with tag
      * @throws UnsupportedEncodingException if URL encoding fails
      */
     @Test
     void generateAmazonLink_nullIsbnValidTitleAndAssociateTag_returnsSearchLinkWithTag() throws UnsupportedEncodingException {
         String encodedTitle = URLEncoder.encode(TEST_TITLE, StandardCharsets.UTF_8.toString());
-        String expectedLink = String.format("https://www.amazon.com/s?k=%s&tag=%s", encodedTitle, AMAZON_ASSOCIATE_TAG);
-        assertEquals(expectedLink, affiliateLinkService.generateAmazonLink(null, TEST_TITLE, AMAZON_ASSOCIATE_TAG));
+        String expectedLink = String.format("https://www.amazon.com/s?k=%s&ref=nosim&tag=%s", encodedTitle, AMAZON_ASSOCIATE_TAG);
+        assertEquals(expectedLink, affiliateLinkService.generateAmazonLink(null, TEST_TITLE, AMAZON_ASSOCIATE_TAG).join());
     }
 }

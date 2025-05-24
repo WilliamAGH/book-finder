@@ -42,7 +42,7 @@ class GoogleBooksServiceTest {
     @Mock
     private GoogleApiFetcher googleApiFetcherMock;
 
-    @Mock // Added mock for BookDataOrchestrator
+    @Mock
     private BookDataOrchestrator bookDataOrchestratorMock;
 
     @Spy
@@ -161,8 +161,8 @@ class GoogleBooksServiceTest {
         StepVerifier.create(result)
             .expectNextMatches(books -> books.isEmpty()) // Explicitly check that the list is empty
             .verifyComplete();
-        // Verify that the fallback method recorded the failure
-        verify(apiRequestMonitorMock).recordFailedRequest(anyString(), anyString());
+        // Verify that the fallback method recorded the failure - expect 2 calls due to error handling in both searchBooks and searchBooksAsyncReactive
+        verify(apiRequestMonitorMock, org.mockito.Mockito.times(2)).recordFailedRequest(anyString(), anyString());
     }
 
     /**

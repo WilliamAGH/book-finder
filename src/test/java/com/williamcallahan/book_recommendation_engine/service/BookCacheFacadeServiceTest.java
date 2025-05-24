@@ -24,8 +24,10 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
+import java.util.concurrent.CompletableFuture;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -64,9 +66,14 @@ class BookCacheFacadeServiceTest {
     void setUp() {
         testBook = createTestBook(testBookId, "Effective Java", "Joshua Bloch");
         // Setup for cacheEnabled field in the facade
-        ReflectionTestUtils.setField(bookCacheFacadeService, "cacheEnabled", true);
+        ReflectionTestUtils.setField(bookCacheFacadeService, "dbCacheEnabled", true);
         // Mock the CacheManager to return our mocked "books" cache
         when(cacheManager.getCache("books")).thenReturn(booksSpringCache);
+        // Mock RedisCacheService async methods to prevent null returns
+        when(redisCacheService.getAllBookIdsAsync()).thenReturn(CompletableFuture.completedFuture(Collections.emptySet()));
+        when(redisCacheService.isRedisAvailableAsync()).thenReturn(CompletableFuture.completedFuture(true));
+        when(redisCacheService.evictBookAsync(anyString())).thenReturn(CompletableFuture.completedFuture(null));
+        when(redisCacheService.getBookByIdAsync(anyString())).thenReturn(CompletableFuture.completedFuture(Optional.empty()));
     }
 
     private Book createTestBook(String id, String title, String author) {
@@ -86,20 +93,20 @@ class BookCacheFacadeServiceTest {
     @DisplayName("getBookById (facade) delegates to BookSyncCacheService when Spring Cache misses")
     void getBookById_facadeDelegatesToSyncService_onSpringCacheMiss() {
         when(booksSpringCache.get(testBookId, Book.class)).thenReturn(null); // Spring cache miss
-        when(bookSyncCacheService.getBookById(testBookId)).thenReturn(testBook);
+        when(bookSyncCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(testBook));
 
-        Book result = bookCacheFacadeService.getBookById(testBookId);
+        Book result = bookCacheFacadeService.getBookById(testBookId).join();
 
         assertNotNull(result);
         assertEquals(testBookId, result.getId());
-        verify(bookSyncCacheService).getBookById(testBookId);
+        verify(bookSyncCacheService).getBookByIdAsync(testBookId);
     }
     
     @Test
     @DisplayName("getCachedBook returns book from Spring Cache")
     void getCachedBook_returnsFromSpringCache() {
         when(booksSpringCache.get(testBookId, Book.class)).thenReturn(testBook);
-        Optional<Book> result = bookCacheFacadeService.getCachedBook(testBookId);
+        Optional<Book> result = bookCacheFacadeService.getCachedBook(testBookId).join();
         assertTrue(result.isPresent());
         assertEquals(testBookId, result.get().getId());
         verify(booksSpringCache).get(testBookId, Book.class);
@@ -110,20 +117,20 @@ class BookCacheFacadeServiceTest {
     @DisplayName("getCachedBook returns book from Redis if Spring Cache misses")
     void getCachedBook_returnsFromRedis_ifSpringMiss() {
         when(booksSpringCache.get(testBookId, Book.class)).thenReturn(null);
-        when(redisCacheService.getBookById(testBookId)).thenReturn(Optional.of(testBook));
-        Optional<Book> result = bookCacheFacadeService.getCachedBook(testBookId);
+        when(redisCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(Optional.of(testBook)));
+        Optional<Book> result = bookCacheFacadeService.getCachedBook(testBookId).join();
         assertTrue(result.isPresent());
         assertEquals(testBookId, result.get().getId());
-        verify(redisCacheService).getBookById(testBookId);
+        verify(redisCacheService).getBookByIdAsync(testBookId);
         verifyNoInteractions(cachedBookRepository);
     }
     
     @Test
     @DisplayName("getCachedBook returns book from DB if Spring Cache and Redis miss")
     void getCachedBook_returnsFromDb_ifSpringAndRedisMiss() {
-        ReflectionTestUtils.setField(bookCacheFacadeService, "cacheEnabled", true);
+        ReflectionTestUtils.setField(bookCacheFacadeService, "dbCacheEnabled", true);
         when(booksSpringCache.get(testBookId, Book.class)).thenReturn(null);
-        when(redisCacheService.getBookById(testBookId)).thenReturn(Optional.empty());
+        when(redisCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(Optional.empty()));
         
         CachedBook cachedDbBook = new CachedBook(); // Assume conversion
         cachedDbBook.setId(testBookId); // Use String ID
@@ -132,7 +139,7 @@ class BookCacheFacadeServiceTest {
 
         when(cachedBookRepository.findByGoogleBooksId(testBookId)).thenReturn(Optional.of(cachedDbBook));
         
-        Optional<Book> result = bookCacheFacadeService.getCachedBook(testBookId);
+        Optional<Book> result = bookCacheFacadeService.getCachedBook(testBookId).join();
         assertTrue(result.isPresent());
         assertEquals(testBookId, result.get().getId());
         verify(cachedBookRepository).findByGoogleBooksId(testBookId);
@@ -143,20 +150,23 @@ class BookCacheFacadeServiceTest {
     @DisplayName("getCachedBook returns empty Optional when book not in any cache")
     void getCachedBook_ShouldReturnEmpty_WhenAbsentInAllCaches() {
         when(booksSpringCache.get(testBookId, Book.class)).thenReturn(null);
-        when(redisCacheService.getBookById(testBookId)).thenReturn(Optional.empty());
+        when(redisCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(Optional.empty()));
         when(cachedBookRepository.findByGoogleBooksId(testBookId)).thenReturn(Optional.empty());
         
-        Optional<Book> actual = bookCacheFacadeService.getCachedBook(testBookId);
+        Optional<Book> actual = bookCacheFacadeService.getCachedBook(testBookId).join();
         
         assertFalse(actual.isPresent());
     }
 
     @Test
     @DisplayName("cacheBook delegates to sync and reactive services")
-    void cacheBook_delegatesToSubServices() {
+    void cacheBook_delegatesToSubServices() throws Exception {
         when(bookReactiveCacheService.cacheBookReactive(testBook)).thenReturn(Mono.empty());
         
-        bookCacheFacadeService.cacheBook(testBook);
+        bookCacheFacadeService.cacheBook(testBook).join();
+        
+        // Allow time for the async operations to complete
+        Thread.sleep(100);
         
         verify(booksSpringCache).put(testBookId, testBook);
         verify(bookReactiveCacheService).cacheBookReactive(testBook);
@@ -165,17 +175,21 @@ class BookCacheFacadeServiceTest {
     @Test
     @DisplayName("evictBook delegates to sync, redis, and db services")
     void evictBook_delegatesToSubServices() {
-        bookCacheFacadeService.evictBook(testBookId);
+        when(redisCacheService.evictBookAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(null));
+        when(redisCacheService.isRedisAvailableAsync()).thenReturn(CompletableFuture.completedFuture(true));
+        when(cachedBookRepository.findByGoogleBooksId(testBookId)).thenReturn(Optional.empty());
+        
+        bookCacheFacadeService.evictBook(testBookId).join();
         
         verify(booksSpringCache).evictIfPresent(testBookId);
-        verify(redisCacheService).evictBook(testBookId);
-        verify(cachedBookRepository).findByGoogleBooksId(testBookId); // and then deleteById if present
+        verify(redisCacheService).evictBookAsync(testBookId);
+        verify(cachedBookRepository).findByGoogleBooksId(testBookId);
     }
 
     @Test
     @DisplayName("clearAll delegates to sync, spring cache, and db repo")
     void clearAll_delegatesToSubServices() {
-        bookCacheFacadeService.clearAll();
+        bookCacheFacadeService.clearAll().join();
         
         verify(booksSpringCache).clear();
         verify(cachedBookRepository).deleteAll();
@@ -187,10 +201,10 @@ class BookCacheFacadeServiceTest {
     void updateBook_callsEvictAndCache() {
         // Use spy to verify method calls on the same instance
         BookCacheFacadeService spyFacade = spy(bookCacheFacadeService);
-        doNothing().when(spyFacade).evictBook(testBookId);
-        doNothing().when(spyFacade).cacheBook(testBook);
+        when(spyFacade.evictBook(testBookId)).thenReturn(CompletableFuture.completedFuture(null));
+        when(spyFacade.cacheBook(testBook)).thenReturn(CompletableFuture.completedFuture(null));
 
-        spyFacade.updateBook(testBook);
+        spyFacade.updateBook(testBook).join();
 
         verify(spyFacade).evictBook(testBookId);
         verify(spyFacade).cacheBook(testBook);
@@ -200,9 +214,9 @@ class BookCacheFacadeServiceTest {
     @DisplayName("removeBook calls evictBook")
     void removeBook_callsEvictBook() {
         BookCacheFacadeService spyFacade = spy(bookCacheFacadeService);
-        doNothing().when(spyFacade).evictBook(testBookId);
+        when(spyFacade.evictBook(testBookId)).thenReturn(CompletableFuture.completedFuture(null));
         
-        spyFacade.removeBook(testBookId);
+        spyFacade.removeBook(testBookId).join();
         
         verify(spyFacade).evictBook(testBookId);
     }
@@ -211,23 +225,23 @@ class BookCacheFacadeServiceTest {
     @DisplayName("isBookInCache checks relevant caches")
     void isBookInCache_checksRelevantLayers() {
         when(booksSpringCache.get(testBookId)).thenReturn(null);
-        when(redisCacheService.getBookById(testBookId)).thenReturn(Optional.empty());
+        when(redisCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(Optional.empty()));
         when(cachedBookRepository.findByGoogleBooksId(testBookId)).thenReturn(Optional.empty());
-        assertFalse(bookCacheFacadeService.isBookInCache(testBookId));
+        assertFalse(bookCacheFacadeService.isBookInCache(testBookId).join());
 
         when(booksSpringCache.get(testBookId)).thenReturn(new Cache.ValueWrapper() {
             @Override public Object get() { return testBook; }
         });
-        assertTrue(bookCacheFacadeService.isBookInCache(testBookId));
+        assertTrue(bookCacheFacadeService.isBookInCache(testBookId).join());
         when(booksSpringCache.get(testBookId)).thenReturn(null); // reset
 
-        when(redisCacheService.getBookById(testBookId)).thenReturn(Optional.of(testBook));
-        assertTrue(bookCacheFacadeService.isBookInCache(testBookId));
-        when(redisCacheService.getBookById(testBookId)).thenReturn(Optional.empty());// reset
+        when(redisCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(Optional.of(testBook)));
+        assertTrue(bookCacheFacadeService.isBookInCache(testBookId).join());
+        when(redisCacheService.getBookByIdAsync(testBookId)).thenReturn(CompletableFuture.completedFuture(Optional.empty()));// reset
         
         CachedBook cachedDbBook = new CachedBook();
         when(cachedBookRepository.findByGoogleBooksId(testBookId)).thenReturn(Optional.of(cachedDbBook));
-        assertTrue(bookCacheFacadeService.isBookInCache(testBookId));
+        assertTrue(bookCacheFacadeService.isBookInCache(testBookId).join());
     }
     
     @Test
@@ -236,7 +250,7 @@ class BookCacheFacadeServiceTest {
         Set<String> expectedIds = Set.of("id1", "id2");
         when(cachedBookRepository.findAllDistinctGoogleBooksIds()).thenReturn(expectedIds);
         
-        Set<String> actualIds = bookCacheFacadeService.getAllCachedBookIds();
+        Set<String> actualIds = bookCacheFacadeService.getAllCachedBookIds().join();
         
         assertEquals(expectedIds, actualIds);
         verify(cachedBookRepository).findAllDistinctGoogleBooksIds();
@@ -246,9 +260,9 @@ class BookCacheFacadeServiceTest {
     @DisplayName("getAllCachedBookIds returns empty set when repository is null")
     void getAllCachedBookIds_returnsEmptySet_whenRepositoryNull() {
         ReflectionTestUtils.setField(bookCacheFacadeService, "cachedBookRepository", null);
-        ReflectionTestUtils.setField(bookCacheFacadeService, "cacheEnabled", false); // Also ensure cacheEnabled reflects this
+        ReflectionTestUtils.setField(bookCacheFacadeService, "dbCacheEnabled", false); // Also ensure dbCacheEnabled reflects this
         
-        Set<String> actualIds = bookCacheFacadeService.getAllCachedBookIds();
+        Set<String> actualIds = bookCacheFacadeService.getAllCachedBookIds().join();
         
         assertTrue(actualIds.isEmpty());
     }
