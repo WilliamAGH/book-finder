@@ -19,6 +19,8 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.CompletionException;
+
 @Component("jsonS3ToRedis_JsonS3ToRedisRunner")
 @Profile("jsontoredis") // Activate this runner only when 'jsontoredis' profile is active
 public class JsonS3ToRedisRunner implements CommandLineRunner {
@@ -64,6 +66,15 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
         try {
             jsonS3ToRedisService.performMigrationAsync().join();
             log.info("S3 JSON to Redis migration process completed by runner.");
+        } catch (CompletionException ce) {
+            Throwable cause = ce.getCause() != null ? ce.getCause() : ce;
+            log.error("S3 JSON to Redis migration process failed: {}", cause.getMessage(), cause);
+            // Rethrow the original exception if it's checked, otherwise rethrow the CompletionException
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            } else {
+                throw ce;
+            }
         } catch (Exception e) {
             log.error("S3 JSON to Redis migration process failed with an error: {}", e.getMessage(), e);
             // Rethrow the exception to ensure the application exits with an error status,

@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -43,7 +44,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.scheduling.annotation.Async;
 
 @RestController
 @RequestMapping("/admin")
@@ -204,7 +204,6 @@ public class AdminController {
      *
      * @return A ResponseEntity indicating the outcome of the trigger
      */
-    @Async
     @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
     public CompletableFuture<ResponseEntity<String>> triggerNytBestsellerProcessing() {
         logger.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
@@ -234,7 +233,6 @@ public class AdminController {
      *
      * @return A ResponseEntity indicating the outcome of the trigger
      */
-    @Async
     @PostMapping(value = "/trigger-cache-warming", produces = MediaType.TEXT_PLAIN_VALUE)
     public CompletableFuture<ResponseEntity<String>> triggerCacheWarming() {
         logger.info("Admin endpoint /admin/trigger-cache-warming invoked.");
@@ -264,7 +262,6 @@ public class AdminController {
      *
      * @return A ResponseEntity containing the circuit breaker status
      */
-    @Async
     @GetMapping(value = "/circuit-breaker/status", produces = MediaType.TEXT_PLAIN_VALUE)
     public CompletableFuture<ResponseEntity<String>> getCircuitBreakerStatus() {
         logger.info("Admin endpoint /admin/circuit-breaker/status invoked.");
@@ -275,17 +272,16 @@ public class AdminController {
             return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(errorMessage));
         }
 
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                String status = apiCircuitBreakerService.getCircuitStatus().join();
+        return apiCircuitBreakerService.getCircuitStatus()
+            .thenApply(status -> {
                 logger.info("Circuit breaker status retrieved: {}", status);
                 return ResponseEntity.ok(status);
-            } catch (Exception e) {
+            })
+            .exceptionally(e -> {
                 String errorMessage = "Failed to get circuit breaker status: " + e.getMessage();
                 logger.error(errorMessage, e);
                 return ResponseEntity.internalServerError().body(errorMessage);
-            }
-        });
+            });
     }
 
     /**
@@ -293,7 +289,6 @@ public class AdminController {
      *
      * @return A ResponseEntity indicating the outcome of the reset
      */
-    @Async
     @PostMapping(value = "/circuit-breaker/reset", produces = MediaType.TEXT_PLAIN_VALUE)
     public CompletableFuture<ResponseEntity<String>> resetCircuitBreaker() {
         logger.info("Admin endpoint /admin/circuit-breaker/reset invoked.");
@@ -324,7 +319,6 @@ public class AdminController {
      * @param dryRun Optional request parameter to perform a dry run without actual changes. Defaults to true
      * @return A ResponseEntity containing the consolidation summary
      */
-    @Async
     @PostMapping(value = "/data/consolidate-books", produces = MediaType.TEXT_PLAIN_VALUE)
     public CompletableFuture<ResponseEntity<String>> triggerBookDataConsolidation(
             @RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
@@ -356,7 +350,6 @@ public class AdminController {
      *
      * @return A ResponseEntity containing cache integrity statistics
      */
-    @Async
     @GetMapping(value = "/cache/diagnose", produces = MediaType.APPLICATION_JSON_VALUE)
     public CompletableFuture<ResponseEntity<Map<String,Integer>>> diagnoseCacheIntegrity() {
         logger.info("Admin endpoint /admin/cache/diagnose invoked.");
@@ -432,35 +425,38 @@ public class AdminController {
             @RequestParam(value = "limit", defaultValue = "100") int limit,
             @RequestParam(value = "dryRun", defaultValue = "true") boolean dryRun) {
         
-        if (cachedBookRepository == null) { // Changed
+        if (cachedBookRepository == null) {
             return CompletableFuture.completedFuture(
                 ResponseEntity.badRequest().body("Repository service is not available.")
             );
         }
         
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                logger.info("Starting embedding generation. Limit: {}, Dry run: {}", limit, dryRun);
-                
-                // Get books without embeddings or with wrong dimension
+        logger.info("Starting embedding generation. Limit: {}, Dry run: {}", limit, dryRun);
+        
+        // Use reactive approach from the beginning
+        return Mono.fromFuture(cachedBookRepository.findAllAsync())
+            .map(allBooks -> {
                 var books = new ArrayList<CachedBook>();
-                for (CachedBook book : cachedBookRepository.findAll()) { // Changed
+                for (CachedBook book : allBooks) {
                     if (embeddingService.shouldGenerateEmbedding(book)) {
                         books.add(book);
                         if (books.size() >= limit) break;
                     }
                 }
-                
+                return books;
+            })
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(books -> {
                 if (books.isEmpty()) {
                     String message = "No books found needing embedding generation.";
                     logger.info(message);
-                    return ResponseEntity.ok(message);
+                    return Mono.just(ResponseEntity.ok(message));
                 }
                 
                 if (dryRun) {
                     String message = String.format("Dry run: Found %d books that need embeddings generated.", books.size());
                     logger.info(message);
-                    return ResponseEntity.ok(message);
+                    return Mono.just(ResponseEntity.ok(message));
                 }
                 
                 AtomicInteger processedCount = new AtomicInteger(0);
@@ -468,22 +464,22 @@ public class AdminController {
                 int totalBooksToProcess = books.size();
 
                 // Use reactive streams with controlled concurrency
-                Flux.fromIterable(books)
+                return Flux.fromIterable(books)
                     .flatMap(book -> embeddingService.generateEmbeddingForBook(book)
                         .flatMap(embedding -> {
                             if (embedding != null) {
                                 book.setEmbedding(embedding);
-                                // Assuming cachedBookRepository.save() is synchronous or can be wrapped
-                                // If save is also reactive, chain it: .then(cachedBookRepository.saveReactive(book))
-                                try {
-                                    cachedBookRepository.save(book); // Changed
-                                    processedCount.incrementAndGet();
-                                } catch (Exception ex) {
-                                    logger.warn("Failed to save book {} after embedding generation: {}", book.getId(), ex.getMessage());
-                                    errorCount.incrementAndGet();
-                                    return Mono.empty(); // Or handle error differently
-                                }
-                                return Mono.just(book);
+                                // Use async save properly
+                                return Mono.fromFuture(cachedBookRepository.saveAsync(book))
+                                    .map(savedBook -> {
+                                        processedCount.incrementAndGet();
+                                        return savedBook;
+                                    })
+                                    .onErrorResume(ex -> {
+                                        logger.warn("Failed to save book {} after embedding generation: {}", book.getId(), ex.getMessage());
+                                        errorCount.incrementAndGet();
+                                        return Mono.empty();
+                                    });
                             }
                             return Mono.empty();
                         })
@@ -494,29 +490,26 @@ public class AdminController {
                             }
                         })
                         .onErrorResume(e -> {
-                            // This error handling is for errors within the flatMap chain for a single book
-                            // The book object might not be available here if the error happened before book was emitted
-                            // For specific book error logging, doOnError inside the inner Mono is better.
                             logger.warn("Error during embedding generation stream for a book: {}", e.getMessage());
                             errorCount.incrementAndGet();
-                            return Mono.empty(); // Continue with other books
+                            return Mono.empty();
                         }),
                         10 // Concurrency limit
                     )
                     .collectList()
-                    .block(); // Block here to wait for all reactive processing to finish before returning response
-
-                String message = String.format("Embedding generation completed. Processed: %d, Errors: %d, Total found: %d",
-                    processedCount.get(), errorCount.get(), totalBooksToProcess);
-                logger.info(message);
-                return ResponseEntity.ok(message);
-
-            } catch (Exception e) {
+                    .map(processedBooks -> {
+                        String message = String.format("Embedding generation completed. Processed: %d, Errors: %d, Total found: %d",
+                            processedCount.get(), errorCount.get(), totalBooksToProcess);
+                        logger.info(message);
+                        return ResponseEntity.ok(message);
+                    });
+            })
+            .onErrorResume(e -> {
                 String errorMessage = String.format("Failed to generate embeddings. Limit: %d, Dry run: %b. Error: %s", 
                     limit, dryRun, e.getMessage());
                 logger.error(errorMessage, e);
-                return ResponseEntity.internalServerError().body(errorMessage);
-            }
-        });
+                return Mono.just(ResponseEntity.internalServerError().body(errorMessage));
+            })
+            .toFuture();
     }
 }

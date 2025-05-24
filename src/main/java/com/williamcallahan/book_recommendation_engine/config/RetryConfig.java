@@ -11,6 +11,7 @@
 
 package com.williamcallahan.book_recommendation_engine.config;
 
+import com.williamcallahan.book_recommendation_engine.service.PoolShutdownException;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.retry.annotation.EnableRetry;
@@ -40,7 +41,7 @@ public class RetryConfig {
         // Configure retry policy
         Map<Class<? extends Throwable>, Boolean> retryableExceptions = new HashMap<>();
         retryableExceptions.put(JedisConnectionException.class, true);
-        retryableExceptions.put(IllegalStateException.class, true); // Connection pool shutdown
+        retryableExceptions.put(PoolShutdownException.class, true); // Connection pool shutdown
         
         SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(3, retryableExceptions);
         retryTemplate.setRetryPolicy(retryPolicy);
@@ -68,7 +69,7 @@ public class RetryConfig {
         // Configure retry policy
         Map<Class<? extends Throwable>, Boolean> retryableExceptions = new HashMap<>();
         retryableExceptions.put(S3Exception.class, true);
-        retryableExceptions.put(IllegalStateException.class, true); // Connection pool shutdown
+        retryableExceptions.put(PoolShutdownException.class, true); // Connection pool shutdown
         
         SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(3, retryableExceptions);
         retryTemplate.setRetryPolicy(retryPolicy);
