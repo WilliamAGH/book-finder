@@ -102,7 +102,7 @@ public class BackgroundEnrichmentService {
                             .flux()
                             .onErrorResume(e -> {
                                 logger.warn("Error fetching cover for book {}: {}", bookId, e.getMessage());
-                                return Flux.empty();
+                                return Flux.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "cover", "error", e.getMessage())));
                             });
                         Flux<EnrichmentEvent> editionsFlux = duplicateBookService
                             .populateDuplicateEditionsReactive(book)
@@ -111,7 +111,7 @@ public class BackgroundEnrichmentService {
                             .flux()
                             .onErrorResume(e -> {
                                 logger.warn("Error fetching editions for book {}: {}", bookId, e.getMessage());
-                                return Flux.empty();
+                                return Flux.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "editions", "error", e.getMessage())));
                             });
                         Flux<EnrichmentEvent> affiliateLinksFlux = Flux.defer(() ->
                             Mono.zip(
@@ -125,7 +125,8 @@ public class BackgroundEnrichmentService {
                             )).map(payload -> new EnrichmentEvent("affiliateLinks", bookId, payload))
                         ).onErrorResume(e -> {
                             logger.warn("Error fetching affiliate links for book {}: {}", bookId, e.getMessage());
-                            return Mono.empty();
+                            // This was a Mono, so we convert the error event to a Mono
+                            return Mono.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "affiliateLinks", "error", e.getMessage())));
                         });
                         Flux<EnrichmentEvent> similarBooksFlux = recommendationService
                             .getSimilarBooks(bookId, DEFAULT_SIMILAR_COUNT)
@@ -133,7 +134,7 @@ public class BackgroundEnrichmentService {
                             .flux()
                             .onErrorResume(e -> {
                                 logger.warn("Error fetching similar books for book {}: {}", bookId, e.getMessage());
-                                return Flux.empty();
+                                return Flux.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "similar", "error", e.getMessage())));
                             });
                         return Flux.merge(coverFlux, editionsFlux, affiliateLinksFlux, similarBooksFlux);
                     });
@@ -147,7 +148,7 @@ public class BackgroundEnrichmentService {
                             .flux()
                             .onErrorResume(e -> {
                                 logger.warn("Error fetching cover for recent book {}: {}", bookId, e.getMessage());
-                                return Flux.empty();
+                                return Flux.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "cover", "error", e.getMessage())));
                             });
                         Flux<EnrichmentEvent> editionsFlux = duplicateBookService
                             .populateDuplicateEditionsReactive(book)
@@ -156,7 +157,7 @@ public class BackgroundEnrichmentService {
                             .flux()
                             .onErrorResume(e -> {
                                 logger.warn("Error fetching editions for recent book {}: {}", bookId, e.getMessage());
-                                return Flux.empty();
+                                return Flux.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "editions", "error", e.getMessage())));
                             });
                         Flux<EnrichmentEvent> affiliateLinksFlux = Flux.defer(() ->
                             Mono.zip(
@@ -170,7 +171,7 @@ public class BackgroundEnrichmentService {
                             )).map(payload -> new EnrichmentEvent("affiliateLinks", bookId, payload))
                         ).onErrorResume(e -> {
                             logger.warn("Error fetching affiliate links for recent book {}: {}", bookId, e.getMessage());
-                            return Mono.empty();
+                            return Mono.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "affiliateLinks", "error", e.getMessage())));
                         });
                         Flux<EnrichmentEvent> similarBooksFlux = recommendationService
                             .getSimilarBooks(bookId, DEFAULT_SIMILAR_COUNT)
@@ -178,7 +179,7 @@ public class BackgroundEnrichmentService {
                             .flux()
                             .onErrorResume(e -> {
                                 logger.warn("Error fetching similar books for recent book {}: {}", bookId, e.getMessage());
-                                return Flux.empty();
+                                return Flux.just(new EnrichmentEvent("enrichment_failed", bookId, Map.of("failed_type", "similar", "error", e.getMessage())));
                             });
                         return Flux.merge(coverFlux, editionsFlux, affiliateLinksFlux, similarBooksFlux);
                     });

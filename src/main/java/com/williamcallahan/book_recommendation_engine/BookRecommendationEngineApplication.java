@@ -14,10 +14,12 @@ package com.williamcallahan.book_recommendation_engine;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.retry.annotation.EnableRetry;
+import com.williamcallahan.book_recommendation_engine.config.*;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration;
@@ -36,6 +38,15 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoCon
     org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class,
     // Disable management web security auto-configuration since we have custom security
     org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration.class
+})
+@EnableConfigurationProperties({
+    AppConfigurationProperties.class,
+    S3ConfigurationProperties.class,
+    GoogleConfigurationProperties.class,
+    NytConfigurationProperties.class,
+    OpenLibraryConfigurationProperties.class,
+    SitemapConfigurationProperties.class,
+    JsonToRedisConfigurationProperties.class
 })
 @EnableCaching
 @EnableAsync(proxyTargetClass = true)
