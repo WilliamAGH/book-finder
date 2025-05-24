@@ -13,6 +13,7 @@
  * - Supports real-time search result updates and progress notifications
  * - Routes search events to query-specific WebSocket topics
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
@@ -23,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
 import org.springframework.messaging.core.MessageSendingOperations;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
@@ -60,6 +62,7 @@ public class CoverUpdateNotifierService {
      * 
      * @param event The BookCoverUpdatedEvent containing updated cover information
      */
+    @Async
     @EventListener
     public void handleBookCoverUpdated(BookCoverUpdatedEvent event) {
         if (event.getGoogleBookId() == null || event.getNewCoverUrl() == null) {
@@ -94,6 +97,7 @@ public class CoverUpdateNotifierService {
      * 
      * @param event The SearchResultsUpdatedEvent containing new search results
      */
+    @Async
     @EventListener
     public void handleSearchResultsUpdated(SearchResultsUpdatedEvent event) {
         if (event.getQueryHash() == null || event.getNewResults() == null) {
@@ -150,6 +154,7 @@ public class CoverUpdateNotifierService {
      * 
      * @param event The SearchProgressEvent containing progress information
      */
+    @Async
     @EventListener
     public void handleSearchProgress(SearchProgressEvent event) {
         if (event.getQueryHash() == null) {

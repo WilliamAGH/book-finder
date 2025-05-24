@@ -12,6 +12,7 @@
  * 
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.config;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -153,62 +154,6 @@ class HomepageHealthIndicator implements ReactiveHealthIndicator {
      */
     @Override
     public Mono<Health> health() {
-        return delegate.checkPage();
-    }
-}
-
-/**
- * Health indicator for checking book detail page availability
- *
- */
-@Component("bookDetailPageHealthIndicator")
-class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
-    private final WebPageHealthIndicator delegate;
-    private final String testBookId;
-    private final boolean isConfigured;
-
-    /**
-     * Constructs a BookDetailPageHealthIndicator with required dependencies
-     * 
-     * @param webClientBuilder The Spring WebClient builder for making HTTP requests
-     * @param serverPort The port on which the server is running (defaults to 8081)
-     * @param testBookId The ID of a test book to check for existence (configured via properties)
-     * @param reportErrorsAsDown If true, HTTP errors will be reported as DOWN status
-     * 
-     * @implNote Creates a WebPageHealthIndicator delegate if a test book ID is configured
-     * Otherwise, remains in an unconfigured state and will return UP with a not_configured detail
-     */
-    public BookDetailPageHealthIndicator(
-            WebClient.Builder webClientBuilder,
-            @Value("${server.port:8081}") int serverPort,
-            @Value("${healthcheck.test-book-id:}") String testBookId,
-            @Value("${healthcheck.report-errors-as-down:true}") boolean reportErrorsAsDown) {
-        this.testBookId = testBookId;
-        this.isConfigured = this.testBookId != null && !this.testBookId.trim().isEmpty();
-        if (isConfigured) {
-            String baseUrl = "http://localhost:" + serverPort;
-            this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/books/" + this.testBookId, "book_detail_page", reportErrorsAsDown, true);
-        } else {
-            this.delegate = null;
-        }
-    }
-
-    /**
-     * Implements the health() method from ReactiveHealthIndicator interface
-     * 
-     * @return Mono emitting a Health object with the book detail page availability status
-     * 
-     * @implNote Returns UP with not_configured detail if no test book ID is configured
-     * Otherwise delegates to the WebPageHealthIndicator instance to perform the actual check
-     */
-    @Override
-    public Mono<Health> health() {
-        if (!isConfigured) {
-            return Mono.just(Health.up()
-                .withDetail("book_detail_page_status", "not_configured")
-                .withDetail("detail", "Property 'healthcheck.test-book-id' is not set.")
-                .build());
-        }
         return delegate.checkPage();
     }
 }

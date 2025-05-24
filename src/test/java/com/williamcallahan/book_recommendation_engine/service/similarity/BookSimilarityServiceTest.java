@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -61,6 +62,9 @@ class BookSimilarityServiceTest {
     @Mock
     private WebClient.ResponseSpec responseSpec;
 
+    @Mock
+    private AsyncTaskExecutor mvcTaskExecutor;
+
     private BookSimilarityService bookSimilarityService;
 
     @BeforeEach
@@ -75,7 +79,8 @@ class BookSimilarityServiceTest {
             bookReactiveCacheService,
             null, // embeddingServiceUrl
             webClientBuilder,
-            false // embeddingServiceEnabled
+            false, // embeddingServiceEnabled
+            mvcTaskExecutor
         );
     }
 
@@ -89,7 +94,7 @@ class BookSimilarityServiceTest {
         // When & Then
         StepVerifier.create(bookSimilarityService.generateEmbeddingReactive(book))
             .assertNext(embedding -> {
-                assertThat(embedding).hasSize(384);
+                assertThat(embedding).hasSize(1536);
                 assertThat(embedding).containsOnly(0.0f);
             })
             .verifyComplete();
@@ -108,7 +113,7 @@ class BookSimilarityServiceTest {
         // When & Then
         StepVerifier.create(bookSimilarityService.generateEmbeddingReactive(book))
             .assertNext(embedding -> {
-                assertThat(embedding).hasSize(384);
+                assertThat(embedding).hasSize(1536);
                 assertThat(embedding).containsOnly(0.0f);
             })
             .verifyComplete();
@@ -122,9 +127,9 @@ class BookSimilarityServiceTest {
         // When & Then
         StepVerifier.create(bookSimilarityService.generateEmbeddingReactive(book))
             .assertNext(embedding -> {
-                assertThat(embedding).hasSize(384);
+                assertThat(embedding).hasSize(1536);
                 // Should not be all zeros since we have text content
-                assertThat(embedding).isNotEqualTo(new float[384]);
+                assertThat(embedding).isNotEqualTo(new float[1536]);
                 // Verify it's deterministic
                 float[] expected = bookSimilarityService.createPlaceholderEmbedding("Test Title Test Author Test Description Fiction");
                 assertThat(embedding).isEqualTo(expected);
@@ -136,7 +141,7 @@ class BookSimilarityServiceTest {
     void generateEmbeddingReactive_withValidBookData_serviceEnabled_successfulCall() {
         // Given
         Book book = createTestBook();
-        float[] mockEmbedding = new float[384];
+        float[] mockEmbedding = new float[1536];
         Arrays.fill(mockEmbedding, 0.5f);
 
         // Create service with embedding enabled
@@ -146,7 +151,8 @@ class BookSimilarityServiceTest {
             bookReactiveCacheService,
             "http://localhost:8080/api/embedding",
             webClientBuilder,
-            true // embeddingServiceEnabled
+            true, // embeddingServiceEnabled
+            mvcTaskExecutor
         );
 
         // Mock WebClient chain
@@ -158,7 +164,7 @@ class BookSimilarityServiceTest {
         // When & Then
         StepVerifier.create(bookSimilarityService.generateEmbeddingReactive(book))
             .assertNext(embedding -> {
-                assertThat(embedding).hasSize(384);
+                assertThat(embedding).hasSize(1536);
                 assertThat(embedding).containsOnly(0.5f);
             })
             .verifyComplete();
@@ -176,7 +182,8 @@ class BookSimilarityServiceTest {
             bookReactiveCacheService,
             "http://localhost:8080/api/embedding",
             webClientBuilder,
-            true // embeddingServiceEnabled
+            true, // embeddingServiceEnabled
+            mvcTaskExecutor
         );
 
         // Mock WebClient chain to throw error
@@ -188,7 +195,7 @@ class BookSimilarityServiceTest {
         // When & Then
         StepVerifier.create(bookSimilarityService.generateEmbeddingReactive(book))
             .assertNext(embedding -> {
-                assertThat(embedding).hasSize(384);
+                assertThat(embedding).hasSize(1536);
                 // Should fallback to placeholder embedding
                 float[] expected = bookSimilarityService.createPlaceholderEmbedding("Test Title Test Author Test Description Fiction");
                 assertThat(embedding).isEqualTo(expected);
@@ -210,7 +217,7 @@ class BookSimilarityServiceTest {
         // When & Then
         StepVerifier.create(bookSimilarityService.generateEmbeddingReactive(book))
             .assertNext(embedding -> {
-                assertThat(embedding).hasSize(384);
+                assertThat(embedding).hasSize(1536);
                 assertThat(embedding).containsOnly(0.0f);
             })
             .verifyComplete();
@@ -222,7 +229,7 @@ class BookSimilarityServiceTest {
         float[] result = bookSimilarityService.createPlaceholderEmbedding(null);
 
         // Then
-        assertThat(result).hasSize(384);
+        assertThat(result).hasSize(1536);
         assertThat(result).containsOnly(0.0f);
     }
 
@@ -232,7 +239,7 @@ class BookSimilarityServiceTest {
         float[] result = bookSimilarityService.createPlaceholderEmbedding("");
 
         // Then
-        assertThat(result).hasSize(384);
+        assertThat(result).hasSize(1536);
         assertThat(result).containsOnly(0.0f);
     }
 
@@ -246,9 +253,9 @@ class BookSimilarityServiceTest {
         float[] result2 = bookSimilarityService.createPlaceholderEmbedding(text);
 
         // Then
-        assertThat(result1).hasSize(384);
+        assertThat(result1).hasSize(1536);
         assertThat(result1).isEqualTo(result2); // Should be deterministic
-        assertThat(result1).isNotEqualTo(new float[384]); // Should not be all zeros
+        assertThat(result1).isNotEqualTo(new float[1536]); // Should not be all zeros
 
         // Verify sine-based calculation
         int hash = text.hashCode();

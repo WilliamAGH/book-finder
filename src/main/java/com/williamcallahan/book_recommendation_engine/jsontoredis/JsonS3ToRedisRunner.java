@@ -19,6 +19,8 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.CompletionException;
+
 @Component("jsonS3ToRedis_JsonS3ToRedisRunner")
 @Profile("jsontoredis") // Activate this runner only when 'jsontoredis' profile is active
 public class JsonS3ToRedisRunner implements CommandLineRunner {
@@ -27,12 +29,15 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
 
     private final JsonS3ToRedisService jsonS3ToRedisService;
     private final RedisJsonService redisJsonService; // For initial ping test
+    private final S3Service s3Service; // For S3 availability check
 
     public JsonS3ToRedisRunner(
             @Qualifier("jsonS3ToRedis_JsonS3ToRedisService") JsonS3ToRedisService jsonS3ToRedisService,
-            @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService) {
+            @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService,
+            @Qualifier("jsonS3ToRedis_S3Service") S3Service s3Service) {
         this.jsonS3ToRedisService = jsonS3ToRedisService;
         this.redisJsonService = redisJsonService;
+        this.s3Service = s3Service;
     }
 
     /**
@@ -59,11 +64,29 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
             return; 
         }
 
-        // 2. Perform Migration
+        // 2. Test S3 Connection
+        log.info("Attempting to check S3 service availability...");
+        if (!s3Service.isS3Available()) {
+            log.error("S3 service is not available or bucket is not accessible. Migration will not proceed.");
+            log.error("Please ensure S3 (e.g., LocalStack or AWS S3) is running, accessible, and configured correctly (s3.server-url, s3.bucket-name, etc. in application.properties and relevant S3 environment variables).");
+            return;
+        }
+        log.info("S3 service is available. Proceeding with migration.");
+
+        // 3. Perform Migration
         log.info("Proceeding with S3 JSON to Redis migration.");
         try {
-            jsonS3ToRedisService.performMigration();
+            jsonS3ToRedisService.performMigrationAsync().join();
             log.info("S3 JSON to Redis migration process completed by runner.");
+        } catch (CompletionException ce) {
+            Throwable cause = ce.getCause() != null ? ce.getCause() : ce;
+            log.error("S3 JSON to Redis migration process failed: {}", cause.getMessage(), cause);
+            // Rethrow the original exception if it's checked, otherwise rethrow the CompletionException
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            } else {
+                throw ce;
+            }
         } catch (Exception e) {
             log.error("S3 JSON to Redis migration process failed with an error: {}", e.getMessage(), e);
             // Rethrow the exception to ensure the application exits with an error status,

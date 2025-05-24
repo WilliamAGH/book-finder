@@ -8,12 +8,12 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.test.config;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -56,6 +57,16 @@ import java.util.concurrent.TimeUnit;
 @Profile("test")
 public class TestBookCoverConfig {
     private static final Logger logger = LoggerFactory.getLogger(TestBookCoverConfig.class);
+
+    @Bean("mvcTaskExecutor")
+    public AsyncTaskExecutor mvcTaskExecutor() {
+        return Mockito.mock(AsyncTaskExecutor.class);
+    }
+
+    @Bean("imageProcessingExecutor")
+    public AsyncTaskExecutor imageProcessingExecutor() {
+        return Mockito.mock(AsyncTaskExecutor.class);
+    }
 
     /**
      * Provides a mock S3Client for the test environment
@@ -375,7 +386,7 @@ public class TestBookCoverConfig {
         CoverSourceFetchingService mockService = Mockito.mock(CoverSourceFetchingService.class);
         
         // Default behavior to return a placeholder image details
-        Mockito.when(mockService.getBestCoverImageUrlAsync(Mockito.any(Book.class), Mockito.anyString(), Mockito.any(ImageProvenanceData.class)))
+        Mockito.when(mockService.getBestCoverImageUrlAsync(Mockito.any(Book.class), Mockito.anyString(), Mockito.any(ImageProvenanceData.class), Mockito.anyBoolean()))
             .thenAnswer(invocation -> {
                 Book book = invocation.getArgument(0);
                 String bookId = book != null ? book.getId() : "unknown-id";
@@ -396,7 +407,8 @@ public class TestBookCoverConfig {
         Mockito.when(mockService.getBestCoverImageUrlAsync(
                 Mockito.argThat(book -> book != null && ("testbook123".equals(book.getId()) || "Hn41AgAAQBAJ".equals(book.getId()))),
                 Mockito.anyString(),
-                Mockito.any(ImageProvenanceData.class)))
+                Mockito.any(ImageProvenanceData.class),
+                Mockito.anyBoolean()))
             .thenAnswer(invocation -> {
                 Book book = invocation.getArgument(0);
                 String bookId = book.getId();
@@ -532,19 +544,6 @@ public class TestBookCoverConfig {
         
         logger.info("Mock GoogleBooksService configured for testing");
         return mockService;
-    }
-    
-    /**
-     * Provides a mock CachedBookRepository for testing
-     * 
-     * @return Mock CachedBookRepository for testing
-     */
-    @Bean
-    @Primary
-    public CachedBookRepository testCachedBookRepository() {
-        CachedBookRepository mockRepository = Mockito.mock(CachedBookRepository.class);
-        logger.info("Mock CachedBookRepository configured for testing");
-        return mockRepository;
     }
 
     /**

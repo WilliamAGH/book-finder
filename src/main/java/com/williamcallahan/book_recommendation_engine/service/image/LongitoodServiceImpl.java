@@ -41,12 +41,12 @@ public class LongitoodServiceImpl implements LongitoodService {
     private final WebClient webClient;
 
     /**
-     * Constructs a new LongitoodServiceImpl with the specified WebClient
+     * Constructs a new LongitoodServiceImpl with the specified WebClient Builder
      *
-     * @param webClient The WebClient for making HTTP requests to the Longitood API
+     * @param webClientBuilder The WebClient Builder for making HTTP requests to the Longitood API
      */
-    public LongitoodServiceImpl(WebClient webClient) {
-        this.webClient = webClient;
+    public LongitoodServiceImpl(WebClient.Builder webClientBuilder) {
+        this.webClient = webClientBuilder.build();
     }
 
     /**

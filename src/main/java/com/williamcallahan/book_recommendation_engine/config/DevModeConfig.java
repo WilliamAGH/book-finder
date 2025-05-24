@@ -75,8 +75,15 @@ public class DevModeConfig {
                 .recordStats()
                 .expireAfterWrite(Duration.ofMinutes(searchResultsCacheTtlMinutes))
                 .build());
+
+        cacheManager.registerCustomCache("similarBooksCache", Caffeine.newBuilder()
+                .initialCapacity(100)
+                .maximumSize(1000)
+                .recordStats()
+                .expireAfterWrite(Duration.ofMinutes(60)) // Cache recommendations for 1 hour
+                .build());
         
-        logger.info("Dev mode cache initialized: 'books' TTL {} mins, 'bookSearchResults' TTL {} mins. Request limit: {}/min",
+        logger.info("Dev mode cache initialized: 'books' TTL {} mins, 'bookSearchResults' TTL {} mins, 'similarBooksCache' TTL 60 mins. Request limit: {}/min",
                 googleBooksCacheTtlMinutes, searchResultsCacheTtlMinutes, googleBooksRequestLimitPerMinute);
         
         this.cacheManager = cacheManager;

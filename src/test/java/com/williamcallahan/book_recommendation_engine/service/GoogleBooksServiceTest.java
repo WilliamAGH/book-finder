@@ -42,8 +42,11 @@ class GoogleBooksServiceTest {
     @Mock
     private GoogleApiFetcher googleApiFetcherMock;
 
-    @Mock // Added mock for BookDataOrchestrator
+    @Mock
     private BookDataOrchestrator bookDataOrchestratorMock;
+
+    @Mock
+    private org.springframework.core.env.Environment environmentMock; // Added mock for Environment
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -58,11 +61,17 @@ class GoogleBooksServiceTest {
         // Manually instantiate GoogleBooksService with new constructor
         // Old constructor: new GoogleBooksService(webClientBuilderMock, s3RetryServiceMock, objectMapper, apiRequestMonitorMock);
         googleBooksService = new GoogleBooksService(
-                objectMapper, 
+                objectMapper,
                 apiRequestMonitorMock,
                 googleApiFetcherMock,
-                bookDataOrchestratorMock // Pass the new mock
+                bookDataOrchestratorMock,
+                environmentMock // Pass the mocked Environment
         );
+
+        // Mock environment to simulate "dev" profile for tests that rely on it, or non-dev otherwise
+        // For example, to simulate "dev" profile:
+        // when(environmentMock.acceptsProfiles(Profiles.of("dev"))).thenReturn(true);
+        // By default, it will return false if not mocked.
 
         // @Value fields are no longer in GoogleBooksService, they are in GoogleApiFetcher
         // ReflectionTestUtils.setField(googleBooksService, "googleBooksApiUrl", "http://fakeapi.com");
@@ -161,8 +170,8 @@ class GoogleBooksServiceTest {
         StepVerifier.create(result)
             .expectNextMatches(books -> books.isEmpty()) // Explicitly check that the list is empty
             .verifyComplete();
-        // Verify that the fallback method recorded the failure
-        verify(apiRequestMonitorMock).recordFailedRequest(anyString(), anyString());
+        // Verify that the fallback method recorded the failure - expect 2 calls due to error handling in both searchBooks and searchBooksAsyncReactive
+        verify(apiRequestMonitorMock, org.mockito.Mockito.times(2)).recordFailedRequest(anyString(), anyString());
     }
 
     /**

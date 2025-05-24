@@ -9,6 +9,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -21,6 +22,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -35,7 +38,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import reactor.core.scheduler.Schedulers;
 
 @Service
 @Conditional(S3EnvironmentCondition.class)
@@ -46,19 +48,21 @@ public class NewYorkTimesService {
     private final ObjectMapper objectMapper;
     private final WebClient webClient;
     private final String nytApiBaseUrl;
-
+    private final Environment environment;
     private final String nytApiKey;
 
     public NewYorkTimesService(S3StorageService s3StorageService,
                                ObjectMapper objectMapper,
                                WebClient.Builder webClientBuilder,
                                @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
-                               @Value("${nyt.api.key}") String nytApiKey) {
+                               @Value("${nyt.api.key}") String nytApiKey,
+                               Environment environment) {
         this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;
         this.nytApiBaseUrl = nytApiBaseUrl;
         this.nytApiKey = nytApiKey;
         this.webClient = webClientBuilder.baseUrl(nytApiBaseUrl).build();
+        this.environment = environment;
     }
 
     /**
@@ -69,7 +73,11 @@ public class NewYorkTimesService {
      */
     public Mono<JsonNode> fetchBestsellerListOverview() {
         String overviewUrl = "/lists/overview.json?api-key=" + nytApiKey;
-        logger.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_WEBC] Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
+        } else {
+            logger.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
+        }
         return webClient.mutate()
                 .baseUrl(nytApiBaseUrl)
                 .build()
@@ -97,8 +105,7 @@ public class NewYorkTimesService {
         String s3Prefix = "lists/nyt/" + listNameEncoded + "/";
         logger.debug("Attempting to fetch latest NYT list for category '{}' (limit {}) from S3 prefix: {}", listNameEncoded, limit, s3Prefix);
 
-        return Mono.fromCallable(() -> s3StorageService.listObjects(s3Prefix)) // Wrap synchronous call
-            .subscribeOn(Schedulers.boundedElastic()) // Execute blocking S3 call on appropriate scheduler
+        return Mono.fromFuture(s3StorageService.listObjectsAsync(s3Prefix)) // Use async method
             .flatMap(s3ObjectList -> { // s3ObjectList is List<S3Object>
                 if (s3ObjectList == null || s3ObjectList.isEmpty()) {
                     logger.warn("No S3 objects found for prefix '{}'. Returning empty list.", s3Prefix);

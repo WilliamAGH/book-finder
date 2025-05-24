@@ -150,7 +150,7 @@ public class BookImageOrchestrationService {
             book.getTitle(), book.getId(), preferredSource, resolutionPreference, finalFallbackUrl);
 
         // Convert Mono<CoverImages> to CompletableFuture
-        return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+        return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book, true)
             .toFuture() // Converts Mono<CoverImages> to CompletableFuture<CoverImages>
             .thenApply(coverImagesResult -> {
                 String initialPreferredUrl = (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) ? coverImagesResult.getPreferredUrl() : DEFAULT_PLACEHOLDER_IMAGE;
