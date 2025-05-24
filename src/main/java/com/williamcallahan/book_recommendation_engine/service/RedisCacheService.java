@@ -24,6 +24,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.config.GracefulShutdownConfig;
 import com.williamcallahan.book_recommendation_engine.config.RedisEnvironmentCondition;
+import com.williamcallahan.book_recommendation_engine.config.RedisHealthIndicator;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.monitoring.MetricsService;
 import com.williamcallahan.book_recommendation_engine.util.ErrorHandlingUtils;
@@ -39,7 +40,6 @@ import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.Response;
 import redis.clients.jedis.exceptions.JedisConnectionException;
-import redis.clients.jedis.resps.ScanResult;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -62,8 +62,6 @@ import jakarta.annotation.PreDestroy;
 public class RedisCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisCacheService.class);
-    private static final String BOOK_CACHE_PREFIX = "book:";
-    private static final String SEARCH_CACHE_PREFIX = "search:";
 
     private final AtomicBoolean redisCurrentlyAvailable = new AtomicBoolean(false);
     private volatile long lastAvailabilityCheckTimestamp = 0L;
@@ -76,6 +74,8 @@ public class RedisCacheService {
     private final Duration affiliateTtl;
     private final AsyncTaskExecutor mvcTaskExecutor;
     private final MetricsService metricsService;
+    private final RedisHealthIndicator redisHealthIndicator;
+    private final RedisKeyService keyService;
 
     @Value("${app.redis.cache.enabled:true}")
     private boolean redisCacheEnabled;
@@ -85,13 +85,17 @@ public class RedisCacheService {
                              @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor,
                              @Value("${app.cache.book.ttl:24h}") String bookTtlStr,
                              @Value("${app.cache.affiliate.ttl:1h}") String affiliateTtlStr,
-                             @Autowired(required = false) MetricsService metricsService) {
+                             @Autowired(required = false) MetricsService metricsService,
+                             @Autowired(required = false) RedisHealthIndicator redisHealthIndicator,
+                             RedisKeyService keyService) {
         this.jedisPooled = jedisPooled;
         this.objectMapper = objectMapper;
         this.mvcTaskExecutor = mvcTaskExecutor;
         this.bookTtl = DurationStyle.detectAndParse(bookTtlStr);
         this.affiliateTtl = DurationStyle.detectAndParse(affiliateTtlStr);
         this.metricsService = metricsService;
+        this.redisHealthIndicator = redisHealthIndicator;
+        this.keyService = keyService;
     }
 
     /**
@@ -108,10 +112,17 @@ public class RedisCacheService {
     /**
      * Asynchronously checks if the Redis cache is enabled via configuration and if Redis is reachable.
      * Availability status is cached for a short duration to reduce PING overhead.
+     * Implements circuit breaker pattern - after consecutive failures, stops checking for a period.
      * @return CompletableFuture<Boolean> resolving to true if Redis is enabled and available, false otherwise.
      */
     public CompletableFuture<Boolean> isRedisAvailableAsync() {
         if (!redisCacheEnabled || GracefulShutdownConfig.isShuttingDown()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        
+        // Check circuit breaker state if health indicator is available
+        if (redisHealthIndicator != null && !redisHealthIndicator.isHealthy()) {
+            logger.debug("Redis circuit breaker is open, skipping availability check");
             return CompletableFuture.completedFuture(false);
         }
 
@@ -128,12 +139,29 @@ public class RedisCacheService {
                 }
 
                 try {
-                    jedisPooled.ping(); 
+                    // Add timeout to ping operation
+                    CompletableFuture<String> pingFuture = CompletableFuture.supplyAsync(() -> {
+                        return jedisPooled.ping();
+                    }, this.mvcTaskExecutor);
+                    
+                    pingFuture.get(1, java.util.concurrent.TimeUnit.SECONDS);
                     redisCurrentlyAvailable.set(true);
                     logger.debug("Redis PING successful, connection is available.");
+                    if (metricsService != null) {
+                        metricsService.recordRedisAvailable();
+                    }
+                } catch (java.util.concurrent.TimeoutException e) {
+                    logger.warn("Redis PING timeout after 1 second");
+                    redisCurrentlyAvailable.set(false);
+                    if (metricsService != null) {
+                        metricsService.incrementRedisTimeout();
+                    }
                 } catch (JedisConnectionException e) {
                     logger.warn("Redis connection failed during PING: {}", e.getMessage());
                     redisCurrentlyAvailable.set(false);
+                    if (metricsService != null) {
+                        metricsService.incrementRedisError();
+                    }
                 } catch (redis.clients.jedis.exceptions.JedisException e) {
                     if (e.getMessage() != null && e.getMessage().contains("Pool not open")) {
                         logger.debug("Redis pool closed during shutdown");
@@ -149,7 +177,12 @@ public class RedisCacheService {
                 }
                 return redisCurrentlyAvailable.get();
             }
-        }, this.mvcTaskExecutor);
+        }, this.mvcTaskExecutor)
+        .exceptionally(throwable -> {
+            logger.error("Failed to check Redis availability: {}", throwable.getMessage());
+            redisCurrentlyAvailable.set(false);
+            return false;
+        });
     }
 
     /**
@@ -170,50 +203,51 @@ public class RedisCacheService {
     }
 
     private String getKeyForBook(String bookId) {
-        return BOOK_CACHE_PREFIX + bookId;
+        return keyService.bookKey(bookId);
     }
 
     public CompletableFuture<Optional<Book>> getBookByIdAsync(String bookId) {
         if (bookId == null || bookId.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        return isRedisAvailableAsync().thenComposeAsync(available -> {
-            if (!available) {
-                return CompletableFuture.completedFuture(Optional.empty());
-            }
-            
-            // Track timing if metrics available
-            io.micrometer.core.instrument.Timer.Sample sample = null;
-            if (metricsService != null) {
-                sample = metricsService.startRedisTimer();
-            }
-            final io.micrometer.core.instrument.Timer.Sample finalSample = sample;
-            
-            return CompletableFuture.supplyAsync(() -> {
-                try {
-                    String bookJson = jedisPooled.get(getKeyForBook(bookId));
-                    if (bookJson != null) {
-                        Book book = objectMapper.readValue(bookJson, Book.class);
-                        logger.debug("Redis cache HIT for book ID: {}", bookId);
-                        return Optional.of(book);
-                    }
-                    logger.debug("Redis cache MISS for book ID: {}", bookId);
-                    return Optional.<Book>empty();
-                } catch (Exception e) {
-                    throw new CompletionException("Failed to get book from Redis", e);
-                } finally {
-                    if (finalSample != null && metricsService != null) {
-                        metricsService.stopRedisTimer(finalSample);
-                    }
+        
+        return ErrorHandlingUtils.withRedisResilience(
+            () -> isRedisAvailableAsync().thenComposeAsync(available -> {
+                if (!available) {
+                    return CompletableFuture.completedFuture(Optional.empty());
                 }
-            }, this.mvcTaskExecutor)
-            .handle(ErrorHandlingUtils.createErrorHandler(
-                logger, 
-                "getBookByIdAsync-" + bookId,
-                metricsService,
-                Optional.<Book>empty()
-            ));
-        });
+                
+                // Track timing if metrics available
+                io.micrometer.core.instrument.Timer.Sample sample = null;
+                if (metricsService != null) {
+                    sample = metricsService.startRedisTimer();
+                }
+                final io.micrometer.core.instrument.Timer.Sample finalSample = sample;
+                
+                return CompletableFuture.supplyAsync(() -> {
+                    try {
+                        String bookJson = jedisPooled.get(getKeyForBook(bookId));
+                        if (bookJson != null) {
+                            Book book = objectMapper.readValue(bookJson, Book.class);
+                            logger.debug("Redis cache HIT for book ID: {}", bookId);
+                            return Optional.of(book);
+                        }
+                        logger.debug("Redis cache MISS for book ID: {}", bookId);
+                        return Optional.<Book>empty();
+                    } catch (Exception e) {
+                        throw new CompletionException("Failed to get book from Redis", e);
+                    } finally {
+                        if (finalSample != null && metricsService != null) {
+                            metricsService.stopRedisTimer(finalSample);
+                        }
+                    }
+                }, this.mvcTaskExecutor);
+            }),
+            Optional.<Book>empty(),
+            logger,
+            "getBookByIdAsync-" + bookId,
+            metricsService
+        );
     }
 
     public Mono<Book> getBookByIdReactive(String bookId) {
@@ -370,7 +404,7 @@ public class RedisCacheService {
     }
 
     private String getKeyForSearch(String searchKey) {
-        return SEARCH_CACHE_PREFIX + searchKey;
+        return keyService.searchCacheKey(searchKey);
     }
 
     public CompletableFuture<Optional<List<String>>> getCachedSearchResultsAsync(String searchKey) {
@@ -485,31 +519,18 @@ public class RedisCacheService {
                 return CompletableFuture.completedFuture(Collections.emptySet());
             }
             return CompletableFuture.supplyAsync(() -> {
+                Set<String> keys = keyService.scanKeys(jedisPooled, keyService.bookKeyPattern(), 100);
                 Set<String> bookIds = new HashSet<>();
-                try {
-                    String cursor = "0";
-                    do {
-                        ScanResult<String> scanResult = jedisPooled.scan(cursor, new redis.clients.jedis.params.ScanParams()
-                                .match(BOOK_CACHE_PREFIX + "*")
-                                .count(100));
-                        
-                        for (String key : scanResult.getResult()) {
-                            if (key.startsWith(BOOK_CACHE_PREFIX)) {
-                                String bookId = key.substring(BOOK_CACHE_PREFIX.length());
-                                if (!bookId.isEmpty()) {
-                                    bookIds.add(bookId);
-                                }
-                            }
-                        }
-                        cursor = scanResult.getCursor();
-                    } while (!"0".equals(cursor));
-                    
-                    logger.debug("Retrieved {} book IDs from Redis using SCAN (async)", bookIds.size());
-                    return bookIds;
-                } catch (Exception e) {
-                    logger.error("Error scanning Redis for book keys (async): {}", e.getMessage(), e);
-                    return Collections.emptySet();
+                
+                for (String key : keys) {
+                    String bookId = keyService.extractIdFromBookKey(key);
+                    if (!bookId.isEmpty()) {
+                        bookIds.add(bookId);
+                    }
                 }
+                
+                logger.debug("Retrieved {} book IDs from Redis using SCAN (async)", bookIds.size());
+                return bookIds;
             }, this.mvcTaskExecutor); // Use the class-level executor
         });
     }

@@ -52,7 +52,7 @@ public class LocalDiskCoverCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(LocalDiskCoverCacheService.class);
     private static final String LOCAL_PLACEHOLDER_PATH = "/images/placeholder-book-cover.svg";
-    private static final String GOOGLE_PLACEHOLDER_CLASSPATH_PATH = "/images/image-not-available.png";
+    private static final String GOOGLE_PLACEHOLDER_CLASSPATH_PATH = "/static/images/image-not-available.png";
 
     @Value("${app.cover-cache.enabled:true}")
     private boolean cacheEnabled;

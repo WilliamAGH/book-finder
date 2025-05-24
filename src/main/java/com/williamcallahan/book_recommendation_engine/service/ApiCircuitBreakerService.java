@@ -38,7 +38,7 @@ public class ApiCircuitBreakerService {
     
     // Configuration
     private static final int FAILURE_THRESHOLD = 3; // Open circuit after 3 consecutive 429 errors
-    private static final int CIRCUIT_OPEN_DURATION_MINUTES = 60; // Keep circuit open for 1 hour
+    private static final int CIRCUIT_OPEN_DURATION_MINUTES = 5; // Keep circuit open for 5 minutes
     private static final int HALF_OPEN_TIMEOUT_MINUTES = 5; // Try half-open after 5 minutes
 
     public ApiCircuitBreakerService(@Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor) {

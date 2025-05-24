@@ -15,20 +15,18 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.williamcallahan.book_recommendation_engine.util.ErrorHandlingUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry;
-
-import java.io.IOException;
 import java.util.Optional;
-import java.time.Duration;
 
 @Service
 public class GoogleApiFetcher {
@@ -38,6 +36,7 @@ public class GoogleApiFetcher {
     private final WebClient webClient;
     private final ApiRequestMonitor apiRequestMonitor;
     private final ApiCircuitBreakerService circuitBreakerService;
+    private final Environment environment;
 
     @Value("${google.books.api.base-url}")
     private String googleBooksApiUrl;
@@ -51,13 +50,16 @@ public class GoogleApiFetcher {
      * @param webClientBuilder WebClient builder 
      * @param apiRequestMonitor API request tracking service
      * @param circuitBreakerService Circuit breaker for API rate limiting
+     * @param environment Spring Environment for profile checks
      */
-    public GoogleApiFetcher(WebClient.Builder webClientBuilder, 
+    public GoogleApiFetcher(WebClient.Builder webClientBuilder,
                            ApiRequestMonitor apiRequestMonitor,
-                           ApiCircuitBreakerService circuitBreakerService) {
+                           ApiCircuitBreakerService circuitBreakerService,
+                           Environment environment) {
         this.webClient = webClientBuilder.build();
         this.apiRequestMonitor = apiRequestMonitor;
         this.circuitBreakerService = circuitBreakerService;
+        this.environment = environment;
     }
 
     /**
@@ -86,38 +88,26 @@ public class GoogleApiFetcher {
                         .build(false)
                         .toUriString();
                 
-                logger.debug("Making Authenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
+                if (environment.acceptsProfiles(Profiles.of("dev"))) {
+                    logger.info("[ASYNC_WEBC] Making Authenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
+                } else {
+                    logger.debug("Making Authenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
+                }
 
                 return webClient.get()
                         .uri(url)
                         .retrieve()
                         .bodyToMono(JsonNode.class)
-                        .doOnSubscribe(s -> logger.debug("Fetching book {} from Google API (Authenticated).", bookId))
-                        .retryWhen(Retry.backoff(3, Duration.ofSeconds(2))
-                                .filter(throwable -> {
-                                    if (throwable instanceof WebClientResponseException) {
-                                        WebClientResponseException wcre = (WebClientResponseException) throwable;
-                                        return wcre.getStatusCode().is5xxServerError() || wcre.getStatusCode().value() == 429;
-                                    }
-                                    return throwable instanceof IOException || throwable instanceof WebClientRequestException;
-                                })
-                                .doBeforeRetry(retrySignal -> {
-                                    // url variable is in scope from the outer flatMap
-                                    Throwable failure = retrySignal.failure();
-                                    if (failure instanceof WebClientResponseException) {
-                                        WebClientResponseException wcre = (WebClientResponseException) failure;
-                                        logger.warn("Retrying API call to {} after status {}. Attempt #{}. Error: {}",
-                                                url, wcre.getStatusCode(), retrySignal.totalRetries() + 1, wcre.getMessage());
-                                    } else {
-                                        logger.warn("Retrying API call to {} after error. Attempt #{}. Error: {}",
-                                                url, retrySignal.totalRetries() + 1, failure.getMessage());
-                                    }
-                                })
-                                .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                                    logger.error("All retries failed for Authenticated API call for book {}. Final error: {}", bookId, retrySignal.failure().getMessage());
-                                    apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
-                                    return retrySignal.failure();
-                                }))
+                        .doOnSubscribe(s -> {
+                            if (environment.acceptsProfiles(Profiles.of("dev"))) {
+                                logger.info("[ASYNC_WEBC] Fetching book {} from Google API (Authenticated).", bookId);
+                            } else {
+                                logger.debug("Fetching book {} from Google API (Authenticated).", bookId);
+                            }
+                        })
+                        .retryWhen(ErrorHandlingUtils.createWebClientRetry(logger,
+                                "Authenticated API call for book " + bookId,
+                                () -> apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed")))
                         .doOnSuccess(response -> {
                             apiRequestMonitor.recordSuccessfulRequest(endpoint);
                             circuitBreakerService.recordSuccess();
@@ -156,38 +146,26 @@ public class GoogleApiFetcher {
                 .toUriString();
 
         String endpoint = "volumes/get/" + bookId + "/unauthenticated";
-        logger.debug("Making Unauthenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_WEBC] Making Unauthenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
+        } else {
+            logger.debug("Making Unauthenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
+        }
         
         return webClient.get()
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .doOnSubscribe(s -> logger.debug("Fetching book {} from Google API (Unauthenticated).", bookId))
-                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // Slightly increased initial backoff
-                        .filter(throwable -> {
-                            if (throwable instanceof WebClientResponseException) {
-                                WebClientResponseException wcre = (WebClientResponseException) throwable;
-                                return wcre.getStatusCode().is5xxServerError() || wcre.getStatusCode().value() == 429;
-                            }
-                            return throwable instanceof IOException || throwable instanceof WebClientRequestException;
-                        })
-                        .doBeforeRetry(retrySignal -> {
-                            String targetUrl = url; // Or a more generic endpoint description
-                            Throwable failure = retrySignal.failure();
-                            if (failure instanceof WebClientResponseException) {
-                                WebClientResponseException wcre = (WebClientResponseException) failure;
-                                logger.warn("Retrying API call to {} after status {}. Attempt #{}. Error: {}",
-                                        targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1, wcre.getMessage());
-                            } else {
-                                logger.warn("Retrying API call to {} after error. Attempt #{}. Error: {}",
-                                        targetUrl, retrySignal.totalRetries() + 1, failure.getMessage());
-                            }
-                        })
-                        .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                            logger.error("All retries failed for Unauthenticated API call for book {}. Final error: {}", bookId, retrySignal.failure().getMessage());
-                            apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
-                            return retrySignal.failure();
-                        }))
+                .doOnSubscribe(s -> {
+                    if (environment.acceptsProfiles(Profiles.of("dev"))) {
+                        logger.info("[ASYNC_WEBC] Fetching book {} from Google API (Unauthenticated).", bookId);
+                    } else {
+                        logger.debug("Fetching book {} from Google API (Unauthenticated).", bookId);
+                    }
+                })
+                .retryWhen(ErrorHandlingUtils.createWebClientRetry(logger,
+                        "Unauthenticated API call for book " + bookId,
+                        () -> apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed")))
                 .doOnSuccess(response -> apiRequestMonitor.recordSuccessfulRequest(endpoint))
                 .onErrorResume(e -> {
                     if (e instanceof WebClientResponseException) {
@@ -273,40 +251,28 @@ public class GoogleApiFetcher {
         String authStatus = authenticated ? "authenticated" : "unauthenticated";
         String endpoint = "volumes/search/" + getQueryTypeForMonitoring(query) + "/" + authStatus;
 
-        logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}, endpoint: {}",
-                authStatus, query, startIndex, endpoint);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_WEBC] Making Google Books API search call ({}) for query: {}, startIndex: {}, endpoint: {}",
+                    authStatus, query, startIndex, endpoint);
+        } else {
+            logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}, endpoint: {}",
+                    authStatus, query, startIndex, endpoint);
+        }
 
         return webClient.get()
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .doOnSubscribe(s -> logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex))
-                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // Slightly increased initial backoff
-                        .filter(throwable -> {
-                            if (throwable instanceof WebClientResponseException) {
-                                WebClientResponseException wcre = (WebClientResponseException) throwable;
-                                return wcre.getStatusCode().is5xxServerError() || wcre.getStatusCode().value() == 429;
-                            }
-                            return throwable instanceof IOException || throwable instanceof WebClientRequestException;
-                        })
-                        .doBeforeRetry(retrySignal -> {
-                            String targetUrl = url; // Or a more generic endpoint description
-                            Throwable failure = retrySignal.failure();
-                            if (failure instanceof WebClientResponseException) {
-                                WebClientResponseException wcre = (WebClientResponseException) failure;
-                                logger.warn("Retrying API search call ({}) to {} after status {}. Attempt #{}. Error: {}",
-                                        authStatus, targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1, wcre.getMessage());
-                            } else {
-                                logger.warn("Retrying API search call ({}) to {} after error. Attempt #{}. Error: {}",
-                                        authStatus, targetUrl, retrySignal.totalRetries() + 1, failure.getMessage());
-                            }
-                        })
-                        .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                            logger.error("All retries failed for API search call ({}) for query '{}', startIndex {}. Final error: {}",
-                                    authStatus, query, startIndex, retrySignal.failure().getMessage());
-                            apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
-                            return retrySignal.failure();
-                        }))
+                .doOnSubscribe(s -> {
+                    if (environment.acceptsProfiles(Profiles.of("dev"))) {
+                        logger.info("[ASYNC_WEBC] Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex);
+                    } else {
+                        logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex);
+                    }
+                })
+                .retryWhen(ErrorHandlingUtils.createWebClientRetry(logger,
+                        String.format("API search call (%s) for query '%s', startIndex %d", authStatus, query, startIndex),
+                        () -> apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed")))
                 .doOnSuccess(response -> {
                     apiRequestMonitor.recordSuccessfulRequest(endpoint);
                     if (authenticated) {

@@ -21,6 +21,8 @@ import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -34,16 +36,20 @@ import java.util.Date;
 import java.text.SimpleDateFormat;
 import java.text.ParseException;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class OpenLibraryBookDataService {
 
     private static final Logger logger = LoggerFactory.getLogger(OpenLibraryBookDataService.class);
     private final WebClient webClient;
+    private final Environment environment;
 
     public OpenLibraryBookDataService(WebClient.Builder webClientBuilder,
-                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl) {
+                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl,
+                                   Environment environment) {
         this.webClient = webClientBuilder.baseUrl(openLibraryApiUrl).build();
+        this.environment = environment;
     }
 
     /**
@@ -52,15 +58,19 @@ public class OpenLibraryBookDataService {
      * @param isbn The ISBN of the book
      * @return A Mono emitting the Book object if found, or Mono.empty() otherwise
      */
-    @RateLimiter(name = "openLibraryDataService")
+    @RateLimiter(name = "openLibraryRateLimiter")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "fetchBookFallback")
     @TimeLimiter(name = "openLibraryDataService")
-    public Mono<Book> fetchBookByIsbn(String isbn) {
+    public CompletableFuture<Book> fetchBookByIsbn(String isbn) {
         if (isbn == null || isbn.trim().isEmpty()) {
             logger.warn("ISBN is null or empty. Cannot fetch book from OpenLibrary.");
-            return Mono.empty();
+            return CompletableFuture.completedFuture(null);
         }
-        logger.info("Attempting to fetch book data from OpenLibrary for ISBN: {}", isbn);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_CF_VIA_WEBC] Attempting to fetch book data from OpenLibrary for ISBN: {}", isbn);
+        } else {
+            logger.info("Attempting to fetch book data from OpenLibrary for ISBN: {}", isbn);
+        }
 
         String bibkey = "ISBN:" + isbn;
 
@@ -86,7 +96,8 @@ public class OpenLibraryBookDataService {
                 .onErrorResume(e -> { // Ensure fallback behavior on error before circuit breaker
                     logger.warn("Error during OpenLibrary fetch for ISBN {}, returning empty. Error: {}", isbn, e.getMessage());
                     return Mono.empty();
-                });
+                })
+                .toFuture();
     }
 
     /**
@@ -95,15 +106,18 @@ public class OpenLibraryBookDataService {
      * @param title The title of the book
      * @return A Flux emitting Book objects matching the search query
      */
-    @RateLimiter(name = "openLibraryDataService")
+    @RateLimiter(name = "openLibraryRateLimiter")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
     public Flux<Book> searchBooksByTitle(String title) {
         if (title == null || title.trim().isEmpty()) {
             logger.warn("Title is null or empty. Cannot search books on OpenLibrary.");
             return Flux.empty();
         }
-        // Example endpoint: /search.json?q={title} or /search.json?title={title}&author={author}
-        logger.info("Attempting to search books from OpenLibrary for title: {}", title);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_REACTIVE_STREAM] Attempting to search books from OpenLibrary for title: {}", title);
+        } else {
+            logger.info("Attempting to search books from OpenLibrary for title: {}", title);
+        }
         // Placeholder:
         // return webClient.get().uri("/search.json?q=" + title)
         // .retrieve()
@@ -136,9 +150,9 @@ public class OpenLibraryBookDataService {
 
     // --- Fallback Methods ---
 
-    public Mono<Book> fetchBookFallback(String isbn, Throwable t) {
+    public CompletableFuture<Book> fetchBookFallback(String isbn, Throwable t) {
         logger.warn("OpenLibraryBookDataService.fetchBookByIsbn fallback triggered for ISBN: {}. Error: {}", isbn, t.getMessage());
-        return Mono.empty();
+        return CompletableFuture.completedFuture(null);
     }
 
     public Flux<Book> searchBooksFallback(String title, Throwable t) {

@@ -53,14 +53,14 @@ public class BookReactiveCacheService {
     private static final Logger logger = LoggerFactory.getLogger(BookReactiveCacheService.class);
     private static final String BOOK_SEARCH_RESULTS_CACHE_NAME = "bookSearchResults";
 
-    private final GoogleBooksCachingStrategy googleBooksCachingStrategy;
-    private final BookDataOrchestrator bookDataOrchestrator;
-    private final RedisCacheService redisCacheService;
-    private final CacheManager cacheManager;
-    private final ObjectMapper objectMapper;
-    private final CachedBookRepository cachedBookRepository;
-    private final BookSlugService bookSlugService;
-    private final EmbeddingService embeddingService;
+    private GoogleBooksCachingStrategy googleBooksCachingStrategy;
+    private BookDataOrchestrator bookDataOrchestrator;
+    private RedisCacheService redisCacheService;
+    private CacheManager cacheManager;
+    private ObjectMapper objectMapper;
+    private CachedBookRepository cachedBookRepository;
+    private BookSlugService bookSlugService;
+    private EmbeddingService embeddingService;
     // private final WebClient embeddingClient; // Unused field
     // private final boolean embeddingServiceEnabled; // Unused field
     
@@ -70,6 +70,7 @@ public class BookReactiveCacheService {
     @Value("${app.embedding.service.url:#{null}}")
     private String embeddingServiceUrl;
 
+    // Default constructor for Mockito inline mocking
     public BookReactiveCacheService(
             GoogleBooksCachingStrategy googleBooksCachingStrategy,
             BookDataOrchestrator bookDataOrchestrator,

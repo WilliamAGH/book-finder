@@ -25,8 +25,9 @@ import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
 import com.williamcallahan.book_recommendation_engine.service.GoogleApiFetcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
@@ -36,6 +37,7 @@ import reactor.core.publisher.Mono;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.function.Function;
 import java.util.function.BinaryOperator;
@@ -54,6 +56,7 @@ public class GoogleBooksService {
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
     private final BookDataOrchestrator bookDataOrchestrator;
+    private final Environment environment;
 
     private static final int ISBN_BATCH_QUERY_SIZE = 5; // Reduced batch size for ISBN OR queries
     
@@ -71,11 +74,13 @@ public class GoogleBooksService {
             ObjectMapper objectMapper,
             ApiRequestMonitor apiRequestMonitor,
             GoogleApiFetcher googleApiFetcher,
-            BookDataOrchestrator bookDataOrchestrator) {
+            BookDataOrchestrator bookDataOrchestrator,
+            Environment environment) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.environment = environment;
     }
 
     /**
@@ -92,12 +97,16 @@ public class GoogleBooksService {
     @CircuitBreaker(name = "googleBooksService", fallbackMethod = "searchBooksFallback")
     @TimeLimiter(name = "googleBooksService")
     @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "searchBooksRateLimitFallback")
-    public Mono<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
+    public CompletableFuture<JsonNode> searchBooks(String query, int startIndex, String orderBy, String langCode) {
         // Delegate to GoogleApiFetcher for authenticated search
         // Resilience4j annotations remain on this public method
         // The actual API call and its own retry/monitoring are within GoogleApiFetcher
         // This method now primarily serves as an entry point with resilience
-        logger.debug("GoogleBooksService.searchBooks called for query: {}, startIndex: {}. Delegating to GoogleApiFetcher.", query, startIndex);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_CF_VIA_WEBC] GoogleBooksService.searchBooks for query: {}, startIndex: {}. Delegating to GoogleApiFetcher.", query, startIndex);
+        } else {
+            logger.debug("GoogleBooksService.searchBooks called for query: {}, startIndex: {}. Delegating to GoogleApiFetcher.", query, startIndex);
+        }
         // Assuming this service primarily deals with authenticated calls if it's a direct passthrough
         // The plan implies GoogleBooksService might be a thin wrapper for *authenticated* calls
         return googleApiFetcher.searchVolumesAuthenticated(query, startIndex, orderBy, langCode)
@@ -107,7 +116,8 @@ public class GoogleBooksService {
             ))
             .doOnError(e -> apiRequestMonitor.recordFailedRequest(
                 "volumes/search/authenticated?query=" + query + "&startIndex=" + startIndex,
-                e.getMessage()));
+                e.getMessage()))
+            .toFuture();
     }
 
     /**
@@ -125,23 +135,30 @@ public class GoogleBooksService {
         final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
         final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
         
-        logger.debug("GoogleBooksService.searchBooksAsyncReactive with query: '{}', langCode: {}, maxResults: {}, orderBy: {}",
-            query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_REACTIVE_STREAM] GoogleBooksService.searchBooksAsyncReactive with query: '{}', langCode: {}, maxResults: {}, orderBy: {}",
+                query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
+        } else {
+            logger.debug("GoogleBooksService.searchBooksAsyncReactive with query: '{}', langCode: {}, maxResults: {}, orderBy: {}",
+                query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
+        }
 
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
 
         return Flux.range(0, (maxTotalResultsToFetch + maxResultsPerPage - 1) / maxResultsPerPage)
             .map(page -> page * maxResultsPerPage)
-            .concatMap(startIndex ->
+            .concatMap((Integer startIndex) -> { // Explicitly type startIndex
                 // Delegate to searchBooks and handle errors per page to avoid bubbling up
-                searchBooks(query, startIndex, effectiveOrderBy, langCode)
+                // Using fully qualified name for Supplier here just in case, though import should cover it.
+                java.util.function.Supplier<java.util.concurrent.CompletableFuture<JsonNode>> futureSupplier = () -> searchBooks(query, startIndex, effectiveOrderBy, langCode);
+                Flux<JsonNode> pageResults = Mono.fromFuture(futureSupplier)
                     .flatMapMany(responseNode -> {
                         if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
                             List<JsonNode> items = new ArrayList<>();
                             responseNode.get("items").forEach(items::add);
                             return Flux.fromIterable(items);
                         }
-                        return Flux.empty();
+                        return Flux.<JsonNode>empty(); // Explicit type for Flux.empty()
                     })
                     .onErrorResume(e -> {
                         logger.error("Error fetching page {} for query '{}': {}", startIndex, query, e.getMessage());
@@ -149,9 +166,11 @@ public class GoogleBooksService {
                             "volumes/search/reactive/" + query,
                             e.getMessage()
                         );
-                        return Flux.empty();
-                    })
-            )
+                        return Flux.<JsonNode>empty(); // Explicit type for Flux.empty()
+                    });
+                // Explicitly return pageResults for clarity, though it was implicitly returned before.
+                return pageResults; 
+            })
             .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode)) // Use BookJsonParser
             .filter(Objects::nonNull)
             .map(book -> {
@@ -229,18 +248,31 @@ public class GoogleBooksService {
      * @param langCode Optional language code to restrict results
      * @return Mono containing a list of Book objects by the specified author
      */
-    public Mono<List<Book>> searchBooksByAuthor(String author, String langCode) {
-        return searchBooksAsyncReactive("inauthor:" + author, langCode);
+    public Mono<List<Book>> searchBooksByAuthor(String author, String langCode, int desiredTotalResults, String orderBy) {
+        return searchBooksAsyncReactive("inauthor:" + author, langCode, desiredTotalResults, orderBy);
     }
 
     /**
-     * Overloaded version without language filtering
+     * Searches books by author using the 'inauthor:' Google Books API qualifier.
+     * Defaults to fetching up to 200 results ordered by "newest".
+     * 
+     * @param author Author name to search for
+     * @param langCode Optional language code to restrict results
+     * @return Mono containing a list of Book objects by the specified author
+     */
+    public Mono<List<Book>> searchBooksByAuthor(String author, String langCode) {
+        return searchBooksByAuthor(author, langCode, 200, "newest"); // Keep existing default behavior
+    }
+
+    /**
+     * Overloaded version without language filtering.
+     * Defaults to fetching up to 200 results ordered by "newest".
      * 
      * @param author Author name to search for
      * @return Mono containing a list of Book objects by the specified author
      */
     public Mono<List<Book>> searchBooksByAuthor(String author) {
-        return searchBooksByAuthor(author, null);
+        return searchBooksByAuthor(author, null, 200, "newest"); // Keep existing default behavior
     }
 
     /**
@@ -274,8 +306,14 @@ public class GoogleBooksService {
      */
     @RateLimiter(name = "googleBooksServiceRateLimiter") // Apply rate limiting
     public Mono<String> fetchGoogleBookIdByIsbn(String isbn) {
-        logger.debug("Fetching Google Book ID for ISBN: {}", isbn);
-        return searchBooks("isbn:" + isbn, 0, "relevance", null)
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_CF_VIA_WEBC] Fetching Google Book ID for ISBN: {} (via searchBooks to CompletableFuture, then to Mono)", isbn);
+        } else {
+            logger.debug("Fetching Google Book ID for ISBN: {}", isbn);
+        }
+        // Explicit typing for supplier, though it should be inferred.
+        java.util.function.Supplier<java.util.concurrent.CompletableFuture<JsonNode>> futureSupplier = () -> searchBooks("isbn:" + isbn, 0, "relevance", null);
+        return Mono.fromFuture(futureSupplier)
             .map(responseNode -> {
                 if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray() && responseNode.get("items").size() > 0) {
                     JsonNode firstItem = responseNode.get("items").get(0);
@@ -309,7 +347,11 @@ public class GoogleBooksService {
     @TimeLimiter(name = "googleBooksService")
     @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "getBookByIdRateLimitFallback")
     public CompletionStage<Book> getBookById(String bookId) {
-        logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheFacadeService/GoogleBooksCachingStrategy.", bookId);
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_CF_VIA_WEBC] GoogleBooksService.getBookById for bookId: {}. Delegating to GoogleApiFetcher.", bookId);
+        } else {
+            logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheFacadeService/GoogleBooksCachingStrategy.", bookId);
+        }
         return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
             .map(BookJsonParser::convertJsonToBook)
             .filter(Objects::nonNull)
@@ -379,7 +421,7 @@ public class GoogleBooksService {
      * @param t The throwable that triggered the circuit breaker
      * @return Empty Mono to indicate no results available
      */
-    public Mono<JsonNode> searchBooksFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
+    public CompletableFuture<JsonNode> searchBooksFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
         logger.warn("GoogleBooksService.searchBooks circuit breaker opened for query: '{}', startIndex: {}. Error: {}", 
             query, startIndex, t.getMessage());
         
@@ -392,7 +434,7 @@ public class GoogleBooksService {
         apiRequestMonitor.recordFailedRequest(apiEndpoint, "Circuit breaker opened for query: '" + query + "', startIndex: " + startIndex + ": " + t.getMessage());
         
         // Return an empty object node instead of Mono.empty() to avoid downstream errors
-        return Mono.just(objectMapper.createObjectNode());
+        return CompletableFuture.completedFuture(objectMapper.createObjectNode());
     }
     
     /**
@@ -409,14 +451,14 @@ public class GoogleBooksService {
      * @param t The throwable from the rate limiter
      * @return Empty Mono to indicate no results available
      */
-    public Mono<JsonNode> searchBooksRateLimitFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
+    public CompletableFuture<JsonNode> searchBooksRateLimitFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
         logger.warn("GoogleBooksService.searchBooks rate limit exceeded for query: '{}', startIndex: {}. Error: {}", 
             query, startIndex, t.getMessage());
         
         apiRequestMonitor.recordMetric("api/rate-limited", "API call rate limited for search: " + query + " (via GoogleBooksService)");
         
         // Return an empty object node instead of Mono.empty() to avoid downstream errors
-        return Mono.just(objectMapper.createObjectNode());
+        return CompletableFuture.completedFuture(objectMapper.createObjectNode());
     }
 
     /**

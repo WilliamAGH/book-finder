@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import reactor.core.publisher.Mono; // Added import
 
 @Service
 public class NytIndividualBookProcessorService {
@@ -127,23 +128,30 @@ public class NytIndividualBookProcessorService {
                         }
                     } else {
                         logger.warn("Full Google Books data for ID {} was not pre-fetched. Attempting fetch via BookDataOrchestrator.", finalInitialGoogleBookId);
-                        googleBookJsonNodeFuture = bookDataOrchestrator.getBookByIdTiered(finalInitialGoogleBookId)
-                            .toFuture()
-                            .thenApply(fetchedNow -> {
+                        Mono<JsonNode> monoJsonNode = bookDataOrchestrator.getBookByIdTiered(finalInitialGoogleBookId)
+                            .flatMap(fetchedNow -> { // Use flatMap to handle potential null from objectMapper or fetchedNow
                                 if (fetchedNow != null) {
                                     try {
-                                        return (fetchedNow.getRawJsonResponse() != null) ?
+                                        JsonNode node = (fetchedNow.getRawJsonResponse() != null) ?
                                             objectMapper.readTree(fetchedNow.getRawJsonResponse()) :
                                             objectMapper.valueToTree(fetchedNow);
+                                        return Mono.justOrEmpty(node);
                                     } catch (IOException e) {
-                                        logger.error("Error parsing raw JSON for directly fetched Google Book ID {}: {}", finalInitialGoogleBookId, e.getMessage());
-                                        return objectMapper.valueToTree(fetchedNow);
+                                        logger.error("Error parsing raw JSON for directly fetched Google Book ID {}: {}", finalInitialGoogleBookId, e.getMessage(), e);
+                                        // Fallback to tree conversion of the Book object itself if raw JSON fails
+                                        try {
+                                            return Mono.justOrEmpty(objectMapper.valueToTree(fetchedNow));
+                                        } catch (IllegalArgumentException iae) {
+                                            logger.error("Error converting fetchedNow to JsonNode for Google Book ID {}: {}", finalInitialGoogleBookId, iae.getMessage(), iae);
+                                            return Mono.empty(); // Critical error, return empty
+                                        }
                                     }
                                 } else {
                                     logger.warn("Full Google Books data not found for ID {} even after direct fetch attempt.", finalInitialGoogleBookId);
-                                    return null;
+                                    return Mono.empty(); // Return empty Mono if fetchedNow is null
                                 }
                             });
+                        googleBookJsonNodeFuture = monoJsonNode.toFuture(); // Convert the Mono<JsonNode> (or empty Mono) to CompletableFuture<JsonNode>
                     }
                 } else {
                     googleBookJsonNodeFuture = CompletableFuture.completedFuture(null);
@@ -164,25 +172,30 @@ public class NytIndividualBookProcessorService {
                         List<JsonNode> fallbackSources = new ArrayList<>();
                         fallbackSources.add(nytBookApiNode);
 
-                        finalAggregatedBookDataFuture = openLibraryBookDataService.fetchBookByIsbn(effectiveIsbn)
-                            .toFuture()
-                            .thenApply(olBook -> {
-                                if (olBook != null) {
-                                    logger.info("Fetched data from OpenLibrary for ISBN {} (NYT title: '{}')", effectiveIsbn, titleForLogging);
-                                    fallbackSources.add(objectMapper.valueToTree(olBook));
-                                } else {
-                                    logger.info("No data found from OpenLibrary for ISBN {} (NYT title: '{}')", effectiveIsbn, titleForLogging);
-                                }
-                                return bookDataAggregatorService.aggregateBookDataSourcesAsync(currentPrimaryId, "id", fallbackSources.toArray(new JsonNode[0])).join();
-                            }).exceptionally(e -> {
-                                logger.warn("Error fetching from OpenLibrary for ISBN {} (NYT title: '{}'): {}", effectiveIsbn, titleForLogging, e.getMessage());
-                                return bookDataAggregatorService.aggregateBookDataSourcesAsync(currentPrimaryId, "id", fallbackSources.toArray(new JsonNode[0])).join();
-                            })
-                            .thenApply(aggregated -> {
-                                enrichWithNytData(aggregated, nytBookApiNode);
-                                logger.debug("Aggregated data using OpenLibrary fallback for ISBN: {} (NYT title: '{}')", effectiveIsbn, titleForLogging);
-                                return aggregated;
-                            });
+                        // openLibraryBookDataService.fetchBookByIsbn already returns CompletableFuture<Book>
+                        CompletableFuture<Book> olBookFuture = openLibraryBookDataService.fetchBookByIsbn(effectiveIsbn);
+
+                        finalAggregatedBookDataFuture = olBookFuture.thenApplyAsync(olBook -> {
+                            if (olBook != null) {
+                                logger.info("Fetched data from OpenLibrary for ISBN {} (NYT title: '{}')", effectiveIsbn, titleForLogging);
+                                fallbackSources.add(objectMapper.valueToTree(olBook));
+                            } else {
+                                logger.info("No data found from OpenLibrary for ISBN {} (NYT title: '{}')", effectiveIsbn, titleForLogging);
+                            }
+                            // .join() is blocking. This stage must return ObjectNode.
+                            ObjectNode aggregated = bookDataAggregatorService.aggregateBookDataSourcesAsync(currentPrimaryId, "id", fallbackSources.toArray(new JsonNode[0])).join();
+                            enrichWithNytData(aggregated, nytBookApiNode);
+                            logger.debug("Aggregated data using OpenLibrary fallback for ISBN: {} (NYT title: '{}')", effectiveIsbn, titleForLogging);
+                            return aggregated; // This is an ObjectNode
+                        }, mvcTaskExecutor).exceptionally(e -> {
+                            logger.warn("Error fetching/processing OpenLibrary data for ISBN {} (NYT title: '{}'): {}", effectiveIsbn, titleForLogging, e.getMessage(), e);
+                            List<JsonNode> errorFallbackSources = new ArrayList<>();
+                            errorFallbackSources.add(nytBookApiNode);
+                            // .join() is blocking. This stage must return ObjectNode.
+                            ObjectNode aggregated = bookDataAggregatorService.aggregateBookDataSourcesAsync(currentPrimaryId, "id", errorFallbackSources.toArray(new JsonNode[0])).join();
+                            enrichWithNytData(aggregated, nytBookApiNode);
+                            return aggregated; // This is an ObjectNode
+                        });
                     } else {
                         logger.warn("Book from NYT has no Google ID or effective ISBN. Creating record with NYT data only. Title: {}", titleForLogging);
                         primaryIdForPersistence = "NYT_" + titleForLogging.replaceAll("[^a-zA-Z0-9.-]", "_") + "_" + System.currentTimeMillis();

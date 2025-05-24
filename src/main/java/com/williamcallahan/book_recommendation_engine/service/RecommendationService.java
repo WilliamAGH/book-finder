@@ -17,8 +17,12 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.ErrorHandlingUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
@@ -49,18 +53,21 @@ public class RecommendationService {
 
     private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheFacadeService
     private final BookCacheFacadeService bookCacheFacadeService;
+    private final Environment environment;
 
     /**
      * Constructs the RecommendationService with required dependencies
-     * 
+     *
      * @param googleBooksService Service for searching books in Google Books API
      * @param bookCacheFacadeService Service for retrieving cached book information
-     * 
+     * @param environment Spring Environment for profile checks
+     *
      * @implNote Uses both GoogleBooksService for searches and BookCacheFacadeService for book details
      */
-    public RecommendationService(GoogleBooksService googleBooksService, BookCacheFacadeService bookCacheFacadeService) {
+    public RecommendationService(GoogleBooksService googleBooksService, BookCacheFacadeService bookCacheFacadeService, Environment environment) {
         this.googleBooksService = googleBooksService;
         this.bookCacheFacadeService = bookCacheFacadeService;
+        this.environment = environment;
     }
 
     /**
@@ -74,8 +81,14 @@ public class RecommendationService {
      * Scores and ranks results to provide the most relevant recommendations
      * Filters by language to match the source book when language information is available
      */
+    @Cacheable(value = "similarBooksCache", key = "#bookId + '-' + #finalCount", unless="#result == null || #result.empty")
     public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
         final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_REACTIVE_STREAM] getSimilarBooks called for bookId: {}, finalCount: {}. Cache will be checked.", bookId, finalCount);
+        } else {
+            logger.debug("getSimilarBooks called for bookId: {}, finalCount: {}. Cache will be checked.", bookId, finalCount);
+        }
 
         return bookCacheFacadeService.getBookByIdReactive(bookId)
             .flatMap(sourceBook -> {
@@ -113,16 +126,41 @@ public class RecommendationService {
                                 logger.info("Serving {} recommendations for book {} from S3/cached IDs.", Math.min(cachedBooks.size(), effectiveCount), bookId);
                                 return Mono.just(cachedBooks.stream().limit(effectiveCount).collect(Collectors.toList()));
                             } else {
-                                logger.info("Cached recommendations for book {} are insufficient ({} found, {} needed). Fetching from API.", bookId, cachedBooks.size(), effectiveCount);
+                                if (environment.acceptsProfiles(Profiles.of("dev"))) {
+                                    logger.info("[ASYNC_REACTIVE_STREAM] Cached recommendations for book {} are insufficient ({} found, {} needed). Fetching from API.", bookId, cachedBooks.size(), effectiveCount);
+                                } else {
+                                    logger.info("Cached recommendations for book {} are insufficient ({} found, {} needed). Fetching from API.", bookId, cachedBooks.size(), effectiveCount);
+                                }
                                 return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
                             }
                         });
                 } else {
-                    logger.info("No cached recommendation IDs for book {}. Fetching from API.", bookId);
+                    if (environment.acceptsProfiles(Profiles.of("dev"))) {
+                        logger.info("[ASYNC_REACTIVE_STREAM] No cached recommendation IDs for book {}. Fetching from API.", bookId);
+                    } else {
+                        logger.info("No cached recommendation IDs for book {}. Fetching from API.", bookId);
+                    }
                     return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
                 }
             })
-            .switchIfEmpty(Mono.just(Collections.emptyList())); // If the whole chain above is empty, provide an empty list.
+            .switchIfEmpty(Mono.just(Collections.emptyList())) // If the whole chain above is empty, provide an empty list.
+            .onErrorResume(throwable -> {
+                ErrorHandlingUtils.ErrorCategory category = ErrorHandlingUtils.categorizeError(throwable);
+                switch (category) {
+                    case TIMEOUT:
+                        logger.warn("Timeout while fetching recommendations for book {}: {}", bookId, throwable.getMessage());
+                        break;
+                    case RATE_LIMIT:
+                        logger.warn("Rate limit hit while fetching recommendations for book {}: {}", bookId, throwable.getMessage());
+                        break;
+                    case VALIDATION:
+                        logger.warn("Validation error while fetching recommendations for book {}: {}", bookId, throwable.getMessage());
+                        break;
+                    default:
+                        logger.error("Error fetching recommendations for book {}: {}", bookId, throwable.getMessage(), throwable);
+                }
+                return Mono.just(Collections.<Book>emptyList()); // Return empty list on any error
+            });
     }
 
     /**
@@ -201,8 +239,25 @@ public class RecommendationService {
                         });
                 } else {
                      logger.info("No recommendations generated from API for book ID: {}", sourceBook.getId());
-                    return Mono.just(Collections.emptyList());
+                    return Mono.just(Collections.<Book>emptyList());
                 }
+            })
+            .onErrorResume(throwable -> {
+                ErrorHandlingUtils.ErrorCategory category = ErrorHandlingUtils.categorizeError(throwable);
+                switch (category) {
+                    case TIMEOUT:
+                        logger.warn("Timeout while fetching API recommendations for book {}: {}", sourceBook.getId(), throwable.getMessage());
+                        break;
+                    case RATE_LIMIT:
+                        logger.warn("Rate limit hit while fetching API recommendations for book {}: {}", sourceBook.getId(), throwable.getMessage());
+                        break;
+                    case VALIDATION:
+                        logger.warn("Validation error while fetching API recommendations for book {}: {}", sourceBook.getId(), throwable.getMessage());
+                        break;
+                    default:
+                        logger.error("Error fetching API recommendations for book {}: {}", sourceBook.getId(), throwable.getMessage(), throwable);
+                }
+                return Mono.just(Collections.<Book>emptyList()); // Return empty list on any error
             });
     }
     
@@ -222,7 +277,7 @@ public class RecommendationService {
         String langCode = sourceBook.getLanguage(); // Get language from source book
         
         return Flux.fromIterable(sourceBook.getAuthors())
-            .flatMap(author -> googleBooksService.searchBooksByAuthor(author, langCode) // Pass langCode
+            .flatMap(author -> googleBooksService.searchBooksByAuthor(author, langCode, MAX_SEARCH_RESULTS, "relevance") // Pass langCode, limit, and order
                 .flatMapMany(Flux::fromIterable)
                 .map(book -> new ScoredBook(book, 4.0)) // Same author is a strong indicator
                 .onErrorResume(e -> {
@@ -259,9 +314,9 @@ public class RecommendationService {
         String categoryQueryString = "subject:" + String.join(" OR subject:", mainCategories);
         String langCode = sourceBook.getLanguage(); // Get language from source book
         
-        return googleBooksService.searchBooksAsyncReactive(categoryQueryString, langCode) // Pass langCode
+        return googleBooksService.searchBooksAsyncReactive(categoryQueryString, langCode, MAX_SEARCH_RESULTS, "relevance") // Pass langCode, limit, order
             .flatMapMany(Flux::fromIterable)
-            .take(MAX_SEARCH_RESULTS) // Limit results after fetching the list from Mono<List<Book>>
+            // .take(MAX_SEARCH_RESULTS) // No longer needed as desiredTotalResults is passed
             .map(book -> {
                 double categoryScore = calculateCategoryOverlapScore(sourceBook, book);
                 return new ScoredBook(book, categoryScore);
@@ -356,9 +411,9 @@ public class RecommendationService {
         String query = String.join(" ", keywords);
         String langCode = sourceBook.getLanguage(); // Get language from source book
 
-        return googleBooksService.searchBooksAsyncReactive(query, langCode) // Pass langCode
+        return googleBooksService.searchBooksAsyncReactive(query, langCode, MAX_SEARCH_RESULTS, "relevance") // Pass langCode, limit, order
             .flatMapMany(Flux::fromIterable)
-            .take(MAX_SEARCH_RESULTS)
+            // .take(MAX_SEARCH_RESULTS) // No longer needed
             .flatMap(book -> {
                 String candidateText = ((book.getTitle() != null ? book.getTitle() : "") + " " +
                                       (book.getDescription() != null ? book.getDescription() : "")).toLowerCase();
@@ -440,6 +495,9 @@ public class RecommendationService {
      */
     @Async
     public CompletableFuture<List<Book>> getSimilarBooksAsync(String bookId, int finalCount) {
+        if (environment.acceptsProfiles(Profiles.of("dev"))) {
+            logger.info("[ASYNC_@Async] Executing getSimilarBooksAsync on thread pool for bookId: {}, finalCount: {}", bookId, finalCount);
+        }
         return getSimilarBooks(bookId, finalCount).toFuture();
     }
 }

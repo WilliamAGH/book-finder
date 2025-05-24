@@ -20,7 +20,10 @@ import com.williamcallahan.book_recommendation_engine.types.EnrichmentEvent;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import org.slf4j.Logger; // Added
+import org.slf4j.LoggerFactory; // Added
 import org.springframework.stereotype.Component;
+import java.util.Collections; // Added
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -31,6 +34,7 @@ import java.util.stream.Collectors;
 @Component
 public class BackgroundEnrichmentService {
 
+    private static final Logger logger = LoggerFactory.getLogger(BackgroundEnrichmentService.class); // Added logger
     private final NewYorkTimesService newYorkTimesService;
     private final RecentlyViewedService recentlyViewedService;
     private final BookCoverManagementService bookCoverManagementService;
@@ -78,9 +82,11 @@ public class BackgroundEnrichmentService {
      * @return Flux of EnrichmentEvent containing covers, editions, affiliate links, and similar books
      */
     public Flux<EnrichmentEvent> homeEnrichmentStream() {
-        Mono<List<Book>> bestsellersMono = newYorkTimesService.getCurrentBestSellers("hardcover-fiction", MAX_BESTSELLERS);
+        Mono<List<Book>> bestsellersMono = newYorkTimesService.getCurrentBestSellers("hardcover-fiction", MAX_BESTSELLERS)
+            .onErrorReturn(Collections.emptyList());
         Mono<List<Book>> recentsMono = Mono.fromFuture(recentlyViewedService.getRecentlyViewedBooksAsync())
-            .map(list -> list.stream().limit(MAX_RECENTS).collect(Collectors.toList()));
+            .map(list -> list.stream().limit(MAX_RECENTS).collect(Collectors.toList()))
+            .onErrorReturn(Collections.emptyList());
 
         return Mono.zip(bestsellersMono, recentsMono)
             .flatMapMany(tuple -> {
@@ -92,25 +98,43 @@ public class BackgroundEnrichmentService {
                         String bookId = book.getId();
                         Flux<EnrichmentEvent> coverFlux = bookCoverManagementService
                             .getInitialCoverUrlAndTriggerBackgroundUpdate(book, true)
-                            .map(ci -> new EnrichmentEvent("cover", bookId, ci)).flux();
+                            .map(ci -> new EnrichmentEvent("cover", bookId, ci))
+                            .flux()
+                            .onErrorResume(e -> {
+                                logger.warn("Error fetching cover for book {}: {}", bookId, e.getMessage());
+                                return Flux.empty();
+                            });
                         Flux<EnrichmentEvent> editionsFlux = duplicateBookService
                             .populateDuplicateEditionsReactive(book)
                             .then(Mono.fromCallable(() -> book.getOtherEditions()))
-                            .map(editions -> new EnrichmentEvent("editions", bookId, editions)).flux();
+                            .map(editions -> new EnrichmentEvent("editions", bookId, editions))
+                            .flux()
+                            .onErrorResume(e -> {
+                                logger.warn("Error fetching editions for book {}: {}", bookId, e.getMessage());
+                                return Flux.empty();
+                            });
                         Flux<EnrichmentEvent> affiliateLinksFlux = Flux.defer(() ->
                             Mono.zip(
-                                Mono.fromFuture(affiliateLinkService.generateBarnesAndNobleLink(book.getIsbn13(), null, null)),
-                                Mono.fromFuture(affiliateLinkService.generateBookshopLink(book.getIsbn13(), null)),
-                                Mono.fromFuture(affiliateLinkService.generateAmazonLink(book.getIsbn13(), book.getTitle(), null))
+                                Mono.fromFuture(affiliateLinkService.generateBarnesAndNobleLink(book.getIsbn13(), null, null)).onErrorReturn(""),
+                                Mono.fromFuture(affiliateLinkService.generateBookshopLink(book.getIsbn13(), null)).onErrorReturn(""),
+                                Mono.fromFuture(affiliateLinkService.generateAmazonLink(book.getIsbn13(), book.getTitle(), null)).onErrorReturn("")
                             ).map(tup -> Map.of(
                                 "barnesandnoble", tup.getT1(),
                                 "bookshop", tup.getT2(),
                                 "amazon", tup.getT3()
                             )).map(payload -> new EnrichmentEvent("affiliateLinks", bookId, payload))
-                        );
+                        ).onErrorResume(e -> {
+                            logger.warn("Error fetching affiliate links for book {}: {}", bookId, e.getMessage());
+                            return Mono.empty();
+                        });
                         Flux<EnrichmentEvent> similarBooksFlux = recommendationService
                             .getSimilarBooks(bookId, DEFAULT_SIMILAR_COUNT)
-                            .map(list -> new EnrichmentEvent("similar", bookId, list)).flux();
+                            .map(list -> new EnrichmentEvent("similar", bookId, list))
+                            .flux()
+                            .onErrorResume(e -> {
+                                logger.warn("Error fetching similar books for book {}: {}", bookId, e.getMessage());
+                                return Flux.empty();
+                            });
                         return Flux.merge(coverFlux, editionsFlux, affiliateLinksFlux, similarBooksFlux);
                     });
 
@@ -119,25 +143,43 @@ public class BackgroundEnrichmentService {
                         String bookId = book.getId();
                         Flux<EnrichmentEvent> coverFlux = bookCoverManagementService
                             .getInitialCoverUrlAndTriggerBackgroundUpdate(book, true)
-                            .map(ci -> new EnrichmentEvent("cover", bookId, ci)).flux();
+                            .map(ci -> new EnrichmentEvent("cover", bookId, ci))
+                            .flux()
+                            .onErrorResume(e -> {
+                                logger.warn("Error fetching cover for recent book {}: {}", bookId, e.getMessage());
+                                return Flux.empty();
+                            });
                         Flux<EnrichmentEvent> editionsFlux = duplicateBookService
                             .populateDuplicateEditionsReactive(book)
                             .then(Mono.fromCallable(() -> book.getOtherEditions()))
-                            .map(editions -> new EnrichmentEvent("editions", bookId, editions)).flux();
+                            .map(editions -> new EnrichmentEvent("editions", bookId, editions))
+                            .flux()
+                            .onErrorResume(e -> {
+                                logger.warn("Error fetching editions for recent book {}: {}", bookId, e.getMessage());
+                                return Flux.empty();
+                            });
                         Flux<EnrichmentEvent> affiliateLinksFlux = Flux.defer(() ->
                             Mono.zip(
-                                Mono.fromFuture(affiliateLinkService.generateBarnesAndNobleLink(book.getIsbn13(), null, null)),
-                                Mono.fromFuture(affiliateLinkService.generateBookshopLink(book.getIsbn13(), null)),
-                                Mono.fromFuture(affiliateLinkService.generateAmazonLink(book.getIsbn13(), book.getTitle(), null))
+                                Mono.fromFuture(affiliateLinkService.generateBarnesAndNobleLink(book.getIsbn13(), null, null)).onErrorReturn(""),
+                                Mono.fromFuture(affiliateLinkService.generateBookshopLink(book.getIsbn13(), null)).onErrorReturn(""),
+                                Mono.fromFuture(affiliateLinkService.generateAmazonLink(book.getIsbn13(), book.getTitle(), null)).onErrorReturn("")
                             ).map(tup -> Map.of(
                                 "barnesandnoble", tup.getT1(),
                                 "bookshop", tup.getT2(),
                                 "amazon", tup.getT3()
                             )).map(payload -> new EnrichmentEvent("affiliateLinks", bookId, payload))
-                        );
+                        ).onErrorResume(e -> {
+                            logger.warn("Error fetching affiliate links for recent book {}: {}", bookId, e.getMessage());
+                            return Mono.empty();
+                        });
                         Flux<EnrichmentEvent> similarBooksFlux = recommendationService
                             .getSimilarBooks(bookId, DEFAULT_SIMILAR_COUNT)
-                            .map(list -> new EnrichmentEvent("similar", bookId, list)).flux();
+                            .map(list -> new EnrichmentEvent("similar", bookId, list))
+                            .flux()
+                            .onErrorResume(e -> {
+                                logger.warn("Error fetching similar books for recent book {}: {}", bookId, e.getMessage());
+                                return Flux.empty();
+                            });
                         return Flux.merge(coverFlux, editionsFlux, affiliateLinksFlux, similarBooksFlux);
                     });
 
