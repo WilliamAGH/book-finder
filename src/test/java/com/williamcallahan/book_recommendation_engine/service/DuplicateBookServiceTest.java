@@ -11,12 +11,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.eq;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
@@ -34,10 +34,10 @@ public class DuplicateBookServiceTest {
     @Mock
     private CachedBookRepository cachedBookRepository;
 
-    /**
-     * Service instance under test
-     */
-    @InjectMocks
+    @Mock
+    private BookDeduplicationService bookDeduplicationService;
+
+    private Executor taskExecutor;
     private DuplicateBookService duplicateBookService;
 
     /**
@@ -45,7 +45,8 @@ public class DuplicateBookServiceTest {
      */
     @BeforeEach
     void setUp() {
-        // MockitoAnnotations.openMocks(this); // Not strictly necessary with @ExtendWith
+        taskExecutor = Runnable::run;
+        duplicateBookService = new DuplicateBookService(cachedBookRepository, taskExecutor, bookDeduplicationService);
     }
 
     /**

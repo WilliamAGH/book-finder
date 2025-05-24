@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import java.util.concurrent.CompletableFuture;
 import java.util.Map;
+import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,6 +27,8 @@ import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerS
 import com.williamcallahan.book_recommendation_engine.service.BookDataConsolidationService;
 import com.williamcallahan.book_recommendation_engine.repository.RedisBookMaintenanceService;
 import com.williamcallahan.book_recommendation_engine.service.EmbeddingService;
+import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService; // Added import
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository; // Added import
 import org.springframework.http.ResponseEntity;
 
 class AdminControllerTest {
@@ -36,6 +39,9 @@ class AdminControllerTest {
     private ApiCircuitBreakerService mockCircuitService;
     private BookDataConsolidationService mockConsolidationService;
     private RedisBookMaintenanceService mockMaintenanceService;
+    private S3CoverCleanupService mockS3CoverCleanupService; // Added mock field
+    private CachedBookRepository mockCachedBookRepository; // Added mock field
+    private EmbeddingService mockEmbeddingService; // Added mock field
 
     @BeforeEach
     void setUp() {
@@ -44,16 +50,19 @@ class AdminControllerTest {
         mockCircuitService = Mockito.mock(ApiCircuitBreakerService.class);
         mockConsolidationService = Mockito.mock(BookDataConsolidationService.class);
         mockMaintenanceService = Mockito.mock(RedisBookMaintenanceService.class);
+        mockS3CoverCleanupService = Mockito.mock(S3CoverCleanupService.class); // Initialized mock
+        mockCachedBookRepository = Mockito.mock(CachedBookRepository.class); // Initialized mock
+        mockEmbeddingService = Mockito.mock(EmbeddingService.class); // Initialized mock
 
         controller = new AdminController(
-            null,
+            mockS3CoverCleanupService, // Used mock
             mockScheduler,
             mockCacheScheduler,
             mockCircuitService,
             mockConsolidationService,
-            null,
+            mockCachedBookRepository, // Used mock
             mockMaintenanceService,
-            Mockito.mock(EmbeddingService.class),
+            mockEmbeddingService, // Used mock
             "prefix",
             10,
             "quarantine"
@@ -65,9 +74,19 @@ class AdminControllerTest {
         Mockito.doNothing().when(mockScheduler).processNewYorkTimesBestsellers();
         ResponseEntity<String> resp = controller.triggerNytBestsellerProcessing().join();
         assertEquals(200, resp.getStatusCode().value());
-        String responseBody1 = resp.getBody();
-        assertNotNull(responseBody1);
+        String responseBody1 = Objects.requireNonNull(resp.getBody());
         assertTrue(responseBody1.contains("Successfully triggered New York Times Bestseller processing job"));
+    }
+
+    @Test
+    void triggerNytBestsellerProcessing_failure() throws Exception {
+        Mockito.doThrow(new RuntimeException("Processing failed"))
+            .when(mockScheduler).processNewYorkTimesBestsellers();
+        
+        ResponseEntity<String> resp = controller.triggerNytBestsellerProcessing().join();
+        assertEquals(500, resp.getStatusCode().value());
+        String responseBody2 = Objects.requireNonNull(resp.getBody());
+        assertTrue(responseBody2.contains("Failed to trigger New York Times Bestseller processing job: Processing failed"));
     }
 
     @Test
@@ -85,8 +104,7 @@ class AdminControllerTest {
                 .thenReturn(CompletableFuture.completedFuture(null));
         ResponseEntity<String> resp = controller.triggerBookDataConsolidation(true).join();
         assertEquals(200, resp.getStatusCode().value());
-        String responseBody2 = resp.getBody();
-        assertNotNull(responseBody2);
+        String responseBody2 = Objects.requireNonNull(resp.getBody());
         assertTrue(responseBody2.contains("Book data consolidation process started"));
     }
 
@@ -104,8 +122,7 @@ class AdminControllerTest {
         Mockito.doNothing().when(mockCacheScheduler).warmPopularBookCaches();
         ResponseEntity<String> resp = controller.triggerCacheWarming().join();
         assertEquals(200, resp.getStatusCode().value());
-        String responseBody3 = resp.getBody();
-        assertNotNull(responseBody3);
+        String responseBody3 = Objects.requireNonNull(resp.getBody());
         assertTrue(responseBody3.contains("Successfully triggered book cache warming job"));
     }
 
