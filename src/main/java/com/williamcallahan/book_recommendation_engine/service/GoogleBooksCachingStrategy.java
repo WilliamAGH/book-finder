@@ -1,13 +1,17 @@
 /**
  * Implements a multi-level caching strategy for Book objects
- * Provides efficient book retrieval by checking caches in order of speed before an API fallback
- * Cache layers include: In-memory, Spring Cache, Local Disk (dev), Redis, Database, and S3
- * Populates all relevant cache layers after a successful retrieval from a lower tier or API
- * Offers synchronous and reactive interfaces for fetching and managing cached Book data
- * Supports cache-only queries, existence checks, and cache bypass for debugging
- * Ensures thread-safe operations for concurrent access
+ * Provides efficient book retrieval by checking caches in order of speed before API fallback
+ * Populates all relevant cache layers after successful retrieval from lower tier or API
  *
  * @author William Callahan
+ *
+ * Features:
+ * - Multi-tier caching with in-memory, Spring Cache, local disk, Redis, database, and S3 layers
+ * - Efficient book retrieval checking caches in order of speed before API fallback
+ * - Cache population across all relevant layers after successful lower-tier retrieval
+ * - Synchronous and reactive interfaces for fetching and managing cached Book data
+ * - Cache-only queries, existence checks, and cache bypass capabilities for debugging
+ * - Thread-safe operations for concurrent access
  */
 
 package com.williamcallahan.book_recommendation_engine.service;
@@ -28,10 +32,11 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Optional;
@@ -51,10 +56,10 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     private final CacheManager cacheManager;
     private final CachedBookRepository cachedBookRepository;
     private final ObjectMapper objectMapper;
-    private final RedisCacheService redisCacheService; 
+    private final RedisCacheService redisCacheService;
     
     private final ConcurrentHashMap<String, Book> bookDetailCache = new ConcurrentHashMap<>();
-    private final Executor localDiskExecutor = Executors.newFixedThreadPool(4); 
+    private final ExecutorService localDiskExecutor = Executors.newFixedThreadPool(4);
     
     @Value("${app.cache.enabled:true}")
     private boolean cacheEnabled;
@@ -295,12 +300,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
             localDiskFuture = saveBookToLocalCacheAsync(bookId, book);
         }
 
-        localDiskFuture.thenCompose(v -> 
+        // Chain the reactive put operation after the local disk future completes,
+        // and return the CompletionStage representing this entire chain.
+        return localDiskFuture.thenCompose(v -> 
             putReactive(bookId, book).toFuture()
         );
-        putReactive(bookId, book).subscribe();
-        
-        return CompletableFuture.completedFuture(null);
     }
 
     @Override
@@ -600,7 +604,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         cachedBook.setAuthors(book.getAuthors());
         cachedBook.setPublisher(book.getPublisher());
         if (book.getPublishedDate() != null) {
-            cachedBook.setPublishedDate(book.getPublishedDate().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime());
+            cachedBook.setPublishedDate(book.getPublishedDate().atStartOfDay());
         } else {
             cachedBook.setPublishedDate(null);
         }
@@ -629,5 +633,23 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
         
         return cachedBook;
+    }
+
+    @PreDestroy
+    public void shutdownExecutor() {
+        logger.info("Shutting down localDiskExecutor...");
+        localDiskExecutor.shutdown();
+        try {
+            if (!localDiskExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                localDiskExecutor.shutdownNow();
+                if (!localDiskExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    logger.error("localDiskExecutor did not terminate.");
+                }
+            }
+        } catch (InterruptedException ie) {
+            localDiskExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        logger.info("localDiskExecutor shut down successfully.");
     }
 }

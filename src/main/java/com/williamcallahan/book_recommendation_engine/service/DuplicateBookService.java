@@ -23,12 +23,12 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import java.util.stream.Collectors;
 import java.util.Set;
 import java.util.Collections;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.util.Date;
 @Service
 public class DuplicateBookService {
 
@@ -153,10 +153,10 @@ public class DuplicateBookService {
                     editionInfo.setEditionIsbn10(dupCachedBook.getIsbn10());
                     editionInfo.setEditionIsbn13(dupCachedBook.getIsbn13());
                     
-                    // Convert LocalDateTime to Date for publishedDate
+                    // Convert LocalDateTime to LocalDate for publishedDate
                     LocalDateTime ldt = dupCachedBook.getPublishedDate();
                     if (ldt != null) {
-                        editionInfo.setPublishedDate(Date.from(ldt.atZone(ZoneId.systemDefault()).toInstant()));
+                        editionInfo.setPublishedDate(ldt.toLocalDate());
                     } else {
                         editionInfo.setPublishedDate(primaryBook.getPublishedDate());
                     }
@@ -235,6 +235,18 @@ public class DuplicateBookService {
                     potentialPrimaries.size(), newBook.getTitle(), potentialPrimaries.get(0).getId());
                 return Optional.of(potentialPrimaries.get(0));
             });
+    }
+
+    /**
+     * Reactive version of populateDuplicateEditions
+     *
+     * @param primaryBook The main book whose duplicate editions will be populated
+     * @return Mono that completes when the operation is done
+     */
+    public Mono<Void> populateDuplicateEditionsReactive(Book primaryBook) {
+        return Mono.fromFuture(populateDuplicateEditionsAsync(primaryBook))
+                   .subscribeOn(Schedulers.boundedElastic())
+                   .then();
     }
 
     // Deprecated synchronous versions

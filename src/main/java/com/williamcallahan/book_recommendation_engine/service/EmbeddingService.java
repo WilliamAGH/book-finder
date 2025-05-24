@@ -29,7 +29,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
-// import java.util.Collections; // Unused import
 import java.util.Map;
 
 @Service
@@ -42,6 +41,9 @@ public class EmbeddingService {
     private final boolean embeddingServiceEnabled;
     private final String embeddingServiceUrl;
     private final String embeddingProvider;
+
+    @Value("${app.openai.api.key:}")
+    private String openAiApiKey;
 
     public EmbeddingService(
             WebClient.Builder webClientBuilder,
@@ -123,7 +125,7 @@ public class EmbeddingService {
 
         return embeddingClient.post()
                 .uri("/v1/embeddings")
-                .header("Authorization", "Bearer ${OPENAI_API_KEY}")
+                .header("Authorization", "Bearer " + openAiApiKey)
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(Map.class)
