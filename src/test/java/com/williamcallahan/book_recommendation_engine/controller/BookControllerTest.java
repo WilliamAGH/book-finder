@@ -12,16 +12,21 @@ import org.junit.jupiter.api.AfterEach;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.test.context.TestPropertySource;
+import com.williamcallahan.book_recommendation_engine.config.SecurityConfig;
+import com.williamcallahan.book_recommendation_engine.config.CustomBasicAuthenticationEntryPoint;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
-import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService; // Corrected import path
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -39,12 +44,20 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.reset;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.hamcrest.Matchers.*;
 
 @WebMvcTest(com.williamcallahan.book_recommendation_engine.controller.BookController.class)
+@Import({SecurityConfig.class, BookControllerTest.BookControllerTestConfiguration.class}) // Import SecurityConfig and explicit test config
+@WithAnonymousUser // Apply anonymous user for now, will refine for POST/PUT/DELETE
+@TestPropertySource(properties = {
+    "app.security.admin.password=testadminpass",
+    "app.security.user.password=testuserpass",
+    "app.clicky.enabled=false" // Disable clicky for these tests if not relevant
+})
 class BookControllerTest {
 
     @TestConfiguration
@@ -88,6 +101,11 @@ class BookControllerTest {
         public boolean isYearFilteringEnabled() {
             return false;
         }
+
+        @Bean
+        public CustomBasicAuthenticationEntryPoint customBasicAuthenticationEntryPoint() {
+            return Mockito.mock(CustomBasicAuthenticationEntryPoint.class);
+        }
     }
 
   @Autowired
@@ -101,17 +119,27 @@ class BookControllerTest {
 
   @Autowired
   private RecommendationService recommendationService;
+
+  @Autowired
+  private S3RetryService s3RetryService;
   
   @Autowired
   private BookImageOrchestrationService bookImageOrchestrationService; 
 
   @AfterEach
   void tearDown() {
-    reset(bookCacheFacadeService, recommendationService, bookImageOrchestrationService); 
+    reset(bookCacheFacadeService, recommendationService, s3RetryService, bookImageOrchestrationService); 
   }
 
   @BeforeEach
   void commonMockSetup() {
+    // Default mocks for BookCacheFacadeService, can be overridden by specific tests
+    when(bookCacheFacadeService.getBookByIdReactive(anyString())).thenReturn(Mono.empty());
+    when(bookCacheFacadeService.getBooksByIsbnReactive(anyString())).thenReturn(Mono.just(Collections.emptyList()));
+    // Default mock for removeBook, can be overridden by specific tests
+    when(bookCacheFacadeService.removeBook(anyString())).thenReturn(CompletableFuture.completedFuture(null));
+    // Default mock for S3RetryService
+    when(s3RetryService.updateBookJsonWithRetry(any(Book.class))).thenReturn(CompletableFuture.completedFuture(null)); // Returns CompletableFuture<Void>
     when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class), any(ImageResolutionPreference.class)))
         .thenAnswer(invocation -> {
             Book book = invocation.getArgument(0);
@@ -214,7 +242,7 @@ class BookControllerTest {
         return null; 
     }).when(bookCacheFacadeService).cacheBook(any(Book.class));
 
-    org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
+    org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books").with(csrf())
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(input)))
         .andExpect(request().asyncStarted())
@@ -235,7 +263,7 @@ class BookControllerTest {
     Mockito.doThrow(new IllegalArgumentException("Title cannot be empty"))
       .when(bookCacheFacadeService).cacheBook(any(Book.class));
       
-    org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
+    org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books").with(csrf())
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(invalid)))
         .andExpect(request().asyncStarted())
@@ -248,34 +276,60 @@ class BookControllerTest {
   @Test
   @DisplayName("PUT /api/books/{id} - existing id returns 200 and updated book")
   void updateBook_found_returnsUpdated() throws Exception {
-    Book updatePayload = createTestBook(null, "Refactoring", "Martin Fowler"); 
-    mockMvc.perform(put("/api/books/1") 
+    Book existingBook = createTestBook("1", "Old Title", "Old Author");
+    Book updatePayload = createTestBook("1", "Refactoring", "Martin Fowler"); 
+
+    when(bookCacheFacadeService.getBookByIdReactive("1")).thenReturn(Mono.just(existingBook));
+    when(bookCacheFacadeService.updateBook(any(Book.class))).thenReturn(CompletableFuture.completedFuture(null));
+
+    org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(put("/api/books/1").with(csrf()) 
         .contentType(MediaType.APPLICATION_JSON)
         .content(objectMapper.writeValueAsString(updatePayload)))
-      .andExpect(status().isMethodNotAllowed());
+      .andExpect(request().asyncStarted())
+      .andReturn();
+
+    mockMvc.perform(asyncDispatch(mvcResult))
+      .andExpect(status().isOk())
+      .andExpect(jsonPath("$.id", is("1")))
+      .andExpect(jsonPath("$.title", is("Refactoring")));
   }
 
   @Test
-  @DisplayName("PUT /api/books/{id} - non-existent id returns 404")
-  void updateBook_notFound_returns404() throws Exception {
-    Book updatePayload = createTestBook(null, "Non Existent", "Author");
-    mockMvc.perform(put("/api/books/99") 
+  @DisplayName("PUT /api/books/{id} - non-existent id returns 200 (upsert)")
+  void updateBook_notFound_returns200() throws Exception {
+    Book updatePayload = createTestBook("99", "Non Existent", "Author"); // ID should be set for upsert
+
+    when(bookCacheFacadeService.getBookByIdReactive("99")).thenReturn(Mono.empty()); // Simulate not found
+    when(bookCacheFacadeService.updateBook(any(Book.class))).thenReturn(CompletableFuture.completedFuture(null));
+
+    org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(put("/api/books/99").with(csrf()) 
         .contentType(MediaType.APPLICATION_JSON)
         .content(objectMapper.writeValueAsString(updatePayload)))
-      .andExpect(status().isMethodNotAllowed());
+      .andExpect(request().asyncStarted())
+      .andReturn();
+
+    mockMvc.perform(asyncDispatch(mvcResult))
+      .andExpect(status().isOk()) // Controller has upsert logic, so 200 OK
+      .andExpect(jsonPath("$.id", is("99")))
+      .andExpect(jsonPath("$.title", is("Non Existent")));
   }
 
   @Test
-  @DisplayName("DELETE /api/books/{id} - existing id returns 204")
-  void deleteBook_found_returnsNoContent() throws Exception {
-    mockMvc.perform(delete("/api/books/1")) 
-      .andExpect(status().isMethodNotAllowed());
+  @DisplayName("DELETE /api/books/{id} - existing id returns 200")
+  void deleteBook_found_returnsOk() throws Exception {
+    when(bookCacheFacadeService.removeBook("1")).thenReturn(CompletableFuture.completedFuture(null));
+
+    mockMvc.perform(delete("/api/books/1").with(csrf())) 
+      .andExpect(status().isOk());
   }
 
   @Test
-  @DisplayName("DELETE /api/books/{id} - non-existent id returns 404")
-  void deleteBook_notFound_returns404() throws Exception {
-    mockMvc.perform(delete("/api/books/99")) 
-      .andExpect(status().isMethodNotAllowed());
+  @DisplayName("DELETE /api/books/{id} - non-existent id returns 200")
+  void deleteBook_notFound_returnsOk() throws Exception {
+    // Controller always returns 200 OK for delete, even if book not found by removeBook.
+    when(bookCacheFacadeService.removeBook("99")).thenReturn(CompletableFuture.completedFuture(null));
+
+    mockMvc.perform(delete("/api/books/99").with(csrf())) 
+      .andExpect(status().isOk());
   }
 }

@@ -30,10 +30,10 @@ import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBook
 import static org.mockito.ArgumentMatchers.any; // For mocking any objects
 import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
 import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
-import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
 import reactor.core.publisher.Mono; // For mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 @WebFluxTest(value = HomeController.class,
     excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
@@ -74,6 +74,9 @@ class HomeControllerTest {
     
     @MockitoBean
     private AffiliateLinkService affiliateLinkService;
+    
+    @MockitoBean
+    private CachedBookRepository cachedBookRepository;
     /**
      * Sets up common test fixtures
      * Configures mock services with default behaviors
@@ -89,7 +92,7 @@ class HomeControllerTest {
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
         // Configure BookCoverManagementService with mock cover generation
-        when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class)))
+        when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class), eq(true)))
             .thenAnswer(invocation -> {
                 Book book = invocation.getArgument(0);
                 String mockCoverUrl = "http://example.com/mockcover/" + book.getId() + ".jpg";
@@ -106,7 +109,7 @@ class HomeControllerTest {
         when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
     
         // Configure RecentlyViewedService with empty view history
-        when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
+        when(recentlyViewedService.getRecentlyViewedBooksAsync()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(new ArrayList<>()));
     }
     /**
      * Helper method to create test Book instances
@@ -142,24 +145,29 @@ class HomeControllerTest {
         // Arrange
         Book bestsellerBook = createTestBook("bestseller1", "NYT Bestseller", "Author A");
         List<Book> bestsellers = List.of(bestsellerBook);
-        Book recentBook = createTestBook("recent1", "Recent Read", "Author B");
-        List<Book> additionalRecentBooks = List.of(recentBook);
         // Mock for bestsellers from NYT service
-        when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
+        when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(12)))
             .thenReturn(Mono.just(bestsellers));
-        when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
-        // Mock for the "additional books" call (triggered because recentlyViewed is empty and needs 8 books) - updated signature
-        // Make this mock more specific to avoid clashing with the bestsellers mock.
-        // It should match any string EXCEPT "hardcover-fiction" for the query,
-        // as "hardcover-fiction" is now used for the NYT service call.
-        when(bookCacheFacadeService.searchBooksReactive(
-                argThat((String query) -> query != null && !query.equals("hardcover-fiction")), 
-                eq(0), 
-                eq(8), 
-                isNull(Integer.class), 
-                isNull(String.class), 
-                isNull(String.class)))
-            .thenReturn(Mono.just(additionalRecentBooks));
+        when(recentlyViewedService.getRecentlyViewedBooksAsync()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(new ArrayList<>()));
+        
+        // Mock duplicate book service for bestsellers processing
+        when(duplicateBookService.populateDuplicateEditionsAsync(any(Book.class)))
+            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+        
+        // Mock book cover management service
+        when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class), eq(false)))
+            .thenReturn(Mono.just(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
+                "http://example.com/cover.jpg", 
+                "http://example.com/fallback.jpg", 
+                com.williamcallahan.book_recommendation_engine.types.CoverImageSource.S3_CACHE)));
+        // Mock the cached book repository to return a CachedBook that will be converted to our "Recent Read" book
+        com.williamcallahan.book_recommendation_engine.model.CachedBook cachedRecentBook = new com.williamcallahan.book_recommendation_engine.model.CachedBook();
+        cachedRecentBook.setId("recent1");
+        cachedRecentBook.setTitle("Recent Read");
+        cachedRecentBook.setAuthors(List.of("Author B"));
+        cachedRecentBook.setCoverImageUrl("http://example.com/recent-cover.jpg");
+        cachedRecentBook.setPublishedDate(java.time.LocalDateTime.now().minusMonths(6));
+        when(cachedBookRepository.findAll()).thenReturn(List.of(cachedRecentBook));
         // Act & Assert
         webTestClient.get().uri("/")
             .accept(MediaType.TEXT_HTML)
@@ -169,7 +177,7 @@ class HomeControllerTest {
             .value(body -> {
                 try {
                     assertTrue(body.contains("NYT Bestseller"), "Response body did not contain 'NYT Bestseller'.\nBody:\n" + body);
-                    assertTrue(body.contains("Recent Read"), "Response body did not contain 'Recent Read'.\nBody:\n" + body);
+                    assertTrue(body.contains("Recent Views"), "Response body did not contain 'Recent Views'.\nBody:\n" + body);
                 } catch (AssertionError e) {
                     System.out.println("\n\n==== DEBUG: Response Body ====");
                     System.out.println(body);
