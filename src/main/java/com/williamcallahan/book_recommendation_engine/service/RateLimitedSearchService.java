@@ -12,6 +12,7 @@
  * - Automatically merges and deduplicates results from multiple sources
  * - Updates S3 and Redis storage with merged book data
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -29,6 +30,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class RateLimitedSearchService {
@@ -40,6 +42,7 @@ public class RateLimitedSearchService {
     private final ApiCircuitBreakerService circuitBreakerService;
     private final DuplicateBookService duplicateBookService;
     private final ApplicationEventPublisher eventPublisher;
+    private final OpenLibraryBookDataService openLibraryBookDataService;
     
     // Track which API source to use next for alternating strategy
     private final AtomicInteger apiSourceCounter = new AtomicInteger(0);
@@ -54,12 +57,14 @@ public class RateLimitedSearchService {
                                   BookDataOrchestrator bookDataOrchestrator,
                                   ApiCircuitBreakerService circuitBreakerService,
                                   DuplicateBookService duplicateBookService,
-                                  ApplicationEventPublisher eventPublisher) {
+                                  ApplicationEventPublisher eventPublisher,
+                                  OpenLibraryBookDataService openLibraryBookDataService) {
         this.bookCacheFacadeService = bookCacheFacadeService;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.circuitBreakerService = circuitBreakerService;
         this.duplicateBookService = duplicateBookService;
         this.eventPublisher = eventPublisher;
+        this.openLibraryBookDataService = openLibraryBookDataService;
     }
 
     /**
@@ -88,7 +93,11 @@ public class RateLimitedSearchService {
             .flatMap(cachedResults -> {
                 // Start background search if not already running
                 if (activeSearches.add(queryHash)) {
-                    startBackgroundSearch(query, maxResults, publishedYear, langCode, orderBy, queryHash, cachedResults.size());
+                    startBackgroundSearchAsync(query, maxResults, publishedYear, langCode, orderBy, queryHash, cachedResults.size())
+                        .exceptionally(ex -> {
+                            logger.error("Error in background search for query '{}': {}", query, ex.getMessage(), ex);
+                            return null;
+                        });
                 } else {
                     logger.debug("Background search already active for query hash: {}", queryHash);
                 }
@@ -155,7 +164,7 @@ public class RateLimitedSearchService {
             }
             
             // Try secondary API source only if circuit breaker allows and we need more results
-            if (allResults.size() < maxResults && circuitBreakerService.isApiCallAllowed()) {
+            if (allResults.size() < maxResults && circuitBreakerService.isApiCallAllowed().join()) {
                 List<Book> secondaryResults = searchFromSource(query, maxResults - allResults.size(), secondarySource, queryHash);
                 if (secondaryResults != null && !secondaryResults.isEmpty()) {
                     List<Book> deduplicatedSecondary = deduplicateAndMerge(secondaryResults, seenBookIds);
@@ -184,12 +193,28 @@ public class RateLimitedSearchService {
     }
 
     /**
+     * Asynchronously starts the background search process as a CompletableFuture.
+     * @param query the search query
+     * @param maxResults maximum number of results desired
+     * @param publishedYear optional year filter
+     * @param langCode optional language filter
+     * @param orderBy optional sort order
+     * @param queryHash unique hash of the query parameters
+     * @param initialResultCount number of initial cached results
+     * @return CompletableFuture that completes when background search is scheduled/executed
+     */
+    public CompletableFuture<Void> startBackgroundSearchAsync(String query, int maxResults, Integer publishedYear,
+            String langCode, String orderBy, String queryHash, int initialResultCount) {
+        return CompletableFuture.runAsync(() -> startBackgroundSearch(query, maxResults, publishedYear, langCode, orderBy, queryHash, initialResultCount));
+    }
+
+    /**
      * Searches from a specific API source
      */
     private List<Book> searchFromSource(String query, int maxResults, String source, String queryHash) {
         try {
             if ("GOOGLE_BOOKS".equals(source)) {
-                if (!circuitBreakerService.isApiCallAllowed()) {
+                if (!circuitBreakerService.isApiCallAllowed().join()) {
                     logger.info("Circuit breaker is open, skipping Google Books search for query: '{}'", query);
                     eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.RATE_LIMITED, 
                         "Google Books rate limited", queryHash, source));
@@ -203,10 +228,18 @@ public class RateLimitedSearchService {
                     .block(); // Convert to blocking for @Async method
                     
             } else if ("OPEN_LIBRARY".equals(source)) {
+                if (!circuitBreakerService.isApiCallAllowed().join()) {
+                    logger.info("Circuit breaker is open, skipping OpenLibrary search for query: '{}'", query);
+                    eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.RATE_LIMITED, 
+                        "OpenLibrary rate limited", queryHash, source));
+                    return Collections.emptyList();
+                }
+                
                 eventPublisher.publishEvent(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.SEARCHING_OPENLIBRARY, 
                     "Searching OpenLibrary...", queryHash, source));
                     
-                return bookDataOrchestrator.searchBooksTiered(query, null, maxResults, null)
+                return openLibraryBookDataService.searchBooksByTitle(query)
+                    .collectList()
                     .block(); // Convert to blocking for @Async method
             }
         } catch (Exception e) {
@@ -242,7 +275,7 @@ public class RateLimitedSearchService {
             }
             
             // Use existing deduplication logic
-            duplicateBookService.populateDuplicateEditions(book);
+            duplicateBookService.populateDuplicateEditionsAsync(book).join();
             
             seenBookIds.add(book.getId());
             deduplicated.add(book);

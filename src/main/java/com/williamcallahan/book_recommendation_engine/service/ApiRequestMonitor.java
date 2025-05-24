@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.util.concurrent.CompletableFuture;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
@@ -75,25 +76,24 @@ public class ApiRequestMonitor {
      * Records a successful API request
      * @param endpoint The API endpoint that was called
      */
-    public void recordSuccessfulRequest(String endpoint) {
+    public CompletableFuture<Void> recordSuccessfulRequest(String endpoint) {
+        // Synchronously update metrics
         totalRequests.incrementAndGet();
         totalSuccessful.incrementAndGet();
         hourlyRequests.incrementAndGet();
         hourlySuccessful.incrementAndGet();
         dailyRequests.incrementAndGet();
         dailySuccessful.incrementAndGet();
-        
         // Track per endpoint
         endpointCounts.computeIfAbsent(endpoint, k -> new AtomicInteger(0)).incrementAndGet();
-        
         // Log if we're approaching limits
         int hourly = hourlyRequests.get();
         if (hourly % 50 == 0) {
             logger.info("API Request count: {} in the current hour", hourly);
         }
-        
         // Check for hour/day boundaries
         checkAndUpdateTimePeriods();
+        return CompletableFuture.completedFuture(null);
     }
 
     /**
@@ -101,22 +101,21 @@ public class ApiRequestMonitor {
      * @param endpoint The API endpoint that was called
      * @param errorMessage The error message from the failed call
      */
-    public void recordFailedRequest(String endpoint, String errorMessage) {
+    public CompletableFuture<Void> recordFailedRequest(String endpoint, String errorMessage) {
+        // Synchronously update metrics
         totalRequests.incrementAndGet();
         totalFailed.incrementAndGet();
         hourlyRequests.incrementAndGet();
         hourlyFailed.incrementAndGet();
         dailyRequests.incrementAndGet();
         dailyFailed.incrementAndGet();
-        
         // Track per endpoint (even failures)
         endpointCounts.computeIfAbsent(endpoint, k -> new AtomicInteger(0)).incrementAndGet();
-        
         // Always log failures
         logger.warn("Failed API request to endpoint {}: {}", endpoint, errorMessage);
-        
         // Check for hour/day boundaries
         checkAndUpdateTimePeriods();
+        return CompletableFuture.completedFuture(null);
     }
 
     /**
@@ -176,24 +175,24 @@ public class ApiRequestMonitor {
      * Gets the current hourly request count
      * @return Number of requests in the current hour
      */
-    public int getCurrentHourlyRequests() {
-        return hourlyRequests.get();
+    public CompletableFuture<Integer> getCurrentHourlyRequests() {
+        return CompletableFuture.supplyAsync(() -> hourlyRequests.get());
     }
 
     /**
      * Gets the current daily request count
      * @return Number of requests in the current day
      */
-    public int getCurrentDailyRequests() {
-        return dailyRequests.get();
+    public CompletableFuture<Integer> getCurrentDailyRequests() {
+        return CompletableFuture.supplyAsync(() -> dailyRequests.get());
     }
     
     /**
      * Gets the total request count since application start
      * @return Total number of requests
      */
-    public long getTotalRequests() {
-        return totalRequests.get();
+    public CompletableFuture<Long> getTotalRequests() {
+        return CompletableFuture.supplyAsync(() -> totalRequests.get());
     }
     
     /**
@@ -201,7 +200,8 @@ public class ApiRequestMonitor {
      * @param metricName The name of the metric to track
      * @param details Optional details about the metric event
      */
-    public void recordMetric(String metricName, String details) {
+    public CompletableFuture<Void> recordMetric(String metricName, String details) {
+        return CompletableFuture.runAsync(() -> {
         // Guard against unbounded growth - ignore metrics if we're at capacity and not whitelisted
         if (customMetricCounts.size() >= MAX_CUSTOM_METRICS && !whitelistedMetrics.contains(metricName) && 
             !customMetricCounts.containsKey(metricName)) {
@@ -231,13 +231,15 @@ public class ApiRequestMonitor {
         } else {
             logger.debug("Recorded metric {}: {}", metricName, details);
         }
+        });
     }
 
     /**
      * Generates a human-readable report of API usage metrics
      * @return String containing the formatted report
      */
-    public String generateReport() {
+    public CompletableFuture<String> generateReport() {
+        return CompletableFuture.supplyAsync(() -> {
         StringBuilder report = new StringBuilder();
         report.append("API Request Monitor Report\n");
         report.append("==========================\n");
@@ -260,6 +262,7 @@ public class ApiRequestMonitor {
         report.append("  Daily: ").append(TIME_FORMATTER.format(lastDailyReset)).append("\n");
         
         return report.toString();
+        });
     }
     
     /**
@@ -268,7 +271,8 @@ public class ApiRequestMonitor {
      * 
      * @return Map containing all metrics
      */
-    public Map<String, Object> getMetricsMap() {
+    public CompletableFuture<Map<String, Object>> getMetricsMap() {
+        return CompletableFuture.supplyAsync(() -> {
         Map<String, Object> metrics = new ConcurrentHashMap<>();
         
         // Current counts
@@ -299,5 +303,6 @@ public class ApiRequestMonitor {
         metrics.put("custom_metrics", customMetrics);
         
         return metrics;
+        });
     }
 }

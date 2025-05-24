@@ -14,6 +14,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -52,7 +53,7 @@ public class GoogleBooksService {
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
-    private final BookDataOrchestrator bookDataOrchestrator; // Added for fetchMultipleBooksByIds
+    private final BookDataOrchestrator bookDataOrchestrator;
 
     private static final int ISBN_BATCH_QUERY_SIZE = 5; // Reduced batch size for ISBN OR queries
     

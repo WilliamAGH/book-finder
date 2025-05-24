@@ -10,6 +10,7 @@
  * - Merges metadata from duplicate sources to enrich primary entries
  * - Enables unified book view across different identifiers and editions
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.Set;
 import java.util.Collections;
@@ -48,40 +50,43 @@ public class DuplicateBookService {
      *
      * @param book The book to check for duplicates
      * @param excludeId The ID of the book itself, to exclude from duplicate search results
-     * @return A list of CachedBook entities that are considered duplicates
+     * @return A CompletableFuture resolving to a list of CachedBook entities that are considered duplicates
      */
-    public List<CachedBook> findPotentialDuplicates(Book book, String excludeId) {
+    public CompletableFuture<List<CachedBook>> findPotentialDuplicatesAsync(Book book, String excludeId) {
         if (book == null || book.getTitle() == null || book.getAuthors() == null || book.getAuthors().isEmpty()) {
-            return Collections.emptyList();
+            return CompletableFuture.completedFuture(Collections.emptyList());
         }
 
-        List<CachedBook> candidates = cachedBookRepository.findByTitleIgnoreCaseAndIdNot(book.getTitle(), excludeId);
-        
-        Set<String> bookAuthorsLower = book.getAuthors().stream()
-            .map(String::toLowerCase)
-            .collect(Collectors.toSet());
+        return CompletableFuture.supplyAsync(() -> {
+            List<CachedBook> candidates = cachedBookRepository.findByTitleIgnoreCaseAndIdNot(book.getTitle(), excludeId);
+            
+            Set<String> bookAuthorsLower = book.getAuthors().stream()
+                .map(String::toLowerCase)
+                .collect(Collectors.toSet());
 
-        return candidates.stream()
-            .filter(candidate -> {
-                if (candidate.getAuthors() == null || candidate.getAuthors().isEmpty()) {
-                    return false; // Cannot be a duplicate if it has no authors and the book does
-                }
-                Set<String> candidateAuthorsLower = candidate.getAuthors().stream()
-                    .map(String::toLowerCase)
-                    .collect(Collectors.toSet());
-                return candidateAuthorsLower.equals(bookAuthorsLower);
-            })
-            .collect(Collectors.toList());
+            return candidates.stream()
+                .filter(candidate -> {
+                    if (candidate.getAuthors() == null || candidate.getAuthors().isEmpty()) {
+                        return false; // Cannot be a duplicate if it has no authors and the book does
+                    }
+                    Set<String> candidateAuthorsLower = candidate.getAuthors().stream()
+                        .map(String::toLowerCase)
+                        .collect(Collectors.toSet());
+                    return candidateAuthorsLower.equals(bookAuthorsLower);
+                })
+                .collect(Collectors.toList());
+        });
     }
 
     /**
      * Populates the 'otherEditions' field of a primary book with information from its duplicates
      *
      * @param primaryBook The main book object whose otherEditions will be populated
+     * @return A CompletableFuture that completes when the operation is done
      */
-    public void populateDuplicateEditions(Book primaryBook) {
+    public CompletableFuture<Void> populateDuplicateEditionsAsync(Book primaryBook) {
         if (primaryBook == null || primaryBook.getId() == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         // Clear any existing other editions to start fresh
@@ -91,155 +96,187 @@ public class DuplicateBookService {
             primaryBook.getOtherEditions().clear();
         }
 
-        List<CachedBook> duplicates = findPotentialDuplicates(primaryBook, primaryBook.getId());
-        
-        if (duplicates.isEmpty()) {
-            return; // No duplicates found, return early
-        }
-        
-        for (CachedBook dupCachedBook : duplicates) {
-            // Skip if this is the same book with same GoogleBooksId
-            if (dupCachedBook.getGoogleBooksId() != null && 
-                dupCachedBook.getGoogleBooksId().equals(primaryBook.getId())) {
-                logger.debug("Skipping exact same book with Google ID: {}", primaryBook.getId());
-                continue;
-            }
-            
-            // Check if ISBNs match the primary book exactly - if both match, it's not a different edition
-            if (primaryBook.getIsbn13() != null && primaryBook.getIsbn13().equals(dupCachedBook.getIsbn13()) &&
-                primaryBook.getIsbn10() != null && primaryBook.getIsbn10().equals(dupCachedBook.getIsbn10())) {
-                logger.debug("Skipping identical edition with matching ISBN-10 and ISBN-13");
-                continue;
-            }
-            
-            // If the Google ID is different but we have matching ISBNs, this is truly a different edition
-            boolean hasAtLeastOneUniqueIdentifier = false;
-            
-            // The duplicate has a different Google ID
-            if (dupCachedBook.getGoogleBooksId() != null && 
-                !dupCachedBook.getGoogleBooksId().equals(primaryBook.getId())) {
-                hasAtLeastOneUniqueIdentifier = true;
-            }
-            
-            // The duplicate has a unique ISBN-13 that doesn't match the primary book
-            if (dupCachedBook.getIsbn13() != null && 
-                (primaryBook.getIsbn13() == null || !dupCachedBook.getIsbn13().equals(primaryBook.getIsbn13()))) {
-                hasAtLeastOneUniqueIdentifier = true;
-            }
-            
-            // The duplicate has a unique ISBN-10 that doesn't match the primary book
-            if (dupCachedBook.getIsbn10() != null && 
-                (primaryBook.getIsbn10() == null || !dupCachedBook.getIsbn10().equals(primaryBook.getIsbn10()))) {
-                hasAtLeastOneUniqueIdentifier = true;
-            }
-            
-            if (!hasAtLeastOneUniqueIdentifier) {
-                logger.debug("Skipping duplicate with no unique identifiers");
-                continue;
-            }
-            
-            // This is a genuine other edition, create the EditionInfo
-            Book.EditionInfo editionInfo = new Book.EditionInfo();
-
-            // Set core information for the edition
-            if (dupCachedBook.getGoogleBooksId() != null && !dupCachedBook.getGoogleBooksId().isEmpty()) {
-                editionInfo.setGoogleBooksId(dupCachedBook.getGoogleBooksId());
-            }
-            editionInfo.setEditionIsbn10(dupCachedBook.getIsbn10());
-            editionInfo.setEditionIsbn13(dupCachedBook.getIsbn13());
-            
-            // Convert LocalDateTime to Date for publishedDate
-            LocalDateTime ldt = dupCachedBook.getPublishedDate();
-            if (ldt != null) {
-                editionInfo.setPublishedDate(Date.from(ldt.atZone(ZoneId.systemDefault()).toInstant()));
-            } else {
-                // If the duplicate doesn't have a date but the primary book does, use that
-                // This provides more context for alternative editions
-                editionInfo.setPublishedDate(primaryBook.getPublishedDate());
-            }
-            // editionInfo.setCoverImageUrl(dupCachedBook.getCoverImageUrl());
-
-            // Determine a primary display identifier and type for quick reference
-            String displayIdentifier = dupCachedBook.getIsbn13();
-            String displayType = "ISBN-13";
-
-            if (displayIdentifier == null || displayIdentifier.trim().isEmpty()) {
-                displayIdentifier = dupCachedBook.getIsbn10();
-                displayType = "ISBN-10";
-            }
-            
-            if (displayIdentifier == null || displayIdentifier.trim().isEmpty()) {
-                if (dupCachedBook.getGoogleBooksId() != null && !dupCachedBook.getGoogleBooksId().isEmpty()) {
-                    displayIdentifier = dupCachedBook.getGoogleBooksId();
-                    displayType = "GoogleID";
-                } else { 
-                    displayIdentifier = "Ref: " + dupCachedBook.getId(); 
-                    displayType = "InternalRef";
+        return findPotentialDuplicatesAsync(primaryBook, primaryBook.getId())
+            .thenAccept(duplicates -> {
+                if (duplicates.isEmpty()) {
+                    return; // No duplicates found, return early
                 }
-            }
-            editionInfo.setIdentifier(displayIdentifier); // This is a fallback/summary identifier
-            editionInfo.setType(displayType); // Describes the fallback/summary identifier
-            
-            // Check if this edition is already in the list to avoid duplicates
-            boolean alreadyExists = primaryBook.getOtherEditions().stream()
-                .anyMatch(oe -> {
-                    if (oe.getGoogleBooksId() != null && 
-                        oe.getGoogleBooksId().equals(editionInfo.getGoogleBooksId())) {
-                        return true;
+                
+                for (CachedBook dupCachedBook : duplicates) {
+                    // Skip if this is the same book with same GoogleBooksId
+                    if (dupCachedBook.getGoogleBooksId() != null && 
+                        dupCachedBook.getGoogleBooksId().equals(primaryBook.getId())) {
+                        logger.debug("Skipping exact same book with Google ID: {}", primaryBook.getId());
+                        continue;
                     }
-                    // If GoogleBooksId is null, check ISBNs
-                    if (editionInfo.getGoogleBooksId() == null && oe.getGoogleBooksId() == null) {
-                         if (oe.getEditionIsbn13() != null && 
-                             oe.getEditionIsbn13().equals(editionInfo.getEditionIsbn13())) {
-                             return true;
-                         }
-                         if (oe.getEditionIsbn10() != null && 
-                             oe.getEditionIsbn10().equals(editionInfo.getEditionIsbn10())) {
-                             return true;
-                         }
+                    
+                    // Check if ISBNs match the primary book exactly - if both match, it's not a different edition
+                    if (primaryBook.getIsbn13() != null && primaryBook.getIsbn13().equals(dupCachedBook.getIsbn13()) &&
+                        primaryBook.getIsbn10() != null && primaryBook.getIsbn10().equals(dupCachedBook.getIsbn10())) {
+                        logger.debug("Skipping identical edition with matching ISBN-10 and ISBN-13");
+                        continue;
                     }
-                    return false;
-                });
-            
-            if (!alreadyExists) {
-                 primaryBook.getOtherEditions().add(editionInfo);
-                 logger.debug("Added edition (GoogleID: {}, ISBN13: {}, ISBN10: {}) to primary book {}. DisplayID: {}, DisplayType: {}", 
-                              editionInfo.getGoogleBooksId(), editionInfo.getEditionIsbn13(), editionInfo.getEditionIsbn10(), 
-                              primaryBook.getId(), displayIdentifier, displayType);
-            } else {
-                logger.debug("Skipped adding duplicate edition that already exists in the list");
-            }
-        }
-        
-        // If no valid different editions were found, ensure the list is empty
-        if (primaryBook.getOtherEditions().isEmpty()) {
-            logger.debug("No valid different editions found for book {}", primaryBook.getId());
-        }
+                    
+                    // If the Google ID is different but we have matching ISBNs, this is truly a different edition
+                    boolean hasAtLeastOneUniqueIdentifier = false;
+                    
+                    // The duplicate has a different Google ID
+                    if (dupCachedBook.getGoogleBooksId() != null && 
+                        !dupCachedBook.getGoogleBooksId().equals(primaryBook.getId())) {
+                        hasAtLeastOneUniqueIdentifier = true;
+                    }
+                    
+                    // The duplicate has a unique ISBN-13 that doesn't match the primary book
+                    if (dupCachedBook.getIsbn13() != null && 
+                        (primaryBook.getIsbn13() == null || !dupCachedBook.getIsbn13().equals(primaryBook.getIsbn13()))) {
+                        hasAtLeastOneUniqueIdentifier = true;
+                    }
+                    
+                    // The duplicate has a unique ISBN-10 that doesn't match the primary book
+                    if (dupCachedBook.getIsbn10() != null && 
+                        (primaryBook.getIsbn10() == null || !dupCachedBook.getIsbn10().equals(primaryBook.getIsbn10()))) {
+                        hasAtLeastOneUniqueIdentifier = true;
+                    }
+                    
+                    if (!hasAtLeastOneUniqueIdentifier) {
+                        logger.debug("Skipping duplicate with no unique identifiers");
+                        continue;
+                    }
+                    
+                    // This is a genuine other edition, create the EditionInfo
+                    Book.EditionInfo editionInfo = new Book.EditionInfo();
+
+                    // Set core information for the edition
+                    if (dupCachedBook.getGoogleBooksId() != null && !dupCachedBook.getGoogleBooksId().isEmpty()) {
+                        editionInfo.setGoogleBooksId(dupCachedBook.getGoogleBooksId());
+                    }
+                    editionInfo.setEditionIsbn10(dupCachedBook.getIsbn10());
+                    editionInfo.setEditionIsbn13(dupCachedBook.getIsbn13());
+                    
+                    // Convert LocalDateTime to Date for publishedDate
+                    LocalDateTime ldt = dupCachedBook.getPublishedDate();
+                    if (ldt != null) {
+                        editionInfo.setPublishedDate(Date.from(ldt.atZone(ZoneId.systemDefault()).toInstant()));
+                    } else {
+                        editionInfo.setPublishedDate(primaryBook.getPublishedDate());
+                    }
+
+                    String displayIdentifier = dupCachedBook.getIsbn13();
+                    String displayType = "ISBN-13";
+
+                    if (displayIdentifier == null || displayIdentifier.trim().isEmpty()) {
+                        displayIdentifier = dupCachedBook.getIsbn10();
+                        displayType = "ISBN-10";
+                    }
+                    
+                    if (displayIdentifier == null || displayIdentifier.trim().isEmpty()) {
+                        if (dupCachedBook.getGoogleBooksId() != null && !dupCachedBook.getGoogleBooksId().isEmpty()) {
+                            displayIdentifier = dupCachedBook.getGoogleBooksId();
+                            displayType = "GoogleID";
+                        } else { 
+                            displayIdentifier = "Ref: " + dupCachedBook.getId(); 
+                            displayType = "InternalRef";
+                        }
+                    }
+                    editionInfo.setIdentifier(displayIdentifier);
+                    editionInfo.setType(displayType);
+                    
+                    boolean alreadyExists = primaryBook.getOtherEditions().stream()
+                        .anyMatch(oe -> {
+                            if (oe.getGoogleBooksId() != null && 
+                                oe.getGoogleBooksId().equals(editionInfo.getGoogleBooksId())) {
+                                return true;
+                            }
+                            if (editionInfo.getGoogleBooksId() == null && oe.getGoogleBooksId() == null) {
+                                 if (oe.getEditionIsbn13() != null && 
+                                     oe.getEditionIsbn13().equals(editionInfo.getEditionIsbn13())) {
+                                     return true;
+                                 }
+                                 if (oe.getEditionIsbn10() != null && 
+                                     oe.getEditionIsbn10().equals(editionInfo.getEditionIsbn10())) {
+                                     return true;
+                                 }
+                            }
+                            return false;
+                        });
+                    
+                    if (!alreadyExists) {
+                         primaryBook.getOtherEditions().add(editionInfo);
+                         logger.debug("Added edition (GoogleID: {}, ISBN13: {}, ISBN10: {}) to primary book {}. DisplayID: {}, DisplayType: {}", 
+                                      editionInfo.getGoogleBooksId(), editionInfo.getEditionIsbn13(), editionInfo.getEditionIsbn10(), 
+                                      primaryBook.getId(), displayIdentifier, displayType);
+                    } else {
+                        logger.debug("Skipped adding duplicate edition that already exists in the list");
+                    }
+                }
+                
+                if (primaryBook.getOtherEditions().isEmpty()) {
+                    logger.debug("No valid different editions found for book {}", primaryBook.getId());
+                }
+            });
     }
 
     /**
      * Finds a "primary" or "canonical" existing CachedBook for a new book based on title and authors
      *
      * @param newBook The new book (typically from an API) to find a canonical version for
-     * @return Optional containing the primary/canonical CachedBook if one exists, otherwise empty
+     * @return A CompletableFuture resolving to an Optional containing the primary/canonical CachedBook if one exists, otherwise empty
      */
-    public Optional<CachedBook> findPrimaryCanonicalBook(Book newBook) {
+    public CompletableFuture<Optional<CachedBook>> findPrimaryCanonicalBookAsync(Book newBook) {
         if (newBook == null || newBook.getTitle() == null || newBook.getAuthors() == null || newBook.getAuthors().isEmpty()) {
-            return Optional.empty();
+            return CompletableFuture.completedFuture(Optional.empty());
         }
-        // When searching for a canonical book for a *new* book, we don't exclude any ID yet.
-        // If the newBook has an ID that might already exist, findPotentialDuplicates will handle it if called with that ID.
-        // Here, we want to find *any* existing match.
-        List<CachedBook> potentialPrimaries = findPotentialDuplicates(newBook, "__NON_EXISTENT_ID__" + System.currentTimeMillis()); // Use a dummy ID that won't match
+        return findPotentialDuplicatesAsync(newBook, "__NON_EXISTENT_ID__" + System.currentTimeMillis())
+            .thenApply(potentialPrimaries -> {
+                if (potentialPrimaries.isEmpty()) {
+                    return Optional.empty();
+                }
+                logger.debug("Found {} potential primary books for new book title '{}'. Selecting first one: {}", 
+                    potentialPrimaries.size(), newBook.getTitle(), potentialPrimaries.get(0).getId());
+                return Optional.of(potentialPrimaries.get(0));
+            });
+    }
 
-        if (potentialPrimaries.isEmpty()) {
+    // Deprecated synchronous versions
+    /**
+     * @deprecated Use {@link #findPotentialDuplicatesAsync(Book, String)} instead.
+     */
+    @Deprecated
+    public List<CachedBook> findPotentialDuplicates(Book book, String excludeId) {
+        logger.warn("Deprecated synchronous findPotentialDuplicates called; use findPotentialDuplicatesAsync instead.");
+        try {
+            return findPotentialDuplicatesAsync(book, excludeId).join();
+        } catch (Exception e) {
+            logger.error("Error in synchronous findPotentialDuplicates: {}", e.getMessage(), e);
+            return Collections.emptyList();
+        }
+    }
+    
+    /**
+     * @deprecated Use {@link #populateDuplicateEditionsAsync(Book)} instead.
+     */
+    @Deprecated
+    public void populateDuplicateEditions(Book primaryBook) {
+        logger.warn("Deprecated synchronous populateDuplicateEditions called; use populateDuplicateEditionsAsync instead.");
+        try {
+            populateDuplicateEditionsAsync(primaryBook).join();
+        } catch (Exception e) {
+            logger.error("Error in synchronous populateDuplicateEditions: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * @deprecated Use {@link #findPrimaryCanonicalBookAsync(Book)} instead.
+     */
+    @Deprecated
+    public Optional<CachedBook> findPrimaryCanonicalBook(Book newBook) {
+        logger.warn("Deprecated synchronous findPrimaryCanonicalBook called; use findPrimaryCanonicalBookAsync instead.");
+        try {
+            return findPrimaryCanonicalBookAsync(newBook).join();
+        } catch (Exception e) {
+            logger.error("Error in synchronous findPrimaryCanonicalBook: {}", e.getMessage(), e);
             return Optional.empty();
         }
-        // Prioritization logic for selecting the "best" primary if multiple found.
-        // For now, just take the first one. Could be enhanced (e.g., most recently updated, most complete data).
-        logger.debug("Found {} potential primary books for new book title '{}'. Selecting first one: {}", 
-            potentialPrimaries.size(), newBook.getTitle(), potentialPrimaries.get(0).getId());
-        return Optional.of(potentialPrimaries.get(0)); 
     }
 
     /**

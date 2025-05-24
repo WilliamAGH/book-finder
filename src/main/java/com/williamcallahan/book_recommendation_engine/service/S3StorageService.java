@@ -8,6 +8,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -80,6 +81,29 @@ public class S3StorageService {
     }
 
     /**
+     * Checks if the S3Client is available and not shut down.
+     * This is especially important during application restarts when the client may be closed.
+     *
+     * @return true if the client is available and operational, false otherwise
+     */
+    private boolean isS3ClientAvailable() {
+        if (s3Client == null) {
+            return false;
+        }
+        try {
+            // Try to get the service name to check if client is still operational
+            s3Client.serviceName();
+            return true;
+        } catch (IllegalStateException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Connection pool shut down")) {
+                logger.warn("S3Client connection pool has been shut down. This typically occurs during application restart.");
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    /**
      * Asynchronously uploads a file to the S3 bucket
      *
      * @param keyName The key (path/filename) under which to store the file in the bucket
@@ -89,8 +113,17 @@ public class S3StorageService {
      * @return A CompletableFuture<String> with the public URL of the uploaded file, or null if upload failed
      */
     public CompletableFuture<String> uploadFileAsync(String keyName, InputStream inputStream, long contentLength, String contentType) {
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot upload file: {}. S3 may be disabled, misconfigured, or shut down.", keyName);
+            return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available or has been shut down."));
+        }
         return Mono.fromCallable(() -> {
             try {
+                // Double-check client availability inside the async operation
+                if (!isS3ClientAvailable()) {
+                    throw new IllegalStateException("S3Client became unavailable during async operation.");
+                }
+                
                 PutObjectRequest putObjectRequest = PutObjectRequest.builder()
                         .bucket(bucketName)
                         .key(keyName)
@@ -141,13 +174,17 @@ public class S3StorageService {
      * @return A CompletableFuture<Void> that completes when the upload is finished or fails.
      */
     public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot upload JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
-            return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot upload JSON for volumeId: {}. S3 may be disabled, misconfigured, or shut down.", volumeId);
+            return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available or has been shut down."));
         }
         return Mono.<Void>fromRunnable(() -> {
             String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
             try {
+                // Double-check client availability inside the async operation
+                if (!isS3ClientAvailable()) {
+                    throw new IllegalStateException("S3Client became unavailable during async operation.");
+                }
                 byte[] compressedJson;
                 try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
                      GZIPOutputStream gzipOutputStream = new GZIPOutputStream(bos)) {
@@ -181,14 +218,18 @@ public class S3StorageService {
      * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found
      */
     public CompletableFuture<S3FetchResult<String>> fetchJsonAsync(String volumeId) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot fetch JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot fetch JSON for volumeId: {}. S3 may be disabled, misconfigured, or shut down.", volumeId);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
         }
         String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
         
         return Mono.<S3FetchResult<String>>fromCallable(() -> {
             try {
+                // Double-check client availability inside the async operation
+                if (!isS3ClientAvailable()) {
+                    return S3FetchResult.serviceError("S3Client became unavailable during fetch operation.");
+                }
                 GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                         .bucket(bucketName)
                         .key(keyName)
@@ -237,12 +278,17 @@ public class S3StorageService {
      * @return A CompletableFuture<Void> that completes when the upload is finished or fails
      */
     public CompletableFuture<Void> uploadGenericJsonAsync(String keyName, String jsonContent, boolean gzipCompress) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot upload generic JSON to key: {}. S3 may be disabled or misconfigured.", keyName);
-            return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot upload generic JSON to key: {}. S3 may be disabled, misconfigured, or shut down.", keyName);
+            return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available or has been shut down."));
         }
         return Mono.<Void>fromRunnable(() -> {
             try {
+                // Double-check client availability inside the async operation
+                if (!isS3ClientAvailable()) {
+                    throw new IllegalStateException("S3Client became unavailable during async operation.");
+                }
+                
                 byte[] contentBytes = jsonContent.getBytes(StandardCharsets.UTF_8);
                 String contentEncodingHeader = null;
 
@@ -272,6 +318,12 @@ public class S3StorageService {
 
                 s3Client.putObject(putObjectRequest, RequestBody.fromBytes(contentBytes));
                 logger.info("Successfully uploaded generic JSON to S3 key {}{}", keyName, gzipCompress ? " (GZIP compressed)" : "");
+            } catch (IllegalStateException e) {
+                if (e.getMessage() != null && e.getMessage().contains("Connection pool shut down")) {
+                    logger.error("S3 connection pool was shut down during upload to key {}: {}", keyName, e.getMessage());
+                    throw new RuntimeException("S3 connection pool shut down during operation for key " + keyName, e);
+                }
+                throw e;
             } catch (Exception e) { 
                 logger.error("Error uploading generic JSON to S3 key {}: {}", keyName, e.getMessage(), e);
                 throw new RuntimeException("Failed to upload generic JSON to S3 for key " + keyName, e);
@@ -289,13 +341,17 @@ public class S3StorageService {
      * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found.
      */
     public CompletableFuture<S3FetchResult<String>> fetchGenericJsonAsync(String keyName) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot fetch generic JSON from key: {}. S3 may be disabled or misconfigured.", keyName);
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot fetch generic JSON from key: {}. S3 may be disabled, misconfigured, or shut down.", keyName);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
         }
         
         return Mono.<S3FetchResult<String>>fromCallable(() -> {
             try {
+                // Double-check client availability inside the async operation
+                if (!isS3ClientAvailable()) {
+                    return S3FetchResult.serviceError("S3Client became unavailable during fetch operation.");
+                }
                 GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                         .bucket(bucketName)
                         .key(keyName)
@@ -347,139 +403,233 @@ public class S3StorageService {
     }
 
     /**
-     * Lists objects in the S3 bucket, handling pagination.
+     * Lists objects in the S3 bucket asynchronously, handling pagination.
      *
      * @param prefix The prefix to filter objects by (e.g., "covers/"). Can be empty or null.
-     * @return A list of S3Object summaries.
+     * @return A CompletableFuture<List<S3Object>> containing the list of S3Object summaries.
      */
-    public List<S3Object> listObjects(String prefix) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot list objects. S3 may be disabled or misconfigured.");
-            return new ArrayList<>();
+    public CompletableFuture<List<S3Object>> listObjectsAsync(String prefix) {
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot list objects. S3 may be disabled, misconfigured, or shut down.");
+            return CompletableFuture.completedFuture(new ArrayList<>());
         }
-        logger.info("Listing objects in bucket {} with prefix '{}'", bucketName, prefix);
-        List<S3Object> allObjects = new ArrayList<>();
-        String continuationToken = null;
+        
+        return Mono.<List<S3Object>>fromCallable(() -> {
+            // Double-check client availability inside the async operation
+            if (!isS3ClientAvailable()) {
+                logger.warn("S3Client became unavailable during list operation.");
+                return new ArrayList<>();
+            }
+            
+            logger.info("Listing objects in bucket {} with prefix '{}'", bucketName, prefix);
+            List<S3Object> allObjects = new ArrayList<>();
+            String continuationToken = null;
 
-        try {
-            do {
-                ListObjectsV2Request.Builder requestBuilder = ListObjectsV2Request.builder()
-                        .bucket(bucketName)
-                        .continuationToken(continuationToken);
+            try {
+                do {
+                    ListObjectsV2Request.Builder requestBuilder = ListObjectsV2Request.builder()
+                            .bucket(bucketName)
+                            .continuationToken(continuationToken);
 
-                if (prefix != null && !prefix.isEmpty()) {
-                    requestBuilder.prefix(prefix);
-                }
+                    if (prefix != null && !prefix.isEmpty()) {
+                        requestBuilder.prefix(prefix);
+                    }
 
-                ListObjectsV2Response response = s3Client.listObjectsV2(requestBuilder.build());
-                int fetchedThisPage = response.contents().size();
-                allObjects.addAll(response.contents());
-                continuationToken = response.nextContinuationToken();
-                logger.debug("Fetched a page of {} S3 object(s). More pages to fetch: {}", fetchedThisPage, (continuationToken != null));
-            } while (continuationToken != null);
+                    ListObjectsV2Response response = s3Client.listObjectsV2(requestBuilder.build());
+                    int fetchedThisPage = response.contents().size();
+                    allObjects.addAll(response.contents());
+                    continuationToken = response.nextContinuationToken();
+                    logger.debug("Fetched a page of {} S3 object(s). More pages to fetch: {}", fetchedThisPage, (continuationToken != null));
+                } while (continuationToken != null);
 
-            logger.info("Finished listing all S3 objects for prefix. Total objects found: {}", allObjects.size());
-        } catch (S3Exception e) {
-            logger.error("Error listing objects in S3 bucket {}: {}", bucketName, e.awsErrorDetails().errorMessage(), e);
-            // Depending on requirements, might rethrow or return empty/partial list
-        } catch (Exception e) {
-            logger.error("Unexpected error listing objects in S3 bucket {}: {}", bucketName, e.getMessage(), e);
-        }
-        return allObjects;
+                logger.info("Finished listing all S3 objects for prefix. Total objects found: {}", allObjects.size());
+            } catch (S3Exception e) {
+                logger.error("Error listing objects in S3 bucket {}: {}", bucketName, e.awsErrorDetails().errorMessage(), e);
+                throw e; // Re-throw to be handled by onErrorResume
+            } catch (Exception e) {
+                logger.error("Unexpected error listing objects in S3 bucket {}: {}", bucketName, e.getMessage(), e);
+                throw e; // Re-throw to be handled by onErrorResume
+            }
+            return allObjects;
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorReturn(new ArrayList<>())
+        .toFuture();
     }
 
     /**
-     * Downloads a file from S3 as a byte array
+     * Downloads a file from S3 as a byte array asynchronously
      *
      * @param key The key of the object to download
-     * @return A byte array containing the file data, or null if an error occurs or file not found
+     * @return A CompletableFuture<byte[]> containing the file data, or null if an error occurs or file not found
      */
-    public byte[] downloadFileAsBytes(String key) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot download file {}. S3 may be disabled or misconfigured.", key);
-            return null;
+    public CompletableFuture<byte[]> downloadFileAsBytesAsync(String key) {
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot download file {}. S3 may be disabled, misconfigured, or shut down.", key);
+            return CompletableFuture.completedFuture(null);
         }
-        logger.debug("Attempting to download file {} from bucket {}", key, bucketName);
-        try {
-            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(key)
-                    .build();
-            ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
-            logger.info("Successfully downloaded file {} from bucket {}", key, bucketName);
-            return objectBytes.asByteArray();
-        } catch (NoSuchKeyException e) {
-            logger.warn("File not found in S3: bucket={}, key={}", bucketName, key);
-            return null;
-        } catch (S3Exception e) {
-            logger.error("S3 error downloading file {} from bucket {}: {}", key, bucketName, e.awsErrorDetails().errorMessage(), e);
-            return null;
-        } catch (Exception e) {
-            logger.error("Unexpected error downloading file {} from bucket {}: {}", key, bucketName, e.getMessage(), e);
-            return null;
-        }
+        
+        return Mono.<byte[]>fromCallable(() -> {
+            // Double-check client availability inside the async operation
+            if (!isS3ClientAvailable()) {
+                logger.warn("S3Client became unavailable during download operation for key {}.", key);
+                return null;
+            }
+            
+            logger.debug("Attempting to download file {} from bucket {}", key, bucketName);
+            try {
+                GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                        .bucket(bucketName)
+                        .key(key)
+                        .build();
+                ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
+                logger.info("Successfully downloaded file {} from bucket {}", key, bucketName);
+                return objectBytes.asByteArray();
+            } catch (NoSuchKeyException e) {
+                logger.warn("File not found in S3: bucket={}, key={}", bucketName, key);
+                return null;
+            } catch (S3Exception e) {
+                logger.error("S3 error downloading file {} from bucket {}: {}", key, bucketName, e.awsErrorDetails().errorMessage(), e);
+                return null;
+            } catch (Exception e) {
+                logger.error("Unexpected error downloading file {} from bucket {}: {}", key, bucketName, e.getMessage(), e);
+                return null;
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorReturn(null)
+        .toFuture();
     }
 
     /**
-     * Copies an object within the S3 bucket.
+     * Copies an object within the S3 bucket asynchronously.
      *
      * @param sourceKey      The key of the source object.
      * @param destinationKey The key of the destination object.
-     * @return true if successful, false otherwise.
+     * @return A CompletableFuture<Boolean> indicating if the operation was successful.
      */
-    public boolean copyObject(String sourceKey, String destinationKey) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot copy object from {} to {}. S3 may be disabled or misconfigured.", sourceKey, destinationKey);
-            return false;
+    public CompletableFuture<Boolean> copyObjectAsync(String sourceKey, String destinationKey) {
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot copy object from {} to {}. S3 may be disabled, misconfigured, or shut down.", sourceKey, destinationKey);
+            return CompletableFuture.completedFuture(false);
         }
-        logger.info("Attempting to copy object in bucket {} from key {} to key {}", bucketName, sourceKey, destinationKey);
-        try {
-            CopyObjectRequest copyReq = CopyObjectRequest.builder()
-                    .sourceBucket(bucketName)
-                    .sourceKey(sourceKey)
-                    .destinationBucket(bucketName)
-                    .destinationKey(destinationKey)
-                    .build();
+        
+        return Mono.<Boolean>fromCallable(() -> {
+            // Double-check client availability inside the async operation
+            if (!isS3ClientAvailable()) {
+                logger.warn("S3Client became unavailable during copy operation from {} to {}.", sourceKey, destinationKey);
+                return false;
+            }
+            
+            logger.info("Attempting to copy object in bucket {} from key {} to key {}", bucketName, sourceKey, destinationKey);
+            try {
+                CopyObjectRequest copyReq = CopyObjectRequest.builder()
+                        .sourceBucket(bucketName)
+                        .sourceKey(sourceKey)
+                        .destinationBucket(bucketName)
+                        .destinationKey(destinationKey)
+                        .build();
 
-            s3Client.copyObject(copyReq);
-            logger.info("Successfully copied object from {} to {}", sourceKey, destinationKey);
-            return true;
-        } catch (S3Exception e) {
-            logger.error("S3 error copying object from {} to {}: {}", sourceKey, destinationKey, e.awsErrorDetails().errorMessage(), e);
-            return false;
-        } catch (Exception e) {
-            logger.error("Unexpected error copying object from {} to {}: {}", sourceKey, destinationKey, e.getMessage(), e);
-            return false;
-        }
+                s3Client.copyObject(copyReq);
+                logger.info("Successfully copied object from {} to {}", sourceKey, destinationKey);
+                return true;
+            } catch (S3Exception e) {
+                logger.error("S3 error copying object from {} to {}: {}", sourceKey, destinationKey, e.awsErrorDetails().errorMessage(), e);
+                return false;
+            } catch (Exception e) {
+                logger.error("Unexpected error copying object from {} to {}: {}", sourceKey, destinationKey, e.getMessage(), e);
+                return false;
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorReturn(false)
+        .toFuture();
     }
 
     /**
-     * Deletes an object from the S3 bucket
+     * Deletes an object from the S3 bucket asynchronously
      *
      * @param key The key of the object to delete
-     * @return true if successful, false otherwise
+     * @return A CompletableFuture<Boolean> indicating if the operation was successful
      */
-    public boolean deleteObject(String key) {
-        if (s3Client == null) {
-            logger.warn("S3Client is null. Cannot delete object {}. S3 may be disabled or misconfigured.", key);
-            return false;
+    public CompletableFuture<Boolean> deleteObjectAsync(String key) {
+        if (!isS3ClientAvailable()) {
+            logger.warn("S3Client is not available. Cannot delete object {}. S3 may be disabled, misconfigured, or shut down.", key);
+            return CompletableFuture.completedFuture(false);
         }
-        logger.info("Attempting to delete object {} from bucket {}", key, bucketName);
-        try {
-            DeleteObjectRequest deleteReq = DeleteObjectRequest.builder()
-                    .bucket(bucketName)
-                    .key(key)
-                    .build();
+        
+        return Mono.<Boolean>fromCallable(() -> {
+            // Double-check client availability inside the async operation
+            if (!isS3ClientAvailable()) {
+                logger.warn("S3Client became unavailable during delete operation for key {}.", key);
+                return false;
+            }
+            
+            logger.info("Attempting to delete object {} from bucket {}", key, bucketName);
+            try {
+                DeleteObjectRequest deleteReq = DeleteObjectRequest.builder()
+                        .bucket(bucketName)
+                        .key(key)
+                        .build();
+                logger.trace("Executing S3 deleteObject for key: {}", key);
+                s3Client.deleteObject(deleteReq);
+                logger.info("Successfully deleted object {}", key);
+                return true;
+            } catch (IllegalStateException ise) {
+                if (ise.getMessage() != null && ise.getMessage().toLowerCase().contains("connection pool shut down")) {
+                    logger.error("CRITICAL: HTTP Connection pool shutdown during S3 deleteObject for key {}: {}",key, ise.getMessage(), ise);
+                } else {
+                    logger.error("IllegalStateException during S3 deleteObject for key {}: {}",key, ise.getMessage(), ise);
+                }
+                return false;
+            } catch (S3Exception e) {
+                logger.error("S3 error deleting object {}: {}", key, e.awsErrorDetails().errorMessage(), e);
+                return false;
+            } catch (Exception e) {
+                logger.error("Unexpected error deleting object {}: {}", key, e.getMessage(), e);
+                return false;
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorReturn(false)
+        .toFuture();
+    }
 
-            s3Client.deleteObject(deleteReq);
-            logger.info("Successfully deleted object {}", key);
-            return true;
-        } catch (S3Exception e) {
-            logger.error("S3 error deleting object {}: {}", key, e.awsErrorDetails().errorMessage(), e);
-            return false;
-        } catch (Exception e) {
-            logger.error("Unexpected error deleting object {}: {}", key, e.getMessage(), e);
-            return false;
-        }
+    // Backward compatibility synchronous methods - deprecated in favor of async versions
+
+    /**
+     * @deprecated Use listObjectsAsync() instead for better performance and non-blocking behavior
+     */
+    @Deprecated
+    public List<S3Object> listObjects(String prefix) {
+        logger.warn("Deprecated synchronous listObjects called; use listObjectsAsync instead.");
+        return listObjectsAsync(prefix).join();
+    }
+
+    /**
+     * @deprecated Use downloadFileAsBytesAsync() instead for better performance and non-blocking behavior
+     */
+    @Deprecated
+    public byte[] downloadFileAsBytes(String key) {
+        logger.warn("Deprecated synchronous downloadFileAsBytes called; use downloadFileAsBytesAsync instead.");
+        return downloadFileAsBytesAsync(key).join();
+    }
+
+    /**
+     * @deprecated Use copyObjectAsync() instead for better performance and non-blocking behavior
+     */
+    @Deprecated
+    public boolean copyObject(String sourceKey, String destinationKey) {
+        logger.warn("Deprecated synchronous copyObject called; use copyObjectAsync instead.");
+        return copyObjectAsync(sourceKey, destinationKey).join();
+    }
+
+    /**
+     * @deprecated Use deleteObjectAsync() instead for better performance and non-blocking behavior
+     */
+    @Deprecated
+    public boolean deleteObject(String key) {
+        logger.warn("Deprecated synchronous deleteObject called; use deleteObjectAsync instead.");
+        return deleteObjectAsync(key).join();
     }
 }

@@ -7,6 +7,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,14 +18,17 @@ import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 @Service
+@SuppressWarnings("deprecation")
 @Conditional(S3EnvironmentCondition.class)
 public class S3RetryService {
     private static final Logger logger = LoggerFactory.getLogger(S3RetryService.class);
@@ -34,12 +38,14 @@ public class S3RetryService {
     private final int maxRetries;
     private final int initialBackoffMs;
     private final double backoffMultiplier;
+    private final AsyncTaskExecutor mvcTaskExecutor;
 
     /**
      * Constructs an S3RetryService with required dependencies
      *
      * @param s3StorageService The S3 storage service to use for operations
      * @param apiRequestMonitor The API request monitor for tracking metrics
+     * @param mvcTaskExecutor Executor for async tasks
      * @param maxRetries Maximum number of retry attempts for S3 operations
      * @param initialBackoffMs Initial backoff time in milliseconds
      * @param backoffMultiplier Multiplier for exponential backoff
@@ -47,11 +53,13 @@ public class S3RetryService {
     public S3RetryService(
             S3StorageService s3StorageService,
             ApiRequestMonitor apiRequestMonitor,
+            @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor,
             @Value("${s3.retry.max-attempts:3}") int maxRetries,
             @Value("${s3.retry.initial-backoff-ms:200}") int initialBackoffMs,
             @Value("${s3.retry.backoff-multiplier:2.0}") double backoffMultiplier) {
         this.s3StorageService = s3StorageService;
         this.apiRequestMonitor = apiRequestMonitor;
+        this.mvcTaskExecutor = mvcTaskExecutor;
         this.maxRetries = maxRetries;
         this.initialBackoffMs = initialBackoffMs;
         this.backoffMultiplier = backoffMultiplier;
@@ -103,7 +111,7 @@ public class S3RetryService {
                         // This supplier is just for the delay, it doesn't produce a meaningful value for the next stage.
                         return null; 
                     }, CompletableFuture.delayedExecutor(backoffMs, TimeUnit.MILLISECONDS))
-                        .thenComposeAsync(ignored -> fetchJsonWithRetryInternal(volumeId, nextAttempt, nextBackoffMs));
+                        .thenComposeAsync(ignored -> fetchJsonWithRetryInternal(volumeId, nextAttempt, nextBackoffMs), mvcTaskExecutor);
                 }
                 
                 // Exhausted all retries or not a retriable error
@@ -154,7 +162,7 @@ public class S3RetryService {
                     return CompletableFuture.runAsync(() -> {
                         // Delay operation
                     }, CompletableFuture.delayedExecutor(backoffMs, TimeUnit.MILLISECONDS))
-                        .thenCompose(ignored -> uploadJsonWithRetryInternal(volumeId, jsonContent, nextAttempt, nextBackoffMs));
+                        .thenComposeAsync(ignored -> uploadJsonWithRetryInternal(volumeId, jsonContent, nextAttempt, nextBackoffMs), mvcTaskExecutor);
                 } else {
                     // Exhausted all retries
                     logger.error("S3 upload failed after {} retries for volumeId {}: {}",

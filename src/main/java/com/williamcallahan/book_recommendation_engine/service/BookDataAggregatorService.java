@@ -11,6 +11,7 @@
  * - Creates enriched book records with data from all available sources
  * - Ensures consistent field naming and data structure
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -20,6 +21,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.scheduling.annotation.Async;
+import java.util.concurrent.CompletableFuture;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -47,18 +50,37 @@ public class BookDataAggregatorService {
     }
 
     /**
+     * Async wrapper for prepareEnrichedBookJson to avoid blocking caller threads.
+     */
+    @Async
+    public CompletableFuture<ObjectNode> prepareEnrichedBookJsonAsync(JsonNode googleBooksJsonNode, JsonNode nytBookJsonNode, String googleBookId) {
+        return CompletableFuture.supplyAsync(() -> prepareEnrichedBookJson(googleBooksJsonNode, nytBookJsonNode, googleBookId));
+    }
+
+    /**
+     * Async wrapper for aggregateBookDataSources to avoid blocking caller threads.
+     */
+    @Async
+    public CompletableFuture<ObjectNode> aggregateBookDataSourcesAsync(String primaryId, String sourceIdentifierField, JsonNode... dataSources) {
+        return CompletableFuture.supplyAsync(() -> aggregateBookDataSources(primaryId, sourceIdentifierField, dataSources));
+    }
+
+    /**
      * Merges data from Google Books API and New York Times API for a single book
-     * 
+     *
+     * @deprecated Use {@link #prepareEnrichedBookJsonAsync(JsonNode, JsonNode, String)} instead.
      * @param googleBooksJsonNode The JsonNode representing the full book data from Google Books API
      * @param nytBookJsonNode The JsonNode representing the book data from the NYT bestseller list
      * @param googleBookId The Google Books ID of the book
      * @return An ObjectNode containing the merged book data
-     * 
+     *
      * @implNote Uses Google Books data as the base, with NYT data supplementing or overriding
      * Preserves source-specific identifiers and handles special NYT fields differently
      * Books with the same ID may have different data from each source
      */
+    @Deprecated
     public ObjectNode prepareEnrichedBookJson(JsonNode googleBooksJsonNode, JsonNode nytBookJsonNode, String googleBookId) {
+        logger.warn("Deprecated synchronous prepareEnrichedBookJson called; use prepareEnrichedBookJsonAsync instead.");
         ObjectNode mergedBookJson;
 
         // Start with Google Books data as the base
@@ -136,13 +158,17 @@ public class BookDataAggregatorService {
     /**
      * Aggregates book data from multiple JsonNode sources.
      *
+     * @deprecated Use {@link #aggregateBookDataSourcesAsync(String, String, JsonNode...)} instead.
+     *
      * @param primaryId The primary identifier for the book (e.g., Google Books ID or ISBN).
      * @param sourceIdentifierField The field name in each JsonNode that holds its native primary ID (e.g., "id" for Google, "key" for OpenLibrary works).
      * @param dataSources Varargs of JsonNode, each representing book data from a different source.
      *                    It's recommended to pass sources in order of preference (e.g., Google, OpenLibrary, Longitood).
      * @return An ObjectNode containing the merged book data.
      */
+    @Deprecated
     public ObjectNode aggregateBookDataSources(String primaryId, String sourceIdentifierField, JsonNode... dataSources) {
+        logger.warn("Deprecated synchronous aggregateBookDataSources called; use aggregateBookDataSourcesAsync instead.");
         ObjectNode aggregatedJson = objectMapper.createObjectNode();
         List<JsonNode> validSources = Arrays.stream(dataSources)
                                             .filter(node -> node != null && node.isObject())

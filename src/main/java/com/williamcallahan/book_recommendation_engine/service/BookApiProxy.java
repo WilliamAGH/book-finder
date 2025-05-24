@@ -117,119 +117,99 @@ public class BookApiProxy {
      * @param future Future to complete with result
      */
     private void processBookRequest(String bookId, CompletableFuture<Book> future) {
-        // First try the local file cache (in dev/test mode)
-        if (localCacheEnabled) {
-            Book localBook = getBookFromLocalCache(bookId);
-            if (localBook != null) {
+        CompletableFuture<Optional<Book>> localCacheFuture = localCacheEnabled ? 
+            getBookFromLocalCacheAsync(bookId) : 
+            CompletableFuture.completedFuture(Optional.empty());
+
+        localCacheFuture.thenCompose(localBookOptional -> {
+            if (localBookOptional.isPresent()) {
                 logger.debug("Retrieved book {} from local cache", bookId);
-                future.complete(localBook);
-                return;
-            } else {
-                logger.debug("Local cache MISS for bookId: {}", bookId);
+                return CompletableFuture.completedFuture(localBookOptional.get());
             }
-        }
-        
-        // Next, check mock data if available (in dev/test mode)
-        if (mockService.isPresent() && mockService.get().hasMockDataForBook(bookId)) {
-            Book mockBook = mockService.get().getBookById(bookId);
-            if (mockBook != null) {
-                logger.debug("Retrieved book {} from mock data", bookId);
-                future.complete(mockBook);
-                
-                // Still persist to local cache for faster future access
-                if (localCacheEnabled) {
-                    saveBookToLocalCache(bookId, mockBook);
+            logger.debug("Local cache MISS for bookId: {}", bookId);
+
+            // Next, check mock data if available
+            if (mockService.isPresent() && mockService.get().hasMockDataForBook(bookId)) {
+                Book mockBook = mockService.get().getBookById(bookId); // Assuming mock is fast/sync
+                if (mockBook != null) {
+                    logger.debug("Retrieved book {} from mock data", bookId);
+                    // Save to local cache asynchronously
+                    if (localCacheEnabled) {
+                        saveBookToLocalCacheAsync(bookId, mockBook)
+                            .exceptionally(ex -> { 
+                                logger.warn("Failed to save mock book {} to local cache: {}", bookId, ex.getMessage()); 
+                                return null; 
+                            });
+                    }
+                    return CompletableFuture.completedFuture(mockBook);
                 }
-                
-                return;
+            } else if (mockService.isPresent()) {
+                logger.debug("Mock service MISS for bookId: {} (or no mock data available)", bookId);
             }
-        } else if (mockService.isPresent()) {
-            logger.debug("Mock service MISS for bookId: {} (or no mock data available)", bookId);
-        }
-        
-        // Always check S3 cache first in configurations that prefer it
-        if (alwaysCheckS3First) {
-            logger.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
-            // Try to get from S3 cache directly
-            s3StorageService.fetchJsonAsync(bookId)
-                .<Book>thenCompose(s3Result -> {
-                    if (s3Result.isSuccess()) {
-                        Optional<String> jsonDataOptional = s3Result.getData();
-                        if (jsonDataOptional.isPresent()) {
+
+            // S3 or Google Books API flow
+            if (alwaysCheckS3First) {
+                logger.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
+                return s3StorageService.fetchJsonAsync(bookId)
+                    .thenCompose(s3Result -> {
+                        if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
                             try {
-                                JsonNode bookNode = objectMapper.readTree(jsonDataOptional.get());
+                                JsonNode bookNode = objectMapper.readTree(s3Result.getData().get());
                                 Book book = objectMapper.treeToValue(bookNode, Book.class);
-
-                                // Cache the S3 result locally for faster future access
-                                if (localCacheEnabled) {
-                                    saveBookToLocalCache(bookId, book);
-                                }
-
-                                // Also cache in mock service for future test runs
-                                if (mockService.isPresent()) {
-                                    mockService.get().saveBookResponse(bookId, bookNode);
-                                }
-
                                 logger.debug("Retrieved book {} from S3 cache", bookId);
-                                return CompletableFuture.completedFuture(book);
+                                CompletableFuture<Void> saveToLocalCacheFuture = localCacheEnabled ? 
+                                    saveBookToLocalCacheAsync(bookId, book) : 
+                                    CompletableFuture.completedFuture(null);
+                                return saveToLocalCacheFuture.thenApply(v -> book);
                             } catch (Exception e) {
-                                logger.warn("Error parsing book from S3 cache: {}", e.getMessage());
+                                logger.warn("Error parsing book from S3 cache for {}: {}", bookId, e.getMessage());
+                                // Fall through to API call
                             }
                         } else {
-                            logger.debug("S3 cache MISS (data not present) for bookId: {}", bookId);
+                            logger.debug("S3 cache MISS for bookId: {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Fetch not successful or data not present"));
                         }
-                    } else {
-                        logger.debug("S3 cache MISS (fetch not successful) for bookId: {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
-                    }
-                    // If S3 fails or data is not present, fallback to the actual API
-                    if (logApiCalls) {
-                        logger.info("Making REAL API call to Google Books for book ID: {}", bookId);
-                    }
-                    
-                    return googleBooksService.getBookById(bookId)
-                        .thenApply(book -> {
-                            // If retrieved successfully, cache the result
-                            if (book != null && localCacheEnabled) {
-                                saveBookToLocalCache(bookId, book);
-                            }
-                            return book;
-                        });
-                })
-                .whenComplete((book, ex) -> {
-                    if (ex != null) {
-                        logger.error("Error retrieving book {}: {}", bookId, ex.getMessage());
-                        future.completeExceptionally(ex);
-                    } else {
-                        future.complete(book);
-                    }
-                });
-        } else {
-            // Standard flow - use Google Books Service which already has S3 caching integrated
-            googleBooksService.getBookById(bookId)
-                .thenAccept(book -> {
-                    // Cache to local file system for development
-                    if (book != null && localCacheEnabled) {
-                        saveBookToLocalCache(bookId, book);
-                    }
-                    
-                    // Cache for mock service if this was a real API call
-                    if (book != null && mockService.isPresent() && book.getRawJsonResponse() != null) {
-                        try {
-                            JsonNode bookNode = objectMapper.readTree(book.getRawJsonResponse());
-                            mockService.get().saveBookResponse(bookId, bookNode);
-                        } catch (Exception e) {
-                            logger.warn("Error saving book to mock service: {}", e.getMessage());
+                        // Fallback to Google Books API
+                        if (logApiCalls) logger.info("Making REAL API call to Google Books for book ID: {}", bookId);
+                        return googleBooksService.getBookById(bookId)
+                            .thenCompose(apiBook -> {
+                                if (apiBook != null && localCacheEnabled) {
+                                    return saveBookToLocalCacheAsync(bookId, apiBook).thenApply(v -> apiBook);
+                                }
+                                return CompletableFuture.completedFuture(apiBook);
+                            });
+                    });
+            } else {
+                // Standard flow: Google Books Service (which might use S3 internally or its own caching)
+                if (logApiCalls) logger.info("Making API call via GoogleBooksService for book ID: {}", bookId);
+                return googleBooksService.getBookById(bookId)
+                    .thenCompose(apiBook -> {
+                        if (apiBook != null) {
+                            CompletableFuture<Void> saveToLocal = localCacheEnabled ? 
+                                saveBookToLocalCacheAsync(bookId, apiBook) : 
+                                CompletableFuture.completedFuture(null);
+                            
+                            CompletableFuture<Void> saveToMock = (mockService.isPresent() && apiBook.getRawJsonResponse() != null) ?
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        JsonNode bookNode = objectMapper.readTree(apiBook.getRawJsonResponse());
+                                        mockService.get().saveBookResponse(bookId, bookNode);
+                                    } catch (Exception e) {
+                                        logger.warn("Error saving book {} to mock service: {}", bookId, e.getMessage());
+                                    }
+                                }) : CompletableFuture.completedFuture(null);
+                            return CompletableFuture.allOf(saveToLocal, saveToMock).thenApply(v -> apiBook);
                         }
-                    }
-                    
-                    future.complete(book);
-                })
-                .exceptionally(ex -> {
-                    logger.error("Error retrieving book {}: {}", bookId, ex.getMessage());
-                    future.completeExceptionally(ex);
-                    return null;
-                });
-        }
+                        return CompletableFuture.completedFuture(null);
+                    });
+            }
+        }).whenComplete((book, ex) -> {
+            if (ex != null) {
+                logger.error("Error processing book request for {}: {}", bookId, ex.getMessage(), ex);
+                future.completeExceptionally(ex);
+            } else {
+                future.complete(book);
+            }
+        });
     }
     
     /**
@@ -267,52 +247,60 @@ public class BookApiProxy {
      * @param future Future to complete with result
      */
     private void processSearchRequest(String query, String langCode, CompletableFuture<List<Book>> future) {
-        // First try the local file cache (in dev/test mode)
-        if (localCacheEnabled) {
-            List<Book> localResults = getSearchFromLocalCache(query, langCode);
-            if (localResults != null && !localResults.isEmpty()) {
-                logger.debug("Retrieved search '{}' from local cache, {} results", query, localResults.size());
-                future.complete(localResults);
-                return;
+        CompletableFuture<Optional<List<Book>>> localCacheFuture = localCacheEnabled ?
+            getSearchFromLocalCacheAsync(query, langCode) :
+            CompletableFuture.completedFuture(Optional.empty());
+
+        localCacheFuture.thenCompose(localResultsOptional -> {
+            if (localResultsOptional.isPresent() && !localResultsOptional.get().isEmpty()) {
+                logger.debug("Retrieved search '{}' from local cache, {} results", query, localResultsOptional.get().size());
+                return CompletableFuture.completedFuture(localResultsOptional.get());
             }
-        }
-        
-        // Next, check mock data if available (in dev/test mode)
-        if (mockService.isPresent() && mockService.get().hasMockDataForSearch(query)) {
-            List<Book> mockResults = mockService.get().searchBooks(query);
-            if (mockResults != null && !mockResults.isEmpty()) {
-                logger.debug("Retrieved search '{}' from mock data, {} results", query, mockResults.size());
-                future.complete(mockResults);
-                
-                // Still persist to local cache for faster future access
-                if (localCacheEnabled) {
-                    saveSearchToLocalCache(query, langCode, mockResults);
-                }
-                
-                return;
-            }
-        }
-        
-        // Fall back to the actual service (which has its own caching)
-        if (logApiCalls) {
-            logger.info("Making REAL API call to Google Books for search: '{}'", query);
-        }
-        
-        // This is already a Mono<List<Book>>, no need for collectList()
-        googleBooksService.searchBooksAsyncReactive(query, langCode)
-            .subscribe(
-                results -> {
-                    // Cache the results
-                    if (results != null && !results.isEmpty() && localCacheEnabled) {
-                        saveSearchToLocalCache(query, langCode, results);
+            logger.debug("Local cache MISS for search query: '{}'", query);
+
+            // Next, check mock data if available
+            if (mockService.isPresent() && mockService.get().hasMockDataForSearch(query)) {
+                List<Book> mockResults = mockService.get().searchBooks(query); // Assuming mock is fast/sync
+                if (mockResults != null && !mockResults.isEmpty()) {
+                    logger.debug("Retrieved search '{}' from mock data, {} results", query, mockResults.size());
+                    if (localCacheEnabled) {
+                        saveSearchToLocalCacheAsync(query, langCode, mockResults)
+                            .exceptionally(ex -> {
+                                logger.warn("Failed to save mock search results for '{}' to local cache: {}", query, ex.getMessage());
+                                return null;
+                            });
                     }
-                    future.complete(results);
-                },
-                error -> {
-                    logger.error("Error searching for '{}': {}", query, error.getMessage());
-                    future.completeExceptionally(error);
+                    return CompletableFuture.completedFuture(mockResults);
                 }
-            );
+            }
+
+            // Fall back to the actual service
+            if (logApiCalls) {
+                logger.info("Making REAL API call to Google Books for search: '{}'", query);
+            }
+            
+            // Convert Mono to CompletableFuture
+            CompletableFuture<List<Book>> apiResultsFuture = new CompletableFuture<>();
+            googleBooksService.searchBooksAsyncReactive(query, langCode)
+                .subscribe(
+                    apiResultsFuture::complete,
+                    apiResultsFuture::completeExceptionally
+                );
+
+            return apiResultsFuture.thenCompose(results -> {
+                if (results != null && !results.isEmpty() && localCacheEnabled) {
+                    return saveSearchToLocalCacheAsync(query, langCode, results).thenApply(v -> results);
+                }
+                return CompletableFuture.completedFuture(results);
+            });
+        }).whenComplete((results, ex) -> {
+            if (ex != null) {
+                logger.error("Error processing search request for '{}': {}", query, ex.getMessage(), ex);
+                future.completeExceptionally(ex);
+            } else {
+                future.complete(results);
+            }
+        });
     }
     
     /**
@@ -321,21 +309,31 @@ public class BookApiProxy {
      * @param bookId Book ID to retrieve
      * @return Book if found in cache, null otherwise
      */
-    private Book getBookFromLocalCache(String bookId) {
-        if (!localCacheEnabled) return null;
-        
-        Path bookFile = Paths.get(localCacheDirectory, "books", bookId + ".json");
-        
-        if (Files.exists(bookFile)) {
-            try {
-                JsonNode bookNode = objectMapper.readTree(bookFile.toFile());
-                return objectMapper.treeToValue(bookNode, Book.class);
-            } catch (Exception e) {
-                logger.warn("Error reading book from local cache: {}", e.getMessage());
-            }
+    private CompletableFuture<Optional<Book>> getBookFromLocalCacheAsync(String bookId) {
+        if (!localCacheEnabled) {
+            return CompletableFuture.completedFuture(Optional.empty());
         }
-        
-        return null;
+        Path bookFile = Paths.get(localCacheDirectory, "books", bookId + ".json");
+
+        // Consider using a dedicated executor for blocking I/O operations
+        // For example: CompletableFuture.supplyAsync(() -> { ... }, ioExecutor);
+        return CompletableFuture.supplyAsync(() -> {
+            if (Files.exists(bookFile)) { // This is a blocking call
+                try {
+                    // objectMapper.readTree(Path) is more efficient if available and suitable
+                    // Reading all bytes first, then parsing, to keep blocking section clear
+                    byte[] jsonData = Files.readAllBytes(bookFile); // This is a blocking call
+                    JsonNode bookNode = objectMapper.readTree(jsonData);
+                    Book book = objectMapper.treeToValue(bookNode, Book.class);
+                    return Optional.ofNullable(book);
+                } catch (Exception e) {
+                    logger.warn("Error reading book {} from local cache {}: {}", bookId, bookFile, e.getMessage());
+                    return Optional.empty();
+                }
+            }
+            logger.debug("Local cache MISS for bookId {} at path {}", bookId, bookFile);
+            return Optional.empty();
+        });
     }
     
     /**
@@ -344,21 +342,25 @@ public class BookApiProxy {
      * @param bookId Book ID to save
      * @param book Book object to save
      */
-    private void saveBookToLocalCache(String bookId, Book book) {
-        if (!localCacheEnabled || book == null) return;
-        
-        Path bookFile = Paths.get(localCacheDirectory, "books", bookId + ".json");
-        
-        try {
-            // Ensure directory exists
-            Files.createDirectories(bookFile.getParent());
-            
-            // Convert to JSON and save
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(bookFile.toFile(), book);
-            logger.debug("Saved book {} to local cache", bookId);
-        } catch (Exception e) {
-            logger.warn("Error saving book to local cache: {}", e.getMessage());
+    private CompletableFuture<Void> saveBookToLocalCacheAsync(String bookId, Book book) {
+        if (!localCacheEnabled || book == null) {
+            return CompletableFuture.completedFuture(null);
         }
+        Path bookFile = Paths.get(localCacheDirectory, "books", bookId + ".json");
+
+        // Consider using a dedicated executor for blocking I/O operations
+        return CompletableFuture.runAsync(() -> {
+            try {
+                Files.createDirectories(bookFile.getParent()); // This is a blocking call
+                // objectMapper.writeValue(Path, Object) is more efficient if available
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(bookFile.toFile(), book); // This is a blocking call
+                logger.debug("Saved book {} to local cache at {}", bookId, bookFile);
+            } catch (Exception e) {
+                logger.warn("Error saving book {} to local cache {}: {}", bookId, bookFile, e.getMessage());
+                // Depending on requirements, might want to throw a CompletionException here
+                // throw new CompletionException(e);
+            }
+        });
     }
     
     /**
@@ -368,52 +370,63 @@ public class BookApiProxy {
      * @param langCode The language code or null
      * @return List of Book objects if found in cache, null otherwise
      */
-    private List<Book> getSearchFromLocalCache(String query, String langCode) {
-        if (!localCacheEnabled) return null;
+    private CompletableFuture<Optional<List<Book>>> getSearchFromLocalCacheAsync(String query, String langCode) {
+        if (!localCacheEnabled) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
         
         String normalizedQuery = query.toLowerCase().trim();
         String langString = langCode != null ? langCode : "any";
         String filename = normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + "-" + langString + ".json";
-        
         Path searchFile = Paths.get(localCacheDirectory, "searches", filename);
-        
-        if (Files.exists(searchFile)) {
-            try {
-                return objectMapper.readValue(searchFile.toFile(), 
+
+        // Consider using a dedicated executor for blocking I/O operations
+        return CompletableFuture.supplyAsync(() -> {
+            if (Files.exists(searchFile)) { // Blocking call
+                try {
+                    byte[] jsonData = Files.readAllBytes(searchFile); // Blocking call
+                    List<Book> books = objectMapper.readValue(jsonData, 
                         objectMapper.getTypeFactory().constructCollectionType(List.class, Book.class));
-            } catch (Exception e) {
-                logger.warn("Error reading search results from local cache: {}", e.getMessage());
+                    return Optional.ofNullable(books);
+                } catch (Exception e) {
+                    logger.warn("Error reading search results for query '{}' from local cache {}: {}", query, searchFile, e.getMessage());
+                    return Optional.empty();
+                }
             }
-        }
-        
-        return null;
+            logger.debug("Local cache MISS for search query '{}' at path {}", query, searchFile);
+            return Optional.empty();
+        });
     }
     
     /**
-     * Saves search results to the local file cache
+     * Saves search results to the local file cache asynchronously.
      * 
      * @param query The search query
      * @param langCode The language code or null
      * @param results The search results to save
+     * @return CompletableFuture<Void> indicating completion of the save operation
      */
-    private void saveSearchToLocalCache(String query, String langCode, List<Book> results) {
-        if (!localCacheEnabled || results == null) return;
-        
+    private CompletableFuture<Void> saveSearchToLocalCacheAsync(String query, String langCode, List<Book> results) {
+        if (!localCacheEnabled || results == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
         String normalizedQuery = query.toLowerCase().trim();
         String langString = langCode != null ? langCode : "any";
         String filename = normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + "-" + langString + ".json";
-        
         Path searchFile = Paths.get(localCacheDirectory, "searches", filename);
-        
-        try {
-            // Ensure directory exists
-            Files.createDirectories(searchFile.getParent());
-            
-            // Save to JSON
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(searchFile.toFile(), results);
-            logger.debug("Saved search results for '{}' ({}) to local cache", query, langCode);
-        } catch (Exception e) {
-            logger.warn("Error saving search results to local cache: {}", e.getMessage());
-        }
+
+        // Consider using a dedicated executor for blocking I/O operations
+        return CompletableFuture.runAsync(() -> {
+            try {
+                Files.createDirectories(searchFile.getParent()); // Blocking call
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(searchFile.toFile(), results); // Blocking call
+                logger.debug("Saved search results for query '{}' to local cache at {}", query, searchFile);
+            } catch (Exception e) {
+                logger.warn("Error saving search results for query '{}' to local cache {}: {}", query, searchFile, e.getMessage());
+                // Optionally, rethrow as a CompletionException if callers need to react to save failures
+                // throw new CompletionException(e);
+            }
+        });
     }
 }

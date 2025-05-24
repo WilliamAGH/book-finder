@@ -10,9 +10,11 @@
  * @param <K> The type of key used for cache lookups
  * @param <V> The type of value stored in the cache
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CompletableFuture; // Added import
 import reactor.core.publisher.Mono;
 import java.util.Optional;
 
@@ -77,17 +79,17 @@ public interface CachingStrategy<K, V> {
      * Checks if a value exists in any cache layer
      * 
      * @param key The key to check
-     * @return true if the value exists in any cache layer, false otherwise
+     * @return CompletableFuture<Boolean> true if the value exists in any cache layer, false otherwise
      */
-    boolean exists(K key);
+    CompletableFuture<Boolean> existsAsync(K key);
     
     /**
      * Gets a value from cache only, without fetching from external source
      * 
      * @param key The key to look up
-     * @return Optional containing the value if found in any cache, empty otherwise
+     * @return CompletableFuture<Optional<V>> containing the value if found in any cache, empty otherwise
      */
-    Optional<V> getFromCacheOnly(K key);
+    CompletableFuture<Optional<V>> getFromCacheOnlyAsync(K key);
     
     /**
      * Clears all cache layers

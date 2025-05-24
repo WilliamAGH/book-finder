@@ -10,6 +10,7 @@
  * - Handles caching of API responses for performance
  * - Supports both authenticated and unauthenticated API usage
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -109,7 +110,7 @@ public class BookDataOrchestrator {
                 logger.info("BookDataOrchestrator: No data found from any API source for identifier: {}", bookId);
                 return Mono.<Book>empty();
             }
-            ObjectNode aggregatedJson = bookDataAggregatorService.aggregateBookDataSources(bookId, "id", jsonList.toArray(new JsonNode[0]));
+            ObjectNode aggregatedJson = bookDataAggregatorService.aggregateBookDataSourcesAsync(bookId, "id", jsonList.toArray(new JsonNode[0])).join();
             Book finalBook = BookJsonParser.convertJsonToBook(aggregatedJson);
 
             if (finalBook == null || finalBook.getId() == null) {
