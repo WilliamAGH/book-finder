@@ -13,6 +13,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -33,6 +34,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import org.springframework.scheduling.annotation.Async;
+import java.util.concurrent.CompletableFuture;
 @Service
 public class RecommendationService {
     private static final Logger logger = LoggerFactory.getLogger(RecommendationService.class);
@@ -427,5 +430,16 @@ public class RecommendationService {
         public void setScore(double score) {
             this.score = score;
         }
+    }
+
+    /**
+     * Async wrapper for reactive getSimilarBooks.
+     * @param bookId The Google Books ID
+     * @param finalCount number of recommendations
+     * @return CompletableFuture emitting list of recommended books
+     */
+    @Async
+    public CompletableFuture<List<Book>> getSimilarBooksAsync(String bookId, int finalCount) {
+        return getSimilarBooks(bookId, finalCount).toFuture();
     }
 }

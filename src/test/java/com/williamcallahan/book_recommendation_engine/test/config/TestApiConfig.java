@@ -7,6 +7,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.test.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -94,7 +95,8 @@ public class TestApiConfig {
         private final List<String> uploadRequests = new ArrayList<>();
         
         public TestS3StorageService(ObjectMapper objectMapper) {
-            super(null, "test-bucket", "https://test-cdn.example.com/", "https://test.example.com/");
+            // Pass null for MetricsService parameter to satisfy constructor signature
+            super(null, "test-bucket", "https://test-cdn.example.com/", "https://test.example.com/", null);
             this.objectMapper = objectMapper;
         }
         

@@ -11,6 +11,7 @@
  * - Provides fallback behavior for API failures
  * - Uses reactive programming model with Mono/Flux return types
  */
+
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -32,7 +33,7 @@ import java.util.List;
 import java.util.Date;
 import java.text.SimpleDateFormat;
 import java.text.ParseException;
-import java.util.Objects; // Added import
+import java.util.Objects;
 
 @Service
 public class OpenLibraryBookDataService {
@@ -203,8 +204,10 @@ public class OpenLibraryBookDataService {
 
             if (parsedDate == null) {
                 logger.warn("Could not parse OpenLibrary publish_date '{}' for ISBN {} with any of the attempted formats.", publishedDateStr, originalIsbn);
+            } else {
+                // Convert Date to LocalDate
+                book.setPublishedDate(parsedDate.toInstant().atZone(java.time.ZoneId.systemDefault()).toLocalDate());
             }
-            book.setPublishedDate(parsedDate);
         }
 
 

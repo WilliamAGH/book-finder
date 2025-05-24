@@ -10,6 +10,7 @@
  * - Supports extraction of qualifiers from search queries
  * - Contains robust error handling for malformed JSON or missing fields
  */
+
 package com.williamcallahan.book_recommendation_engine.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -18,15 +19,14 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Arrays;
-
 
 public class BookJsonParser {
 
@@ -83,7 +83,8 @@ public class BookJsonParser {
         }
         book.setPublisher(rawPublisher);
 
-        book.setPublishedDate(parsePublishedDate(volumeInfo));
+        LocalDate ld = parsePublishedDate(volumeInfo);
+        book.setPublishedDate(ld);
         book.setDescription(volumeInfo.has("description") ? volumeInfo.get("description").asText() : null);
         book.setCoverImageUrl(getGoogleCoverImageFromVolumeInfo(volumeInfo));
         book.setLanguage(volumeInfo.has("language") ? volumeInfo.get("language").asText() : null);
@@ -286,26 +287,23 @@ public class BookJsonParser {
      * Parses published date with format fallbacks
      * 
      * @param volumeInfo Volume info JSON node
-     * @return Date object or null if parsing fails
+     * @return LocalDate object or null if parsing fails
      */
-    private static Date parsePublishedDate(JsonNode volumeInfo) {
+    private static LocalDate parsePublishedDate(JsonNode volumeInfo) {
         if (volumeInfo.has("publishedDate")) {
             String dateString = volumeInfo.get("publishedDate").asText();
-            // Try yyyy-MM-dd first
-            SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
             try {
-                return format.parse(dateString);
-            } catch (ParseException e) {
-                // Try yyyy-MM
-                format = new SimpleDateFormat("yyyy-MM");
+                // Try yyyy-MM-dd first
+                return LocalDate.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            } catch (DateTimeParseException e) {
                 try {
-                    return format.parse(dateString);
-                } catch (ParseException ex) {
-                    // Try yyyy
-                    format = new SimpleDateFormat("yyyy");
+                    // Try yyyy-MM
+                    return LocalDate.parse(dateString + "-01", DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                } catch (DateTimeParseException ex) {
                     try {
-                        return format.parse(dateString);
-                    } catch (ParseException exc) {
+                        // Try yyyy
+                        return LocalDate.parse(dateString + "-01-01", DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                    } catch (DateTimeParseException exc) {
                         logger.warn("Failed to parse published date: {} with formats yyyy-MM-dd, yyyy-MM, yyyy", dateString);
                         return null;
                     }
@@ -343,9 +341,8 @@ public class BookJsonParser {
             try {
                 JsonNode qualifiersNode = item.get("qualifiers");
                 if (qualifiersNode != null && qualifiersNode.isObject()) {
-                    qualifiersNode.fields().forEachRemaining(entry -> {
-                        String key = entry.getKey();
-                        JsonNode valueNode = entry.getValue();
+                    qualifiersNode.fieldNames().forEachRemaining(key -> {
+                        JsonNode valueNode = qualifiersNode.get(key);
                         
                         if (valueNode.isBoolean()) book.addQualifier(key, valueNode.booleanValue());
                         else if (valueNode.isTextual()) book.addQualifier(key, valueNode.textValue());

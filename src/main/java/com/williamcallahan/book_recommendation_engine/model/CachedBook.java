@@ -14,12 +14,14 @@
 package com.williamcallahan.book_recommendation_engine.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtil; // Added import
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import com.williamcallahan.book_recommendation_engine.types.RedisVector;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
@@ -65,6 +67,9 @@ public class CachedBook {
     private List<String> cachedRecommendationIds;
     private Map<String, Object> qualifiers;
     private List<Book.EditionInfo> otherEditions;
+    private String s3Key;
+    private Instant lastUpdated;
+    private String slug; // For SEO-friendly URLs
 
     /**
      * Convert from Book to CachedBook entity
@@ -76,16 +81,31 @@ public class CachedBook {
      */
     public static CachedBook fromBook(Book book, JsonNode rawData, RedisVector embedding) {
         CachedBook cachedBook = new CachedBook();
-        cachedBook.setId(book.getId());
-        cachedBook.setGoogleBooksId(book.getId());
+
+        if (book.getId() != null) {
+            if (UuidUtil.isUuid(book.getId())) {
+                cachedBook.setId(book.getId()); // Preserve if Book.id is already a UUIDv7
+                // Attempt to get GoogleBooksID from qualifiers if Book.id was a UUID
+                if (book.getQualifiers() != null && book.getQualifiers().containsKey("googleBooksId")) {
+                    Object gbIdObj = book.getQualifiers().get("googleBooksId");
+                    if (gbIdObj instanceof String) {
+                        cachedBook.setGoogleBooksId((String) gbIdObj);
+                    }
+                }
+            } else {
+                // Book.id is an external ID (e.g., Google Books ID)
+                // CachedBook.id will be set by RedisCachedBookRepository.save() if null/non-UUID here.
+                cachedBook.setGoogleBooksId(book.getId());
+            }
+        }
+
         cachedBook.setTitle(book.getTitle());
-        // Ensure we have a non-null authors list, even if the book's authors are null
-        cachedBook.setAuthors(book.getAuthors() != null ? book.getAuthors() : new ArrayList<>());
+        cachedBook.setAuthors(book.getAuthors() != null ? new ArrayList<>(book.getAuthors()) : new ArrayList<>());
         cachedBook.setDescription(book.getDescription());
         cachedBook.setCoverImageUrl(book.getCoverImageUrl());
         cachedBook.setIsbn10(book.getIsbn10());
         cachedBook.setIsbn13(book.getIsbn13());
-        cachedBook.setCategories(book.getCategories());
+        cachedBook.setCategories(book.getCategories() != null ? new ArrayList<>(book.getCategories()) : null);
         cachedBook.setAverageRating(book.getAverageRating() != null ? BigDecimal.valueOf(book.getAverageRating()) : null);
         cachedBook.setRatingsCount(book.getRatingsCount());
         cachedBook.setPageCount(book.getPageCount());
@@ -117,9 +137,9 @@ public class CachedBook {
      */
     public Book toBook() {
         Book book = new Book();
-        book.setId(this.googleBooksId);
+        book.setId(this.id); // Book.id should be the canonical UUIDv7 ID from CachedBook
         book.setTitle(this.title);
-        book.setAuthors(this.authors != null ? this.authors : new ArrayList<>());
+        book.setAuthors(this.authors != null ? new ArrayList<>(this.authors) : new ArrayList<>());
         book.setDescription(this.description);
         book.setCoverImageUrl(this.coverImageUrl);
         book.setIsbn10(this.isbn10);
@@ -136,7 +156,13 @@ public class CachedBook {
 
         // Populate new fields in Book from CachedBook
         book.setCachedRecommendationIds(this.cachedRecommendationIds != null ? new ArrayList<>(this.cachedRecommendationIds) : new ArrayList<>());
-        book.setQualifiers(this.qualifiers != null ? new HashMap<>(this.qualifiers) : new HashMap<>());
+        
+        Map<String, Object> bookQualifiers = this.qualifiers != null ? new HashMap<>(this.qualifiers) : new HashMap<>();
+        if (this.googleBooksId != null && !UuidUtil.isUuid(this.googleBooksId)) { // Store original GBID if it's not a UUID itself
+            bookQualifiers.put("googleBooksId", this.googleBooksId);
+        }
+        book.setQualifiers(bookQualifiers);
+        
         book.setOtherEditions(this.otherEditions != null ? new ArrayList<>(this.otherEditions) : new ArrayList<>());
         
         // It's good practice to also set the rawJsonResponse if it's available in CachedBook,

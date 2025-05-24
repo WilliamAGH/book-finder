@@ -10,8 +10,11 @@
  * - Uses Jedis client for Redis communication
  * - Designed for integration with S3-to-Redis migration process
  */
+
 package com.williamcallahan.book_recommendation_engine.jsontoredis;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.json.Path2; // Using non-deprecated Path2
 import org.slf4j.Logger;
@@ -25,10 +28,12 @@ import org.springframework.stereotype.Service;
 public class RedisJsonService {
 
     private final JedisPooled jedis;
+    private final ObjectMapper objectMapper; // Added ObjectMapper
     private static final Logger log = LoggerFactory.getLogger(RedisJsonService.class);
 
-    public RedisJsonService(@Qualifier("jsonS3ToRedisJedisPooled") JedisPooled jedis) { // Changed to inject JedisPooled
+    public RedisJsonService(@Qualifier("jsonS3ToRedisJedisPooled") JedisPooled jedis, ObjectMapper objectMapper) { // Changed to inject JedisPooled and ObjectMapper
         this.jedis = jedis;
+        this.objectMapper = objectMapper; // Initialize ObjectMapper
     }
 
     /**
@@ -36,15 +41,34 @@ public class RedisJsonService {
      * @param key The Redis key
      * @param pathString The JSON path string (use "$" or "." for root)
      * @param jsonString The JSON string value to set
+     * @return true if successful, false otherwise
      */
-    public void jsonSet(String key, String pathString, String jsonString) {
+    public boolean jsonSet(String key, String pathString, String jsonString) {
         try {
-            Path2 path = Path2.of(pathString);
-            jedis.jsonSet(key, path, jsonString);
-            log.debug("Set JSON for key {} at path {}", key, pathString);
+            // Validate JSON before storing
+            objectMapper.readTree(jsonString); // This validates the JSON
+            
+            // For root path, use the simpler 2-parameter version
+            if ("$".equals(pathString) || ".".equals(pathString)) {
+                // When setting at root, pass the JSON string directly
+                // This stores the JSON object without any wrapper
+                jedis.jsonSet(key, jsonString);
+                log.debug("Set JSON for key {} at root path", key);
+            } else {
+                // For nested paths, use the 3-parameter version with Path2
+                Path2 path = Path2.of(pathString);
+                // Parse the jsonString into an Object for nested path operations
+                Object jsonObject = objectMapper.readValue(jsonString, Object.class);
+                jedis.jsonSet(key, path, jsonObject);
+                log.debug("Set JSON for key {} at path {}", key, pathString);
+            }
+            return true;
+        } catch (JsonProcessingException e) {
+            log.error("Error parsing jsonString before setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
+            return false;
         } catch (Exception e) {
             log.error("Error setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
-            // Consider rethrowing a custom exception or a JedisException if callers need to react
+            return false;
         }
     }
 
@@ -68,10 +92,14 @@ public class RedisJsonService {
             }
             // Convert to string. For complex objects, this will be the default toString(),
             // which might not be the JSON string representation.
-            // If a JSON string is always needed, consider using a JSON library (e.g., Jackson)
-            // to serialize the 'result' object if it's a Map/List.
-            // For now, keeping it simple with toString().
-            return result.toString();
+            // Serialize the result object back to a JSON string if it's not null.
+            if (result instanceof String) { // If RedisJSON already returned it as a simple string (e.g. a value at a deeper path like a string field)
+                return (String) result;
+            }
+            return objectMapper.writeValueAsString(result);
+        } catch (JsonProcessingException e) {
+            log.error("Error serializing result to JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
+            return null;
         } catch (Exception e) {
             log.warn("Error getting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
             return null;
@@ -104,6 +132,26 @@ public class RedisJsonService {
         } catch (Exception e) {
             log.error("Error pinging Redis: {}", e.getMessage(), e);
             throw e; // Rethrow the exception to be handled by the caller
+        }
+    }
+    
+    /**
+     * Gets raw JSON using legacy path to avoid array wrapping
+     * This is useful for diagnostics and DataGrip compatibility
+     * @param key The Redis key
+     * @return The raw JSON string without array wrapping
+     */
+    public String jsonGetRaw(String key) {
+        try {
+            // Use legacy path "." to get raw JSON without array wrapper
+            Object result = jedis.jsonGet(key);
+            if (result == null) {
+                return null;
+            }
+            return result.toString();
+        } catch (Exception e) {
+            log.error("Error getting raw JSON for key {}: {}", key, e.getMessage(), e);
+            return null;
         }
     }
 }

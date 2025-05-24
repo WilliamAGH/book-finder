@@ -13,7 +13,7 @@ package com.williamcallahan.book_recommendation_engine.model;
 
 import com.williamcallahan.book_recommendation_engine.types.CoverImages;
 
-import java.util.Date;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 import java.util.ArrayList;
@@ -29,7 +29,7 @@ public class Book {
     private String imageUrl;
     private String isbn10;
     private String isbn13;
-    private Date publishedDate;
+    private LocalDate publishedDate;
     private List<String> categories;
     private Double averageRating;
     private Integer ratingsCount;
@@ -81,7 +81,7 @@ public class Book {
         private String identifier;
         private String editionIsbn10;
         private String editionIsbn13;
-        private Date publishedDate;
+        private LocalDate publishedDate;
         private String coverImageUrl;
 
         /**
@@ -100,7 +100,7 @@ public class Book {
          * @param publishedDate Publication date
          * @param coverImageUrl Cover image URL
          */
-        public EditionInfo(String googleBooksId, String type, String identifier, String editionIsbn10, String editionIsbn13, Date publishedDate, String coverImageUrl) {
+        public EditionInfo(String googleBooksId, String type, String identifier, String editionIsbn10, String editionIsbn13, LocalDate publishedDate, String coverImageUrl) {
             this.googleBooksId = googleBooksId;
             this.type = type;
             this.identifier = identifier;
@@ -206,7 +206,7 @@ public class Book {
          * 
          * @return Edition publication date
          */
-        public Date getPublishedDate() {
+        public LocalDate getPublishedDate() {
             return publishedDate;
         }
 
@@ -216,7 +216,7 @@ public class Book {
          * 
          * @param publishedDate Edition publication date
          */
-        public void setPublishedDate(Date publishedDate) {
+        public void setPublishedDate(LocalDate publishedDate) {
             this.publishedDate = publishedDate;
         }
 
@@ -433,7 +433,7 @@ public class Book {
      * 
      * @return Publication date
      */
-    public Date getPublishedDate() {
+    public LocalDate getPublishedDate() {
         return publishedDate;
     }
 
@@ -442,7 +442,7 @@ public class Book {
      * 
      * @param publishedDate Publication date
      */
-    public void setPublishedDate(Date publishedDate) {
+    public void setPublishedDate(LocalDate publishedDate) {
         this.publishedDate = publishedDate;
     }
 

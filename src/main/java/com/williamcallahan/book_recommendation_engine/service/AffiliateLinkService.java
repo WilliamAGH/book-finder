@@ -7,6 +7,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import java.util.concurrent.CompletableFuture;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -17,7 +18,6 @@ import org.springframework.stereotype.Service;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 
 /**
  * Service class responsible for generating affiliate links and tracking their usage
@@ -78,32 +78,34 @@ public class AffiliateLinkService {
      * @param cjWebsiteId CJ Website ID for Barnes & Noble, uses default if null/empty
      * @return Affiliate link or direct search link if IDs are missing
      */
-    public String generateBarnesAndNobleLink(String isbn, String cjPublisherId, String cjWebsiteId) {
-        if (isbn == null || isbn.isEmpty()) {
-            // Cannot generate a specific link without ISBN; return base URL or null
-            return "https://www.barnesandnoble.com/";
-        }
+    public CompletableFuture<String> generateBarnesAndNobleLink(String isbn, String cjPublisherId, String cjWebsiteId) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (isbn == null || isbn.isEmpty()) {
+                // Cannot generate a specific link without ISBN; return base URL or null
+                return "https://www.barnesandnoble.com/";
+            }
 
-        String actualCjPublisherId = (cjPublisherId == null || cjPublisherId.isEmpty()) ? defaultCjPublisherId : cjPublisherId;
-        String actualCjWebsiteId = (cjWebsiteId == null || cjWebsiteId.isEmpty()) ? defaultCjWebsiteId : cjWebsiteId;
+            String actualCjPublisherId = (cjPublisherId == null || cjPublisherId.isEmpty()) ? defaultCjPublisherId : cjPublisherId;
+            String actualCjWebsiteId = (cjWebsiteId == null || cjWebsiteId.isEmpty()) ? defaultCjWebsiteId : cjWebsiteId;
 
-        // If affiliate IDs are missing (even after checking defaults), provide a direct search link
-        if (actualCjPublisherId == null || actualCjPublisherId.isEmpty() || actualCjWebsiteId == null || actualCjWebsiteId.isEmpty()) {
-            return "https://www.barnesandnoble.com/w/?ean=" + isbn; // ean is used for ISBN search
-        }
-        
-        // Affiliate IDs present, generate affiliate link
-        String productUrl = "https://www.barnesandnoble.com/w/?ean=" + isbn;
-        try {
-            String encodedProductUrl = URLEncoder.encode(productUrl, StandardCharsets.UTF_8.toString());
-            barnesAndNobleLinksGenerated.increment();
-            return String.format("https://www.anrdoezrs.net/click-%s-%s?url=%s&sid=%s",
-                                 actualCjPublisherId, actualCjWebsiteId, encodedProductUrl, isbn);
-        } catch (UnsupportedEncodingException e) {
-            logger.error("Error encoding Barnes & Noble URL: {}", e.getMessage(), e);
-            barnesAndNobleEncodingErrors.increment();
-            return "https://www.barnesandnoble.com/w/?ean=" + isbn; // Fallback to direct search on error
-        }
+            // If affiliate IDs are missing (even after checking defaults), provide a direct search link
+            if (actualCjPublisherId == null || actualCjPublisherId.isEmpty() || actualCjWebsiteId == null || actualCjWebsiteId.isEmpty()) {
+                return "https://www.barnesandnoble.com/w/?ean=" + isbn; // ean is used for ISBN search
+            }
+            
+            // Affiliate IDs present, generate affiliate link
+            String productUrl = "https://www.barnesandnoble.com/w/?ean=" + isbn;
+            try {
+                String encodedProductUrl = URLEncoder.encode(productUrl, StandardCharsets.UTF_8.toString());
+                barnesAndNobleLinksGenerated.increment();
+                return String.format("https://www.anrdoezrs.net/click-%s-%s?url=%s&sid=%s",
+                                     actualCjPublisherId, actualCjWebsiteId, encodedProductUrl, isbn);
+            } catch (UnsupportedEncodingException e) {
+                logger.error("Error encoding Barnes & Noble URL: {}", e.getMessage(), e);
+                barnesAndNobleEncodingErrors.increment();
+                return "https://www.barnesandnoble.com/w/?ean=" + isbn; // Fallback to direct search on error
+            }
+        });
     }
 
     /**
@@ -113,20 +115,22 @@ public class AffiliateLinkService {
      * @param bookshopAffiliateId Bookshop_org affiliate ID, uses default if null/empty
      * @return Affiliate link or direct product link if ID is missing
      */
-    public String generateBookshopLink(String isbn, String bookshopAffiliateId) {
-        if (isbn == null || isbn.isEmpty()) {
-            // Cannot generate a specific link without ISBN; return base URL or null
-            return "https://bookshop.org/";
-        }
-        String actualBookshopAffiliateId = (bookshopAffiliateId == null || bookshopAffiliateId.isEmpty()) ? defaultBookshopAffiliateId : bookshopAffiliateId;
+    public CompletableFuture<String> generateBookshopLink(String isbn, String bookshopAffiliateId) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (isbn == null || isbn.isEmpty()) {
+                // Cannot generate a specific link without ISBN; return base URL or null
+                return "https://bookshop.org/";
+            }
+            String actualBookshopAffiliateId = (bookshopAffiliateId == null || bookshopAffiliateId.isEmpty()) ? defaultBookshopAffiliateId : bookshopAffiliateId;
 
-        // If affiliate ID is missing (even after checking default), provide a direct product link
-        if (actualBookshopAffiliateId == null || actualBookshopAffiliateId.isEmpty()) {
-            return String.format("https://bookshop.org/book/%s", isbn);
-        }
-        // Affiliate ID present
-        bookshopLinksGenerated.increment();
-        return String.format("https://bookshop.org/a/%s/%s", actualBookshopAffiliateId, isbn);
+            // If affiliate ID is missing (even after checking default), provide a direct product link
+            if (actualBookshopAffiliateId == null || actualBookshopAffiliateId.isEmpty()) {
+                return String.format("https://bookshop.org/book/%s", isbn);
+            }
+            // Affiliate ID present
+            bookshopLinksGenerated.increment();
+            return String.format("https://bookshop.org/a/%s/%s", actualBookshopAffiliateId, isbn);
+        });
     }
 
     /**
@@ -137,48 +141,53 @@ public class AffiliateLinkService {
      * @param amazonAssociateTag Amazon Associates Tag, uses default if null/empty
      * @return Affiliate link, title search, or generic search based on available data
      */
-    public String generateAudibleLink(String asin, String title, String amazonAssociateTag) {
-        String actualAmazonAssociateTag = (amazonAssociateTag == null || amazonAssociateTag.isEmpty()) ? defaultAmazonAssociateTag : amazonAssociateTag;
+    public CompletableFuture<String> generateAudibleLink(String asin, String title, String amazonAssociateTag) {
+        return CompletableFuture.supplyAsync(() -> {
+            String actualAmazonAssociateTag = (amazonAssociateTag == null || amazonAssociateTag.isEmpty()) ? defaultAmazonAssociateTag : amazonAssociateTag;
 
-        if (asin != null && !asin.isEmpty()) {
-            // ASIN is present, construct direct Audible product link
-            String baseUrl = String.format("https://www.audible.com/pd/%s", asin);
-            if (actualAmazonAssociateTag == null || actualAmazonAssociateTag.isEmpty()) {
-                return baseUrl; // No associate tag, provide direct Audible product link
-            }
-            // ASIN and tag present: affiliate link
-            audibleLinksGenerated.increment();
-            return String.format("https://www.audible.com/pd/%s?tag=%s", asin, actualAmazonAssociateTag);
-        }
-        
-        // ASIN is missing, try to use title for search
-        if (title != null && !title.isEmpty()) {
-            try {
-                String encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.toString());
-                String searchUrl = String.format("https://www.audible.com/search?keywords=%s", encodedTitle);
-                if (actualAmazonAssociateTag != null && !actualAmazonAssociateTag.isEmpty()) {
-                    // Attempt to add tag to search URL. Note: Effectiveness may vary by platform/program rules.
-                    // It's generally safer for product links, but let's include it if present.
-                    searchUrl += String.format("&tag=%s", actualAmazonAssociateTag);
-                    // We consider this a generated link if a tag is applied, even to a search
-                    audibleLinksGenerated.increment(); 
+            if (asin != null && !asin.isEmpty()) {
+                // ASIN is present, construct direct Audible product link
+                String baseUrl = String.format("https://www.audible.com/pd/%s", asin);
+                if (actualAmazonAssociateTag == null || actualAmazonAssociateTag.isEmpty()) {
+                    return baseUrl; // No associate tag, provide direct Audible product link
                 }
-                return searchUrl;
-            } catch (UnsupportedEncodingException e) {
-                logger.error("Error encoding title for Audible search: {}", e.getMessage(), e);
-                audibleEncodingErrors.increment();
-                // Fallback to generic search if title encoding fails
+                // ASIN and tag present: affiliate link
+                audibleLinksGenerated.increment();
+                return String.format("https://www.audible.com/pd/%s?tag=%s", asin, actualAmazonAssociateTag);
             }
-        }
-        
-        // Fallback to generic Audible search if no ASIN and no title (or title encoding failed)
-        // If a tag is present, we can still try to append it to the generic search, though its utility here is low.
-        if (actualAmazonAssociateTag != null && !actualAmazonAssociateTag.isEmpty()) {
-            // We consider this a generated link if a tag is applied, even to a generic search
-            audibleLinksGenerated.increment();
-            return String.format("https://www.audible.com/search?tag=%s", actualAmazonAssociateTag);
-        }
-        return "https://www.audible.com/search"; 
+            
+            // ASIN is missing, try to use title for search
+            if (title != null && !title.isEmpty()) {
+                try {
+                    String encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.toString());
+                    String searchUrl = String.format("https://www.audible.com/search?keywords=%s", encodedTitle);
+                    if (actualAmazonAssociateTag != null && !actualAmazonAssociateTag.isEmpty()) {
+                        // Attempt to add tag to search URL. Note: Effectiveness may vary by platform/program rules.
+                        // It's generally safer for product links, but let's include it if present.
+                        searchUrl += String.format("&tag=%s", actualAmazonAssociateTag);
+                        // We consider this a generated link if a tag is applied, even to a search
+                        audibleLinksGenerated.increment(); 
+                    }
+                    return searchUrl;
+                } catch (UnsupportedEncodingException e) {
+                    logger.error("Error encoding title for Audible search: {}", e.getMessage(), e);
+                    audibleEncodingErrors.increment();
+                    // Fallback to direct search if ISBN/title is missing or encoding fails
+                    String fallbackUrl = "https://www.audible.com/search";
+                    return fallbackUrl;
+                }
+            }
+            
+            // Fallback to generic Audible search if no ASIN and no title (or title encoding failed)
+            // If a tag is present, we can still try to append it to the generic search, though its utility here is low.
+            if (actualAmazonAssociateTag != null && !actualAmazonAssociateTag.isEmpty()) {
+                // We consider this a generated link if a tag is applied, even to a generic search
+                audibleLinksGenerated.increment();
+                String searchUrl = String.format("https://www.audible.com/search?tag=%s", actualAmazonAssociateTag);
+                return searchUrl;
+            }
+            return "https://www.audible.com/search"; 
+        });
     }
 
     /**
@@ -189,61 +198,75 @@ public class AffiliateLinkService {
      * @param amazonAssociateTag Amazon Associates Tag, uses default if null/empty
      * @return Affiliate link or direct search link if ID/title missing
      */
-    public String generateAmazonLink(String isbn, String title, String amazonAssociateTag) {
+    public CompletableFuture<String> generateAmazonLink(String isbn, String title, String amazonAssociateTag) {
         String actualTag = (amazonAssociateTag == null || amazonAssociateTag.isEmpty()) ? defaultAmazonAssociateTag : amazonAssociateTag;
-        boolean redisAvailable = redisCacheService.isRedisAvailable();
         String cacheKey = "affiliate:amazon:" + (isbn != null && !isbn.isEmpty() ? isbn : title) + ":" + actualTag;
-        if (redisAvailable) {
-            Optional<String> cached = redisCacheService.getCachedString(cacheKey);
-            if (cached.isPresent()) {
-                return cached.get();
-            }
-        }
-        if (isbn != null && !isbn.isEmpty()) {
+        
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(redisAvailable -> {
+                if (redisAvailable) {
+                    return redisCacheService.getCachedStringAsync(cacheKey)
+                        .thenCompose(cached -> {
+                            if (cached.isPresent()) {
+                                return CompletableFuture.completedFuture(cached.get());
+                            }
+                            return generateAndCacheAmazonUrl(isbn, title, actualTag, cacheKey, true);
+                        });
+                } else {
+                    return generateAndCacheAmazonUrl(isbn, title, actualTag, cacheKey, false);
+                }
+            })
+            .exceptionally(ex -> {
+                logger.error("Error in generateAmazonLink: {}", ex.getMessage(), ex);
+                return "https://www.amazon.com/";
+            });
+    }
+    
+    private CompletableFuture<String> generateAndCacheAmazonUrl(String isbn, String title, String actualTag, String cacheKey, boolean cacheEnabled) {
+        return CompletableFuture.supplyAsync(() -> {
             String searchUrl;
-            try {
-                String encodedIsbn = URLEncoder.encode(isbn, StandardCharsets.UTF_8.toString());
-                searchUrl = String.format("https://www.amazon.com/s?k=%s", encodedIsbn);
-            } catch (UnsupportedEncodingException e) {
-                logger.error("Error encoding ISBN for Amazon search: {}", e.getMessage(), e);
-                amazonEncodingErrors.increment();
+            
+            if (isbn != null && !isbn.isEmpty()) {
+                try {
+                    String encodedIsbn = URLEncoder.encode(isbn, StandardCharsets.UTF_8.toString());
+                    searchUrl = String.format("https://www.amazon.com/s?k=%s", encodedIsbn);
+                } catch (UnsupportedEncodingException e) {
+                    logger.error("Error encoding ISBN for Amazon search: {}", e.getMessage(), e);
+                    amazonEncodingErrors.increment();
+                    searchUrl = "https://www.amazon.com/";
+                }
+            } else if (title != null && !title.isEmpty()) {
+                try {
+                    String encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.toString());
+                    searchUrl = String.format("https://www.amazon.com/s?k=%s", encodedTitle);
+                } catch (UnsupportedEncodingException e) {
+                    logger.error("Error encoding title for Amazon search: {}", e.getMessage(), e);
+                    amazonEncodingErrors.increment();
+                    return "https://www.amazon.com/";
+                }
+            } else {
                 searchUrl = "https://www.amazon.com/";
             }
-            if (actualTag != null && !actualTag.isEmpty()) {
+            
+            if (actualTag != null && !actualTag.isEmpty() && !searchUrl.equals("https://www.amazon.com/")) {
                 searchUrl += String.format("&ref=nosim&tag=%s", actualTag);
                 amazonLinksGenerated.increment();
+            } else if (actualTag != null && !actualTag.isEmpty()) {
+                searchUrl = String.format("https://www.amazon.com/?tag=%s", actualTag);
+                amazonLinksGenerated.increment();
             }
-            if (redisAvailable) {
-                redisCacheService.cacheString(cacheKey, searchUrl);
-            }
+            
             return searchUrl;
-        }
-        if (title != null && !title.isEmpty()) {
-            try {
-                String encodedTitle = URLEncoder.encode(title, StandardCharsets.UTF_8.toString());
-                String searchUrl = String.format("https://www.amazon.com/s?k=%s", encodedTitle);
-                if (actualTag != null && !actualTag.isEmpty()) {
-                    searchUrl += String.format("&ref=nosim&tag=%s", actualTag);
-                    amazonLinksGenerated.increment();
-                }
-                if (redisAvailable) {
-                    redisCacheService.cacheString(cacheKey, searchUrl);
-                }
-                return searchUrl;
-            } catch (UnsupportedEncodingException e) {
-                logger.error("Error encoding title for Amazon search: {}", e.getMessage(), e);
-                amazonEncodingErrors.increment();
-                return "https://www.amazon.com/";
+        }).thenCompose(searchUrl -> {
+            if (cacheEnabled) {
+                return redisCacheService.cacheStringAsync(cacheKey, searchUrl)
+                    .thenApply(v -> searchUrl)
+                    .exceptionally(ex -> {
+                        logger.warn("Failed to cache Amazon URL: {}", ex.getMessage());
+                        return searchUrl;
+                    });
             }
-        }
-        if (actualTag != null && !actualTag.isEmpty()) {
-            amazonLinksGenerated.increment();
-            String searchUrl = String.format("https://www.amazon.com/?tag=%s", actualTag);
-            if (redisAvailable) {
-                redisCacheService.cacheString(cacheKey, searchUrl);
-            }
-            return searchUrl;
-        }
-        return "https://www.amazon.com/";
+            return CompletableFuture.completedFuture(searchUrl);
+        });
     }
 }

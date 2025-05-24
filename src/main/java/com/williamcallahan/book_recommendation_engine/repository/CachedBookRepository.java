@@ -11,6 +11,7 @@
  * - Handles standard CRUD operations for cached book data
  * - Tracks unique Google Books IDs for deduplication
  */
+
 package com.williamcallahan.book_recommendation_engine.repository;
 
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
@@ -18,6 +19,8 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 @Repository
 public interface CachedBookRepository {
 
@@ -55,12 +58,23 @@ public interface CachedBookRepository {
     List<CachedBook> findSimilarBooksById(String bookId, int limit);
     
     /**
-     * Persists a book entity in the cache
+     * Persists a book entity in the cache asynchronously
+     * 
+     * @param entity The book entity to save
+     * @return CompletableFuture of the saved book entity with any generated values populated
+     * @param <S> Type extending CachedBook
+     */
+    <S extends CachedBook> CompletableFuture<S> saveAsync(S entity);
+    
+    /**
+     * Persists a book entity in the cache (synchronous - deprecated)
      * 
      * @param entity The book entity to save
      * @return The saved book entity with any generated values populated
      * @param <S> Type extending CachedBook
+     * @deprecated Use saveAsync(S entity) instead for non-blocking operation
      */
+    @Deprecated
     <S extends CachedBook> S save(S entity);
     
     /**
@@ -73,26 +87,55 @@ public interface CachedBookRepository {
     <S extends CachedBook> Iterable<S> saveAll(Iterable<S> entities);
     
     /**
-     * Retrieves a cached book by its primary identifier
+     * Retrieves a cached book by its primary identifier asynchronously
+     * 
+     * @param id The unique identifier of the book
+     * @return CompletableFuture of Optional containing the cached book if found, empty otherwise
+     */
+    CompletableFuture<Optional<CachedBook>> findByIdAsync(String id);
+    
+    /**
+     * Retrieves a cached book by its primary identifier (synchronous - deprecated)
      * 
      * @param id The unique identifier of the book
      * @return Optional containing the cached book if found, empty otherwise
+     * @deprecated Use findByIdAsync(String id) instead for non-blocking operation
      */
+    @Deprecated
     Optional<CachedBook> findById(String id);
     
     /**
-     * Checks if a book with the specified identifier exists in the cache
+     * Checks if a book with the specified identifier exists in the cache asynchronously
+     * 
+     * @param id The unique identifier of the book to check
+     * @return CompletableFuture of true if the book exists, false otherwise
+     */
+    CompletableFuture<Boolean> existsByIdAsync(String id);
+    
+    /**
+     * Checks if a book with the specified identifier exists in the cache (synchronous - deprecated)
      * 
      * @param id The unique identifier of the book to check
      * @return true if the book exists, false otherwise
+     * @deprecated Use existsByIdAsync(String id) instead for non-blocking operation
      */
+    @Deprecated
     boolean existsById(String id);
     
     /**
-     * Retrieves all books stored in the cache
+     * Retrieves all books stored in the cache asynchronously
+     * 
+     * @return CompletableFuture of Iterable collection of all cached books
+     */
+    CompletableFuture<Iterable<CachedBook>> findAllAsync();
+    
+    /**
+     * Retrieves all books stored in the cache (synchronous - deprecated)
      * 
      * @return Iterable collection of all cached books
+     * @deprecated Use findAllAsync() instead for non-blocking operation
      */
+    @Deprecated
     Iterable<CachedBook> findAll();
     
     /**
@@ -104,17 +147,36 @@ public interface CachedBookRepository {
     Iterable<CachedBook> findAllById(Iterable<String> ids);
     
     /**
-     * Counts the total number of books in the cache
+     * Counts the total number of books in the cache asynchronously
+     * 
+     * @return CompletableFuture of total count of cached books
+     */
+    CompletableFuture<Long> countAsync();
+    
+    /**
+     * Counts the total number of books in the cache (synchronous - deprecated)
      * 
      * @return Total count of cached books
+     * @deprecated Use countAsync() instead for non-blocking operation
      */
+    @Deprecated
     long count();
     
     /**
-     * Removes a book from the cache by its identifier
+     * Removes a book from the cache by its identifier asynchronously
      * 
      * @param id The unique identifier of the book to delete
+     * @return CompletableFuture that completes when deletion is finished
      */
+    CompletableFuture<Void> deleteByIdAsync(String id);
+    
+    /**
+     * Removes a book from the cache by its identifier (synchronous - deprecated)
+     * 
+     * @param id The unique identifier of the book to delete
+     * @deprecated Use deleteByIdAsync(String id) instead for non-blocking operation
+     */
+    @Deprecated
     void deleteById(String id);
     
     /**
@@ -160,4 +222,21 @@ public interface CachedBookRepository {
      * @return A list of cached books matching the criteria
      */
     List<CachedBook> findByTitleIgnoreCaseAndIdNot(String title, String idToExclude);
+
+    /**
+     * Retrieves a cached book by its SEO-friendly slug.
+     *
+     * @param slug The slug to search for.
+     * @return Optional containing the cached book if found, empty otherwise.
+     */
+    Optional<CachedBook> findBySlug(String slug);
+    
+    /**
+     * Retrieves random cached books from recent years (2024-2025) with good quality covers
+     * 
+     * @param count Maximum number of books to return
+     * @param excludeIds Set of book IDs to exclude from results
+     * @return List of cached books matching the criteria
+     */
+    List<CachedBook> findRandomRecentBooksWithGoodCovers(int count, Set<String> excludeIds);
 }

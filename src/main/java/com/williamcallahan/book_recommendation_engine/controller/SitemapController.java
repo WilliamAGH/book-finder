@@ -128,8 +128,8 @@ public class SitemapController {
     public Mono<String> getBooksSitemap() {
         String currentDate = LocalDate.now().format(DATE_FORMATTER);
 
-        return Mono.fromCallable(() -> bookSitemapService.getAccumulatedBookIdsFromS3())
-                   .subscribeOn(Schedulers.boundedElastic())
+        return Mono.fromFuture(bookSitemapService.getAccumulatedBookIdsFromS3Async())
+                   // .subscribeOn(Schedulers.boundedElastic()) // subscribeOn might not be necessary here as fromFuture handles the async nature.
                    .map(bookIds -> {
                        if (bookIds == null || bookIds.isEmpty()) {
                            logger.info("No book IDs found for sitemap or error upstream. Returning empty sitemap.");
@@ -166,13 +166,10 @@ public class SitemapController {
     @ResponseBody
     public Mono<ResponseEntity<String>> manualTriggerSitemapUpdate() {
         logger.info("Manual trigger: Scheduling update of accumulated book IDs in S3.");
-        return Mono.fromRunnable(() -> {
-                    logger.info("Background task started: Updating accumulated book IDs in S3.");
-                    bookSitemapService.updateAccumulatedBookIdsInS3();
-                    logger.info("Background task finished: Accumulated book ID update process completed.");
-                })
-                   .subscribeOn(Schedulers.boundedElastic())
-                   .thenReturn(ResponseEntity.ok("Sitemap book ID update triggered successfully. Will run in background."))
+        return Mono.fromFuture(bookSitemapService.updateAccumulatedBookIdsInS3Async())
+                   .subscribeOn(Schedulers.boundedElastic()) // Ensure the chain runs on a suitable thread
+                   .then(Mono.just(ResponseEntity.ok("Sitemap book ID update triggered successfully. Will run in background.")))
+                   .doOnSuccess(response -> logger.info("Manual trigger for sitemap update completed successfully."))
                    .onErrorResume(e -> {
                        logger.error("Error during manual sitemap book ID update trigger:", e);
                        return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)

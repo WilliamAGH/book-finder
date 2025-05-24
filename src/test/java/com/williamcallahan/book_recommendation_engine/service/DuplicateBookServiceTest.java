@@ -94,7 +94,7 @@ public class DuplicateBookServiceTest {
         Book book = createBook("book1", "Unique Title", "Author U");
         when(cachedBookRepository.findByTitleIgnoreCaseAndIdNot(eq("Unique Title"), eq("book1"))).thenReturn(Collections.emptyList());
 
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(book, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(book, "book1").join();
         assertTrue(duplicates.isEmpty());
     }
 
@@ -109,7 +109,7 @@ public class DuplicateBookServiceTest {
         when(cachedBookRepository.findByTitleIgnoreCaseAndIdNot(eq("Duplicate Title"), eq("book1")))
             .thenReturn(List.of(duplicateInDb));
 
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookToSearchFor, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookToSearchFor, "book1").join();
         assertEquals(1, duplicates.size());
         assertEquals("dbId2", duplicates.get(0).getId());
     }
@@ -125,7 +125,7 @@ public class DuplicateBookServiceTest {
         when(cachedBookRepository.findByTitleIgnoreCaseAndIdNot(eq("Same Title Different Author"), eq("book1")))
             .thenReturn(List.of(potentialDuplicateInDb));
 
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookToSearchFor, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookToSearchFor, "book1").join();
         assertTrue(duplicates.isEmpty());
     }
 
@@ -141,7 +141,7 @@ public class DuplicateBookServiceTest {
         when(cachedBookRepository.findByTitleIgnoreCaseAndIdNot(eq("Popular Title"), eq("book1")))
             .thenReturn(Arrays.asList(dup1InDb, dup2InDb));
 
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookToSearchFor, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookToSearchFor, "book1").join();
         assertEquals(2, duplicates.size());
     }
 
@@ -157,7 +157,7 @@ public class DuplicateBookServiceTest {
         when(cachedBookRepository.findByTitleIgnoreCaseAndIdNot(eq("mixedcase title"), eq("book1")))
             .thenReturn(List.of(duplicateInDb));
         
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookToSearchFor, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookToSearchFor, "book1").join();
         assertEquals(1, duplicates.size());
         assertEquals("dbId2", duplicates.get(0).getId());
     }
@@ -167,7 +167,7 @@ public class DuplicateBookServiceTest {
      */
     @Test
     void findPotentialDuplicates_nullBook_returnsEmptyList() {
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(null, "someId");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(null, "someId").join();
         assertTrue(duplicates.isEmpty());
     }
 
@@ -177,7 +177,7 @@ public class DuplicateBookServiceTest {
     @Test
     void findPotentialDuplicates_bookWithNullTitle_returnsEmptyList() {
         Book bookWithNullTitle = createBook("book1", null, "Author");
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookWithNullTitle, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookWithNullTitle, "book1").join();
         assertTrue(duplicates.isEmpty());
     }
 
@@ -188,7 +188,7 @@ public class DuplicateBookServiceTest {
     void findPotentialDuplicates_bookWithNullAuthors_returnsEmptyList() {
         Book bookWithNullAuthors = createBook("book1", "A Title", null);
         bookWithNullAuthors.setAuthors(null); // Explicitly set to null
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookWithNullAuthors, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookWithNullAuthors, "book1").join();
         assertTrue(duplicates.isEmpty());
     }
 
@@ -199,7 +199,7 @@ public class DuplicateBookServiceTest {
     void findPotentialDuplicates_bookWithEmptyAuthors_returnsEmptyList() {
         Book bookWithEmptyAuthors = createBook("book1", "A Title", null);
         bookWithEmptyAuthors.setAuthors(Collections.emptyList()); // Explicitly set to empty list
-        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicates(bookWithEmptyAuthors, "book1");
+        List<CachedBook> duplicates = duplicateBookService.findPotentialDuplicatesAsync(bookWithEmptyAuthors, "book1").join();
         assertTrue(duplicates.isEmpty());
     }
 }

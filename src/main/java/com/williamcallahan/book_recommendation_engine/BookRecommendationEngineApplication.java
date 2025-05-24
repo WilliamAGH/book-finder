@@ -32,14 +32,13 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoCon
     OpenAiEmbeddingAutoConfiguration.class,
     OpenAiImageAutoConfiguration.class,
     OpenAiModerationAutoConfiguration.class,
-    // Disable default Spring Security auto-configuration to allow public access
-    org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
-    org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration.class,
     // Disable reactive security auto-configuration for WebFlux endpoints
-    org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class
+    org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class,
+    // Disable management web security auto-configuration since we have custom security
+    org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration.class
 })
 @EnableCaching
-@EnableAsync
+@EnableAsync(proxyTargetClass = true)
 @EnableScheduling
 @EnableRetry
 public class BookRecommendationEngineApplication {
