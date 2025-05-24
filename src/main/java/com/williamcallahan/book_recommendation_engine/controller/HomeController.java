@@ -58,7 +58,7 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Objects;
 import reactor.core.scheduler.Schedulers;
-import java.util.concurrent.TimeUnit;
+import java.time.Year;
 
 @Controller
 public class HomeController {
@@ -293,7 +293,15 @@ public class HomeController {
         return true; // Assume it's an actual cover if none of the above match
     }
 
-    // Helper method to de-duplicate a list of books by their ID
+    /**
+     * De-duplicates a list of books by their canonical identifier (UUID or GoogleBooksId).
+     * <p>
+     * Assumes each Book.getId() has been set to a canonical ID by cache lookup or identifier deduplication.
+     * Filters out duplicate entries to ensure unique books in UI display.
+     *
+     * @param books List of books to filter
+     * @return List of unique books by ID
+     */
     private List<Book> deduplicateBooksById(List<Book> books) {
         if (books == null || books.isEmpty()) {
             return Collections.emptyList();
@@ -325,8 +333,9 @@ public class HomeController {
                     bestsellers.forEach(book -> excludeIds.add(book.getId()));
                     
                     // Use new efficient repository method to get recent books with good covers
+                    int fromYear = Year.now().getValue();
                     List<CachedBook> recentCachedBooks = cachedBookRepository
-                        .findRandomRecentBooksWithGoodCovers(count, excludeIds);
+                        .findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear);
                     
                     if (recentCachedBooks.isEmpty()) {
                         logger.info("No recent books with good covers found in cache, trying fallback query");
@@ -334,28 +343,26 @@ public class HomeController {
                         String fallbackQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
                         logger.info("Using fallback query for homepage: '{}'", fallbackQuery);
                         
-                        try {
-                            List<Book> fallbackBooks;
-                            try {
-                                fallbackBooks = bookCacheFacadeService.searchBooks(fallbackQuery, 1, count)
-                                    .get(10, TimeUnit.SECONDS);
-                            } catch (Exception e) {
-                                logger.warn("Fallback query timed out or failed: {}", e.getMessage());
+                        // Use reactive approach for fallback
+                        return Mono.fromFuture(bookCacheFacadeService.searchBooks(fallbackQuery, 1, count))
+                            .timeout(Duration.ofSeconds(10))
+                            .map(fallbackBooksList -> {
+                                if (fallbackBooksList != null && !fallbackBooksList.isEmpty()) {
+                                    logger.info("Fallback query returned {} books for homepage", fallbackBooksList.size());
+                                    return fallbackBooksList.stream()
+                                        .filter(book -> !excludeIds.contains(book.getId()))
+                                        .limit(count)
+                                        .collect(Collectors.toList());
+                                }
                                 return Collections.<Book>emptyList();
-                            }
-
-                            if (fallbackBooks != null && !fallbackBooks.isEmpty()) {
-                                logger.info("Fallback query returned {} books for homepage", fallbackBooks.size());
-                                return fallbackBooks.stream()
-                                    .filter(book -> !excludeIds.contains(book.getId()))
-                                    .limit(count)
-                                    .collect(Collectors.toList());
-                            }
-                        } catch (Exception e) {
-                            logger.warn("Fallback query failed: {}", e.getMessage());
-                        }
-                        
-                        return Collections.<Book>emptyList();
+                            })
+                            .onErrorResume(e -> {
+                                logger.warn("Fallback query failed or timed out: {}", e.getMessage());
+                                return Mono.just(Collections.<Book>emptyList());
+                            })
+                            .block(); // Block here as the outer method expects a List<Book>, not Mono<List<Book>>
+                                     // This is acceptable as it's within a flatMap of a Mono.fromCallable
+                                     // and scheduled on boundedElastic.
                     }
                     
                     // Convert CachedBooks to Books
