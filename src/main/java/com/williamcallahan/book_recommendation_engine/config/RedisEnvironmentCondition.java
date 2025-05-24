@@ -6,38 +6,42 @@
  *
  * Features:
  * - Checks for REDIS_SERVER environment variable
- * - Alternatively checks for SPRING_REDIS_HOST and SPRING_REDIS_PORT combination
  * - Enables Redis-dependent beans when conditions are met
  * - Provides console output indicating Redis availability status
  */
 package com.williamcallahan.book_recommendation_engine.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Condition;
 import org.springframework.context.annotation.ConditionContext;
+import org.springframework.core.env.Environment;
 import org.springframework.core.type.AnnotatedTypeMetadata;
 import org.springframework.lang.NonNull;
 
 public class RedisEnvironmentCondition implements Condition {
 
+    private static final Logger logger = LoggerFactory.getLogger(RedisEnvironmentCondition.class);
+    private static volatile boolean hasLoggedRedisDetection = false;
+
     @Override
     public boolean matches(@NonNull ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {
-        String redisServer = context.getEnvironment().getProperty("REDIS_SERVER");
-        String redisHost = context.getEnvironment().getProperty("SPRING_REDIS_HOST");
-        String redisPort = context.getEnvironment().getProperty("SPRING_REDIS_PORT");
+        Environment env = context.getEnvironment();
         
-        // Redis is available if either REDIS_SERVER is set OR both host and port are set
-        boolean hasRedisServer = redisServer != null && !redisServer.trim().isEmpty();
-        boolean hasHostAndPort = redisHost != null && !redisHost.trim().isEmpty() && 
-                                redisPort != null && !redisPort.trim().isEmpty();
+        // Check for Redis environment variables
+        String redisServer = env.getProperty("REDIS_SERVER");
+        String redisHost = env.getProperty("spring.redis.host");
+        String redisPort = env.getProperty("spring.redis.port");
         
-        boolean hasRequiredVars = hasRedisServer || hasHostAndPort;
+        boolean hasRedisConfig = (redisServer != null && !redisServer.trim().isEmpty()) ||
+                                (redisHost != null && !redisHost.trim().isEmpty()) ||
+                                (redisPort != null && !redisPort.trim().isEmpty());
         
-        if (hasRequiredVars) {
-            System.out.println("Redis environment variables detected - enabling Redis services");
-        } else {
-            System.out.println("Redis environment variables not found - Redis services will be disabled");
+        if (hasRedisConfig && !hasLoggedRedisDetection) {
+            logger.info("Redis environment variables detected - enabling Redis services");
+            hasLoggedRedisDetection = true;
         }
         
-        return hasRequiredVars;
+        return hasRedisConfig;
     }
 }

@@ -31,7 +31,7 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.StaticHeadersWriter;
-import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RegexRequestMatcher;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
@@ -76,6 +76,7 @@ public class SecurityConfig {
     }
 
     @Bean
+    @org.springframework.core.annotation.Order(2)
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             // Specify a security matcher pattern to avoid conflicts with test configurations
@@ -84,6 +85,7 @@ public class SecurityConfig {
                 authorizeRequests
                     .requestMatchers("/admin/**").hasRole("ADMIN")
                     .requestMatchers("/robots.txt").permitAll() // Explicitly permit robots.txt
+                    .requestMatchers("/analytics/**").permitAll() // Permit analytics endpoints
                     .anyRequest().permitAll() // Default to permit all for non-admin routes
             )
             .formLogin(withDefaults()) // Enable form-based login
@@ -92,8 +94,15 @@ public class SecurityConfig {
             )
             .csrf(csrf -> csrf
                 .ignoringRequestMatchers(
-                    new AntPathRequestMatcher("/admin/s3-cleanup/dry-run", "GET"),
-                    new AntPathRequestMatcher("/admin/api-metrics/**", "GET")
+                    new RegexRequestMatcher("^/admin/s3-cleanup/dry-run$", "GET"),
+                    new RegexRequestMatcher("^/admin/api-metrics/.*$", "GET"),
+                    new RegexRequestMatcher("^/admin/trigger-nyt-bestsellers$", "POST"),
+                    new RegexRequestMatcher("^/admin/trigger-cache-warming$", "POST"),
+                    new RegexRequestMatcher("^/admin/circuit-breaker/reset$", "POST"),
+                    new RegexRequestMatcher("^/admin/s3-cleanup/move-flagged$", "POST"),
+                    new RegexRequestMatcher("^/admin/data/consolidate-books(?:\\?.*)?$", "POST"),
+                    new RegexRequestMatcher("^/admin/cache/cleanup(?:\\?.*)?$", "POST"),
+                    new RegexRequestMatcher("^/admin/cache/diagnose$", "GET")
                 )
             );
 
@@ -102,6 +111,18 @@ public class SecurityConfig {
             configureSecurity(http);
         }
             
+        return http.build();
+    }
+
+    @Bean 
+    @org.springframework.core.annotation.Order(1)
+    public SecurityFilterChain managementSecurityFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/actuator/**")
+            .authorizeHttpRequests(auth -> auth
+                .anyRequest().permitAll()
+            )
+            .csrf(csrf -> csrf.disable());
         return http.build();
     }
 
@@ -117,10 +138,10 @@ public class SecurityConfig {
                 StringBuilder connectSrcDirective = new StringBuilder("'self'");
 
                 if (clickyEnabled) {
-                    // Add Clicky Analytics domains for img-src, script-src, and connect-src
-                    imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
-                    scriptSrcDirective.append(" https://static.getclicky.com https://clicky.com");
-                    connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
+                    // Allow clicky analytics scripts and images
+                    imgSrcDirective.append("https://in.getclicky.com ");
+                    scriptSrcDirective.append(" http://in.getclicky.com https://in.getclicky.com clicky.com");
+                    connectSrcDirective.append(" http://in.getclicky.com https://in.getclicky.com https://clicky.com");
                 }
 
                 // Add Google Books domain for cover images

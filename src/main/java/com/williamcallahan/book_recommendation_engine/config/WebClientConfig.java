@@ -1,5 +1,5 @@
 /**
- * Configuration for WebClient
+ * Configuration for WebClient and RestTemplate
  * - Defines beans for creating WebClient instances
  * - Sets up default timeouts and connection settings
  *
@@ -13,16 +13,19 @@ import io.netty.handler.timeout.WriteTimeoutHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.client.RestTemplate;
 import reactor.netty.http.client.HttpClient;
 
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Configures the application's WebClient instances
+ * Configures the application's WebClient and RestTemplate instances
  * - Provides a pre-configured WebClient Builder
+ * - Provides a RestTemplate with timeout settings
  * - Ensures consistent HTTP client behavior
  */
 @Configuration
@@ -55,5 +58,21 @@ public class WebClientConfig {
         return WebClient.builder()
             .exchangeStrategies(exchangeStrategies)
             .clientConnector(new ReactorClientHttpConnector(httpClient));
+    }
+
+    /**
+     * Creates a RestTemplate bean with consistent timeout settings
+     * - Sets connection timeout to 5000ms
+     * - Sets read timeout to 5000ms
+     * - Uses SimpleClientHttpRequestFactory for compatibility
+     *
+     * @return A configured RestTemplate instance
+     */
+    @Bean
+    public RestTemplate restTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(5000);
+        return new RestTemplate(factory);
     }
 }

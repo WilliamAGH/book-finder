@@ -1,42 +1,40 @@
 /**
- * Configuration for Redis connection setup
+ * Redis configuration for book recommendation engine using Jedis directly
  *
  * @author William Callahan
  *
  * Features:
- * - Configures Redis connection using Jedis client library via JedisConnectionFactory
- * - Supports connection via a Redis URL string or separate host/port properties
- * - Handles authentication with a password if provided either in the URL or as a separate property
- * - Provides secure URL logging by masking credentials in case of URI syntax errors
- * - Connection timeout is configurable
- * - SSL usage is configurable
- * - Excludes itself from 'test' profiles to prevent unwanted connections during testing by default
+ * - Configures Redis connection using Jedis directly
+ * - Supports both local and cloud Redis instances
+ * - Handles SSL connections for production environments
+ * - Optimized connection pooling for async/reactive workloads
+ * - Provides JedisPooled instance for all Redis operations
  */
+
 package com.williamcallahan.book_recommendation_engine.config;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
-import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.jedis.JedisClientConfiguration;
-import org.springframework.data.redis.connection.jedis.JedisConnectionFactory;
-import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
-import org.springframework.data.redis.serializer.StringRedisSerializer;
+import redis.clients.jedis.HostAndPort;
+import redis.clients.jedis.JedisPooled;
+import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
+import redis.clients.jedis.Connection;
+import redis.clients.jedis.DefaultJedisClientConfig;
 
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
 
 @Configuration
-@Profile("!test") // Exclude from tests unless specifically needed
+@Profile("!test")
+@Conditional(RedisEnvironmentCondition.class)
 public class RedisConfig {
+
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(RedisConfig.class);
 
     @Value("${spring.redis.host:localhost}")
     private String redisHost;
@@ -53,80 +51,111 @@ public class RedisConfig {
     @Value("${spring.redis.ssl:false}")
     private boolean useSsl;
 
-    @Value("${spring.redis.timeout:2000}")
+    @Value("${spring.redis.timeout:10000}")
     private int timeout;
 
+    @Value("${spring.redis.jedis.pool.max-active:16}")
+    private int maxActive;
+
+    @Value("${spring.redis.jedis.pool.max-idle:8}")
+    private int maxIdle;
+
+    @Value("${spring.redis.jedis.pool.min-idle:2}")
+    private int minIdle;
+
+    @Value("${spring.redis.jedis.pool.max-wait:5000}")
+    private int maxWait;
+
+    /**
+     * Creates JedisPooled instance for all Redis operations
+     *
+     * @return Configured JedisPooled instance
+     */
     @Bean
     @Primary
-    public JedisConnectionFactory jedisConnectionFactory() {
-        // Use the helper method to create Redis configuration
-        RedisStandaloneConfiguration redisConfig = createRedisStandaloneConfiguration();
+    public JedisPooled jedisPooled() {
+        HostAndPort hostAndPort = createHostAndPort();
+        DefaultJedisClientConfig clientConfig = createClientConfig();
+        GenericObjectPoolConfig<Connection> poolConfig = jedisPoolConfig();
         
-        JedisClientConfiguration.JedisClientConfigurationBuilder builder = JedisClientConfiguration.builder();
-        builder.connectTimeout(Duration.ofMillis(timeout));
+        logger.info("Creating JedisPooled bean: host={}, port={}, pool(maxTotal={}, maxIdle={}, minIdle={}), ssl={}, passwordProvided={}",
+            hostAndPort.getHost(), hostAndPort.getPort(),
+            poolConfig.getMaxTotal(), poolConfig.getMaxIdle(), poolConfig.getMinIdle(),
+            clientConfig.isSsl(), clientConfig.getPassword() != null);
         
-        // Enable SSL if either property flag OR scheme dictates
-        boolean effectiveSsl = useSsl || "rediss".equalsIgnoreCase(redisUrl != null ? URI.create(redisUrl).getScheme() : null);
-        if (effectiveSsl) {
-            builder.useSsl();
-        }
-        
-        return new JedisConnectionFactory(redisConfig, builder.build());
+        return new JedisPooled(hostAndPort, clientConfig, poolConfig);
     }
 
-    @Bean
-    public ReactiveRedisConnectionFactory reactiveRedisConnectionFactory() {
-        // Create the same Redis configuration as used for Jedis
-        RedisStandaloneConfiguration redisConfig = createRedisStandaloneConfiguration();
-        
-        LettuceClientConfiguration.LettuceClientConfigurationBuilder builder = LettuceClientConfiguration.builder();
-        builder.commandTimeout(Duration.ofMillis(timeout));
-        
-        // Enable SSL if either property flag OR scheme dictates
-        boolean effectiveSsl = useSsl || "rediss".equalsIgnoreCase(redisUrl != null ? URI.create(redisUrl).getScheme() : null);
-        if (effectiveSsl) {
-            builder.useSsl();
-        }
-        
-        return new LettuceConnectionFactory(redisConfig, builder.build());
-    }
-
-    // Helper method to create Redis configuration (DRY principle)
-    private RedisStandaloneConfiguration createRedisStandaloneConfiguration() {
-        RedisStandaloneConfiguration redisConfig = new RedisStandaloneConfiguration();
-        
+    private HostAndPort createHostAndPort() {
         if (redisUrl != null && !redisUrl.isEmpty()) {
             try {
-                // Parse URL configuration
                 URI uri = new URI(redisUrl);
-                redisConfig.setHostName(uri.getHost());
-                redisConfig.setPort(uri.getPort() != -1 ? uri.getPort() : 6379);
-                
-                if (uri.getUserInfo() != null) {
-                    String[] userInfo = uri.getUserInfo().split(":", 2);
-                    if (userInfo.length > 1) {
-                        redisConfig.setPassword(userInfo[1]);
-                    }
-                } else if (redisPassword != null && !redisPassword.isEmpty()) {
-                    redisConfig.setPassword(redisPassword);
-                }
+                return new HostAndPort(uri.getHost(), uri.getPort() != -1 ? uri.getPort() : 6379);
             } catch (URISyntaxException e) {
                 throw new IllegalStateException("Invalid Redis URL: " + maskCredentials(redisUrl), e);
             }
         } else {
-            // Use host/port configuration
-            redisConfig.setHostName(redisHost);
-            redisConfig.setPort(redisPort);
-            
-            if (redisPassword != null && !redisPassword.isEmpty()) {
-                redisConfig.setPassword(redisPassword);
+            return new HostAndPort(redisHost, redisPort);
+        }
+    }
+
+    private DefaultJedisClientConfig createClientConfig() {
+        DefaultJedisClientConfig.Builder builder = DefaultJedisClientConfig.builder()
+            .connectionTimeoutMillis(timeout)
+            .socketTimeoutMillis(timeout);
+
+        // Handle password from URL or configuration
+        String password = extractPassword();
+        if (password != null && !password.isEmpty()) {
+            builder.password(password);
+        }
+
+        // Handle SSL
+        boolean effectiveSsl = useSsl || (redisUrl != null && redisUrl.startsWith("rediss://"));
+        if (effectiveSsl) {
+            builder.ssl(true);
+        }
+
+        return builder.build();
+    }
+
+    private String extractPassword() {
+        if (redisUrl != null && !redisUrl.isEmpty()) {
+            try {
+                URI uri = new URI(redisUrl);
+                if (uri.getUserInfo() != null) {
+                    String[] userInfo = uri.getUserInfo().split(":", 2);
+                    if (userInfo.length > 1) {
+                        return userInfo[1];
+                    }
+                }
+            } catch (URISyntaxException e) {
+                // Fall through to configuration password
             }
         }
-        
-        return redisConfig;
+        return redisPassword;
+    }
+
+    private GenericObjectPoolConfig<Connection> jedisPoolConfig() {
+        GenericObjectPoolConfig<Connection> poolConfig = new GenericObjectPoolConfig<>();
+        // Pool sizing from application.yml configuration
+        poolConfig.setMaxTotal(maxActive);
+        poolConfig.setMaxIdle(maxIdle);
+        poolConfig.setMinIdle(minIdle);
+        // Connection validation for reliability
+        poolConfig.setTestOnBorrow(true);
+        poolConfig.setTestOnReturn(true);
+        poolConfig.setTestWhileIdle(true);
+        // Async-friendly blocking behavior
+        poolConfig.setBlockWhenExhausted(true);
+        poolConfig.setMaxWait(Duration.ofMillis(maxWait)); // Timeout from application.yml
+        // Optimized eviction for connection stability with async workloads
+        poolConfig.setTimeBetweenEvictionRuns(Duration.ofMillis(60000)); // Reduced frequency from 30s to 60s
+        poolConfig.setMinEvictableIdleDuration(Duration.ofMillis(120000)); // Increased from 60s to 120s
+        poolConfig.setNumTestsPerEvictionRun(3); // Limit tests per eviction run for performance
+        return poolConfig;
     }
     
-    // Utility method to mask credentials in logs
     private String maskCredentials(String url) {
         try {
             URI uri = new URI(url);
@@ -134,28 +163,8 @@ public class RedisConfig {
                 return url.replace(uri.getUserInfo(), "******");
             }
         } catch (URISyntaxException e) {
-            // Ignore, return original URL if it's malformed for URI parsing
+            // Ignore
         }
         return url;
-    }
-
-    @Bean
-    public RedisTemplate<String, Object> redisTemplate(JedisConnectionFactory jedisConnectionFactory) {
-        RedisTemplate<String, Object> template = new RedisTemplate<>();
-        template.setConnectionFactory(jedisConnectionFactory);
-        template.setKeySerializer(new StringRedisSerializer());
-        template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
-        template.setHashKeySerializer(new StringRedisSerializer());
-        template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
-        template.afterPropertiesSet();
-        return template;
-    }
-
-    @Bean
-    public StringRedisTemplate stringRedisTemplate(JedisConnectionFactory jedisConnectionFactory) {
-        StringRedisTemplate template = new StringRedisTemplate();
-        template.setConnectionFactory(jedisConnectionFactory);
-        template.afterPropertiesSet();
-        return template;
     }
 }

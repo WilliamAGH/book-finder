@@ -1,13 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.config;
-
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.core.task.AsyncTaskExecutor;
-import org.springframework.lang.NonNull;
-
 /**
  * Configuration for asynchronous request handling in the Spring MVC framework
  *
@@ -19,6 +9,17 @@ import org.springframework.lang.NonNull;
  * - Optimizes thread usage with bounded queue capacity
  * - Implements custom thread naming for easier debugging
  */
+
+package com.williamcallahan.book_recommendation_engine.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.lang.NonNull;
+
 @Configuration
 public class AsyncConfig implements WebMvcConfigurer {
 
@@ -55,6 +56,8 @@ public class AsyncConfig implements WebMvcConfigurer {
         executor.setMaxPoolSize(100);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("mvc-async-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60); // Wait up to 60 seconds for tasks to complete
         executor.initialize();
         return executor;
     }
@@ -78,6 +81,8 @@ public class AsyncConfig implements WebMvcConfigurer {
         executor.setMaxPoolSize(processors > 1 ? processors * 2 : 4); // Allow some burst
         executor.setQueueCapacity(100); // Smaller queue for CPU-bound tasks
         executor.setThreadNamePrefix("image-proc-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60); // Wait up to 60 seconds for tasks to complete
         executor.initialize();
         return executor;
     }

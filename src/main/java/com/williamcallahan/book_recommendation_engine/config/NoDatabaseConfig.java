@@ -43,7 +43,7 @@ import com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookR
  * Multiple auto-configuration classes are excluded to prevent database startup
  */
 @Configuration
-@ConditionalOnExpression("'${spring.datasource.url:}'.length() == 0")
+@ConditionalOnExpression("'${spring.datasource.url:}'.length() == 0 and '${REDIS_SERVER:}' == '' and '${spring.redis.host:}' == ''")
 @EnableAutoConfiguration(exclude = {
         DataSourceAutoConfiguration.class,
         DataSourceTransactionManagerAutoConfiguration.class,
