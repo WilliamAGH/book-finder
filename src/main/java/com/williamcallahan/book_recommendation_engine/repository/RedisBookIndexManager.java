@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.Pipeline;
 
 import java.util.Optional;
 @Service
@@ -63,30 +64,41 @@ public class RedisBookIndexManager {
         }
         String bookId = newBook.getId();
 
-        // Clean up old indexes if an old version of the book is provided and identifiers differ
-        oldBook.ifPresent(previous -> {
-            if (previous.getGoogleBooksId() != null && !previous.getGoogleBooksId().equals(newBook.getGoogleBooksId())) {
-                deleteIndexEntry(getGoogleBooksIdIndexKey(previous.getGoogleBooksId()));
+        try {
+            // Use pipeline for atomic operations
+            Pipeline pipeline = jedisPooled.pipelined();
+            
+            // Add cleanup operations to pipeline
+            oldBook.ifPresent(previous -> {
+                if (previous.getGoogleBooksId() != null && !previous.getGoogleBooksId().equals(newBook.getGoogleBooksId())) {
+                    pipeline.del(getGoogleBooksIdIndexKey(previous.getGoogleBooksId()));
+                }
+                if (previous.getIsbn10() != null && !previous.getIsbn10().equals(newBook.getIsbn10())) {
+                    pipeline.del(getIsbn10IndexKey(previous.getIsbn10()));
+                }
+                if (previous.getIsbn13() != null && !previous.getIsbn13().equals(newBook.getIsbn13())) {
+                    pipeline.del(getIsbn13IndexKey(previous.getIsbn13()));
+                }
+            });
+            
+            // Add creation operations to pipeline
+            if (newBook.getGoogleBooksId() != null && !newBook.getGoogleBooksId().isEmpty()) {
+                pipeline.setex(getGoogleBooksIdIndexKey(newBook.getGoogleBooksId()), INDEX_TTL_SECONDS, bookId);
             }
-            if (previous.getIsbn10() != null && !previous.getIsbn10().equals(newBook.getIsbn10())) {
-                deleteIndexEntry(getIsbn10IndexKey(previous.getIsbn10()));
+            if (newBook.getIsbn10() != null && !newBook.getIsbn10().isEmpty()) {
+                pipeline.setex(getIsbn10IndexKey(newBook.getIsbn10()), INDEX_TTL_SECONDS, bookId);
             }
-            if (previous.getIsbn13() != null && !previous.getIsbn13().equals(newBook.getIsbn13())) {
-                deleteIndexEntry(getIsbn13IndexKey(previous.getIsbn13()));
+            if (newBook.getIsbn13() != null && !newBook.getIsbn13().isEmpty()) {
+                pipeline.setex(getIsbn13IndexKey(newBook.getIsbn13()), INDEX_TTL_SECONDS, bookId);
             }
-        });
-
-        // Create/update new indexes
-        if (newBook.getGoogleBooksId() != null && !newBook.getGoogleBooksId().isEmpty()) {
-            createIndexEntry(getGoogleBooksIdIndexKey(newBook.getGoogleBooksId()), bookId);
+            
+            // Execute all operations atomically
+            pipeline.sync();
+            logger.debug("Updated indexes for book ID: {} (atomic pipeline)", bookId);
+            
+        } catch (Exception e) {
+            logger.error("Error updating indexes for book ID {}: {}", bookId, e.getMessage(), e);
         }
-        if (newBook.getIsbn10() != null && !newBook.getIsbn10().isEmpty()) {
-            createIndexEntry(getIsbn10IndexKey(newBook.getIsbn10()), bookId);
-        }
-        if (newBook.getIsbn13() != null && !newBook.getIsbn13().isEmpty()) {
-            createIndexEntry(getIsbn13IndexKey(newBook.getIsbn13()), bookId);
-        }
-        logger.debug("Updated indexes for book ID: {}", bookId);
     }
 
     /**
@@ -144,14 +156,6 @@ public class RedisBookIndexManager {
         return getIndexEntry(getIsbn13IndexKey(isbn13));
     }
 
-    private void createIndexEntry(String indexKey, String bookId) {
-        try {
-            jedisPooled.setex(indexKey, INDEX_TTL_SECONDS, bookId);
-            logger.debug("Created/Updated index: {} -> {}", indexKey, bookId);
-        } catch (Exception e) {
-            logger.error("Error creating index entry {} for book ID {}: {}", indexKey, bookId, e.getMessage(), e);
-        }
-    }
 
     private void deleteIndexEntry(String indexKey) {
         try {

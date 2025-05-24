@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 @Repository
 @ConditionalOnExpression("'${spring.datasource.url:}'.length() == 0")
 public class NoOpCachedBookRepository implements CachedBookRepository {
@@ -59,6 +60,11 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
         return Collections.emptyList();
     }
 
+    @Override
+    public <S extends CachedBook> CompletableFuture<S> saveAsync(S entity) {
+        return CompletableFuture.completedFuture(entity);
+    }
+
     /**
      * Returns entity unchanged
      * 
@@ -83,6 +89,11 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
         return entities;
     }
 
+    @Override
+    public CompletableFuture<Optional<CachedBook>> findByIdAsync(String id) {
+        return CompletableFuture.completedFuture(Optional.empty());
+    }
+
     /**
      * @param s Entity ID to find
      * @return Empty Optional
@@ -92,6 +103,11 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
         return Optional.empty();
     }
 
+    @Override
+    public CompletableFuture<Boolean> existsByIdAsync(String id) {
+        return CompletableFuture.completedFuture(false);
+    }
+
     /**
      * @param s Entity ID to check
      * @return Always false
@@ -99,6 +115,11 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
     @Override
     public boolean existsById(String s) {
         return false;
+    }
+
+    @Override
+    public CompletableFuture<Iterable<CachedBook>> findAllAsync() {
+        return CompletableFuture.completedFuture(Collections.emptyList());
     }
 
     /**
@@ -118,12 +139,22 @@ public class NoOpCachedBookRepository implements CachedBookRepository {
         return Collections.emptyList();
     }
 
+    @Override
+    public CompletableFuture<Long> countAsync() {
+        return CompletableFuture.completedFuture(0L);
+    }
+
     /**
      * @return Always zero
      */
     @Override
     public long count() {
         return 0;
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteByIdAsync(String id) {
+        return CompletableFuture.completedFuture(null);
     }
 
     /**

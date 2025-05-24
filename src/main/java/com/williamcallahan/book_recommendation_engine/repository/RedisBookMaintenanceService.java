@@ -343,11 +343,12 @@ public class RedisBookMaintenanceService {
 
     /**
      * Validates JSON string structure for basic syntax correctness
+     * Uses Jackson ObjectMapper to parse and verify valid JSON syntax
      *
      * @param jsonString string content to validate
      * @return true if valid JSON syntax, false otherwise
      */
-    private boolean isValidJson(String jsonString) {
+    public boolean isValidJson(String jsonString) {
         if (jsonString == null || jsonString.trim().isEmpty()) {
             return false;
         }

@@ -23,8 +23,9 @@ import com.williamcallahan.book_recommendation_engine.util.UuidUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.LocalDate;
 import java.util.*;
-import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 // RediSearch client imports
@@ -51,6 +52,7 @@ public class RedisCachedBookRepository implements CachedBookRepository {
     private static final String ISBN10_INDEX_PREFIX = "isbn10_idx:";
     private static final String ISBN13_INDEX_PREFIX = "isbn13_idx:";
     private static final String GOOGLE_BOOKS_ID_INDEX_PREFIX = "gbid_idx:";
+    private final int cacheExpirationSeconds;
 
     private final RedisCacheService redisCacheService;
     private final ObjectMapper objectMapper;
@@ -59,10 +61,18 @@ public class RedisCachedBookRepository implements CachedBookRepository {
     public RedisCachedBookRepository(RedisCacheService redisCacheService,
                                    ObjectMapper objectMapper,
                                    JedisPooled jedisPooled) {
+        this(redisCacheService, objectMapper, jedisPooled, 86400); // Default to 1 day
+    }
+    
+    public RedisCachedBookRepository(RedisCacheService redisCacheService,
+                                   ObjectMapper objectMapper,
+                                   JedisPooled jedisPooled,
+                                   int cacheExpirationSeconds) {
         this.redisCacheService = redisCacheService;
         this.objectMapper = objectMapper;
         this.jedisPooled = jedisPooled;
-        logger.info("Redis CachedBookRepository initialized - using Redis for book storage and RediSearch.");
+        this.cacheExpirationSeconds = cacheExpirationSeconds;
+        logger.info("Redis CachedBookRepository initialized - using Redis for book storage and RediSearch. Cache TTL: {} seconds", cacheExpirationSeconds);
     }
 
     private String getCachedBookKey(String bookId) {
@@ -271,6 +281,11 @@ public class RedisCachedBookRepository implements CachedBookRepository {
     }
 
     @Override
+    public <S extends CachedBook> CompletableFuture<S> saveAsync(S entity) {
+        return CompletableFuture.supplyAsync(() -> save(entity));
+    }
+
+    @Override
     public <S extends CachedBook> S save(S entity) {
         if (!redisCacheService.isRedisAvailableAsync().join() || entity == null) { // Allow entity.getId() to be null initially
             return entity;
@@ -289,12 +304,15 @@ public class RedisCachedBookRepository implements CachedBookRepository {
         // Acquire distributed lock to prevent race conditions
         boolean acquired = false;
         try {
-            // Try to acquire lock with 5 second timeout
-            for (int i = 0; i < 50; i++) {
+            // Try to acquire lock with exponential backoff
+            int maxRetries = 10;
+            long baseDelay = 50; // Start with 50ms
+            for (int i = 0; i < maxRetries; i++) {
                 String result = jedisPooled.set(lockKey, "locked", SetParams.setParams().nx().ex(10));
                 acquired = "OK".equals(result);
                 if (acquired) break;
-                Thread.sleep(100); // Wait 100ms before retry
+                long delay = Math.min(baseDelay * (1L << i), 1000); // Cap at 1 second
+                Thread.sleep(delay);
             }
             
             if (!acquired) {
@@ -322,7 +340,7 @@ public class RedisCachedBookRepository implements CachedBookRepository {
             String bookJson = objectMapper.writeValueAsString(entity);
             
             // Use standard Redis string storage instead of RedisJSON to avoid format conflicts
-            jedisPooled.setex(bookKey, 86400, bookJson); // 86400 seconds = 1 day
+            jedisPooled.setex(bookKey, cacheExpirationSeconds, bookJson);
 
             // Clean up stale indexes when updating a book
             try {
@@ -372,6 +390,11 @@ public class RedisCachedBookRepository implements CachedBookRepository {
             result.add(save(entity));
         }
         return result;
+    }
+
+    @Override
+    public CompletableFuture<Optional<CachedBook>> findByIdAsync(String id) {
+        return CompletableFuture.supplyAsync(() -> findById(id));
     }
 
     @Override
@@ -494,8 +517,18 @@ public class RedisCachedBookRepository implements CachedBookRepository {
     
 
     @Override
+    public CompletableFuture<Boolean> existsByIdAsync(String id) {
+        return CompletableFuture.supplyAsync(() -> existsById(id));
+    }
+
+    @Override
     public boolean existsById(String id) {
         return findById(id).isPresent();
+    }
+
+    @Override
+    public CompletableFuture<Iterable<CachedBook>> findAllAsync() {
+        return CompletableFuture.supplyAsync(() -> findAll());
     }
 
     @Override
@@ -513,8 +546,18 @@ public class RedisCachedBookRepository implements CachedBookRepository {
     }
 
     @Override
+    public CompletableFuture<Long> countAsync() {
+        return CompletableFuture.supplyAsync(() -> count());
+    }
+
+    @Override
     public long count() {
         return scanAllCachedBooks().size();
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteByIdAsync(String id) {
+        return CompletableFuture.runAsync(() -> deleteById(id));
     }
 
     @Override
@@ -1048,8 +1091,11 @@ public class RedisCachedBookRepository implements CachedBookRepository {
             // Note: Our cached books use "book:" prefix to match schema
             // Try both idx:books and idx:cached_books_vector indexes
             
-            // Query for books from 2024 OR 2025 with good quality covers
-            String query = "(@publishedDate:{2024} | @publishedDate:{2025}) @coverImageUrl:(*google*zoom\\=2* | *s3* | *digitalocean* | *cloudfront* | *openlibrary*-L.jpg*)";
+            // Get current and next year dynamically
+            int currentYear = LocalDate.now().getYear();
+            int nextYear = currentYear + 1;
+            String query = String.format("(@publishedDate:{%d} | @publishedDate:{%d}) @coverImageUrl:(*google*zoom\\=2* | *s3* | *digitalocean* | *cloudfront* | *openlibrary*-L.jpg*)", 
+                                        currentYear, nextYear);
             
             // Exclude placeholder covers
             query += " -@coverImageUrl:(*placeholder* | *image-not-available*)";
@@ -1227,7 +1273,9 @@ public class RedisCachedBookRepository implements CachedBookRepository {
         
         try {
             int year = book.getPublishedDate().getYear();
-            return year == 2024 || year == 2025;
+            int currentYear = LocalDate.now().getYear();
+            // Consider books from current year and next year as recent
+            return year == currentYear || year == currentYear + 1;
         } catch (Exception e) {
             logger.debug("Error parsing publication date for book {}: {}", book.getId(), e.getMessage());
             return false;

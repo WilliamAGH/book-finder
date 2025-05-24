@@ -123,10 +123,19 @@ public interface CachedBookRepository {
     boolean existsById(String id);
     
     /**
-     * Retrieves all books stored in the cache
+     * Retrieves all books stored in the cache asynchronously
+     * 
+     * @return CompletableFuture of Iterable collection of all cached books
+     */
+    CompletableFuture<Iterable<CachedBook>> findAllAsync();
+    
+    /**
+     * Retrieves all books stored in the cache (synchronous - deprecated)
      * 
      * @return Iterable collection of all cached books
+     * @deprecated Use findAllAsync() instead for non-blocking operation
      */
+    @Deprecated
     Iterable<CachedBook> findAll();
     
     /**
@@ -138,17 +147,36 @@ public interface CachedBookRepository {
     Iterable<CachedBook> findAllById(Iterable<String> ids);
     
     /**
-     * Counts the total number of books in the cache
+     * Counts the total number of books in the cache asynchronously
+     * 
+     * @return CompletableFuture of total count of cached books
+     */
+    CompletableFuture<Long> countAsync();
+    
+    /**
+     * Counts the total number of books in the cache (synchronous - deprecated)
      * 
      * @return Total count of cached books
+     * @deprecated Use countAsync() instead for non-blocking operation
      */
+    @Deprecated
     long count();
     
     /**
-     * Removes a book from the cache by its identifier
+     * Removes a book from the cache by its identifier asynchronously
      * 
      * @param id The unique identifier of the book to delete
+     * @return CompletableFuture that completes when deletion is finished
      */
+    CompletableFuture<Void> deleteByIdAsync(String id);
+    
+    /**
+     * Removes a book from the cache by its identifier (synchronous - deprecated)
+     * 
+     * @param id The unique identifier of the book to delete
+     * @deprecated Use deleteByIdAsync(String id) instead for non-blocking operation
+     */
+    @Deprecated
     void deleteById(String id);
     
     /**

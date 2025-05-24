@@ -14,7 +14,6 @@
 
 package com.williamcallahan.book_recommendation_engine.repository;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.config.RedisEnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.service.RedisCacheService;
@@ -46,6 +45,9 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisCachedBookRepositoryImpl.class);
     private static final long DEFAULT_BOOK_TTL_SECONDS = 24 * 60 * 60;
+    private static final int LOCK_RETRY_COUNT = 50;
+    private static final long LOCK_RETRY_DELAY_MS = 100;
+    private static final int LOCK_TIMEOUT_SECONDS = 10;
 
     private final RedisBookAccessor bookAccessor;
     private final RedisBookIndexManager indexManager;
@@ -59,8 +61,7 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
                                          RedisBookSearchService searchService,
                                          RedisBookMaintenanceService maintenanceService,
                                          RedisCacheService redisCacheService,
-                                         JedisPooled jedisPooled,
-                                         ObjectMapper objectMapper) {
+                                         JedisPooled jedisPooled) {
         this.bookAccessor = bookAccessor;
         this.indexManager = indexManager;
         this.searchService = searchService;
@@ -142,13 +143,13 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
 
     private CompletableFuture<Boolean> acquireLockAsync(String lockKey) {
         return CompletableFuture.supplyAsync(() -> {
-            for (int i = 0; i < 50; i++) {
+            for (int i = 0; i < LOCK_RETRY_COUNT; i++) {
                 try {
-                    String result = jedisPooled.set(lockKey, "locked", SetParams.setParams().nx().ex(10));
+                    String result = jedisPooled.set(lockKey, "locked", SetParams.setParams().nx().ex(LOCK_TIMEOUT_SECONDS));
                     if ("OK".equals(result)) {
                         return true;
                     }
-                    Thread.sleep(100);
+                    Thread.sleep(LOCK_RETRY_DELAY_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     logger.error("Interrupted while acquiring lock for key: {}", lockKey);
@@ -158,8 +159,8 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
                     return false;
                 }
             }
-            logger.warn("Could not acquire lock for key: {}, proceeding without lock (risk of race condition)", lockKey);
-            return false;
+            logger.error("Could not acquire lock for key: {}", lockKey);
+            throw new RuntimeException("Failed to acquire lock for key: " + lockKey);
         });
     }
 
@@ -231,11 +232,21 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
     }
 
     @Override
+    public CompletableFuture<Iterable<CachedBook>> findAllAsync() {
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable) {
+                    return CompletableFuture.completedFuture(Collections.emptyList());
+                }
+                return CompletableFuture.supplyAsync(() -> bookAccessor.streamAllBooks().collect(java.util.stream.Collectors.toList()));
+            });
+    }
+
+    @Override
+    @Deprecated
     public Iterable<CachedBook> findAll() {
-        if (!redisCacheService.isRedisAvailableAsync().join()) {
-            return Collections.emptyList();
-        }
-        return bookAccessor.scanAndDeserializeAllBooks();
+        logger.warn("Using deprecated synchronous findAll() method. Consider migrating to findAllAsync() for better performance.");
+        return findAllAsync().join();
     }
 
     @Override
@@ -253,26 +264,57 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
     }
 
     @Override
-    public long count() {
-        if (!redisCacheService.isRedisAvailableAsync().join()) {
-            return 0L;
-        }
-        return bookAccessor.countAllBooks();
+    public CompletableFuture<Long> countAsync() {
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable) {
+                    return CompletableFuture.completedFuture(0L);
+                }
+                return CompletableFuture.supplyAsync(() -> bookAccessor.countAllBooks());
+            });
     }
 
     @Override
+    @Deprecated
+    public long count() {
+        logger.warn("Using deprecated synchronous count() method. Consider migrating to countAsync() for better performance.");
+        return countAsync().join();
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteByIdAsync(String id) {
+        return redisCacheService.isRedisAvailableAsync()
+            .thenCompose(isAvailable -> {
+                if (!isAvailable || id == null) {
+                    return CompletableFuture.completedFuture(null);
+                }
+                
+                return findByIdAsync(id)
+                    .thenCompose(bookOpt -> {
+                        if (bookOpt.isPresent()) {
+                            return CompletableFuture.runAsync(() -> {
+                                try {
+                                    bookAccessor.deleteJsonById(id);
+                                    indexManager.deleteAllIndexes(bookOpt.get());
+                                    logger.debug("Deleted CachedBook and its indexes for ID: {}", id);
+                                } catch (Exception e) {
+                                    logger.error("Error deleting CachedBook {}: {}", id, e.getMessage(), e);
+                                    throw new RuntimeException("Failed to delete book with ID: " + id, e);
+                                }
+                            });
+                        } else {
+                            logger.debug("Book with ID {} not found for deletion.", id);
+                            return CompletableFuture.completedFuture(null);
+                        }
+                    });
+            });
+    }
+
+    @Override
+    @Deprecated
     public void deleteById(String id) {
-        if (!redisCacheService.isRedisAvailableAsync().join() || id == null) {
-            return;
-        }
-        Optional<CachedBook> bookOpt = findById(id);
-        if (bookOpt.isPresent()) {
-            bookAccessor.deleteJsonById(id);
-            indexManager.deleteAllIndexes(bookOpt.get());
-            logger.debug("Deleted CachedBook and its indexes for ID: {}", id);
-        } else {
-            logger.debug("Book with ID {} not found for deletion.", id);
-        }
+        logger.warn("Using deprecated synchronous deleteById() method. Consider migrating to deleteByIdAsync() for better performance.");
+        deleteByIdAsync(id).join();
     }
 
     @Override
@@ -306,7 +348,7 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
             return;
         }
         logger.warn("deleteAll() invoked: This will delete ALL cached books and their indexes from Redis");
-        List<CachedBook> allBooks = bookAccessor.scanAndDeserializeAllBooks();
+        List<CachedBook> allBooks = bookAccessor.streamAllBooks().collect(java.util.stream.Collectors.toList());
         for (CachedBook book : allBooks) {
             bookAccessor.deleteJsonById(book.getId());
             indexManager.deleteAllIndexes(book);
@@ -378,7 +420,7 @@ public class RedisCachedBookRepositoryImpl implements CachedBookRepository {
         if (!redisCacheService.isRedisAvailableAsync().join()) {
             return Collections.emptySet();
         }
-        return bookAccessor.scanAndDeserializeAllBooks().stream()
+        return bookAccessor.streamAllBooks()
                 .map(CachedBook::getGoogleBooksId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());

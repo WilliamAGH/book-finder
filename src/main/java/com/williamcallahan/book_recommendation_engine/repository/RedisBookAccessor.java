@@ -26,8 +26,10 @@ import redis.clients.jedis.JedisPooled;
 import java.util.Optional;
 import java.util.List;
 import java.util.Set;
-import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.stream.Stream;
+import java.util.concurrent.CompletableFuture;
+import org.springframework.scheduling.annotation.Async;
 @Service
 public class RedisBookAccessor {
 
@@ -241,29 +243,32 @@ public class RedisBookAccessor {
 
 
     /**
+     * Streams cached books from Redis without loading all into memory
+     * @return Stream of CachedBook objects
+     */
+    public Stream<CachedBook> streamAllBooks() {
+        return scanAllBookKeys().stream()
+            .filter(key -> !key.endsWith(":lock"))
+            .map(key -> key.substring(CACHED_BOOK_PREFIX.length()))
+            .map(this::findJsonByIdWithRedisJsonFallback)
+            .filter(Optional::isPresent)
+            .map(Optional::get)
+            .map(this::deserializeBook)
+            .filter(Optional::isPresent)
+            .map(Optional::get);
+    }
+
+    /**
      * Retrieves all cached books from Redis with deserialization
      * Scans for book keys and converts valid JSON entries to CachedBook objects
      *
+     * @deprecated Use streamAllBooks() for better memory efficiency with large datasets
      * @return list of successfully deserialized CachedBook objects
      */
+    @Deprecated
     public List<CachedBook> scanAndDeserializeAllBooks() {
-        List<CachedBook> books = new ArrayList<>();
-        Set<String> keys = scanAllBookKeys();
-
-        if (!keys.isEmpty()) {
-            logger.debug("Processing {} book keys found by SCAN.", keys.size());
-            for (String key : keys) {
-                String bookId = key.substring(CACHED_BOOK_PREFIX.length());
-                if (bookId.isEmpty() || key.endsWith(":lock")) {
-                    logger.trace("Skipping potentially invalid key from scan: {}", key);
-                    continue;
-                }
-                
-                findJsonByIdWithRedisJsonFallback(bookId).flatMap(this::deserializeBook).ifPresent(books::add);
-            }
-        }
-        logger.debug("Finished processing keys from SCAN. Found {} CachedBook objects.", books.size());
-        return books;
+        logger.warn("Using deprecated scanAndDeserializeAllBooks(). Consider using streamAllBooks() for better memory efficiency.");
+        return streamAllBooks().collect(java.util.stream.Collectors.toList());
     }
 
     /**
@@ -306,5 +311,84 @@ public class RedisBookAccessor {
      */
     public long countAllBooks() {
         return scanAllBookKeys().size();
+    }
+    
+    // ===== Async wrapper methods for non-blocking operations =====
+    
+    /**
+     * Asynchronously saves book JSON data to Redis with expiration time
+     *
+     * @param bookId     book identifier for Redis key generation
+     * @param bookJson   serialized JSON representation of the book data
+     * @param ttlSeconds expiration time in seconds for the Redis key
+     * @return CompletableFuture that completes when save operation finishes
+     */
+    @Async
+    public CompletableFuture<Void> saveJsonAsync(String bookId, String bookJson, long ttlSeconds) {
+        return CompletableFuture.runAsync(() -> saveJson(bookId, bookJson, ttlSeconds));
+    }
+    
+    /**
+     * Asynchronously retrieves book JSON data from Redis by book identifier
+     *
+     * @param bookId unique book identifier
+     * @return CompletableFuture containing Optional with JSON string if found
+     */
+    @Async
+    public CompletableFuture<Optional<String>> findJsonByIdAsync(String bookId) {
+        return CompletableFuture.supplyAsync(() -> findJsonById(bookId));
+    }
+    
+    /**
+     * Asynchronously retrieves book JSON with RedisJSON fallback
+     *
+     * @param bookId unique book identifier
+     * @return CompletableFuture containing Optional with JSON string if found
+     */
+    @Async
+    public CompletableFuture<Optional<String>> findJsonByIdWithRedisJsonFallbackAsync(String bookId) {
+        return CompletableFuture.supplyAsync(() -> findJsonByIdWithRedisJsonFallback(bookId));
+    }
+    
+    /**
+     * Asynchronously removes book data from Redis cache
+     *
+     * @param bookId identifier of book to delete from cache
+     * @return CompletableFuture that completes when delete operation finishes
+     */
+    @Async
+    public CompletableFuture<Void> deleteJsonByIdAsync(String bookId) {
+        return CompletableFuture.runAsync(() -> deleteJsonById(bookId));
+    }
+    
+    /**
+     * Asynchronously verifies existence of book data in Redis cache
+     *
+     * @param bookId book identifier to check
+     * @return CompletableFuture containing true if book data exists in cache
+     */
+    @Async
+    public CompletableFuture<Boolean> existsAsync(String bookId) {
+        return CompletableFuture.supplyAsync(() -> exists(bookId));
+    }
+    
+    /**
+     * Asynchronously counts total number of book entries in Redis cache
+     *
+     * @return CompletableFuture containing total count of cached book keys
+     */
+    @Async
+    public CompletableFuture<Long> countAllBooksAsync() {
+        return CompletableFuture.supplyAsync(this::countAllBooks);
+    }
+    
+    /**
+     * Asynchronously scans Redis for all book-related keys
+     *
+     * @return CompletableFuture containing set of Redis keys matching book prefix pattern
+     */
+    @Async
+    public CompletableFuture<Set<String>> scanAllBookKeysAsync() {
+        return CompletableFuture.supplyAsync(this::scanAllBookKeys);
     }
 }
