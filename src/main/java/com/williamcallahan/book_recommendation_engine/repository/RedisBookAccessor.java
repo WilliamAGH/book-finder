@@ -18,6 +18,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import redis.clients.jedis.json.Path2;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import com.williamcallahan.book_recommendation_engine.config.GracefulShutdownConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -57,6 +58,11 @@ public class RedisBookAccessor {
      * @param ttlSeconds expiration time in seconds for the Redis key
      */
     public void saveJson(String bookId, String bookJson, long ttlSeconds) {
+        if (GracefulShutdownConfig.isShuttingDown()) {
+            logger.debug("Application is shutting down, skipping save operation for book ID: {}", bookId);
+            return;
+        }
+        
         String key = getCachedBookKey(bookId);
         try {
             jedisPooled.setex(key, ttlSeconds, bookJson);
@@ -73,6 +79,11 @@ public class RedisBookAccessor {
      * @return Optional containing JSON string if found, empty if not found or invalid
      */
     public Optional<String> findJsonById(String bookId) {
+        if (GracefulShutdownConfig.isShuttingDown()) {
+            logger.debug("Application is shutting down, skipping Redis operation for book ID: {}", bookId);
+            return Optional.empty();
+        }
+        
         String key = getCachedBookKey(bookId);
         try {
             if (!jedisPooled.exists(key)) {
@@ -84,27 +95,52 @@ public class RedisBookAccessor {
                 logger.debug("Skipping lock key: {}", key);
                 return Optional.empty();
             }
-            String bookJson = jedisPooled.get(key);
-            if (bookJson != null) {
-                // Validate it's actually JSON and not a lock value or other short, non-JSON string
-                if (bookJson.equals("locked") || bookJson.length() < 10 || !isValidJsonStructure(bookJson)) { // Basic check
-                    logger.warn("Skipping non-book or malformed data for key: {}. Content snippet: {}", key, bookJson.substring(0, Math.min(bookJson.length(), 50)));
-                    return Optional.empty();
+
+            String type = jedisPooled.type(key); // Check type first
+
+            if ("string".equalsIgnoreCase(type)) {
+                String bookJson = jedisPooled.get(key);
+                if (bookJson != null) {
+                    if (bookJson.equals("locked") || bookJson.length() < 10 || !isValidJsonStructure(bookJson)) {
+                        logger.warn("Skipping non-book or malformed data for key: {}. Content snippet: {}", key, bookJson.substring(0, Math.min(bookJson.length(), 50)));
+                        return Optional.empty();
+                    }
+                    return Optional.of(bookJson);
                 }
-                return Optional.of(bookJson);
+                return Optional.empty(); // String type but null value
+            } else if ("ReJSON-RL".equalsIgnoreCase(type) || "json".equalsIgnoreCase(type)) {
+                // It's a JSON type, findJsonById (for strings) should not handle it.
+                // Let findJsonByIdWithRedisJsonFallback attempt to read it as JSON.
+                logger.debug("Key {} is RedisJSON type ({}). findJsonById returning empty to allow fallback.", key, type);
+                return Optional.empty();
+            } else {
+                // Unexpected type. Log it. Consider if deletion is appropriate or should be handled by a maintenance task.
+                logger.warn("Key {} is of unexpected type: {}. Not a string or known JSON type.", key, type);
+                // Optional: Delete if this state is considered unrecoverable and problematic for other operations.
+                // For now, we won't delete, to be conservative and prevent data loss if type() was misleading.
+                // try {
+                //     jedisPooled.del(key);
+                //     logger.info("Deleted key {} with unexpected type: {}", key, type);
+                // } catch (Exception deleteEx) {
+                //     logger.error("Failed to delete key {} with unexpected type {}: {}", key, type, deleteEx.getMessage());
+                // }
+                return Optional.empty();
+            }
+        } catch (redis.clients.jedis.exceptions.JedisDataException jde) {
+            // This catch block handles cases where `jedisPooled.get(key)` might still be called
+            // (e.g., if type check was somehow bypassed or if type() returned "string" for a non-string key - unlikely).
+            if (jde.getMessage() != null && jde.getMessage().startsWith("WRONGTYPE")) {
+                logger.warn("WRONGTYPE JedisDataException for key {} (likely a non-string type). Letting fallback handle. Message: {}", key, jde.getMessage());
+                // DO NOT DELETE. The key might be a valid RedisJSON object.
+            } else {
+                logger.error("Jedis data exception for key {}: {}", key, jde.getMessage(), jde);
             }
             return Optional.empty();
-        } catch (redis.clients.jedis.exceptions.JedisDataException jde) {
-            if (jde.getMessage() != null && jde.getMessage().startsWith("WRONGTYPE")) {
-                logger.warn("WRONGTYPE error for key {}, attempting to clean up.", key);
-                try {
-                    jedisPooled.del(key);
-                    logger.info("Deleted key with wrong type: {}", key);
-                } catch (Exception deleteEx) {
-                    logger.error("Failed to delete wrong type key {}: {}", key, deleteEx.getMessage());
-                }
+        } catch (redis.clients.jedis.exceptions.JedisException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Pool not open")) {
+                logger.debug("Redis pool closed during shutdown for book ID {}", bookId);
             } else {
-                logger.error("Jedis data exception for key {}: {}", key, jde.getMessage());
+                logger.error("Redis error finding JSON for book ID {}: {}", bookId, e.getMessage(), e);
             }
             return Optional.empty();
         } catch (Exception e) {
@@ -184,9 +220,21 @@ public class RedisBookAccessor {
      * @return true if book data exists in cache
      */
     public boolean exists(String bookId) {
+        if (GracefulShutdownConfig.isShuttingDown()) {
+            logger.debug("Application is shutting down, returning false for exists check on book ID: {}", bookId);
+            return false;
+        }
+        
         String key = getCachedBookKey(bookId);
         try {
             return jedisPooled.exists(key);
+        } catch (redis.clients.jedis.exceptions.JedisException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Pool not open")) {
+                logger.debug("Redis pool closed during shutdown for book ID {}", bookId);
+            } else {
+                logger.error("Redis error checking existence for book ID {}: {}", bookId, e.getMessage(), e);
+            }
+            return false;
         } catch (Exception e) {
             logger.error("Error checking existence for book ID {}: {}", bookId, e.getMessage(), e);
             return false;
@@ -194,6 +242,11 @@ public class RedisBookAccessor {
     }
     
     public Optional<String> findJsonByIdWithRedisJsonFallback(String bookId) {
+        if (GracefulShutdownConfig.isShuttingDown()) {
+            logger.debug("Application is shutting down, skipping Redis operation for book ID: {}", bookId);
+            return Optional.empty();
+        }
+        
         Optional<String> stringJsonOpt = findJsonById(bookId);
         if (stringJsonOpt.isPresent()) {
             return stringJsonOpt;
@@ -235,12 +288,17 @@ public class RedisBookAccessor {
             } else {
                 logger.error("JedisDataException reading RedisJSON (fallback) for key {}: {}", bookKey, jde.getMessage());
             }
+        } catch (redis.clients.jedis.exceptions.JedisException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Pool not open")) {
+                logger.debug("Redis pool closed during shutdown for key {}", bookKey);
+            } else {
+                logger.warn("Redis error reading RedisJSON (fallback) for key {}: {}", bookKey, e.getMessage());
+            }
         } catch (Exception e) {
             logger.warn("Unexpected error reading RedisJSON (fallback) for key {}: {}", bookKey, e.getMessage());
         }
         return Optional.empty();
     }
-
 
     /**
      * Streams cached books from Redis without loading all into memory

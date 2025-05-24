@@ -19,6 +19,8 @@ import com.williamcallahan.book_recommendation_engine.types.RedisVector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.search.Query;
 import redis.clients.jedis.search.SearchResult;
@@ -56,17 +58,21 @@ public class RedisBookSearchService {
 
     private final JedisPooled jedisPooled;
     private final RedisBookAccessor redisBookAccessor;
+    private final ObjectMapper objectMapper;
 
     /**
      * Constructs search service with required dependencies
      *
      * @param jedisPooled Redis connection pool for search operations
      * @param redisBookAccessor service for book data retrieval
+     * @param objectMapper Jackson ObjectMapper for JSON processing
      */
     public RedisBookSearchService(JedisPooled jedisPooled,
-                                  RedisBookAccessor redisBookAccessor) {
+                                  RedisBookAccessor redisBookAccessor,
+                                  ObjectMapper objectMapper) {
         this.jedisPooled = jedisPooled;
         this.redisBookAccessor = redisBookAccessor;
+        this.objectMapper = objectMapper;
         logger.info("RedisBookSearchService initialized");
     }
 
@@ -113,15 +119,23 @@ public class RedisBookSearchService {
     }
 
     /**
-     * Asynchronous version of findSimilarBooksById for better performance
+     * Asynchronous version of findSimilarBooksById
      *
-     * @param bookId identifier of target book for similarity comparison
-     * @param limit maximum number of similar books to return
-     * @return CompletableFuture containing list of similar books
+     * - executed asynchronously by Spring's taskExecutor
+     * - wraps synchronous result in completed CompletableFuture
+     * - logs and propagates exceptions correctly
      */
     @Async
     public CompletableFuture<List<CachedBook>> findSimilarBooksByIdAsync(String bookId, int limit) {
-        return CompletableFuture.supplyAsync(() -> findSimilarBooksById(bookId, limit));
+        try {
+            List<CachedBook> result = findSimilarBooksById(bookId, limit);
+            return CompletableFuture.completedFuture(result);
+        } catch (Exception ex) {
+            logger.error("Async findSimilarBooksById failed for bookId {}", bookId, ex);
+            CompletableFuture<List<CachedBook>> failed = new CompletableFuture<>();
+            failed.completeExceptionally(ex);
+            return failed;
+        }
     }
 
     /**
@@ -222,13 +236,21 @@ public class RedisBookSearchService {
     /**
      * Asynchronous version of findByTitleIgnoreCaseAndIdNot
      *
-     * @param title book title to search for (case-insensitive)
-     * @param idToExclude book ID to exclude from results
-     * @return CompletableFuture containing list of books with matching titles
+     * - executed asynchronously by Spring's taskExecutor
+     * - wraps synchronous result in completed CompletableFuture
+     * - logs and propagates exceptions correctly
      */
     @Async
     public CompletableFuture<List<CachedBook>> findByTitleIgnoreCaseAndIdNotAsync(String title, String idToExclude) {
-        return CompletableFuture.supplyAsync(() -> findByTitleIgnoreCaseAndIdNot(title, idToExclude));
+        try {
+            List<CachedBook> result = findByTitleIgnoreCaseAndIdNot(title, idToExclude);
+            return CompletableFuture.completedFuture(result);
+        } catch (Exception ex) {
+            logger.error("Async findByTitleIgnoreCaseAndIdNot failed for title {}", title, ex);
+            CompletableFuture<List<CachedBook>> failed = new CompletableFuture<>();
+            failed.completeExceptionally(ex);
+            return failed;
+        }
     }
 
     /**
@@ -427,24 +449,41 @@ public class RedisBookSearchService {
     /**
      * Asynchronous version of findRandomRecentBooksWithGoodCovers
      *
-     * @param count maximum number of books to return
-     * @param excludeIds set of book IDs to exclude from results
-     * @return CompletableFuture containing randomized list of recent books with quality covers
+     * - executed asynchronously by Spring's taskExecutor
+     * - wraps synchronous result in completed CompletableFuture
+     * - logs and propagates exceptions correctly
      */
     @Async
     public CompletableFuture<List<CachedBook>> findRandomRecentBooksWithGoodCoversAsync(int count, Set<String> excludeIds) {
-        return CompletableFuture.supplyAsync(() -> findRandomRecentBooksWithGoodCovers(count, excludeIds));
+        try {
+            List<CachedBook> result = findRandomRecentBooksWithGoodCovers(count, excludeIds);
+            return CompletableFuture.completedFuture(result);
+        } catch (Exception ex) {
+            logger.error("Async findRandomRecentBooksWithGoodCovers failed for count {}", count, ex);
+            CompletableFuture<List<CachedBook>> failed = new CompletableFuture<>();
+            failed.completeExceptionally(ex);
+            return failed;
+        }
     }
     
     /**
      * Asynchronous version of findBySlug
      *
-     * @param slug URL-safe book identifier
-     * @return CompletableFuture containing Optional with book if found by slug
+     * - executed asynchronously by Spring's taskExecutor
+     * - wraps synchronous result in completed CompletableFuture
+     * - logs and propagates exceptions correctly
      */
     @Async
     public CompletableFuture<Optional<CachedBook>> findBySlugAsync(String slug) {
-        return CompletableFuture.supplyAsync(() -> findBySlug(slug));
+        try {
+            Optional<CachedBook> result = findBySlug(slug);
+            return CompletableFuture.completedFuture(result);
+        } catch (Exception ex) {
+            logger.error("Async findBySlug failed for slug {}", slug, ex);
+            CompletableFuture<Optional<CachedBook>> failed = new CompletableFuture<>();
+            failed.completeExceptionally(ex);
+            return failed;
+        }
     }
 
     /**
@@ -523,5 +562,264 @@ public class RedisBookSearchService {
             }
         }
         return false;
+    }
+    
+    /**
+     * Finds a book by ISBN-13 using RediSearch with fallback to streaming scan
+     * Handles different JSON nesting structures including the "value" wrapper issue
+     *
+     * @param isbn13 The ISBN-13 to search for
+     * @return Optional containing the book if found
+     */
+    public Optional<CachedBook> findByIsbn13(String isbn13) {
+        if (isbn13 == null || isbn13.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // Try RediSearch first
+        try {
+            String escapedIsbn = escapeRedisSearchString(isbn13);
+            Query query = new Query("@isbn13:{" + escapedIsbn + "}")
+                    .returnFields("$")
+                    .limit(0, 1);
+            
+            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            if (searchResult.getTotalResults() > 0) {
+                Document doc = searchResult.getDocuments().get(0);
+                String json = doc.getString("$");
+                if (json != null) {
+                    return cleanAndDeserializeBook(json, doc.getId());
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("RediSearch failed for ISBN-13 '{}', falling back to scan: {}", isbn13, e.getMessage());
+        }
+        
+        // Fallback to streaming scan
+        return findByIdentifierFallback("ISBN_13", isbn13);
+    }
+    
+    /**
+     * Finds a book by ISBN-10 using RediSearch with fallback to streaming scan
+     * Handles different JSON nesting structures including the "value" wrapper issue
+     *
+     * @param isbn10 The ISBN-10 to search for
+     * @return Optional containing the book if found
+     */
+    public Optional<CachedBook> findByIsbn10(String isbn10) {
+        if (isbn10 == null || isbn10.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // Try RediSearch first
+        try {
+            String escapedIsbn = escapeRedisSearchString(isbn10);
+            Query query = new Query("@isbn10:{" + escapedIsbn + "}")
+                    .returnFields("$")
+                    .limit(0, 1);
+            
+            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            if (searchResult.getTotalResults() > 0) {
+                Document doc = searchResult.getDocuments().get(0);
+                String json = doc.getString("$");
+                if (json != null) {
+                    return cleanAndDeserializeBook(json, doc.getId());
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("RediSearch failed for ISBN-10 '{}', falling back to scan: {}", isbn10, e.getMessage());
+        }
+        
+        // Fallback to streaming scan
+        return findByIdentifierFallback("ISBN_10", isbn10);
+    }
+    
+    /**
+     * Finds a book by Google Books ID using RediSearch with fallback to streaming scan
+     * Handles different JSON nesting structures including the "value" wrapper issue
+     *
+     * @param googleBooksId The Google Books ID to search for
+     * @return Optional containing the book if found
+     */
+    public Optional<CachedBook> findByGoogleBooksId(String googleBooksId) {
+        if (googleBooksId == null || googleBooksId.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // Try RediSearch first
+        try {
+            String escapedId = escapeRedisSearchString(googleBooksId);
+            Query query = new Query("@googleBooksId:{" + escapedId + "}")
+                    .returnFields("$")
+                    .limit(0, 1);
+            
+            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            if (searchResult.getTotalResults() > 0) {
+                Document doc = searchResult.getDocuments().get(0);
+                String json = doc.getString("$");
+                if (json != null) {
+                    return cleanAndDeserializeBook(json, doc.getId());
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("RediSearch failed for Google Books ID '{}', falling back to scan: {}", googleBooksId, e.getMessage());
+        }
+        
+        // Fallback to streaming scan
+        return findByGoogleBooksIdFallback(googleBooksId);
+    }
+    
+    /**
+     * Fallback method to find book by identifier when RediSearch is unavailable
+     * Uses streaming approach to scan through all books
+     *
+     * @param identifierType Type of identifier (ISBN_13 or ISBN_10)
+     * @param identifierValue The identifier value to search for
+     * @return Optional containing the book if found
+     */
+    private Optional<CachedBook> findByIdentifierFallback(String identifierType, String identifierValue) {
+        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
+            String idType = identifierType.toUpperCase();
+            switch (idType) {
+                case "ISBN_13":
+                    return allBooksStream
+                            .filter(book -> identifierValue.equals(book.getIsbn13()))
+                            .findFirst();
+                case "ISBN_10":
+                    return allBooksStream
+                            .filter(book -> identifierValue.equals(book.getIsbn10()))
+                            .findFirst();
+                default:
+                    return Optional.empty();
+            }
+        }
+    }
+    
+    /**
+     * Fallback method to find book by Google Books ID when RediSearch is unavailable
+     *
+     * @param googleBooksId The Google Books ID to search for
+     * @return Optional containing the book if found
+     */
+    private Optional<CachedBook> findByGoogleBooksIdFallback(String googleBooksId) {
+        try (Stream<CachedBook> allBooksStream = redisBookAccessor.streamAllBooks()) {
+            return allBooksStream
+                    .filter(book -> googleBooksId.equals(book.getGoogleBooksId()))
+                    .findFirst();
+        }
+    }
+    
+    /**
+     * Cleans and deserializes book JSON data, handling various nesting structures
+     * Removes incorrect "value" wrapper if present and ensures proper format
+     *
+     * @param json The JSON string to clean and deserialize
+     * @param key The Redis key (for logging purposes)
+     * @return Optional containing the deserialized book
+     */
+    private Optional<CachedBook> cleanAndDeserializeBook(String json, String key) {
+        try {
+            JsonNode rootNode = objectMapper.readTree(json);
+            
+            // Handle array wrapper from JSONPath
+            if (rootNode.isArray() && rootNode.size() > 0) {
+                JsonNode firstElement = rootNode.get(0);
+                
+                // Check if it has the problematic "value" wrapper
+                if (firstElement.isObject() && firstElement.has("value")) {
+                    logger.debug("Found and removing incorrect 'value' wrapper in key {}", key);
+                    JsonNode valueNode = firstElement.get("value");
+                    String cleanedJson = objectMapper.writeValueAsString(valueNode);
+                    return redisBookAccessor.deserializeBook(cleanedJson);
+                } else {
+                    // Normal case - just array wrapped
+                    String cleanedJson = objectMapper.writeValueAsString(firstElement);
+                    return redisBookAccessor.deserializeBook(cleanedJson);
+                }
+            } else if (rootNode.isObject()) {
+                // Check if root object has "value" wrapper
+                if (rootNode.has("value")) {
+                    logger.debug("Found and removing incorrect 'value' wrapper at root in key {}", key);
+                    JsonNode valueNode = rootNode.get("value");
+                    String cleanedJson = objectMapper.writeValueAsString(valueNode);
+                    return redisBookAccessor.deserializeBook(cleanedJson);
+                } else {
+                    // Normal object
+                    return redisBookAccessor.deserializeBook(json);
+                }
+            }
+            
+            // If we get here, try direct deserialization
+            return redisBookAccessor.deserializeBook(json);
+            
+        } catch (Exception e) {
+            logger.error("Error cleaning and deserializing book data from key {}: {}", key, e.getMessage());
+            return Optional.empty();
+        }
+    }
+    
+    /**
+     * Helper class to hold book information with cleaned data
+     */
+    public static class BookSearchResult {
+        private final String redisKey;
+        private final String uuid;
+        private final CachedBook book;
+        
+        public BookSearchResult(String redisKey, String uuid, CachedBook book) {
+            this.redisKey = redisKey;
+            this.uuid = uuid;
+            this.book = book;
+        }
+        
+        public String getRedisKey() { return redisKey; }
+        public String getUuid() { return uuid; }
+        public CachedBook getBook() { return book; }
+    }
+    
+    /**
+     * Enhanced search method that returns full book information including Redis key
+     * Used by migration process to find existing records
+     *
+     * @param isbn13 The ISBN-13 to search for
+     * @param isbn10 The ISBN-10 to search for
+     * @param googleBooksId The Google Books ID to search for
+     * @return Optional containing the book search result with key and cleaned data
+     */
+    public Optional<BookSearchResult> findExistingBook(String isbn13, String isbn10, String googleBooksId) {
+        // Try ISBN-13 first (most reliable)
+        if (isbn13 != null && !isbn13.isEmpty()) {
+            Optional<CachedBook> bookOpt = findByIsbn13(isbn13);
+            if (bookOpt.isPresent()) {
+                CachedBook book = bookOpt.get();
+                String redisKey = "book:" + book.getId();
+                logger.debug("Found book by ISBN-13: {} with key: {}", isbn13, redisKey);
+                return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
+            }
+        }
+        
+        // Then try ISBN-10
+        if (isbn10 != null && !isbn10.isEmpty()) {
+            Optional<CachedBook> bookOpt = findByIsbn10(isbn10);
+            if (bookOpt.isPresent()) {
+                CachedBook book = bookOpt.get();
+                String redisKey = "book:" + book.getId();
+                logger.debug("Found book by ISBN-10: {} with key: {}", isbn10, redisKey);
+                return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
+            }
+        }
+        
+        // Finally try Google Books ID
+        if (googleBooksId != null && !googleBooksId.isEmpty()) {
+            Optional<CachedBook> bookOpt = findByGoogleBooksId(googleBooksId);
+            if (bookOpt.isPresent()) {
+                CachedBook book = bookOpt.get();
+                String redisKey = "book:" + book.getId();
+                logger.debug("Found book by Google Books ID: {} with key: {}", googleBooksId, redisKey);
+                return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
+            }
+        }
+        
+        return Optional.empty();
     }
 }
