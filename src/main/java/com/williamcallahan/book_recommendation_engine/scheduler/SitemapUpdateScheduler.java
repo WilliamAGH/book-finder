@@ -17,11 +17,14 @@ import com.williamcallahan.book_recommendation_engine.service.BookSitemapService
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.CompletionException;
 @Component
 public class SitemapUpdateScheduler {
 
-    private final Logger logger = LoggerFactory.getLogger(SitemapUpdateScheduler.class); // Made non-static and non-final for testing
+    private final Logger logger = LoggerFactory.getLogger(SitemapUpdateScheduler.class);
     private final BookSitemapService bookSitemapService;
 
     /**
@@ -35,21 +38,19 @@ public class SitemapUpdateScheduler {
 
     /**
      * Scheduled task to update the accumulated book IDs in S3 for the sitemap
-     * 
-     * - Runs every hour at the beginning of the hour
-     * - Updates book ID list used for sitemap generation
-     * - Ensures search engines have latest content information
-     * - Uses cron expression: second, minute, hour, day, month, weekday
-     * - "0 0 * * * *" means at minute 0 of every hour
+     * Runs every hour at the beginning of the hour
+     * Updates book ID list used for sitemap generation
+     *
+     * @see #scheduleSitemapBookIdUpdate()
      */
-    @Scheduled(cron = "0 0 * * * *") // Runs hourly
-    // For testing, you might use a shorter interval like: @Scheduled(fixedRate = 60000) // Every minute
+    @Async
+    @Scheduled(cron = "0 0 * * * *")
     public void scheduleSitemapBookIdUpdate() {
         logger.info("Scheduler triggered: Updating accumulated book IDs in S3.");
         bookSitemapService.updateAccumulatedBookIdsInS3Async()
             .thenRun(() -> logger.info("Scheduler finished: Accumulated book ID update process completed."))
             .exceptionally(e -> {
-                logger.error("Error during scheduled sitemap book ID update:", e);
+                logger.error("Error during scheduled sitemap book ID update:", new CompletionException(e));
                 return null;
             });
     }

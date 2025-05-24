@@ -129,9 +129,7 @@ public class NewYorkTimesBestsellerScheduler {
      * Default is every Sunday at 4 AM
      * Respects configured rate limits for API calls
      */
-    @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
-    @PreDestroy
-    public void onShutdown() {
+    private void signalShutdown() {
         logger.info("NewYorkTimesBestsellerScheduler is shutting down. Signaling ongoing processing to stop.");
         shutdownInProgress.set(true);
         if (isProcessing.get()) {
@@ -151,6 +149,13 @@ public class NewYorkTimesBestsellerScheduler {
      * Respects configured rate limits for API calls
      */
     @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
+    public void scheduledProcessNewYorkTimesBestsellers() {
+        processNewYorkTimesBestsellers();
+    }
+
+    /**
+     * Internal method that performs the actual New York Times bestseller processing
+     */
     public void processNewYorkTimesBestsellers() {
         if (!schedulerEnabled) {
             logger.info("New York Times Bestseller Scheduler is disabled.");
@@ -176,7 +181,7 @@ public class NewYorkTimesBestsellerScheduler {
             // (via Resilience4j on searchBooks) and its batch processing methods (e.g., delayElement in fetchGoogleBookIdsForMultipleIsbns).
             // The googleBooksApiMaxCallsPerJob property serves as a high-level guard for this scheduler job.
 
-            JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview().block();
+            JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview().toFuture().join();
             if (nytOverview == null || !nytOverview.has("results") || !nytOverview.get("results").has("lists")) {
                 logger.error("Failed to fetch valid NYT bestseller overview or overview is empty.");
                 return;
@@ -474,6 +479,7 @@ public class NewYorkTimesBestsellerScheduler {
     
     @PreDestroy
     public void shutdown() {
+        signalShutdown();
         if (isProcessing.get()) {
             logger.warn("New York Times Bestseller processing is in progress during shutdown. Waiting for completion...");
             // Give the process some time to complete
