@@ -11,6 +11,7 @@
  * - Uses existing RedisCacheService infrastructure
  * - Includes specialized search methods for titles, authors, and categories
  */
+
 package com.williamcallahan.book_recommendation_engine.repository;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -21,11 +22,6 @@ import com.williamcallahan.book_recommendation_engine.types.RedisVector;
 import com.williamcallahan.book_recommendation_engine.util.UuidUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.Conditional;
-import org.springframework.context.annotation.Primary;
-import org.springframework.stereotype.Repository;
-import org.springframework.context.annotation.Profile;
-import com.williamcallahan.book_recommendation_engine.config.RedisEnvironmentCondition;
 
 import java.util.*;
 import java.util.Set;
@@ -41,10 +37,13 @@ import redis.clients.jedis.resps.ScanResult;
 import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.params.SetParams;
 
-@Repository
-@Primary
-@Profile("!test")
-@Conditional(RedisEnvironmentCondition.class)
+/**
+ * Original Redis implementation of CachedBookRepository.
+ * This class is being refactored and will be replaced by RedisCachedBookRepositoryImpl
+ * and its associated specialized services.
+ * @deprecated Use RedisCachedBookRepositoryImpl instead.
+ */
+@Deprecated
 public class RedisCachedBookRepository implements CachedBookRepository {
 
     private static final Logger logger = LoggerFactory.getLogger(RedisCachedBookRepository.class);
