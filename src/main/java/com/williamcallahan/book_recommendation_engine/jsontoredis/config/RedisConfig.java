@@ -139,6 +139,7 @@ public class RedisConfig {
                 hostAndPort.getHost(), hostAndPort.getPort(), clientConfig.isSsl(),
                 clientConfig.getConnectionTimeoutMillis(), (clientConfig.getPassword() != null));
 
+        // Use default pool configuration
         return new JedisPooled(hostAndPort, clientConfig);
     }
 }

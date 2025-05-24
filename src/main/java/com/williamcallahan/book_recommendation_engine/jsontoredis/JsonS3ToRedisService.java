@@ -24,6 +24,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.repository.RedisBookSearchService;
+import com.williamcallahan.book_recommendation_engine.repository.RedisBookIndexManager;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -79,7 +80,8 @@ public class JsonS3ToRedisService {
     private final ObjectMapper objectMapper;
     private final CachedBookRepository cachedBookRepository;
     private final RedisBookSearchService redisBookSearchService;
-    private final AsyncTaskExecutor mvcTaskExecutor;
+    private final RedisBookIndexManager indexManager;
+    private final AsyncTaskExecutor migrationTaskExecutor;
 
     // S3 paths will be accessed via s3Service getters
     private final String googleBooksPrefix;
@@ -97,13 +99,15 @@ public class JsonS3ToRedisService {
                                 ObjectMapper objectMapper,
                                 CachedBookRepository cachedBookRepository,
                                 RedisBookSearchService redisBookSearchService,
-                                @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor) {
+                                RedisBookIndexManager indexManager,
+                                @Qualifier("migrationTaskExecutor") AsyncTaskExecutor migrationTaskExecutor) {
         this.s3Service = s3Service;
         this.redisJsonService = redisJsonService;
         this.objectMapper = objectMapper;
         this.cachedBookRepository = cachedBookRepository;
         this.redisBookSearchService = redisBookSearchService;
-        this.mvcTaskExecutor = mvcTaskExecutor;
+        this.indexManager = indexManager;
+        this.migrationTaskExecutor = migrationTaskExecutor;
         this.googleBooksPrefix = s3Service.getGoogleBooksPrefix();
         this.nytBestsellersKey = s3Service.getNytBestsellersKey();
         log.info("JsonS3ToRedisService initialized. Google Books S3 Prefix: {}, NYT Bestsellers S3 Key: {}", googleBooksPrefix, nytBestsellersKey);
@@ -363,7 +367,7 @@ public class JsonS3ToRedisService {
                 errorAggregator.addError("processFile", s3Key, e.getClass().getSimpleName(), e.getMessage(), e);
                 // Don't propagate error to allow other files to continue
             }
-        }, mvcTaskExecutor);
+        }, migrationTaskExecutor);
     }
     
     /**
@@ -403,34 +407,20 @@ public class JsonS3ToRedisService {
                 String redisKey;
                 Map<String, Object> existingData = null;
                 
-                // Use the enhanced RedisBookSearchService to find existing records with timeout protection
+                // Direct synchronous search for existing records with timing
+                log.info("REDIS_DEBUG: Starting search for existing book with ISBN-13: {}, ISBN-10: {}, Google ID: {}", s3Isbn13, s3Isbn10, s3GoogleId);
+                long searchStartTime = System.currentTimeMillis();
                 Optional<RedisBookSearchService.BookSearchResult> existingRecordOpt;
                 try {
-                    log.debug("Searching for existing book with ISBN-13: {}, ISBN-10: {}, Google ID: {}", s3Isbn13, s3Isbn10, s3GoogleId);
-                    
-                    // Add timeout protection for Redis search to prevent hanging
-                    CompletableFuture<Optional<RedisBookSearchService.BookSearchResult>> searchFuture = 
-                        CompletableFuture.supplyAsync(() -> {
-                            try {
-                                return redisBookSearchService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
-                            } catch (Exception e) {
-                                log.warn("Redis search failed for identifiers (ISBN-13: {}, ISBN-10: {}, Google ID: {}): {}", 
-                                        s3Isbn13, s3Isbn10, s3GoogleId, e.getMessage());
-                                return Optional.<RedisBookSearchService.BookSearchResult>empty();
-                            }
-                        }, mvcTaskExecutor);
-                    
-                    existingRecordOpt = searchFuture.get(5, TimeUnit.SECONDS); // 5 second timeout
-                    
-                } catch (java.util.concurrent.TimeoutException e) {
-                    log.warn("Redis search timed out for book with ISBN-13: {}, ISBN-10: {}, Google ID: {}. Creating new UUID.", 
-                            s3Isbn13, s3Isbn10, s3GoogleId);
-                    existingRecordOpt = Optional.empty();
+                    existingRecordOpt = redisBookSearchService.findExistingBook(s3Isbn13, s3Isbn10, s3GoogleId);
                 } catch (Exception e) {
-                    log.warn("Redis search failed for book with ISBN-13: {}, ISBN-10: {}, Google ID: {}. Error: {}. Creating new UUID.", 
+                    log.warn("Redis search failed for identifiers (ISBN-13: {}, ISBN-10: {}, Google ID: {}): {}", 
                             s3Isbn13, s3Isbn10, s3GoogleId, e.getMessage());
                     existingRecordOpt = Optional.empty();
                 }
+                long searchEndTime = System.currentTimeMillis();
+                log.info("REDIS_DEBUG: Completed search in {}ms. Found existing record: {}", 
+                         (searchEndTime - searchStartTime), existingRecordOpt.isPresent());
                 
                 if (existingRecordOpt.isPresent()) {
                     RedisBookSearchService.BookSearchResult existingRecord = existingRecordOpt.get();
@@ -478,7 +468,16 @@ public class JsonS3ToRedisService {
                     String bookTitle = UniversalBookDataExtractor.extractTitle(bookData);
                     log.info("Book '{}' - UUID: {} - Action: {} - Redis Key: {}", 
                             bookTitle, finalRecordUuid, action, redisKey);
-                    
+
+                    // Update secondary indexes for fast lookup
+                    CachedBook indexBook = new CachedBook();
+                    indexBook.setId(finalRecordUuid);
+                    indexBook.setIsbn13(s3Isbn13);
+                    indexBook.setIsbn10(s3Isbn10);
+                    indexBook.setGoogleBooksId(s3GoogleId);
+                    Optional<CachedBook> oldBookOpt = existingRecordOpt.map(RedisBookSearchService.BookSearchResult::getBook);
+                    indexManager.updateAllIndexes(indexBook, oldBookOpt);
+
                     // Move processed S3 object only if Redis write was successful
                     destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
                 } else {

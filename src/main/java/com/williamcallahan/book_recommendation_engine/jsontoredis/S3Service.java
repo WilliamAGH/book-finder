@@ -47,7 +47,7 @@ public class S3Service {
 
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private final S3Client s3Client;
-    private final AsyncTaskExecutor mvcTaskExecutor;
+    private final AsyncTaskExecutor migrationTaskExecutor;
     private final String bucketName;
     private final String googleBooksPrefix;
     private final String nytBestsellersKey;
@@ -59,14 +59,14 @@ public class S3Service {
      * @param bucketName The name of the S3 bucket
      * @param googleBooksPrefix The S3 prefix for Google Books data
      * @param nytBestsellersKey The S3 key for NYT Bestsellers data
-     * @param mvcTaskExecutor The asynchronous task executor
+     * @param migrationTaskExecutor The asynchronous task executor
      * @throws IllegalStateException if the s3Client is null
      */
     public S3Service(S3Client s3Client,
                      @Value("${s3.bucket-name}") String bucketName,
                      @Value("${jsontoredis.s3.google-books-prefix}") String googleBooksPrefix,
                      @Value("${jsontoredis.s3.nyt-bestsellers-key}") String nytBestsellersKey,
-                     @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor) {
+                     @Qualifier("migrationTaskExecutor") AsyncTaskExecutor migrationTaskExecutor) {
         if (s3Client == null) {
             throw new IllegalStateException("S3Client is not available. Ensure S3 is enabled and configured correctly in S3Config.");
         }
@@ -74,7 +74,7 @@ public class S3Service {
         this.bucketName = bucketName;
         this.googleBooksPrefix = googleBooksPrefix;
         this.nytBestsellersKey = nytBestsellersKey;
-        this.mvcTaskExecutor = mvcTaskExecutor;
+        this.migrationTaskExecutor = migrationTaskExecutor;
         log.info("jsonS3ToRedis S3Service initialized with bucket: {}, googleBooksPrefix: {}, nytBestsellersKey: {}", bucketName, googleBooksPrefix, nytBestsellersKey);
     }
 
@@ -103,11 +103,10 @@ public class S3Service {
         
         // Check if executor is shutdown to avoid RejectedExecutionException
         boolean executorShutdown = false;
-        if (mvcTaskExecutor instanceof ThreadPoolTaskExecutor) {
-            executorShutdown = ((ThreadPoolTaskExecutor) mvcTaskExecutor).getThreadPoolExecutor().isShutdown();
+        if (migrationTaskExecutor instanceof ThreadPoolTaskExecutor) {
+            executorShutdown = ((ThreadPoolTaskExecutor) migrationTaskExecutor).getThreadPoolExecutor().isShutdown();
         } else {
-            log.warn("mvcTaskExecutor is not an instance of ThreadPoolTaskExecutor in listObjectKeys. Actual type: {}. Cannot reliably check for shutdown status via getThreadPoolExecutor().", mvcTaskExecutor.getClass().getName());
-            // Assuming not shutdown if type is unknown or doesn't support this check directly
+            log.warn("migrationTaskExecutor is not an instance of ThreadPoolTaskExecutor in listObjectKeys. Actual type: {}. Cannot reliably check for shutdown status via getThreadPoolExecutor().", migrationTaskExecutor.getClass().getName());
         }
 
         if (executorShutdown) {
@@ -116,9 +115,9 @@ public class S3Service {
         }
         
         try {
-            return CompletableFuture.supplyAsync(() -> listObjectKeysSync(prefix), mvcTaskExecutor);
+            return CompletableFuture.supplyAsync(() -> listObjectKeysSync(prefix), migrationTaskExecutor);
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            log.warn("Executor rejected task, falling back to synchronous execution for prefix: {}", prefix);
+            log.warn("migrationTaskExecutor rejected task, falling back to synchronous execution for prefix: {}", prefix);
             return CompletableFuture.completedFuture(listObjectKeysSync(prefix));
         }
     }
@@ -165,14 +164,16 @@ public class S3Service {
     public CompletableFuture<InputStream> getObjectContent(String key) {
         if (shuttingDown.get()) {
             log.warn("S3Service is shutting down, rejecting getObjectContent request for key: {}", key);
-            return CompletableFuture.completedFuture(InputStream.nullInputStream());
+            CompletableFuture<InputStream> future = new CompletableFuture<>();
+            future.completeExceptionally(new IllegalStateException("S3Service is shutting down"));
+            return future;
         }
         // Check if executor is shutdown to avoid RejectedExecutionException
         boolean executorShutdown = false;
-        if (mvcTaskExecutor instanceof ThreadPoolTaskExecutor) {
-            executorShutdown = ((ThreadPoolTaskExecutor) mvcTaskExecutor).getThreadPoolExecutor().isShutdown();
+        if (migrationTaskExecutor instanceof ThreadPoolTaskExecutor) {
+            executorShutdown = ((ThreadPoolTaskExecutor) migrationTaskExecutor).getThreadPoolExecutor().isShutdown();
         } else {
-            log.warn("mvcTaskExecutor is not an instance of ThreadPoolTaskExecutor. Actual type: {}. Cannot reliably check for shutdown status via getThreadPoolExecutor().", mvcTaskExecutor.getClass().getName());
+            log.warn("migrationTaskExecutor is not an instance of ThreadPoolTaskExecutor. Actual type: {}. Cannot reliably check for shutdown status via getThreadPoolExecutor().", migrationTaskExecutor.getClass().getName());
             // Assuming not shutdown if type is unknown or doesn't support this check directly
         }
 
@@ -182,9 +183,9 @@ public class S3Service {
         }
         
         try {
-            return CompletableFuture.supplyAsync(() -> getObjectContentSync(key), mvcTaskExecutor);
+            return CompletableFuture.supplyAsync(() -> getObjectContentSync(key), migrationTaskExecutor);
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            log.warn("Executor rejected task, falling back to synchronous execution for key: {}", key);
+            log.warn("migrationTaskExecutor rejected task, falling back to synchronous execution for key: {}", key);
             return CompletableFuture.completedFuture(getObjectContentSync(key));
         }
     }
@@ -274,7 +275,7 @@ public class S3Service {
                 log.error("Error moving S3 object from {} to {}: {}", sourceKey, destinationKey, e.getMessage(), e);
                 throw new RuntimeException("Failed to move S3 object from " + sourceKey + " to " + destinationKey, e);
             }
-        }, mvcTaskExecutor);
+        }, migrationTaskExecutor);
     }
 
 }
