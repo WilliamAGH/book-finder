@@ -39,6 +39,10 @@ public class RedisHelper {
     
     /** Timestamp when circuit breaker was opened */
     private static Instant circuitBreakerOpenTime;
+    
+    // Redis key prefixes
+    private static final String BOOK_PREFIX = "book:";
+    private static final String SEARCH_CACHE_PREFIX = "search:";
 
     /**
      * Executes a Redis operation with unified error handling
@@ -105,5 +109,53 @@ public class RedisHelper {
             log.warn("Redis operation {} encountered error (failure {}): {}", operationName, failures, e.getMessage());
             return fallback;
         }
+    }
+    
+    // Key generation methods
+    
+    /**
+     * Generates a Redis key for a book by ID
+     * @param bookId the book identifier
+     * @return the Redis key
+     */
+    public static String bookKey(String bookId) {
+        return BOOK_PREFIX + bookId;
+    }
+    
+    /**
+     * Generates a Redis key pattern for scanning all books
+     * @return the pattern for scanning book keys
+     */
+    public static String bookKeyPattern() {
+        return BOOK_PREFIX + "*";
+    }
+    
+    /**
+     * Extracts book ID from a Redis book key
+     * @param key the Redis key
+     * @return the book ID
+     */
+    public static String extractIdFromBookKey(String key) {
+        if (key != null && key.startsWith(BOOK_PREFIX)) {
+            return key.substring(BOOK_PREFIX.length());
+        }
+        return key;
+    }
+    
+    /**
+     * Generates a Redis key for search cache
+     * @param searchQuery the search query
+     * @return the Redis key
+     */
+    public static String searchCacheKey(String searchQuery) {
+        return SEARCH_CACHE_PREFIX + searchQuery;
+    }
+    
+    /**
+     * Get the book key prefix constant
+     * @return the book prefix
+     */
+    public static String getBookPrefix() {
+        return BOOK_PREFIX;
     }
 }

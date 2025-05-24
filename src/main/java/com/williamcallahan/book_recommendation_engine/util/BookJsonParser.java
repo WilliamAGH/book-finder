@@ -179,6 +179,40 @@ public class BookJsonParser {
     }
 
     /**
+     * Extracts an ISBN (preferably ISBN-13) from the volumeInfo.industryIdentifiers
+     *
+     * @param volumeInfo JsonNode representing the volumeInfo part of a Google Books API response
+     * @return An ISBN string (preferably ISBN-13) if found, otherwise null
+     */
+    public static String extractIsbn(JsonNode volumeInfo) {
+        if (volumeInfo != null && volumeInfo.has("industryIdentifiers")) {
+            String isbn13 = null;
+            String isbn10 = null;
+            for (JsonNode identifierNode : volumeInfo.get("industryIdentifiers")) {
+                String type = identifierNode.has("type") ? identifierNode.get("type").asText() : null;
+                String idValue = identifierNode.has("identifier") ? identifierNode.get("identifier").asText() : null;
+
+                if (idValue != null && !idValue.isEmpty()) {
+                    if ("ISBN_13".equals(type)) {
+                        isbn13 = idValue;
+                        break; // Prefer ISBN-13, so break if found
+                    } else if ("ISBN_10".equals(type)) {
+                        isbn10 = idValue;
+                    }
+                }
+            }
+            // Return ISBN-13 if available, else ISBN-10, or null if neither found
+            if (isbn13 != null) return isbn13;
+            if (isbn10 != null) return isbn10;
+            
+            logger.debug("No ISBN_13 or ISBN_10 found in industryIdentifiers for volume.");
+            return null; 
+        }
+        logger.debug("No industryIdentifiers found in volumeInfo or volumeInfo is null, cannot extract ISBN.");
+        return null;
+    }
+
+    /**
      * Enhances Google Books cover URL
      * 
      * @param url Original cover URL

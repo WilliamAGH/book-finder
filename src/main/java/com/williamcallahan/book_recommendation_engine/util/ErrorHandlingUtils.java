@@ -9,11 +9,17 @@ package com.williamcallahan.book_recommendation_engine.util;
 
 import com.williamcallahan.book_recommendation_engine.monitoring.MetricsService;
 import org.slf4j.Logger;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.util.retry.Retry;
 import redis.clients.jedis.exceptions.JedisConnectionException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -183,6 +189,69 @@ public class ErrorHandlingUtils {
     }
     
     /**
+     * Create WebClient retry specification using existing patterns
+     * This consolidates the duplicated retry logic from GoogleApiFetcher
+     */
+    public static Retry createWebClientRetry(Logger logger, String operation) {
+        return createWebClientRetry(logger, operation, null);
+    }
+    
+    /**
+     * Create WebClient retry specification with optional exhausted callback
+     */
+    public static Retry createWebClientRetry(Logger logger, String operation, Runnable onExhausted) {
+        return createWebClientRetry(logger, operation, onExhausted, 3, Duration.ofSeconds(2));
+    }
+    
+    /**
+     * Create WebClient retry specification with full configuration
+     * @param logger Logger instance
+     * @param operation Operation name for logging
+     * @param onExhausted Optional callback when retries exhausted
+     * @param maxAttempts Maximum retry attempts
+     * @param firstBackoff Initial backoff duration
+     */
+    public static Retry createWebClientRetry(Logger logger, String operation, Runnable onExhausted, 
+                                            int maxAttempts, Duration firstBackoff) {
+        return Retry.backoff(maxAttempts, firstBackoff)
+                .maxBackoff(Duration.ofSeconds(30))
+                .jitter(0.5) // Add jitter to prevent thundering herd
+                .filter(throwable -> {
+                    if (throwable instanceof WebClientResponseException) {
+                        WebClientResponseException wcre = (WebClientResponseException) throwable;
+                        // Retry on server errors, rate limits, and timeouts
+                        return wcre.getStatusCode().is5xxServerError() || 
+                               wcre.getStatusCode().value() == 429 ||
+                               wcre.getStatusCode().value() == 408;
+                    }
+                    return throwable instanceof IOException || 
+                           throwable instanceof WebClientRequestException ||
+                           throwable instanceof TimeoutException;
+                })
+                .doBeforeRetry(retrySignal -> {
+                    Throwable failure = retrySignal.failure();
+                    if (failure instanceof WebClientResponseException) {
+                        WebClientResponseException wcre = (WebClientResponseException) failure;
+                        logger.warn("Retrying {} after status {}. Attempt #{}/{}. Error: {}",
+                                operation, wcre.getStatusCode(), retrySignal.totalRetries() + 1, 
+                                maxAttempts, wcre.getMessage());
+                    } else {
+                        logger.warn("Retrying {} after error. Attempt #{}/{}. Error: {}",
+                                operation, retrySignal.totalRetries() + 1, maxAttempts, 
+                                failure.getMessage());
+                    }
+                })
+                .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+                    logger.error("All {} retries failed for {}. Final error: {}", 
+                            maxAttempts, operation, retrySignal.failure().getMessage());
+                    if (onExhausted != null) {
+                        onExhausted.run();
+                    }
+                    return retrySignal.failure();
+                });
+    }
+    
+    /**
      * Get suggested retry delay based on error type
      */
     public static long getRetryDelayMillis(Throwable throwable, int attemptNumber) {
@@ -205,5 +274,95 @@ public class ErrorHandlingUtils {
             default:
                 return baseDelay;
         }
+    }
+    
+    /**
+     * Create a resilient Redis operation wrapper with circuit breaker pattern
+     * @param operation The Redis operation to execute
+     * @param fallback The fallback value if Redis is unavailable
+     * @param logger Logger for operation
+     * @param operationName Name for logging
+     * @param metricsService Optional metrics service
+     */
+    public static <T> CompletableFuture<T> withRedisResilience(
+            java.util.function.Supplier<CompletableFuture<T>> operation,
+            T fallback,
+            Logger logger,
+            String operationName,
+            MetricsService metricsService) {
+        
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return operation.get();
+            } catch (Exception e) {
+                ErrorCategory category = categorizeError(e);
+                if (category == ErrorCategory.REDIS_CONNECTION) {
+                    logger.warn("Redis unavailable for {}, using fallback", operationName);
+                    if (metricsService != null) {
+                        metricsService.incrementRedisError();
+                    }
+                    return CompletableFuture.completedFuture(fallback);
+                }
+                throw new CompletionException(e);
+            }
+        }).thenCompose(Function.identity())
+          .handle(createErrorHandler(logger, operationName, metricsService, fallback));
+    }
+    
+    /**
+     * Create a resilient S3 operation wrapper with retry
+     * @param operation The S3 operation to execute  
+     * @param logger Logger for operation
+     * @param operationName Name for logging
+     * @param maxRetries Maximum retry attempts
+     */
+    public static <T> CompletableFuture<T> withS3Resilience(
+            java.util.function.Supplier<CompletableFuture<T>> operation,
+            Logger logger,
+            String operationName,
+            int maxRetries) {
+        
+        return withRetry(operation, logger, operationName, maxRetries, 1000L, 2.0);
+    }
+    
+    /**
+     * Generic retry wrapper for any async operation
+     */
+    private static <T> CompletableFuture<T> withRetry(
+            java.util.function.Supplier<CompletableFuture<T>> operation,
+            Logger logger,
+            String operationName,
+            int maxRetries,
+            long initialDelayMs,
+            double backoffMultiplier) {
+        
+        return withRetryInternal(operation, logger, operationName, 0, maxRetries, initialDelayMs, backoffMultiplier);
+    }
+    
+    private static <T> CompletableFuture<T> withRetryInternal(
+            java.util.function.Supplier<CompletableFuture<T>> operation,
+            Logger logger,
+            String operationName,
+            int attempt,
+            int maxRetries,
+            long delayMs,
+            double backoffMultiplier) {
+        
+        return operation.get()
+            .exceptionallyCompose(throwable -> {
+                if (attempt < maxRetries && isRetryable(throwable)) {
+                    logger.warn("{} failed on attempt #{}, retrying after {}ms: {}",
+                            operationName, attempt + 1, delayMs, throwable.getMessage());
+                    
+                    return CompletableFuture.supplyAsync(
+                        () -> null, 
+                        CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS))
+                        .thenCompose(ignored -> withRetryInternal(
+                            operation, logger, operationName,
+                            attempt + 1, maxRetries, 
+                            (long)(delayMs * backoffMultiplier), backoffMultiplier));
+                }
+                return CompletableFuture.failedFuture(throwable);
+            });
     }
 }
