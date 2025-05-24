@@ -12,6 +12,7 @@
  * - Applies SEO optimizations including metadata and keyword generation
  * - Manages cover image resolution and source preferences
  */
+
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -42,7 +43,6 @@ import java.time.Duration;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
-import java.util.Date;
 import java.util.List;
 import java.util.Collections;
 import java.util.ArrayList;
@@ -184,10 +184,10 @@ public class HomeController {
                 .collect(Collectors.toList())
             )
             .map(this::deduplicateBooksById)
-            .map(bookList -> {
-                bookList.forEach(book -> duplicateBookService.populateDuplicateEditionsAsync(book).join());
-                return bookList;
-            })
+            .flatMap(bookList -> Flux.fromIterable(bookList)
+                .flatMap(book -> duplicateBookService.populateDuplicateEditionsReactive(book))
+                .then(Mono.just(bookList))
+            )
             .doOnSuccess(bestsellers -> model.addAttribute("currentBestsellers", bestsellers))
             .doOnError(e -> {
                 logger.error("Error fetching and filtering current bestsellers: {}", e.getMessage());
@@ -236,10 +236,10 @@ public class HomeController {
                 .collect(Collectors.toList())
             )
             .map(this::deduplicateBooksById)
-            .map(bookList -> {
-                bookList.forEach(book -> duplicateBookService.populateDuplicateEditionsAsync(book).join());
-                return bookList;
-            })
+            .flatMap(bookList -> Flux.fromIterable(bookList)
+                .flatMap(book -> duplicateBookService.populateDuplicateEditionsReactive(book))
+                .then(Mono.just(bookList))
+            )
             .doOnSuccess(recent -> model.addAttribute("recentBooks", recent))
         .doOnError(e -> {
             logger.error("Error fetching and filtering recent books: {}", e.getMessage());
@@ -357,14 +357,16 @@ public class HomeController {
         if (cachedBook == null) return null;
         
         Book book = new Book();
-        book.setId(cachedBook.getId());
+        // Use googleBooksId if available, otherwise use the cachedBook's ID
+        String bookId = cachedBook.getGoogleBooksId() != null ? 
+            cachedBook.getGoogleBooksId() : cachedBook.getId();
+        book.setId(bookId);
         book.setTitle(cachedBook.getTitle());
         book.setAuthors(cachedBook.getAuthors());
         book.setPublisher(cachedBook.getPublisher());
-        // Convert LocalDateTime to Date
+        // Convert LocalDateTime to LocalDate
         if (cachedBook.getPublishedDate() != null) {
-            book.setPublishedDate(Date.from(cachedBook.getPublishedDate()
-                .atZone(java.time.ZoneId.systemDefault()).toInstant()));
+            book.setPublishedDate(cachedBook.getPublishedDate().toLocalDate());
         }
         book.setDescription(cachedBook.getDescription());
         book.setPageCount(cachedBook.getPageCount());
@@ -382,8 +384,6 @@ public class HomeController {
         book.setIsbn13(cachedBook.getIsbn13());
         // CachedBook doesn't have printType, skip it
         // book.setPrintType(cachedBook.getPrintType());
-        // Book doesn't have setGoogleBooksId, use the googleBooksId field
-        book.setId(cachedBook.getGoogleBooksId() != null ? cachedBook.getGoogleBooksId() : cachedBook.getId());
         // CachedBook doesn't have these cover image fields, skip them
         // book.setCoverImageWidth(cachedBook.getCoverImageWidth());
         // book.setCoverImageHeight(cachedBook.getCoverImageHeight());
@@ -564,7 +564,7 @@ public class HomeController {
                 // Book found, now fetch its cover images
                 // For detail page, allow external API fetch for covers
                 return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book, true) 
-                    .map(coverImagesResult -> {
+                    .flatMap(coverImagesResult -> { // Changed .map to .flatMap
                         book.setCoverImages(coverImagesResult);
                         String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg";
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
@@ -587,35 +587,47 @@ public class HomeController {
                         model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
                         model.addAttribute("keywords", generateKeywords(book));
 
-                        // Populate other editions/duplicates
-                        duplicateBookService.populateDuplicateEditionsAsync(book).join();
+                        // Populate other editions/duplicates reactively
+                        Mono<Void> populateDuplicatesMono = Mono.fromFuture(duplicateBookService.populateDuplicateEditionsAsync(book)).then();
 
-                        // Generate Affiliate Links
-                        Map<String, String> affiliateLinks = new HashMap<>();
+                        // Generate Affiliate Links Reactively
                         String isbn13 = book.getIsbn13();
                         String asin = book.getAsin();
-                        String title = book.getTitle(); // Get the book title
-
-                        if (isbn13 != null) {
-                            affiliateLinks.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId).join());
-                            affiliateLinks.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId).join());
-                        }
-                        // Pass ASIN, title, and associate tag to the updated Audible link generator
-                        affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag).join());
-                        // Generate Amazon affiliate link using ISBN or title
+                        String title = book.getTitle();
                         String isbnForAmazon = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
-                        if (isbnForAmazon != null) {
-                            affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag).join());
-                        }
-                        
-                        model.addAttribute("affiliateLinks", affiliateLinks);
 
-                        try {
-                            recentlyViewedService.addToRecentlyViewedAsync(book);
-                        } catch (Exception e) {
-                            logger.warn("Failed to add book to recently viewed for book ID {}: {}", book.getId(), e.getMessage());
-                        }
-                        return book;
+                        Mono<String> bnLinkMono = (isbn13 != null)
+                            ? Mono.fromFuture(affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId))
+                                .subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("")
+                            : Mono.just("");
+                        Mono<String> bookshopLinkMono = (isbn13 != null)
+                            ? Mono.fromFuture(affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId))
+                                .subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("")
+                            : Mono.just("");
+                        Mono<String> audibleLinkMono = Mono.fromFuture(affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag))
+                            .subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("");
+                        Mono<String> amazonLinkMono = (isbnForAmazon != null)
+                            ? Mono.fromFuture(affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag))
+                                .subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("")
+                            : Mono.just("");
+                        
+                        return populateDuplicatesMono.then(
+                            Mono.zip(bnLinkMono, bookshopLinkMono, audibleLinkMono, amazonLinkMono)
+                                .map(tuple -> {
+                                    Map<String, String> affiliateLinks = new HashMap<>();
+                                    affiliateLinks.put("barnesAndNoble", tuple.getT1());
+                                    affiliateLinks.put("bookshop", tuple.getT2());
+                                    affiliateLinks.put("audible", tuple.getT3());
+                                    affiliateLinks.put("amazon", tuple.getT4());
+                                    model.addAttribute("affiliateLinks", affiliateLinks);
+                                    try {
+                                        recentlyViewedService.addToRecentlyViewedAsync(book);
+                                    } catch (Exception recentViewEx) {
+                                        logger.warn("Failed to add book to recently viewed for book ID {}: {}", book.getId(), recentViewEx.getMessage());
+                                    }
+                                    return book;
+                                })
+                        );
                     })
                     .onErrorResume(e -> { // Handle errors from getInitialCoverUrlAndTriggerBackgroundUpdate
                         logger.warn("Error getting cover for book ID {}: {}. Using placeholder.", book.getId(), e.getMessage());
@@ -640,27 +652,39 @@ public class HomeController {
                         model.addAttribute("keywords", generateKeywords(book));
                         
                         // Populate other editions/duplicates even on cover error, if book object exists
-                        duplicateBookService.populateDuplicateEditionsAsync(book).join();
+                        Mono<Void> populateDuplicatesOnErrorMono = duplicateBookService.populateDuplicateEditionsReactive(book)
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .then();
 
-                        // Generate Affiliate Links even on cover error, if book object exists
-                        Map<String, String> affiliateLinksOnError = new HashMap<>();
+                        // Generate Affiliate Links Reactively even on cover error
                         String isbn13OnError = book.getIsbn13();
                         String asinOnError = book.getAsin();
-
-                        if (isbn13OnError != null) {
-                            affiliateLinksOnError.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId).join());
-                            affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId).join());
-                        }
-                        affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag).join());
-                        // Generate Amazon affiliate link on error fallback
+                        String titleOnError = book.getTitle();
                         String isbnForAmazonOnError = (isbn13OnError != null && !isbn13OnError.isEmpty()) ? isbn13OnError : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
-                        if (isbnForAmazonOnError != null) {
-                            affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag).join());
-                        }
-                        
-                        model.addAttribute("affiliateLinks", affiliateLinksOnError);
 
-                        return Mono.just(book);
+                        Mono<String> bnLinkErrorMono = (isbn13OnError != null)
+                            ? Mono.fromFuture(affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId)).subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("")
+                            : Mono.just("");
+                        Mono<String> bookshopLinkErrorMono = (isbn13OnError != null)
+                            ? Mono.fromFuture(affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId)).subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("")
+                            : Mono.just("");
+                        Mono<String> audibleLinkErrorMono = Mono.fromFuture(affiliateLinkService.generateAudibleLink(asinOnError, titleOnError, amazonAssociateTag)).subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("");
+                        Mono<String> amazonLinkErrorMono = (isbnForAmazonOnError != null)
+                            ? Mono.fromFuture(affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, titleOnError, amazonAssociateTag)).subscribeOn(Schedulers.boundedElastic()).defaultIfEmpty("")
+                            : Mono.just("");
+
+                        return populateDuplicatesOnErrorMono.then(
+                            Mono.zip(bnLinkErrorMono, bookshopLinkErrorMono, audibleLinkErrorMono, amazonLinkErrorMono)
+                                .map(tuple -> {
+                                    Map<String, String> affiliateLinksOnError = new HashMap<>();
+                                    affiliateLinksOnError.put("barnesAndNoble", tuple.getT1());
+                                    affiliateLinksOnError.put("bookshop", tuple.getT2());
+                                    affiliateLinksOnError.put("audible", tuple.getT3());
+                                    affiliateLinksOnError.put("amazon", tuple.getT4());
+                                    model.addAttribute("affiliateLinks", affiliateLinksOnError);
+                                    return book;
+                                })
+                        );
                     });
             })
             .doOnError(e -> { // Errors from getBookByIdReactive

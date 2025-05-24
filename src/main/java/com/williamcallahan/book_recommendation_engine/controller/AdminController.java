@@ -11,6 +11,7 @@
  * - Detailed logging and error handling
  * - Returns operation summaries in text and JSON formats
  */
+
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
@@ -19,13 +20,20 @@ import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupServ
 import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerService;
 import com.williamcallahan.book_recommendation_engine.service.BookDataConsolidationService;
 import com.williamcallahan.book_recommendation_engine.service.EmbeddingService;
-import com.williamcallahan.book_recommendation_engine.repository.RedisCachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.repository.RedisBookMaintenanceService;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import com.williamcallahan.book_recommendation_engine.types.MoveActionSummary;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -35,6 +43,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.scheduling.annotation.Async;
 
 @RestController
 @RequestMapping("/admin")
@@ -50,7 +59,8 @@ public class AdminController {
     private final BookCacheWarmingScheduler bookCacheWarmingScheduler;
     private final ApiCircuitBreakerService apiCircuitBreakerService;
     private final BookDataConsolidationService bookDataConsolidationService;
-    private final RedisCachedBookRepository redisCachedBookRepository;
+    private final CachedBookRepository cachedBookRepository;
+    private final RedisBookMaintenanceService maintenanceService;
     private final EmbeddingService embeddingService;
 
     public AdminController(@Autowired(required = false) S3CoverCleanupService s3CoverCleanupService,
@@ -58,7 +68,8 @@ public class AdminController {
                            BookCacheWarmingScheduler bookCacheWarmingScheduler,
                            ApiCircuitBreakerService apiCircuitBreakerService,
                            BookDataConsolidationService bookDataConsolidationService,
-                           @Autowired(required = false) RedisCachedBookRepository redisCachedBookRepository,
+                           @Autowired(required = false) CachedBookRepository cachedBookRepository,
+                           @Autowired(required = false) RedisBookMaintenanceService maintenanceService,
                            EmbeddingService embeddingService,
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
@@ -68,7 +79,8 @@ public class AdminController {
         this.bookCacheWarmingScheduler = bookCacheWarmingScheduler;
         this.apiCircuitBreakerService = apiCircuitBreakerService;
         this.bookDataConsolidationService = bookDataConsolidationService;
-        this.redisCachedBookRepository = redisCachedBookRepository;
+        this.cachedBookRepository = cachedBookRepository;
+        this.maintenanceService = maintenanceService;
         this.embeddingService = embeddingService;
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
@@ -87,14 +99,16 @@ public class AdminController {
      * @return A ResponseEntity containing a plain text summary and list of flagged files
      */
     @GetMapping(value = "/s3-cleanup/dry-run", produces = MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> triggerS3CoverCleanupDryRun(
+    public CompletableFuture<ResponseEntity<String>> triggerS3CoverCleanupDryRun(
             @RequestParam(name = "prefix", required = false) String prefixOptional,
             @RequestParam(name = "limit", required = false) Integer limitOptional) {
         
         if (s3CoverCleanupService == null) {
             String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
             logger.warn(errorMessage);
-            return ResponseEntity.badRequest().body(errorMessage);
+            return CompletableFuture.completedFuture(
+                ResponseEntity.badRequest().body(errorMessage) // Changed to return String
+            );
         }
         
         String prefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
@@ -110,39 +124,21 @@ public class AdminController {
         
         logger.info("Admin endpoint /admin/s3-cleanup/dry-run invoked. Triggering S3 Cover Cleanup Dry Run with prefix: '{}', limit: {}", prefixToUse, batchLimitToUse);
 
-        // Note: This is a synchronous call. For very long operations,
-        // consider making performDryRun @Async or wrapping this call
-        try {
-            com.williamcallahan.book_recommendation_engine.types.DryRunSummary summary = s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse).join();
-            
-            StringBuilder responseBuilder = new StringBuilder();
-            responseBuilder.append(String.format(
-                "S3 Cover Cleanup Dry Run completed for prefix: '%s', limit: %d.\n",
-                prefixToUse, batchLimitToUse
-            ));
-            responseBuilder.append(String.format(
-                "Total Objects Scanned: %d, Total Objects Flagged: %d\n",
-                summary.getTotalScanned(), summary.getTotalFlagged()
-            ));
-
-            if (summary.getTotalFlagged() > 0) {
-                responseBuilder.append("\nFlagged File Keys:\n");
-                for (String key : summary.getFlaggedFileKeys()) {
-                    responseBuilder.append(key).append("\n");
-                }
-            } else {
-                responseBuilder.append("\nNo files were flagged.\n");
-            }
-            
-            String responseBody = responseBuilder.toString();
-            logger.info("S3 Cover Cleanup Dry Run response prepared for prefix: '{}', limit: {}. Summary: {} flagged out of {} scanned.", 
-                        prefixToUse, batchLimitToUse, summary.getTotalFlagged(), summary.getTotalScanned());
-            return ResponseEntity.ok(responseBody);
-        } catch (Exception e) {
-            String errorMessage = String.format("Failed to complete S3 Cover Cleanup Dry Run with prefix: '%s', limit: %d. Error: %s", prefixToUse, batchLimitToUse, e.getMessage());
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body("Error during S3 Cover Cleanup Dry Run: " + e.getMessage());
-        }
+        // Invoke async service without blocking
+        return s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse)
+            .thenApply(summary -> {
+                logger.info("S3 Cover Cleanup dry run completed. Summary: {}", summary);
+                return ResponseEntity.ok(summary.toString());
+            })
+            .exceptionally(e -> {
+                String errorMsg = String.format(
+                    "Failed to complete S3 Cover Cleanup dry run. Prefix: '%s', Limit: %d. Error: %s",
+                    prefixToUse, batchLimitToUse, e.getMessage()
+                );
+                logger.error(errorMsg, e);
+                return ResponseEntity.internalServerError()
+                    .body("{\"error\": \"" + errorMsg.replace("\"", "\\\"") + "\"}");
+            });
     }
 
     /**
@@ -154,7 +150,7 @@ public class AdminController {
      * @return A ResponseEntity containing the MoveActionSummary as JSON
      */
     @PostMapping(value = "/s3-cleanup/move-flagged", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<?> triggerS3CoverMoveAction(
+    public CompletableFuture<ResponseEntity<MoveActionSummary>> triggerS3CoverMoveAction(
             @RequestParam(name = "prefix", required = false) String prefixOptional,
             @RequestParam(name = "limit", required = false) Integer limitOptional,
             @RequestParam(name = "quarantinePrefix", required = false) String quarantinePrefixOptional) {
@@ -162,7 +158,9 @@ public class AdminController {
         if (s3CoverCleanupService == null) {
             String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
             logger.warn(errorMessage);
-            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}");
+            return CompletableFuture.completedFuture(
+                ResponseEntity.badRequest().body(new MoveActionSummary(errorMessage))
+            );
         }
 
         String sourcePrefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
@@ -175,27 +173,30 @@ public class AdminController {
         if (quarantinePrefixToUse.isEmpty() || quarantinePrefixToUse.equals(sourcePrefixToUse)) {
             String errorMsg = "Invalid quarantine prefix: cannot be empty or same as source prefix.";
             logger.error(errorMsg + " Source: '{}', Quarantine: '{}'", sourcePrefixToUse, quarantinePrefixToUse);
-            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMsg + "\"}");
+            return CompletableFuture.completedFuture(
+                ResponseEntity.badRequest().body(new MoveActionSummary(errorMsg))
+            );
         }
         
         logger.info("Admin endpoint /admin/s3-cleanup/move-flagged invoked. " +
                         "Source Prefix: '{}', Limit: {}, Quarantine Prefix: '{}'",
                 sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse);
 
-        try {
-            com.williamcallahan.book_recommendation_engine.types.MoveActionSummary summary = 
-                s3CoverCleanupService.performMoveAction(sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse).join();
-            
-            logger.info("S3 Cover Cleanup Move Action completed. Summary: {}", summary.toString());
-            return ResponseEntity.ok(summary);
-        } catch (Exception e) {
-            String errorMessage = String.format(
-                "Failed to complete S3 Cover Cleanup Move Action. Source Prefix: '%s', Limit: %d, Quarantine Prefix: '%s'. Error: %s",
-                sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse, e.getMessage()
-            );
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
-        }
+        // Invoke async service without blocking
+        return s3CoverCleanupService.performMoveAction(sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse)
+            .thenApply(summary -> {
+                logger.info("S3 Cover Cleanup Move Action completed. Summary: {}", summary);
+                return ResponseEntity.ok(summary);
+            })
+            .exceptionally(e -> {
+                String errorMessage = String.format(
+                    "Failed to complete S3 Cover Cleanup Move Action. Source Prefix: '%s', Limit: %d, Quarantine Prefix: '%s'. Error: %s",
+                    sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse, e.getMessage()
+                );
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError()
+                    .body(new MoveActionSummary(errorMessage));
+            });
     }
 
     /**
@@ -203,29 +204,29 @@ public class AdminController {
      *
      * @return A ResponseEntity indicating the outcome of the trigger
      */
+    @Async
     @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> triggerNytBestsellerProcessing() {
+    public CompletableFuture<ResponseEntity<String>> triggerNytBestsellerProcessing() {
         logger.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
         
         if (newYorkTimesBestsellerScheduler == null) {
             String errorMessage = "New York Times Bestseller Scheduler is not available. S3 integration may be disabled.";
             logger.warn(errorMessage);
-            return ResponseEntity.badRequest().body(errorMessage);
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(errorMessage));
         }
-        
-        try {
-            // It's good practice to run schedulers asynchronously if they are long-running,
-            // but for a manual trigger, a direct call might be acceptable depending on execution time
-            // If processNewYorkTimesBestsellers is very long, consider wrapping in an async task
-            newYorkTimesBestsellerScheduler.processNewYorkTimesBestsellers();
-            String successMessage = "Successfully triggered New York Times Bestseller processing job.";
-            logger.info(successMessage);
-            return ResponseEntity.ok(successMessage);
-        } catch (Exception e) {
-            String errorMessage = "Failed to trigger New York Times Bestseller processing job: " + e.getMessage();
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body(errorMessage);
-        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                newYorkTimesBestsellerScheduler.processNewYorkTimesBestsellers();
+                String successMessage = "Successfully triggered New York Times Bestseller processing job.";
+                logger.info(successMessage);
+                return ResponseEntity.ok(successMessage);
+            } catch (Exception e) {
+                String errorMessage = "Failed to trigger New York Times Bestseller processing job: " + e.getMessage();
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body(errorMessage);
+            }
+        });
     }
 
     /**
@@ -233,19 +234,29 @@ public class AdminController {
      *
      * @return A ResponseEntity indicating the outcome of the trigger
      */
+    @Async
     @PostMapping(value = "/trigger-cache-warming", produces = MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> triggerCacheWarming() {
+    public CompletableFuture<ResponseEntity<String>> triggerCacheWarming() {
         logger.info("Admin endpoint /admin/trigger-cache-warming invoked.");
-        try {
-            bookCacheWarmingScheduler.warmPopularBookCaches();
-            String successMessage = "Successfully triggered book cache warming job.";
-            logger.info(successMessage);
-            return ResponseEntity.ok(successMessage);
-        } catch (Exception e) {
-            String errorMessage = "Failed to trigger book cache warming job: " + e.getMessage();
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body(errorMessage);
+
+        if (bookCacheWarmingScheduler == null) {
+            String errorMessage = "Book Cache Warming Scheduler is not available.";
+            logger.warn(errorMessage);
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(errorMessage));
         }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                bookCacheWarmingScheduler.warmPopularBookCaches();
+                String successMessage = "Successfully triggered book cache warming job.";
+                logger.info(successMessage);
+                return ResponseEntity.ok(successMessage);
+            } catch (Exception e) {
+                String errorMessage = "Failed to trigger book cache warming job: " + e.getMessage();
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body(errorMessage);
+            }
+        });
     }
 
     /**
@@ -253,18 +264,28 @@ public class AdminController {
      *
      * @return A ResponseEntity containing the circuit breaker status
      */
+    @Async
     @GetMapping(value = "/circuit-breaker/status", produces = MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> getCircuitBreakerStatus() {
+    public CompletableFuture<ResponseEntity<String>> getCircuitBreakerStatus() {
         logger.info("Admin endpoint /admin/circuit-breaker/status invoked.");
-        try {
-            String status = apiCircuitBreakerService.getCircuitStatus().join();
-            logger.info("Circuit breaker status retrieved: {}", status);
-            return ResponseEntity.ok(status);
-        } catch (Exception e) {
-            String errorMessage = "Failed to get circuit breaker status: " + e.getMessage();
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body(errorMessage);
+
+        if (apiCircuitBreakerService == null) {
+            String errorMessage = "API CircuitBreakerService is not available.";
+            logger.warn(errorMessage);
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(errorMessage));
         }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String status = apiCircuitBreakerService.getCircuitStatus().join();
+                logger.info("Circuit breaker status retrieved: {}", status);
+                return ResponseEntity.ok(status);
+            } catch (Exception e) {
+                String errorMessage = "Failed to get circuit breaker status: " + e.getMessage();
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body(errorMessage);
+            }
+        });
     }
 
     /**
@@ -272,19 +293,29 @@ public class AdminController {
      *
      * @return A ResponseEntity indicating the outcome of the reset
      */
+    @Async
     @PostMapping(value = "/circuit-breaker/reset", produces = MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> resetCircuitBreaker() {
+    public CompletableFuture<ResponseEntity<String>> resetCircuitBreaker() {
         logger.info("Admin endpoint /admin/circuit-breaker/reset invoked.");
-        try {
-            apiCircuitBreakerService.reset();
-            String successMessage = "Successfully reset API circuit breaker to CLOSED state.";
-            logger.info(successMessage);
-            return ResponseEntity.ok(successMessage);
-        } catch (Exception e) {
-            String errorMessage = "Failed to reset circuit breaker: " + e.getMessage();
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body(errorMessage);
+
+        if (apiCircuitBreakerService == null) {
+            String errorMessage = "API CircuitBreakerService is not available.";
+            logger.warn(errorMessage);
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(errorMessage));
         }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                apiCircuitBreakerService.reset();
+                String successMessage = "Successfully reset API circuit breaker to CLOSED state.";
+                logger.info(successMessage);
+                return ResponseEntity.ok(successMessage);
+            } catch (Exception e) {
+                String errorMessage = "Failed to reset circuit breaker: " + e.getMessage();
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body(errorMessage);
+            }
+        });
     }
 
     /**
@@ -293,8 +324,9 @@ public class AdminController {
      * @param dryRun Optional request parameter to perform a dry run without actual changes. Defaults to true
      * @return A ResponseEntity containing the consolidation summary
      */
-    @PostMapping(value = "/data/consolidate-books", produces = MediaType.TEXT_PLAIN_VALUE) // Changed to TEXT_PLAIN for simple ack
-    public ResponseEntity<String> triggerBookDataConsolidation( // Return type changed
+    @Async
+    @PostMapping(value = "/data/consolidate-books", produces = MediaType.TEXT_PLAIN_VALUE)
+    public CompletableFuture<ResponseEntity<String>> triggerBookDataConsolidation(
             @RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
         
         logger.info("Admin endpoint /admin/data/consolidate-books invoked. Dry run: {}", dryRun);
@@ -302,28 +334,21 @@ public class AdminController {
         if (bookDataConsolidationService == null) {
             String errorMessage = "BookDataConsolidationService is not available.";
             logger.warn(errorMessage);
-            return ResponseEntity.status(503).body(errorMessage); // Service Unavailable
+            return CompletableFuture.completedFuture(ResponseEntity.status(503).body(errorMessage));
         }
-        
-        try {
-            // Call the @Async method. It will run in a separate thread.
-            bookDataConsolidationService.consolidateBookDataAsync(dryRun);
-            
-            String ackMessage = "Book data consolidation process started. Dry run: " + dryRun + ". Check logs for completion status and summary.";
-            logger.info(ackMessage);
-            return ResponseEntity.ok(ackMessage); // Immediate acknowledgment
-            
-        } catch (Exception e) {
-            // This catch block might not be hit if the @Async method itself throws an unhandled exception,
-            // unless the call to the async method itself fails (e.g., proxy issues).
-            // Async exceptions are typically handled by an AsyncUncaughtExceptionHandler.
-            String errorMessage = String.format(
-                "Failed to START book data consolidation. Dry run: %b. Error: %s",
-                dryRun, e.getMessage()
-            );
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body(errorMessage);
-        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                bookDataConsolidationService.consolidateBookDataAsync(dryRun);
+                String ackMessage = "Book data consolidation process started. Dry run: " + dryRun + ". Check logs for completion status and summary.";
+                logger.info(ackMessage);
+                return ResponseEntity.ok(ackMessage);
+            } catch (Exception e) {
+                String errorMessage = String.format("Failed to START book data consolidation. Dry run: %b. Error: %s", dryRun, e.getMessage());
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body(errorMessage);
+            }
+        });
     }
 
     /**
@@ -331,31 +356,36 @@ public class AdminController {
      *
      * @return A ResponseEntity containing cache integrity statistics
      */
+    @Async
     @GetMapping(value = "/cache/diagnose", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<?> diagnoseCacheIntegrity() {
+    public CompletableFuture<ResponseEntity<Map<String,Integer>>> diagnoseCacheIntegrity() {
         logger.info("Admin endpoint /admin/cache/diagnose invoked.");
         
-        if (redisCachedBookRepository == null) {
-            String errorMessage = "Redis Cached Book Repository is not available. Redis integration may be disabled.";
+        if (maintenanceService == null) {
+            String errorMessage = "Redis Book Maintenance Service is not available. Redis integration may be disabled.";
             logger.warn(errorMessage);
-            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}");
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(Collections.emptyMap()));
         }
         
-        try {
-            java.util.Map<String, Integer> stats = redisCachedBookRepository.diagnoseCacheIntegrity();
-            logger.info("Cache integrity diagnosis completed: {}", stats);
-            return ResponseEntity.ok(stats);
-        } catch (Exception e) {
-            String errorMessage = "Failed to diagnose cache integrity: " + e.getMessage();
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
-        }
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                Map<String, Integer> stats = maintenanceService.diagnoseCacheIntegrity();
+                logger.info("Cache integrity diagnosis completed: {}", stats);
+                return ResponseEntity.ok(stats);
+            } catch (Exception e) {
+                String errorMessage = "Failed to diagnose cache integrity: " + e.getMessage();
+                logger.error(errorMessage, e);
+                // Explicitly type the error response to match the success response type for the supplier
+                Map<String, Integer> errorMap = Collections.emptyMap();
+                return ResponseEntity.internalServerError().body(errorMap);
+            }
+        });
     }
 
     /**
      * Cleans up corrupted cache entries
      *
-     * @param dryRun Optional request parameter to perform a dry run without actual cleanup. Defaults to true.
+     * @param dryRun Optional request parameter to perform a dry run without actual cleanup; defaults to true
      * @return A ResponseEntity containing the cleanup summary
      */
     @PostMapping(value = "/cache/cleanup", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -364,17 +394,17 @@ public class AdminController {
         
         logger.info("Admin endpoint /admin/cache/cleanup invoked. Dry run: {}", dryRun);
         
-        if (redisCachedBookRepository == null) {
-            String errorMessage = "Redis Cached Book Repository is not available. Redis integration may be disabled.";
+        if (maintenanceService == null) { // Changed to maintenanceService
+            String errorMessage = "Redis Book Maintenance Service is not available. Redis integration may be disabled.";
             logger.warn(errorMessage);
             return CompletableFuture.completedFuture(
-                ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}")
+                ResponseEntity.badRequest().body(new MoveActionSummary(errorMessage))
             );
         }
         
         return CompletableFuture.supplyAsync(() -> {
             try {
-                int repairedCount = redisCachedBookRepository.repairCorruptedCache(dryRun);
+                int repairedCount = maintenanceService.repairCorruptedCache(dryRun); // Changed
                 java.util.Map<String, Object> result = new java.util.HashMap<>();
                 result.put("repairedCount", repairedCount);
                 result.put("dryRun", dryRun);
@@ -387,7 +417,8 @@ public class AdminController {
             } catch (Exception e) {
                 String errorMessage = String.format("Failed to repair corrupted cache. Dry run: %b. Error: %s", dryRun, e.getMessage());
                 logger.error(errorMessage, e);
-                return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
+                // Explicitly type the error response if needed, here it's String, method returns ResponseEntity<?>
+                return ResponseEntity.internalServerError().body((Object)("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}"));
             }
         });
     }
@@ -401,7 +432,7 @@ public class AdminController {
             @RequestParam(value = "limit", defaultValue = "100") int limit,
             @RequestParam(value = "dryRun", defaultValue = "true") boolean dryRun) {
         
-        if (redisCachedBookRepository == null) {
+        if (cachedBookRepository == null) { // Changed
             return CompletableFuture.completedFuture(
                 ResponseEntity.badRequest().body("Repository service is not available.")
             );
@@ -413,7 +444,7 @@ public class AdminController {
                 
                 // Get books without embeddings or with wrong dimension
                 var books = new ArrayList<CachedBook>();
-                for (CachedBook book : redisCachedBookRepository.findAll()) {
+                for (CachedBook book : cachedBookRepository.findAll()) { // Changed
                     if (embeddingService.shouldGenerateEmbedding(book)) {
                         books.add(book);
                         if (books.size() >= limit) break;
@@ -432,32 +463,54 @@ public class AdminController {
                     return ResponseEntity.ok(message);
                 }
                 
-                int processed = 0;
-                int errors = 0;
-                
-                for (var book : books) {
-                    try {
-                        var embedding = embeddingService.generateEmbeddingForBook(book).block();
-                        if (embedding != null) {
-                            book.setEmbedding(embedding);
-                            redisCachedBookRepository.save(book);
-                            processed++;
-                            
-                            if (processed % 10 == 0) {
-                                logger.info("Generated embeddings for {} books...", processed);
+                AtomicInteger processedCount = new AtomicInteger(0);
+                AtomicInteger errorCount = new AtomicInteger(0);
+                int totalBooksToProcess = books.size();
+
+                // Use reactive streams with controlled concurrency
+                Flux.fromIterable(books)
+                    .flatMap(book -> embeddingService.generateEmbeddingForBook(book)
+                        .flatMap(embedding -> {
+                            if (embedding != null) {
+                                book.setEmbedding(embedding);
+                                // Assuming cachedBookRepository.save() is synchronous or can be wrapped
+                                // If save is also reactive, chain it: .then(cachedBookRepository.saveReactive(book))
+                                try {
+                                    cachedBookRepository.save(book); // Changed
+                                    processedCount.incrementAndGet();
+                                } catch (Exception ex) {
+                                    logger.warn("Failed to save book {} after embedding generation: {}", book.getId(), ex.getMessage());
+                                    errorCount.incrementAndGet();
+                                    return Mono.empty(); // Or handle error differently
+                                }
+                                return Mono.just(book);
                             }
-                        }
-                    } catch (Exception e) {
-                        errors++;
-                        logger.warn("Failed to generate embedding for book {}: {}", book.getId(), e.getMessage());
-                    }
-                }
-                
-                String message = String.format("Embedding generation completed. Processed: %d, Errors: %d, Total found: %d", 
-                    processed, errors, books.size());
+                            return Mono.empty();
+                        })
+                        .doOnNext(processedBook -> {
+                            int currentProcessed = processedCount.get();
+                            if (currentProcessed % 10 == 0 && currentProcessed > 0) {
+                                logger.info("Generated embeddings for {} books...", currentProcessed);
+                            }
+                        })
+                        .onErrorResume(e -> {
+                            // This error handling is for errors within the flatMap chain for a single book
+                            // The book object might not be available here if the error happened before book was emitted
+                            // For specific book error logging, doOnError inside the inner Mono is better.
+                            logger.warn("Error during embedding generation stream for a book: {}", e.getMessage());
+                            errorCount.incrementAndGet();
+                            return Mono.empty(); // Continue with other books
+                        }),
+                        10 // Concurrency limit
+                    )
+                    .collectList()
+                    .block(); // Block here to wait for all reactive processing to finish before returning response
+
+                String message = String.format("Embedding generation completed. Processed: %d, Errors: %d, Total found: %d",
+                    processedCount.get(), errorCount.get(), totalBooksToProcess);
                 logger.info(message);
                 return ResponseEntity.ok(message);
-                
+
             } catch (Exception e) {
                 String errorMessage = String.format("Failed to generate embeddings. Limit: %d, Dry run: %b. Error: %s", 
                     limit, dryRun, e.getMessage());

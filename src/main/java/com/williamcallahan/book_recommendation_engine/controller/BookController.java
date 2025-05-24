@@ -39,7 +39,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.Calendar;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.CompletionException;
@@ -171,9 +170,7 @@ public class BookController {
                             return true; 
                         }
                         if (book != null && book.getPublishedDate() != null) {
-                            Calendar calendar = Calendar.getInstance();
-                            calendar.setTime(book.getPublishedDate());
-                            int bookYear = calendar.get(Calendar.YEAR);
+                            int bookYear = book.getPublishedDate().getYear();
                             return bookYear == actualPublishedYearForApi;
                         }
                         return false;
@@ -555,7 +552,9 @@ public class BookController {
             )
             .doOnSuccess(book -> {
                 if (book != null) {
-                    recentlyViewedService.addToRecentlyViewedAsync(book);
+                    Mono.fromFuture(recentlyViewedService.addToRecentlyViewedAsync(book))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .subscribe();
                 }
             }) // No null check needed as stream errors out if book not found
             .map(book -> ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body((Object)book)) // Map to ResponseEntity
