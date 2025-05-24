@@ -10,6 +10,7 @@
  * - Uses Jedis client for Redis communication
  * - Designed for integration with S3-to-Redis migration process
  */
+
 package com.williamcallahan.book_recommendation_engine.jsontoredis;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -44,9 +45,13 @@ public class RedisJsonService {
      */
     public boolean jsonSet(String key, String pathString, String jsonString) {
         try {
+            // Validate JSON before storing
+            objectMapper.readTree(jsonString); // This validates the JSON
+            
             // For root path, use the simpler 2-parameter version
             if ("$".equals(pathString) || ".".equals(pathString)) {
                 // When setting at root, pass the JSON string directly
+                // This stores the JSON object without any wrapper
                 jedis.jsonSet(key, jsonString);
                 log.debug("Set JSON for key {} at root path", key);
             } else {
@@ -127,6 +132,26 @@ public class RedisJsonService {
         } catch (Exception e) {
             log.error("Error pinging Redis: {}", e.getMessage(), e);
             throw e; // Rethrow the exception to be handled by the caller
+        }
+    }
+    
+    /**
+     * Gets raw JSON using legacy path to avoid array wrapping
+     * This is useful for diagnostics and DataGrip compatibility
+     * @param key The Redis key
+     * @return The raw JSON string without array wrapping
+     */
+    public String jsonGetRaw(String key) {
+        try {
+            // Use legacy path "." to get raw JSON without array wrapper
+            Object result = jedis.jsonGet(key);
+            if (result == null) {
+                return null;
+            }
+            return result.toString();
+        } catch (Exception e) {
+            log.error("Error getting raw JSON for key {}: {}", key, e.getMessage(), e);
+            return null;
         }
     }
 }

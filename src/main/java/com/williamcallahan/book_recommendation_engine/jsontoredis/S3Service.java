@@ -128,6 +128,10 @@ public class S3Service {
      * This is used as a fallback when the async executor is unavailable
      */
     private List<String> listObjectKeysSync(String prefix) {
+        if (shuttingDown.get()) {
+            log.warn("S3Service is shutting down, not listing objects for prefix: {}", prefix);
+            return new ArrayList<>();
+        }
         log.info("Listing objects in bucket {} with prefix {}", bucketName, prefix);
         List<String> keys = new ArrayList<>();
         ListObjectsV2Request listReq = ListObjectsV2Request.builder()
@@ -159,6 +163,10 @@ public class S3Service {
      * @throws RuntimeException if any other error occurs during S3 interaction
      */
     public CompletableFuture<InputStream> getObjectContent(String key) {
+        if (shuttingDown.get()) {
+            log.warn("S3Service is shutting down, rejecting getObjectContent request for key: {}", key);
+            return CompletableFuture.completedFuture(InputStream.nullInputStream());
+        }
         // Check if executor is shutdown to avoid RejectedExecutionException
         boolean executorShutdown = false;
         if (mvcTaskExecutor instanceof ThreadPoolTaskExecutor) {
@@ -186,6 +194,10 @@ public class S3Service {
      * This is used as a fallback when the async executor is unavailable
      */
     private InputStream getObjectContentSync(String key) {
+        if (shuttingDown.get()) {
+            log.warn("S3Service is shutting down, not getting object content for key: {}", key);
+            return InputStream.nullInputStream();
+        }
         log.debug("Getting object content for S3 key: {} from bucket: {}", key, bucketName);
         GetObjectRequest getReq = GetObjectRequest.builder()
                 .bucket(bucketName)
@@ -196,8 +208,8 @@ public class S3Service {
             log.info("Successfully retrieved S3 object stream for key: {}", key);
             return stream;
         } catch (IllegalStateException ise) {
-            log.error("IllegalStateException while getting S3 object for key {}: {}", key, ise.getMessage(), ise);
-            throw new RuntimeException("Failed to get S3 object content for key " + key, ise);
+            log.warn("Connection pool shut down for S3 key {}. Returning empty InputStream.", key);
+            return InputStream.nullInputStream();
         } catch (NoSuchKeyException e) {
             log.warn("S3 key not found: {} (bucket {})", key, bucketName);
             throw e;
@@ -253,7 +265,7 @@ public class S3Service {
                         .key(sourceKey)
                         .build();
                 s3Client.deleteObject(deleteReq);
-                log.info("Successfully deleted original S3 object {}", sourceKey);
+                log.info("Successfully moved S3 object from {} to {} (removed from original location)", sourceKey, destinationKey);
 
             } catch (NoSuchKeyException e) {
                 log.error("Cannot move S3 object: Source key {} not found in bucket {}.", sourceKey, bucketName, e);
