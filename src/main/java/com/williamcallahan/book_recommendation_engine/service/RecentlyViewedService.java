@@ -1,6 +1,10 @@
 /**
  * Service responsible for tracking, managing, and providing recently viewed books
  * 
+ * Coordinates with {@link BookDeduplicationService} (via {@link DuplicateBookService})
+ * to resolve canonical book identifiers (ISBN-13, ISBN-10, or Google Books ID)
+ * and prevent duplicate entries in the history
+ *
  * This component provides functionality for:
  * - Maintaining a thread-safe list of recently viewed books
  * - Handling canonical book ID resolution to prevent duplicates
