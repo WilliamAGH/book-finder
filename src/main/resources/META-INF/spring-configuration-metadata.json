@@ -2,71 +2,98 @@
   "groups": [
     {
       "name": "google.books.api",
+      "type": "com.williamcallahan.book_recommendation_engine.config.GoogleBooksApiConfig",
       "description": "Google Books API configuration properties"
     },
     {
       "name": "s3",
+      "type": "com.williamcallahan.book_recommendation_engine.config.S3Config",
       "description": "S3 compatible storage configuration properties"
     },
     {
       "name": "app.cover-cache",
+      "type": "com.williamcallahan.book_recommendation_engine.config.CoverCacheConfig",
       "description": "Book cover caching configuration properties"
     },
     {
       "name": "app.cache",
+      "type": "com.williamcallahan.book_recommendation_engine.config.CacheConfig",
       "description": "Application caching configuration properties"
     },
     {
       "name": "app.embedding",
+      "type": "com.williamcallahan.book_recommendation_engine.config.EmbeddingConfig",
       "description": "Embedding service configuration properties"
     },
     {
       "name": "app.environment",
+      "type": "com.williamcallahan.book_recommendation_engine.config.EnvironmentConfig",
       "description": "Environment-specific configuration properties"
     },
     {
       "name": "app.nyt",
+      "type": "com.williamcallahan.book_recommendation_engine.config.NytApiConfig",
       "description": "New York Times API configuration properties"
     },
     {
       "name": "affiliate",
+      "type": "com.williamcallahan.book_recommendation_engine.config.AffiliateConfig",
       "description": "Affiliate link configuration properties"
     },
     {
       "name": "openlibrary.data.api",
+      "type": "com.williamcallahan.book_recommendation_engine.config.OpenLibraryConfig",
       "description": "OpenLibrary API configuration properties"
     },
     {
       "name": "app.security",
+      "type": "com.williamcallahan.book_recommendation_engine.config.SecurityConfig",
       "description": "Application security configuration properties"
     },
     {
       "name": "app.feature",
+      "type": "com.williamcallahan.book_recommendation_engine.config.FeatureConfig",
       "description": "Feature flag configuration properties"
     },
     {
       "name": "nyt.api",
+      "type": "com.williamcallahan.book_recommendation_engine.config.NytApiConfig",
       "description": "New York Times API credentials"
     },
     {
       "name": "app.s3.cleanup",
+      "type": "com.williamcallahan.book_recommendation_engine.config.S3CleanupConfig",
       "description": "S3 cleanup utility configuration properties"
     },
     {
       "name": "jsontoredis.s3",
+      "type": "com.williamcallahan.book_recommendation_engine.config.JsonToRedisConfig",
       "description": "JSON to Redis S3 configuration properties"
     },
     {
       "name": "sitemap.s3",
+      "type": "com.williamcallahan.book_recommendation_engine.config.SitemapConfig",
       "description": "Sitemap S3 configuration properties"
     },
     {
       "name": "book.cover",
+      "type": "com.williamcallahan.book_recommendation_engine.config.BookCoverConfig",
       "description": "Book cover processing configuration properties"
     },
     {
       "name": "healthcheck",
+      "type": "com.williamcallahan.book_recommendation_engine.config.HealthCheckConfig",
       "description": "Health check configuration properties"
+    },
+    {
+      "name": "app.retry",
+      "type": "com.williamcallahan.book_recommendation_engine.config.RetryConfig",
+      "description": "Retry configuration properties"
+    },
+    {
+      "name": "app.timeout",
+      "type": "com.williamcallahan.book_recommendation_engine.config.TimeoutConfig",
+      "description": "Timeout configuration properties"
     }
   ],
   "properties": [
@@ -515,7 +542,153 @@
       "type": "java.lang.Integer",
       "description": "Number of days to consider for recently viewed books",
       "defaultValue": 7
+    },
+    {
+      "name": "app.retry.default.max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Default maximum retry attempts for all operations",
+      "defaultValue": 3
+    },
+    {
+      "name": "app.retry.default.initial-backoff-ms",
+      "type": "java.lang.Long",
+      "description": "Default initial backoff time in milliseconds",
+      "defaultValue": 1000
+    },
+    {
+      "name": "app.retry.default.max-backoff-ms",
+      "type": "java.lang.Long",
+      "description": "Default maximum backoff time in milliseconds",
+      "defaultValue": 30000
+    },
+    {
+      "name": "app.retry.default.backoff-multiplier",
+      "type": "java.lang.Double",
+      "description": "Default backoff multiplier",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "app.retry.default.jitter-factor",
+      "type": "java.lang.Double",
+      "description": "Default jitter factor for retry backoff",
+      "defaultValue": 0.5
+    },
+    {
+      "name": "app.retry.s3.max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Maximum retry attempts for S3 operations",
+      "defaultValue": 3
+    },
+    {
+      "name": "app.retry.s3.initial-backoff-ms",
+      "type": "java.lang.Long",
+      "description": "Initial backoff time in milliseconds for S3 retries",
+      "defaultValue": 200
+    },
+    {
+      "name": "app.retry.s3.backoff-multiplier",
+      "type": "java.lang.Double",
+      "description": "Backoff multiplier for S3 retries",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "app.retry.redis.max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Maximum retry attempts for Redis operations",
+      "defaultValue": 2
+    },
+    {
+      "name": "app.retry.redis.initial-backoff-ms",
+      "type": "java.lang.Long",
+      "description": "Initial backoff time in milliseconds for Redis retries",
+      "defaultValue": 500
+    },
+    {
+      "name": "app.retry.redis.backoff-multiplier",
+      "type": "java.lang.Double",
+      "description": "Backoff multiplier for Redis retries",
+      "defaultValue": 1.5
+    },
+    {
+      "name": "app.retry.google-api.max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Maximum retry attempts for Google API operations",
+      "defaultValue": 3
+    },
+    {
+      "name": "app.retry.google-api.initial-backoff-ms",
+      "type": "java.lang.Long",
+      "description": "Initial backoff time in milliseconds for Google API retries",
+      "defaultValue": 2000
+    },
+    {
+      "name": "app.retry.google-api.backoff-multiplier",
+      "type": "java.lang.Double",
+      "description": "Backoff multiplier for Google API retries",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "app.timeout.default.connection-ms",
+      "type": "java.lang.Long",
+      "description": "Default connection timeout in milliseconds",
+      "defaultValue": 5000
+    },
+    {
+      "name": "app.timeout.default.read-ms",
+      "type": "java.lang.Long",
+      "description": "Default read timeout in milliseconds",
+      "defaultValue": 10000
+    },
+    {
+      "name": "app.timeout.default.write-ms",
+      "type": "java.lang.Long",
+      "description": "Default write timeout in milliseconds",
+      "defaultValue": 10000
+    },
+    {
+      "name": "app.timeout.redis.ping-ms",
+      "type": "java.lang.Long",
+      "description": "Redis ping timeout in milliseconds",
+      "defaultValue": 1000
+    },
+    {
+      "name": "app.timeout.redis.operation-ms",
+      "type": "java.lang.Long",
+      "description": "Redis operation timeout in milliseconds",
+      "defaultValue": 5000
+    },
+    {
+      "name": "app.timeout.s3.operation-ms",
+      "type": "java.lang.Long",
+      "description": "S3 operation timeout in milliseconds",
+      "defaultValue": 30000
+    },
+    {
+      "name": "app.timeout.google-api.operation-ms",
+      "type": "java.lang.Long",
+      "description": "Google API operation timeout in milliseconds",
+      "defaultValue": 60000
+    },
+    {
+      "name": "app.timeout.webclient.default-ms",
+      "type": "java.lang.Long",
+      "description": "Default WebClient timeout in milliseconds",
+      "defaultValue": 30000
     }
   ],
-  "hints": []
+  "hints": [
+    {
+      "name": "app.cache.enabled",
+      "values": [
+        {
+          "value": true,
+          "description": "Enable caching"
+        },
+        {
+          "value": false,
+          "description": "Disable caching"
+        }
+      ]
+    }
+  ]
 }
