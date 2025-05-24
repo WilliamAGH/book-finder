@@ -101,6 +101,7 @@ public class JsonS3ToRedisService {
         List<String> bookKeys = s3Service.listObjectKeys(googleBooksPrefix).join();
         AtomicInteger processedCount = new AtomicInteger(0);
         AtomicInteger skippedNoIdCount = new AtomicInteger(0);
+        AtomicInteger failedCount = new AtomicInteger(0);
 
         bookKeys.stream()
                 .filter(key -> JSON_FILE_PATTERN.matcher(key).matches()) // Ensure it's a .json file
@@ -181,10 +182,16 @@ public class JsonS3ToRedisService {
                             mergedMap.put("id", finalRecordUuid); 
 
                             String mergedJsonString = objectMapper.writeValueAsString(mergedMap);
-                            redisJsonService.jsonSet(redisKey, "$", mergedJsonString);
+                            boolean success = redisJsonService.jsonSet(redisKey, "$", mergedJsonString);
                             
-                            // Move processed S3 object
-                            destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
+                            if (success) {
+                                // Move processed S3 object only if Redis write was successful
+                                destinationS3Key = getProcessedFileDestinationKey(s3Key, googleBooksPrefix);
+                            } else {
+                                log.error("Failed to write book {} to Redis. S3 file {} will not be moved.", finalRecordUuid, s3Key);
+                                failedCount.incrementAndGet();
+                                // Skip to next item in forEach
+                            }
                         } // streamToRead is closed here
                         if (destinationS3Key != null) { // Now destinationS3Key is in scope
                             s3Service.moveObject(s3Key, destinationS3Key);
@@ -203,7 +210,12 @@ public class JsonS3ToRedisService {
                     }
                 });
 
-        log.info("--- Phase 1 Complete: Ingested {} Google Books records. Skipped {} records due to no identifier. ---", processedCount.get(), skippedNoIdCount.get());
+        log.info("--- Phase 1 Complete: Ingested {} Google Books records. Skipped {} records due to no identifier. Failed {} records due to Redis errors. ---", 
+                processedCount.get(), skippedNoIdCount.get(), failedCount.get());
+        
+        if (failedCount.get() > 0) {
+            log.error("WARNING: {} records failed to write to Redis. Check logs for details.", failedCount.get());
+        }
     }
 
     private CompletableFuture<Void> ingestGoogleBooksDataAsync() {

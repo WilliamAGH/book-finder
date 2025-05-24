@@ -40,21 +40,30 @@ public class RedisJsonService {
      * @param key The Redis key
      * @param pathString The JSON path string (use "$" or "." for root)
      * @param jsonString The JSON string value to set
+     * @return true if successful, false otherwise
      */
-    public void jsonSet(String key, String pathString, String jsonString) {
+    public boolean jsonSet(String key, String pathString, String jsonString) {
         try {
-            Path2 path = Path2.of(pathString);
-            // Parse the jsonString into an Object (e.g., Map or List)
-            // so Jedis serializes it as a JSON structure, not a JSON string literal
-            Object jsonObject = objectMapper.readValue(jsonString, Object.class);
-            jedis.jsonSet(key, path, jsonObject);
-            log.debug("Set JSON for key {} at path {}", key, pathString);
+            // For root path, use the simpler 2-parameter version
+            if ("$".equals(pathString) || ".".equals(pathString)) {
+                // When setting at root, pass the JSON string directly
+                jedis.jsonSet(key, jsonString);
+                log.debug("Set JSON for key {} at root path", key);
+            } else {
+                // For nested paths, use the 3-parameter version with Path2
+                Path2 path = Path2.of(pathString);
+                // Parse the jsonString into an Object for nested path operations
+                Object jsonObject = objectMapper.readValue(jsonString, Object.class);
+                jedis.jsonSet(key, path, jsonObject);
+                log.debug("Set JSON for key {} at path {}", key, pathString);
+            }
+            return true;
         } catch (JsonProcessingException e) {
             log.error("Error parsing jsonString before setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
-            // Handle or rethrow as appropriate
+            return false;
         } catch (Exception e) {
             log.error("Error setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
-            // Consider rethrowing a custom exception or a JedisException if callers need to react
+            return false;
         }
     }
 
