@@ -46,15 +46,13 @@ class SitemapUpdateSchedulerTest {
     @Test
     void scheduleSitemapBookIdUpdate_shouldCallServiceAndUpdateLogs_whenSuccessful() throws Exception {
         // Arrange
+        CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
         when(bookSitemapService.updateAccumulatedBookIdsInS3Async())
-            .thenReturn(CompletableFuture.completedFuture(null));
+            .thenReturn(future);
 
         // Act
         sitemapUpdateScheduler.scheduleSitemapBookIdUpdate();
         
-        // Wait a bit for async completion
-        Thread.sleep(100);
-
         // Assert
         verify(bookSitemapService, times(1)).updateAccumulatedBookIdsInS3Async();
         verify(logger, times(1)).info("Scheduler triggered: Updating accumulated book IDs in S3.");
@@ -66,19 +64,18 @@ class SitemapUpdateSchedulerTest {
     void scheduleSitemapBookIdUpdate_shouldCatchAndLogException_whenServiceThrowsException() throws Exception {
         // Arrange
         RuntimeException testException = new RuntimeException("Test S3 service error");
+        CompletableFuture<Void> future = CompletableFuture.failedFuture(testException);
         when(bookSitemapService.updateAccumulatedBookIdsInS3Async())
-            .thenReturn(CompletableFuture.failedFuture(testException));
+            .thenReturn(future);
 
         // Act
         sitemapUpdateScheduler.scheduleSitemapBookIdUpdate();
         
-        // Wait a bit for async completion
-        Thread.sleep(100);
-
         // Assert
         verify(bookSitemapService, times(1)).updateAccumulatedBookIdsInS3Async();
         verify(logger, times(1)).info("Scheduler triggered: Updating accumulated book IDs in S3.");
-        verify(logger, times(1)).error(eq("Error during scheduled sitemap book ID update:"), any(CompletionException.class));
+        // The error is wrapped in CompletionException by the scheduler's exceptionally block
+        verify(logger, times(1)).error(eq("Error during scheduled sitemap book ID update:"), isA(CompletionException.class));
         verify(logger, never()).info("Scheduler finished: Accumulated book ID update process completed.");
     }
 
@@ -86,18 +83,17 @@ class SitemapUpdateSchedulerTest {
     void scheduleSitemapBookIdUpdate_shouldNotPropagateException_whenServiceThrowsException() throws Exception {
         // Arrange
         RuntimeException testException = new RuntimeException("Test S3 service error");
+        CompletableFuture<Void> future = CompletableFuture.failedFuture(testException);
         when(bookSitemapService.updateAccumulatedBookIdsInS3Async())
-            .thenReturn(CompletableFuture.failedFuture(testException));
+            .thenReturn(future);
 
         // Act & Assert
+        // The call to scheduleSitemapBookIdUpdate itself should not throw.
         assertDoesNotThrow(() -> {
             sitemapUpdateScheduler.scheduleSitemapBookIdUpdate();
-        }, "The scheduler should catch the exception and not let it propagate.");
+        }, "The scheduler's initial call should not throw the exception directly.");
         
-        // Wait a bit for async completion
-        Thread.sleep(100);
-        
-        // Also verify logging as a sanity check for this test's purpose
-        verify(logger, times(1)).error(eq("Error during scheduled sitemap book ID update:"), any(CompletionException.class));
+        // Verify logging
+        verify(logger, times(1)).error(eq("Error during scheduled sitemap book ID update:"), isA(CompletionException.class));
     }
 }

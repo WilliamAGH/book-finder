@@ -151,8 +151,8 @@ class HomeControllerTest {
         when(recentlyViewedService.getRecentlyViewedBooksAsync()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(new ArrayList<>()));
         
         // Mock duplicate book service for bestsellers processing
-        when(duplicateBookService.populateDuplicateEditionsAsync(any(Book.class)))
-            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+        when(duplicateBookService.populateDuplicateEditionsReactive(any(Book.class)))
+            .thenReturn(Mono.empty());
         
         // Mock book cover management service
         when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class), eq(false)))

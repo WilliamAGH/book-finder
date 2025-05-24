@@ -163,10 +163,8 @@ class BookCacheFacadeServiceTest {
     void cacheBook_delegatesToSubServices() throws Exception {
         when(bookReactiveCacheService.cacheBookReactive(testBook)).thenReturn(Mono.empty());
         
-        bookCacheFacadeService.cacheBook(testBook).join();
-        
-        // Allow time for the async operations to complete
-        Thread.sleep(100);
+        CompletableFuture<Void> cacheFuture = bookCacheFacadeService.cacheBook(testBook);
+        cacheFuture.join(); // This ensures completion before verification
         
         verify(booksSpringCache).put(testBookId, testBook);
         verify(bookReactiveCacheService).cacheBookReactive(testBook);
