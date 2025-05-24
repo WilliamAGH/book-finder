@@ -12,6 +12,8 @@
  */
 package com.williamcallahan.book_recommendation_engine.jsontoredis;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.json.Path2; // Using non-deprecated Path2
 import org.slf4j.Logger;
@@ -25,10 +27,12 @@ import org.springframework.stereotype.Service;
 public class RedisJsonService {
 
     private final JedisPooled jedis;
+    private final ObjectMapper objectMapper; // Added ObjectMapper
     private static final Logger log = LoggerFactory.getLogger(RedisJsonService.class);
 
-    public RedisJsonService(@Qualifier("jsonS3ToRedisJedisPooled") JedisPooled jedis) { // Changed to inject JedisPooled
+    public RedisJsonService(@Qualifier("jsonS3ToRedisJedisPooled") JedisPooled jedis, ObjectMapper objectMapper) { // Changed to inject JedisPooled and ObjectMapper
         this.jedis = jedis;
+        this.objectMapper = objectMapper; // Initialize ObjectMapper
     }
 
     /**
@@ -40,8 +44,14 @@ public class RedisJsonService {
     public void jsonSet(String key, String pathString, String jsonString) {
         try {
             Path2 path = Path2.of(pathString);
-            jedis.jsonSet(key, path, jsonString);
+            // Parse the jsonString into an Object (e.g., Map or List)
+            // so Jedis serializes it as a JSON structure, not a JSON string literal
+            Object jsonObject = objectMapper.readValue(jsonString, Object.class);
+            jedis.jsonSet(key, path, jsonObject);
             log.debug("Set JSON for key {} at path {}", key, pathString);
+        } catch (JsonProcessingException e) {
+            log.error("Error parsing jsonString before setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
+            // Handle or rethrow as appropriate
         } catch (Exception e) {
             log.error("Error setting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
             // Consider rethrowing a custom exception or a JedisException if callers need to react
@@ -68,10 +78,14 @@ public class RedisJsonService {
             }
             // Convert to string. For complex objects, this will be the default toString(),
             // which might not be the JSON string representation.
-            // If a JSON string is always needed, consider using a JSON library (e.g., Jackson)
-            // to serialize the 'result' object if it's a Map/List.
-            // For now, keeping it simple with toString().
-            return result.toString();
+            // Serialize the result object back to a JSON string if it's not null.
+            if (result instanceof String) { // If RedisJSON already returned it as a simple string (e.g. a value at a deeper path like a string field)
+                return (String) result;
+            }
+            return objectMapper.writeValueAsString(result);
+        } catch (JsonProcessingException e) {
+            log.error("Error serializing result to JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
+            return null;
         } catch (Exception e) {
             log.warn("Error getting JSON for key {} at path {}: {}", key, pathString, e.getMessage(), e);
             return null;

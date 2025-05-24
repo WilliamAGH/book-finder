@@ -14,8 +14,13 @@
 package com.williamcallahan.book_recommendation_engine.jsontoredis;
 
 import com.williamcallahan.book_recommendation_engine.jsontoredis.S3Service;
+import com.williamcallahan.book_recommendation_engine.jsontoredis.RedisJsonService;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtil;
+import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +31,7 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
@@ -43,7 +49,8 @@ public class JsonS3ToRedisService {
 
     private final S3Service s3Service;
     private final RedisJsonService redisJsonService;
-    private final ObjectMapper objectMapper; // Spring Boot auto-configures this
+    private final ObjectMapper objectMapper;
+    private final CachedBookRepository cachedBookRepository;
 
     // S3 paths will be accessed via s3Service getters
     private final String googleBooksPrefix;
@@ -51,10 +58,12 @@ public class JsonS3ToRedisService {
 
     public JsonS3ToRedisService(@Qualifier("jsonS3ToRedis_S3Service") S3Service s3Service,
                                 @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                CachedBookRepository cachedBookRepository) {
         this.s3Service = s3Service;
         this.redisJsonService = redisJsonService;
         this.objectMapper = objectMapper;
+        this.cachedBookRepository = cachedBookRepository;
         this.googleBooksPrefix = s3Service.getGoogleBooksPrefix();
         this.nytBestsellersKey = s3Service.getNytBestsellersKey();
         log.info("JsonS3ToRedisService initialized. Google Books S3 Prefix: {}, NYT Bestsellers S3 Key: {}", googleBooksPrefix, nytBestsellersKey);
@@ -81,7 +90,7 @@ public class JsonS3ToRedisService {
      */
     private void ingestGoogleBooksData() {
         log.info("--- Phase 1: Ingesting Google Books data from S3 prefix: {} ---", googleBooksPrefix);
-        List<String> bookKeys = s3Service.listObjectKeys(googleBooksPrefix);
+        List<String> bookKeys = s3Service.listObjectKeys(googleBooksPrefix).join();
         AtomicInteger processedCount = new AtomicInteger(0);
         AtomicInteger skippedNoIdCount = new AtomicInteger(0);
 
@@ -90,7 +99,7 @@ public class JsonS3ToRedisService {
                 .filter(key -> !key.startsWith(googleBooksPrefix + "in-redis/")) // Skip files already processed and moved
                 .forEach(s3Key -> {
                     log.debug("Processing S3 object: {}", s3Key);
-                    try (InputStream is = s3Service.getObjectContent(s3Key)) {
+                    try (InputStream is = s3Service.getObjectContent(s3Key).join()) {
                         if (is == null) {
                             log.warn("InputStream is null for S3 key {}. Skipping.", s3Key);
                             return;
@@ -100,39 +109,69 @@ public class JsonS3ToRedisService {
                         try (InputStream streamToRead = streamEntry.getKey()) {
                             Map<String, Object> bookData = objectMapper.readValue(streamToRead, new TypeReference<Map<String, Object>>() {});
 
-                            String isbn13 = extractIsbn13FromGoogleBooks(bookData);
-                            String redisKey;
+                            String s3Isbn13 = extractIsbn13FromGoogleBooks(bookData);
+                            String s3Isbn10 = extractIsbn10FromGoogleBooks(bookData);
+                            String s3GoogleId = extractGoogleBooksIdFromGoogleBooks(bookData);
 
-                            if (isbn13 != null && !isbn13.isEmpty()) {
-                                redisKey = "book:" + isbn13;
-                            } else {
-                                String googleBooksId = (String) bookData.get("id");
-                                if (googleBooksId != null && !googleBooksId.isEmpty()) {
-                                    redisKey = "book:id:" + googleBooksId;
-                                    log.warn("ISBN-13 not found for S3 key {}, using Google Books ID for Redis key: {}", s3Key, redisKey);
-                                } else {
-                                    log.error("No usable identifier (ISBN-13 or Google Books ID) found for S3 key {}. Skipping.", s3Key);
-                                    skippedNoIdCount.incrementAndGet();
-                                    return;
+                            String finalRecordUuid;
+                            String redisKey;
+                            String existingJson = null;
+                            java.util.Optional<CachedBook> existingCanonicalBookOpt = java.util.Optional.empty();
+
+                            if (s3Isbn13 != null && !s3Isbn13.isEmpty()) {
+                                existingCanonicalBookOpt = cachedBookRepository.findByIsbn13(s3Isbn13);
+                                if (existingCanonicalBookOpt.isPresent()) {
+                                    log.info("Found existing canonical record for S3 key {} using ISBN-13: {}. Canonical UUIDv7 ID: {}", s3Key, s3Isbn13, existingCanonicalBookOpt.get().getId());
+                                }
+                            }
+                            if (existingCanonicalBookOpt.isEmpty() && s3Isbn10 != null && !s3Isbn10.isEmpty()) {
+                                existingCanonicalBookOpt = cachedBookRepository.findByIsbn10(s3Isbn10);
+                                if (existingCanonicalBookOpt.isPresent()) {
+                                    log.info("Found existing canonical record for S3 key {} using ISBN-10: {}. Canonical UUIDv7 ID: {}", s3Key, s3Isbn10, existingCanonicalBookOpt.get().getId());
+                                }
+                            }
+                            if (existingCanonicalBookOpt.isEmpty() && s3GoogleId != null && !s3GoogleId.isEmpty()) {
+                                existingCanonicalBookOpt = cachedBookRepository.findByGoogleBooksId(s3GoogleId);
+                                if (existingCanonicalBookOpt.isPresent()) {
+                                    log.info("Found existing canonical record for S3 key {} using GoogleBooksID: {}. Canonical UUIDv7 ID: {}", s3Key, s3GoogleId, existingCanonicalBookOpt.get().getId());
                                 }
                             }
 
-                            // Merge with existing Redis record if present
-                            String existingJson = redisJsonService.jsonGet(redisKey, "$"); // Reverted to use "$"
-                            Map<String, Object> mergedMap;
-                            if (existingJson != null && !existingJson.trim().isEmpty() && !existingJson.equalsIgnoreCase("null")) {
-                                com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(existingJson);
-                                if (rootNode.isArray() && rootNode.size() > 0) {
-                                    com.fasterxml.jackson.databind.JsonNode actualObjectNode = rootNode.get(0);
-                                    Map<String, Object> existingMap = objectMapper.convertValue(actualObjectNode, new TypeReference<Map<String, Object>>() {});
-                                    mergedMap = mergeMaps(existingMap, bookData);
-                                } else {
-                                    log.warn("Expected JSON array from redisJsonService.jsonGet for key {}, but got: {}. Treating as new data.", redisKey, existingJson);
-                                    mergedMap = bookData;
+                            if (existingCanonicalBookOpt.isPresent()) {
+                                finalRecordUuid = existingCanonicalBookOpt.get().getId();
+                                redisKey = "book:" + finalRecordUuid;
+                                // Fetch the JSON content of the canonical record for merging
+                                String rawJson = redisJsonService.jsonGet(redisKey, "$");
+                                if (rawJson != null && !rawJson.trim().isEmpty() && !rawJson.equalsIgnoreCase("null")) {
+                                   // RedisJSON often returns an array for path '$', even for a single object.
+                                   JsonNode rootNode = objectMapper.readTree(rawJson);
+                                   if (rootNode.isArray() && rootNode.size() > 0) {
+                                       existingJson = rootNode.get(0).toString();
+                                   } else if (rootNode.isObject()) {
+                                       existingJson = rootNode.toString();
+                                   } else {
+                                       log.warn("Unexpected JSON structure from redisJsonService.jsonGet for key {}: {}", redisKey, rawJson);
+                                   }
                                 }
+                            } else {
+                                finalRecordUuid = UuidUtil.getTimeOrderedEpoch().toString();
+                                redisKey = "book:" + finalRecordUuid;
+                                log.info("No existing canonical record found for S3 key {}. Assigning new UUIDv7 ID: {}. Target Redis key: {}", s3Key, finalRecordUuid, redisKey);
+                                existingJson = null; // No existing record to merge from this key
+                            }
+                            
+                            log.info("Processing S3 object {} for Redis. Final UUIDv7 ID for record: {}. Target Redis key: {}", s3Key, finalRecordUuid, redisKey);
+
+                            Map<String, Object> mergedMap;
+                            if (existingJson != null) {
+                                Map<String, Object> existingMap = objectMapper.readValue(existingJson, new TypeReference<Map<String, Object>>() {});
+                                mergedMap = mergeMaps(existingMap, bookData);
                             } else {
                                 mergedMap = bookData;
                             }
+                            // Ensure the 'id' field in the JSON content is the canonical UUIDv7
+                            mergedMap.put("id", finalRecordUuid); 
+
                             String mergedJsonString = objectMapper.writeValueAsString(mergedMap);
                             redisJsonService.jsonSet(redisKey, "$", mergedJsonString);
                             
@@ -165,28 +204,44 @@ public class JsonS3ToRedisService {
      * @param bookData The Google Books data map
      * @return The ISBN-13 if found, null otherwise
      */
-    @SuppressWarnings("unchecked")
     private String extractIsbn13FromGoogleBooks(Map<String, Object> bookData) {
+        return extractIdentifierFromGoogleBooks(bookData, "ISBN_13");
+    }
+
+    private String extractIsbn10FromGoogleBooks(Map<String, Object> bookData) {
+        return extractIdentifierFromGoogleBooks(bookData, "ISBN_10");
+    }
+
+    private String extractGoogleBooksIdFromGoogleBooks(Map<String, Object> bookData) {
+        // Google Books ID is usually at the top level 'id' field in the JSON from S3
+        if (bookData != null && bookData.get("id") instanceof String) {
+            return (String) bookData.get("id");
+        }   
+        return null; // Or attempt to find it in volumeInfo if structure varies
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractIdentifierFromGoogleBooks(Map<String, Object> bookData, String type) {
         if (bookData != null && bookData.containsKey("volumeInfo")) {
             Map<String, Object> volumeInfo = (Map<String, Object>) bookData.get("volumeInfo");
             if (volumeInfo != null && volumeInfo.containsKey("industryIdentifiers")) {
                 try {
                     List<Map<String, String>> identifiers = (List<Map<String, String>>) volumeInfo.get("industryIdentifiers");
                     if (identifiers != null) {
-                        for (Map<String, String> identifier : identifiers) {
-                            if ("ISBN_13".equals(identifier.get("type"))) {
-                                return identifier.get("identifier");
+                        for (Map<String, String> identifierObj : identifiers) {
+                            if (type.equals(identifierObj.get("type"))) {
+                                return identifierObj.get("identifier");
                             }
                         }
                     }
                 } catch (ClassCastException e) {
-                    log.warn("Could not cast industryIdentifiers to List<Map<String, String>> for book data: {}", bookData.get("id"), e);
+                    log.warn("Could not cast industryIdentifiers for book data: {}", bookData.get("id"), e);
                 }
             }
         }
         return null;
     }
-
+    
     /**
      * Phase 2: Merges NYT Bestsellers data into existing Redis records
      * Adds bestseller information to books that already exist in Redis
@@ -202,7 +257,7 @@ public class JsonS3ToRedisService {
         
         Map<String, Object> nytData = null; // Declare outside try block
 
-        try (InputStream s3InputStream = s3Service.getObjectContent(nytBestsellersKey)) {
+        try (InputStream s3InputStream = s3Service.getObjectContent(nytBestsellersKey).join()) {
             if (s3InputStream == null) {
                 log.error("InputStream is null for NYT Bestsellers S3 key {}. Cannot proceed with merge phase.", nytBestsellersKey);
                 return;
@@ -402,20 +457,19 @@ public class JsonS3ToRedisService {
      * @throws IOException If an I/O error occurs
      */
     private Map.Entry<InputStream, Boolean> handleCompressedInputStream(InputStream inputStream, String s3Key) throws IOException {
-        try (PushbackInputStream pbis = new PushbackInputStream(inputStream, 2)) {
-            byte[] signature = new byte[2];
-            int bytesRead = pbis.read(signature);
-            pbis.unread(signature, 0, bytesRead); // Push back the read bytes
+        PushbackInputStream pbis = new PushbackInputStream(inputStream, 2);
+        byte[] signature = new byte[2];
+        int bytesRead = pbis.read(signature);
+        pbis.unread(signature, 0, bytesRead); // Push back the read bytes
 
-            boolean gzipDetected = (bytesRead == 2 && signature[0] == (byte) 0x1f && signature[1] == (byte) 0x8b);
+        boolean gzipDetected = (bytesRead == 2 && signature[0] == (byte) 0x1f && signature[1] == (byte) 0x8b);
 
-            if (gzipDetected) {
-                log.debug("Detected GZIP compressed content for S3 key: {}", s3Key);
-                return Map.entry(new GZIPInputStream(pbis), true);
-            } else {
-                log.debug("Content for S3 key {} is not GZIP compressed or stream is too short to tell.", s3Key);
-                return Map.entry(pbis, false);
-            }
+        if (gzipDetected) {
+            log.debug("Detected GZIP compressed content for S3 key: {}", s3Key);
+            return Map.entry(new GZIPInputStream(pbis), true);
+        } else {
+            log.debug("Content for S3 key {} is not GZIP compressed or stream is too short to tell.", s3Key);
+            return Map.entry(pbis, false);
         }
     }
 
