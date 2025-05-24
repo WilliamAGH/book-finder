@@ -35,6 +35,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import com.williamcallahan.book_recommendation_engine.util.AsyncUtils;
 
 @Service
 public class BookCacheFacadeService {
@@ -75,17 +78,30 @@ public class BookCacheFacadeService {
     public CompletableFuture<Book> getBookById(String id) {
         logger.debug("BookCacheFacadeService.getBookById (async) called for ID: {}", id);
         // Spring Cache handles CompletableFuture by caching the result once completed.
-        return bookSyncCacheService.getBookByIdAsync(id);
+        return AsyncUtils.withTimeout(
+            () -> bookSyncCacheService.getBookByIdAsync(id),
+            "getBookById-" + id
+        );
     }
 
     public CompletableFuture<List<Book>> getBooksByIsbn(String isbn) {
         logger.debug("BookCacheFacadeService.getBooksByIsbn (async) called for ISBN: {}", isbn);
-        return bookSyncCacheService.getBooksByIsbnAsync(isbn);
+        return AsyncUtils.withTimeoutAndFallback(
+            () -> bookSyncCacheService.getBooksByIsbnAsync(isbn),
+            "getBooksByIsbn-" + isbn,
+            30,
+            Collections.emptyList()
+        );
     }
 
     public CompletableFuture<List<Book>> searchBooks(String query, int startIndex, int maxResults) {
         logger.info("BookCacheFacadeService.searchBooks (async) with query: {}, startIndex: {}, maxResults: {}", query, startIndex, maxResults);
-        return bookSyncCacheService.searchBooksAsync(query, startIndex, maxResults);
+        return AsyncUtils.withTimeoutAndFallback(
+            () -> bookSyncCacheService.searchBooksAsync(query, startIndex, maxResults),
+            "searchBooks-" + query,
+            30,
+            Collections.emptyList()
+        );
     }
 
     public Mono<Book> getBookByIdReactive(String id) {
@@ -115,7 +131,12 @@ public class BookCacheFacadeService {
 
     public CompletableFuture<List<Book>> getSimilarBooks(String bookId, int count) {
         logger.info("BookCacheFacadeService.getSimilarBooks (async) called for bookId: {}, count: {}", bookId, count);
-        return bookSimilarityService.getSimilarBooksReactive(bookId, count).toFuture();
+        return AsyncUtils.withTimeoutAndFallback(
+            () -> bookSimilarityService.getSimilarBooksReactive(bookId, count).toFuture(),
+            "getSimilarBooks-" + bookId,
+            30,
+            Collections.emptyList()
+        );
     }
 
     public Mono<List<Book>> getSimilarBooksReactive(String bookId, int count) {
@@ -265,18 +286,28 @@ public class BookCacheFacadeService {
         if (book == null || book.getId() == null) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("Book and Book ID must not be null."));
         }
-        return CompletableFuture.runAsync(() -> {
-            Cache booksSpringCache = cacheManager.getCache("books");
-            if (booksSpringCache != null) {
-                booksSpringCache.put(book.getId(), book);
-            }
-            // Delegate to reactive for DB and Redis. Subscribe is non-blocking.
-            bookReactiveCacheService.cacheBookReactive(book).subscribe(
-                null,
-                error -> logger.error("Error during reactive caching via facade for book ID {}: {}", book.getId(), error.getMessage())
-            );
-            logger.info("Initiated caching for book ID: {}", book.getId());
-        });
+        
+        // First, update Spring cache
+        Cache booksSpringCache = cacheManager.getCache("books");
+        if (booksSpringCache != null) {
+            booksSpringCache.put(book.getId(), book);
+        }
+        
+        // Then delegate to reactive service with proper error handling
+        return bookReactiveCacheService.cacheBookReactive(book)
+            .toFuture()
+            .orTimeout(30, TimeUnit.SECONDS)
+            .handle((result, ex) -> {
+                if (ex != null) {
+                    if (ex instanceof TimeoutException) {
+                        logger.error("Timeout while caching book ID {}: operation took longer than 30 seconds", book.getId());
+                    } else {
+                        logger.error("Error during reactive caching for book ID {}: {}", book.getId(), ex.getMessage());
+                    }
+                }
+                logger.info("Completed caching operation for book ID: {}", book.getId());
+                return null;
+            });
     }
 
     public CompletableFuture<Void> evictBook(String id) {

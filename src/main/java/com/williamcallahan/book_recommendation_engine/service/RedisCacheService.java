@@ -22,16 +22,22 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.config.GracefulShutdownConfig;
 import com.williamcallahan.book_recommendation_engine.config.RedisEnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.monitoring.MetricsService;
+import com.williamcallahan.book_recommendation_engine.util.ErrorHandlingUtils;
 import org.springframework.boot.convert.DurationStyle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.core.task.AsyncTaskExecutor;
 import redis.clients.jedis.JedisPooled;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.Response;
 import redis.clients.jedis.exceptions.JedisConnectionException;
 import redis.clients.jedis.resps.ScanResult;
 import org.springframework.stereotype.Service;
@@ -40,11 +46,14 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import jakarta.annotation.PreDestroy;
 
@@ -66,6 +75,7 @@ public class RedisCacheService {
     private final Duration bookTtl;
     private final Duration affiliateTtl;
     private final AsyncTaskExecutor mvcTaskExecutor;
+    private final MetricsService metricsService;
 
     @Value("${app.redis.cache.enabled:true}")
     private boolean redisCacheEnabled;
@@ -74,12 +84,14 @@ public class RedisCacheService {
                               ObjectMapper objectMapper,
                              @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor,
                              @Value("${app.cache.book.ttl:24h}") String bookTtlStr,
-                             @Value("${app.cache.affiliate.ttl:1h}") String affiliateTtlStr) {
+                             @Value("${app.cache.affiliate.ttl:1h}") String affiliateTtlStr,
+                             @Autowired(required = false) MetricsService metricsService) {
         this.jedisPooled = jedisPooled;
         this.objectMapper = objectMapper;
         this.mvcTaskExecutor = mvcTaskExecutor;
         this.bookTtl = DurationStyle.detectAndParse(bookTtlStr);
         this.affiliateTtl = DurationStyle.detectAndParse(affiliateTtlStr);
+        this.metricsService = metricsService;
     }
 
     /**
@@ -99,7 +111,7 @@ public class RedisCacheService {
      * @return CompletableFuture<Boolean> resolving to true if Redis is enabled and available, false otherwise.
      */
     public CompletableFuture<Boolean> isRedisAvailableAsync() {
-        if (!redisCacheEnabled) {
+        if (!redisCacheEnabled || GracefulShutdownConfig.isShuttingDown()) {
             return CompletableFuture.completedFuture(false);
         }
 
@@ -121,6 +133,13 @@ public class RedisCacheService {
                     logger.debug("Redis PING successful, connection is available.");
                 } catch (JedisConnectionException e) {
                     logger.warn("Redis connection failed during PING: {}", e.getMessage());
+                    redisCurrentlyAvailable.set(false);
+                } catch (redis.clients.jedis.exceptions.JedisException e) {
+                    if (e.getMessage() != null && e.getMessage().contains("Pool not open")) {
+                        logger.debug("Redis pool closed during shutdown");
+                    } else {
+                        logger.error("Redis error during PING: {}", e.getMessage(), e);
+                    }
                     redisCurrentlyAvailable.set(false);
                 } catch (Exception e) {
                     logger.error("Unexpected error pinging Redis: {}", e.getMessage(), e);
@@ -162,6 +181,14 @@ public class RedisCacheService {
             if (!available) {
                 return CompletableFuture.completedFuture(Optional.empty());
             }
+            
+            // Track timing if metrics available
+            io.micrometer.core.instrument.Timer.Sample sample = null;
+            if (metricsService != null) {
+                sample = metricsService.startRedisTimer();
+            }
+            final io.micrometer.core.instrument.Timer.Sample finalSample = sample;
+            
             return CompletableFuture.supplyAsync(() -> {
                 try {
                     String bookJson = jedisPooled.get(getKeyForBook(bookId));
@@ -171,12 +198,21 @@ public class RedisCacheService {
                         return Optional.of(book);
                     }
                     logger.debug("Redis cache MISS for book ID: {}", bookId);
-                    return Optional.empty();
+                    return Optional.<Book>empty();
                 } catch (Exception e) {
-                    logger.error("Error getting book from Redis for ID {}: {}", bookId, e.getMessage(), e);
-                    return Optional.empty();
+                    throw new CompletionException("Failed to get book from Redis", e);
+                } finally {
+                    if (finalSample != null && metricsService != null) {
+                        metricsService.stopRedisTimer(finalSample);
+                    }
                 }
-            }, this.mvcTaskExecutor);
+            }, this.mvcTaskExecutor)
+            .handle(ErrorHandlingUtils.createErrorHandler(
+                logger, 
+                "getBookByIdAsync-" + bookId,
+                metricsService,
+                Optional.<Book>empty()
+            ));
         });
     }
 
@@ -518,5 +554,156 @@ public class RedisCacheService {
     public void cacheSearchResults(String searchKey, List<String> bookIds) {
         logger.warn("Deprecated synchronous cacheSearchResults called; use cacheSearchResultsAsync instead.");
         cacheSearchResultsAsync(searchKey, bookIds).join();
+    }
+
+    /**
+     * Bulk cache multiple books using Redis pipeline for improved performance
+     * This method reduces network round trips by batching multiple SET operations
+     * 
+     * @param books List of books to cache
+     * @return CompletableFuture<Void> that completes when all books are cached
+     */
+    public CompletableFuture<Void> bulkCacheBooks(List<Book> books) {
+        if (books == null || books.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        
+        return isRedisAvailableAsync().thenComposeAsync(available -> {
+            if (!available) {
+                logger.warn("Redis not available, skipping bulk cache operation for {} books", books.size());
+                return CompletableFuture.completedFuture(null);
+            }
+            
+            return CompletableFuture.runAsync(() -> {
+                int successCount = 0;
+                int failureCount = 0;
+                
+                try (Pipeline pipeline = jedisPooled.pipelined()) {
+                    for (Book book : books) {
+                        if (book != null && book.getId() != null) {
+                            try {
+                                String bookJson = objectMapper.writeValueAsString(book);
+                                pipeline.setex(getKeyForBook(book.getId()), bookTtl.toSeconds(), bookJson);
+                                successCount++;
+                            } catch (Exception e) {
+                                logger.error("Error serializing book {} for bulk cache: {}", 
+                                           book.getId(), e.getMessage());
+                                failureCount++;
+                            }
+                        }
+                    }
+                    
+                    // Execute all commands in the pipeline
+                    pipeline.sync();
+                    logger.info("Bulk cached {} books successfully (failed: {}) using pipeline", 
+                               successCount, failureCount);
+                    
+                } catch (Exception e) {
+                    logger.error("Error during bulk cache pipeline operation: {}", e.getMessage(), e);
+                    throw new CompletionException("Bulk cache operation failed", e);
+                }
+            }, mvcTaskExecutor);
+        });
+    }
+
+    /**
+     * Bulk retrieve multiple books using Redis pipeline for improved performance
+     * 
+     * @param bookIds List of book IDs to retrieve
+     * @return CompletableFuture<Map<String, Book>> containing found books mapped by ID
+     */
+    public CompletableFuture<Map<String, Book>> bulkGetBooks(List<String> bookIds) {
+        if (bookIds == null || bookIds.isEmpty()) {
+            return CompletableFuture.completedFuture(Collections.emptyMap());
+        }
+        
+        return isRedisAvailableAsync().thenComposeAsync(available -> {
+            if (!available) {
+                logger.warn("Redis not available, returning empty result for bulk get");
+                return CompletableFuture.completedFuture(Collections.emptyMap());
+            }
+            
+            return CompletableFuture.supplyAsync(() -> {
+                Map<String, Book> results = new HashMap<>();
+                Map<String, Response<String>> responses = new HashMap<>();
+                
+                try (Pipeline pipeline = jedisPooled.pipelined()) {
+                    // Queue all GET operations
+                    for (String bookId : bookIds) {
+                        if (bookId != null && !bookId.isEmpty()) {
+                            responses.put(bookId, pipeline.get(getKeyForBook(bookId)));
+                        }
+                    }
+                    
+                    // Execute all commands
+                    pipeline.sync();
+                    
+                    // Process responses
+                    int hits = 0;
+                    int misses = 0;
+                    for (Map.Entry<String, Response<String>> entry : responses.entrySet()) {
+                        String bookId = entry.getKey();
+                        String bookJson = entry.getValue().get();
+                        
+                        if (bookJson != null) {
+                            try {
+                                Book book = objectMapper.readValue(bookJson, Book.class);
+                                results.put(bookId, book);
+                                hits++;
+                            } catch (Exception e) {
+                                logger.error("Error deserializing book {} from bulk get: {}", 
+                                           bookId, e.getMessage());
+                            }
+                        } else {
+                            misses++;
+                        }
+                    }
+                    
+                    logger.debug("Bulk get completed: {} hits, {} misses out of {} requests", 
+                               hits, misses, bookIds.size());
+                    return results;
+                    
+                } catch (Exception e) {
+                    logger.error("Error during bulk get pipeline operation: {}", e.getMessage(), e);
+                    return Collections.emptyMap();
+                }
+            }, mvcTaskExecutor);
+        });
+    }
+
+    /**
+     * Bulk evict multiple books using Redis pipeline
+     * 
+     * @param bookIds List of book IDs to evict from cache
+     * @return CompletableFuture<Void> that completes when all books are evicted
+     */
+    public CompletableFuture<Void> bulkEvictBooks(List<String> bookIds) {
+        if (bookIds == null || bookIds.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        
+        return isRedisAvailableAsync().thenComposeAsync(available -> {
+            if (!available) {
+                logger.warn("Redis not available, skipping bulk evict operation");
+                return CompletableFuture.completedFuture(null);
+            }
+            
+            return CompletableFuture.runAsync(() -> {
+                try (Pipeline pipeline = jedisPooled.pipelined()) {
+                    for (String bookId : bookIds) {
+                        if (bookId != null && !bookId.isEmpty()) {
+                            pipeline.del(getKeyForBook(bookId));
+                        }
+                    }
+                    
+                    pipeline.sync();
+                    logger.info("Bulk evicted {} book IDs from Redis cache", bookIds.size());
+                    
+                } catch (Exception e) {
+                    logger.error("Error during bulk evict pipeline operation: {}", e.getMessage(), e);
+                    throw new CompletionException("Bulk evict operation failed", e);
+                }
+            }, mvcTaskExecutor);
+        });
     }
 }

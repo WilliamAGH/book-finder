@@ -29,6 +29,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class BookSyncCacheService {
@@ -165,30 +166,51 @@ public class BookSyncCacheService {
     /**
      * @deprecated Use getBookByIdAsync() instead for better performance and non-blocking behavior.
      *             This synchronous wrapper is provided for backward compatibility and will be removed in a future version.
+     *             Note: This method blocks the calling thread and should be avoided in async contexts.
      */
     @Deprecated
     public Book getBookById(String id) {
         logger.warn("Deprecated method BookSyncCacheService.getBookById called for ID: {}. Consider migrating to getBookByIdAsync.", id);
-        return getBookByIdAsync(id).join(); // .join() will block, which is expected for this deprecated sync method
+        try {
+            // Use get() with timeout instead of join() for better timeout control
+            return getBookByIdAsync(id).get(30, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.error("Error getting book by ID {} synchronously: {}", id, e.getMessage());
+            return null;
+        }
     }
 
     /**
      * @deprecated Use getBooksByIsbnAsync() instead for better performance and non-blocking behavior.
      *             This synchronous wrapper is provided for backward compatibility and will be removed in a future version.
+     *             Note: This method blocks the calling thread and should be avoided in async contexts.
      */
     @Deprecated
     public List<Book> getBooksByIsbn(String isbn) {
         logger.warn("Deprecated method BookSyncCacheService.getBooksByIsbn called for ISBN: {}. Consider migrating to getBooksByIsbnAsync.", isbn);
-        return getBooksByIsbnAsync(isbn).join();
+        try {
+            // Use get() with timeout instead of join() for better timeout control
+            return getBooksByIsbnAsync(isbn).get(30, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.error("Error getting books by ISBN {} synchronously: {}", isbn, e.getMessage());
+            return Collections.emptyList();
+        }
     }
 
     /**
      * @deprecated Use searchBooksAsync() instead for better performance and non-blocking behavior.
      *             This synchronous wrapper is provided for backward compatibility and will be removed in a future version.
+     *             Note: This method blocks the calling thread and should be avoided in async contexts.
      */
     @Deprecated
     public List<Book> searchBooks(String query, int startIndex, int maxResults) {
         logger.warn("Deprecated method BookSyncCacheService.searchBooks called for query: '{}'. Consider migrating to searchBooksAsync.", query);
-        return searchBooksAsync(query, startIndex, maxResults).join();
+        try {
+            // Use get() with timeout instead of join() for better timeout control
+            return searchBooksAsync(query, startIndex, maxResults).get(30, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.error("Error searching books for query '{}' synchronously: {}", query, e.getMessage());
+            return Collections.emptyList();
+        }
     }
 }

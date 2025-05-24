@@ -44,11 +44,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import jakarta.annotation.PreDestroy;
 import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
+import com.williamcallahan.book_recommendation_engine.monitoring.MetricsService;
+import com.williamcallahan.book_recommendation_engine.util.ErrorHandlingUtils;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Service
 @Conditional(S3EnvironmentCondition.class)
@@ -61,6 +64,7 @@ public class S3StorageService {
     private final String bucketName;
     private final String publicCdnUrl;
     private final String serverUrl;
+    private final MetricsService metricsService;
 
     /**
      * Constructs an S3StorageService with required dependencies
@@ -68,20 +72,24 @@ public class S3StorageService {
      * - Configures bucket name from application properties
      * - Sets up optional CDN URL for public access
      * - Sets up optional server URL for DigitalOcean Spaces
+     * - Integrates metrics service for monitoring
      *
      * @param s3Client AWS S3 client for interacting with buckets
      * @param bucketName Name of the S3 bucket to use for storage
      * @param publicCdnUrl Optional CDN URL for public access to files
      * @param serverUrl Optional server URL for DigitalOcean Spaces
+     * @param metricsService Optional metrics service for tracking operations
      */
     public S3StorageService(S3Client s3Client, 
                             @Value("${s3.bucket-name:${S3_BUCKET}}") String bucketName,
                             @Value("${s3.cdn-url:${S3_CDN_URL:#{null}}}") String publicCdnUrl,
-                            @Value("${s3.server-url:${S3_SERVER_URL:#{null}}}") String serverUrl) {
+                            @Value("${s3.server-url:${S3_SERVER_URL:#{null}}}") String serverUrl,
+                            @Autowired(required = false) MetricsService metricsService) {
         this.s3Client = s3Client;
         this.bucketName = bucketName;
         this.publicCdnUrl = publicCdnUrl;
         this.serverUrl = serverUrl;
+        this.metricsService = metricsService;
     }
 
     /**
@@ -133,7 +141,7 @@ public class S3StorageService {
     }
 
     /**
-     * Asynchronously uploads a file to the S3 bucket
+     * Asynchronously uploads a file to the S3 bucket with standardized error handling and metrics
      *
      * @param keyName The key (path/filename) under which to store the file in the bucket
      * @param inputStream The InputStream of the file to upload
@@ -146,6 +154,14 @@ public class S3StorageService {
             logger.warn("S3Client is not available. Cannot upload file: {}. S3 may be disabled, misconfigured, or shut down.", keyName);
             return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available or has been shut down."));
         }
+        
+        // Track timing if metrics available
+        io.micrometer.core.instrument.Timer.Sample sample = null;
+        if (metricsService != null) {
+            sample = metricsService.startS3Timer();
+        }
+        final io.micrometer.core.instrument.Timer.Sample finalSample = sample;
+        
         return Mono.fromCallable(() -> {
             try {
                 // Double-check client availability inside the async operation
@@ -179,20 +195,40 @@ public class S3StorageService {
                 String cdn = publicCdnUrl.endsWith("/") ? publicCdnUrl : publicCdnUrl + "/";
                 String key = keyName.startsWith("/") ? keyName.substring(1) : keyName;
                 return cdn + key;
-            } catch (S3Exception e) {
-                logger.error("Error uploading file {} to S3: {}", keyName, e.awsErrorDetails().errorMessage(), e);
-                throw e; // Re-throw to be handled by onErrorResume
-            } catch (Exception e) {
-                logger.error("Unexpected error uploading file {} to S3: {}", keyName, e.getMessage(), e);
-                throw e; // Re-throw to be handled by onErrorResume
+            } finally {
+                if (finalSample != null && metricsService != null) {
+                    metricsService.stopS3Timer(finalSample);
+                }
             }
         })
-        .subscribeOn(Schedulers.boundedElastic()) // Execute the blocking call on an I/O-optimized scheduler
-        .onErrorResume(e -> {
-            // Log already happened in the callable, rethrow the exception
-            return Mono.error(e); 
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorResume(throwable -> {
+            // Use standardized error handling
+            ErrorHandlingUtils.ErrorCategory category = ErrorHandlingUtils.categorizeError(throwable);
+            
+            switch (category) {
+                case S3_CONNECTION:
+                    logger.error("S3 connection error uploading {}: {}", keyName, throwable.getMessage());
+                    if (metricsService != null) {
+                        metricsService.incrementS3Error();
+                    }
+                    break;
+                case TIMEOUT:
+                    logger.error("Timeout uploading {} to S3", keyName);
+                    if (metricsService != null) {
+                        metricsService.incrementS3Timeout();
+                    }
+                    break;
+                default:
+                    logger.error("Error uploading {} to S3: {}", keyName, throwable.getMessage(), throwable);
+                    if (metricsService != null) {
+                        metricsService.incrementS3Error();
+                    }
+            }
+            
+            return Mono.error(throwable);
         })
-        .toFuture(); // Convert the Mono to CompletableFuture
+        .toFuture();
     }
 
     /**

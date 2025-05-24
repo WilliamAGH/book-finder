@@ -18,11 +18,13 @@ import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.util.stream.Collectors;
@@ -35,14 +37,17 @@ public class DuplicateBookService {
     private static final Logger logger = LoggerFactory.getLogger(DuplicateBookService.class);
 
     private final CachedBookRepository cachedBookRepository;
+    private final Executor taskExecutor;
 
     /**
      * Constructs a new DuplicateBookService
      *
      * @param cachedBookRepository Repository for querying cached book information
+     * @param taskExecutor The executor for async operations
      */
-    public DuplicateBookService(CachedBookRepository cachedBookRepository) {
+    public DuplicateBookService(CachedBookRepository cachedBookRepository, @Qualifier("taskExecutor") Executor taskExecutor) {
         this.cachedBookRepository = cachedBookRepository;
+        this.taskExecutor = taskExecutor;
     }
 
     /**
@@ -75,7 +80,7 @@ public class DuplicateBookService {
                     return candidateAuthorsLower.equals(bookAuthorsLower);
                 })
                 .collect(Collectors.toList());
-        });
+        }, this.taskExecutor);
     }
 
     /**
@@ -97,7 +102,7 @@ public class DuplicateBookService {
         }
 
         return findPotentialDuplicatesAsync(primaryBook, primaryBook.getId())
-            .thenAccept(duplicates -> {
+            .thenAcceptAsync(duplicates -> {
                 if (duplicates.isEmpty()) {
                     return; // No duplicates found, return early
                 }
@@ -213,7 +218,7 @@ public class DuplicateBookService {
                 if (primaryBook.getOtherEditions().isEmpty()) {
                     logger.debug("No valid different editions found for book {}", primaryBook.getId());
                 }
-            });
+            }, this.taskExecutor);
     }
 
     /**
@@ -227,14 +232,14 @@ public class DuplicateBookService {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         return findPotentialDuplicatesAsync(newBook, "__NON_EXISTENT_ID__" + System.currentTimeMillis())
-            .thenApply(potentialPrimaries -> {
+            .thenApplyAsync(potentialPrimaries -> {
                 if (potentialPrimaries.isEmpty()) {
                     return Optional.empty();
                 }
                 logger.debug("Found {} potential primary books for new book title '{}'. Selecting first one: {}", 
                     potentialPrimaries.size(), newBook.getTitle(), potentialPrimaries.get(0).getId());
                 return Optional.of(potentialPrimaries.get(0));
-            });
+            }, this.taskExecutor);
     }
 
     /**
