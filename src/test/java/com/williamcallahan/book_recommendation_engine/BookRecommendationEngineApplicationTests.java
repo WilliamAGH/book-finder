@@ -1,11 +1,3 @@
-package com.williamcallahan.book_recommendation_engine;
-
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.ActiveProfiles;
-
 /**
  * Basic application context load test for the Book Finder
  *
@@ -23,11 +15,26 @@ import org.springframework.test.context.ActiveProfiles;
  * The general test environment uses Redis configured via `application-test.properties`.
  * This test is explicitly set to use the "test" profile via `@ActiveProfiles("test")`.
  */
+
+package com.williamcallahan.book_recommendation_engine;
+
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Bean;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.mockito.Mockito;
+import org.springframework.beans.factory.annotation.Autowired;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 @SpringBootTest
 @ActiveProfiles("test") // Ensure the "test" profile and its Redis configuration are active
+@Import(BookRecommendationEngineApplicationTests.TestConfig.class)
 class BookRecommendationEngineApplicationTests {
 
-    @MockitoBean
+    @Autowired
     private CachedBookRepository cachedBookRepository;
 
     /**
@@ -35,7 +42,14 @@ class BookRecommendationEngineApplicationTests {
      */
     @Test
     void contextLoads() {
-        // Test will pass if the context loads with the mocked repository
+        assertNotNull(cachedBookRepository);
     }
 
+    @TestConfiguration
+    static class TestConfig {
+        @Bean
+        public CachedBookRepository cachedBookRepository() {
+            return Mockito.mock(CachedBookRepository.class);
+        }
+    }
 }
