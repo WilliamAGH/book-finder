@@ -1,3 +1,18 @@
+/**
+ * Service for processing and optimizing book cover images
+ *
+ * @author William Callahan
+ *
+ * Features:
+ * - Resizes large images to standardized dimensions
+ * - Preserves aspect ratio during resizing operations
+ * - Converts images to consistent color format (RGB)
+ * - Compresses to JPEG format with configurable quality
+ * - Prevents upscaling of small images to maintain quality
+ * - Provides detailed processing logs for troubleshooting
+ * - Returns standardized result object with success/failure info
+ */
+
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
@@ -18,20 +33,7 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 
-/**
- * Service for processing and optimizing book cover images
- *
- * @author William Callahan
- *
- * Features:
- * - Resizes large images to standardized dimensions
- * - Preserves aspect ratio during resizing operations
- * - Converts images to consistent color format (RGB)
- * - Compresses to JPEG format with configurable quality
- * - Prevents upscaling of small images to maintain quality
- * - Provides detailed processing logs for troubleshooting
- * - Returns standardized result object with success/failure info
- */
+
 @Service
 public class ImageProcessingService {
 
@@ -241,40 +243,56 @@ public class ImageProcessingService {
     }
 
     /**
-     * Public method to check if an image from raw bytes is predominantly white.
+     * Asynchronously checks if an image from raw bytes is predominantly white.
      * This is a convenience method for services that only need this check without full processing.
      *
      * @param rawImageBytes The raw image bytes to check
      * @param imageIdForLog Identifier for logging (e.g., S3 key or book ID)
-     * @return True if the image is predominantly white, false otherwise. Returns false if image can't be read.
+     * @return CompletableFuture<Boolean> true if the image is predominantly white, false otherwise. Returns false if image can't be read or in case of error.
      */
-    public boolean isDominantlyWhite(byte[] rawImageBytes, String imageIdForLog) {
-        if (rawImageBytes == null || rawImageBytes.length == 0) {
-            logger.warn("Image ID {}: Raw image bytes are null or empty for dominant white check.", imageIdForLog);
-            return false; // Or throw an IllegalArgumentException, depending on desired strictness
-        }
-
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
-            BufferedImage rawOriginalImage = ImageIO.read(bais);
-            if (rawOriginalImage == null) {
-                logger.warn("Image ID {}: Could not read raw bytes into a BufferedImage for dominant white check. Image format might be unsupported or corrupt.", imageIdForLog);
-                return false; // Consider this not dominantly white, or handle as an error
+    @Async("imageProcessingExecutor")
+    public CompletableFuture<Boolean> isDominantlyWhiteAsync(byte[] rawImageBytes, String imageIdForLog) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (rawImageBytes == null || rawImageBytes.length == 0) {
+                logger.warn("Image ID {}: Raw image bytes are null or empty for dominant white check.", imageIdForLog);
+                return false;
             }
 
-            // Convert to a standard RGB colorspace for consistent analysis
-            BufferedImage imageInRGB = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
-            Graphics2D g = imageInRGB.createGraphics();
-            g.drawImage(rawOriginalImage, 0, 0, null);
-            g.dispose();
+            try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
+                BufferedImage rawOriginalImage = ImageIO.read(bais);
+                if (rawOriginalImage == null) {
+                    logger.warn("Image ID {}: Could not read raw bytes into a BufferedImage for dominant white check. Image format might be unsupported or corrupt.", imageIdForLog);
+                    return false;
+                }
 
-            return isDominantlyWhite(imageInRGB, imageIdForLog);
+                // Convert to a standard RGB colorspace for consistent analysis
+                BufferedImage imageInRGB = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
+                Graphics2D g = imageInRGB.createGraphics();
+                g.drawImage(rawOriginalImage, 0, 0, null);
+                g.dispose();
 
-        } catch (IOException e) {
-            logger.error("Image ID {}: IOException during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
-            return false; // Treat as not dominantly white in case of error, or rethrow
+                return isDominantlyWhite(imageInRGB, imageIdForLog);
+
+            } catch (IOException e) {
+                logger.error("Image ID {}: IOException during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
+                return false;
+            } catch (Exception e) {
+                logger.error("Image ID {}: Unexpected exception during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
+                return false;
+            }
+        });
+    }
+
+    /**
+     * @deprecated Use {@link #isDominantlyWhiteAsync(byte[], String)} instead.
+     */
+    @Deprecated
+    public boolean isDominantlyWhite(byte[] rawImageBytes, String imageIdForLog) {
+        try {
+            return isDominantlyWhiteAsync(rawImageBytes, imageIdForLog).join();
         } catch (Exception e) {
-            logger.error("Image ID {}: Unexpected exception during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
-            return false; // Treat as not dominantly white, or rethrow
+            logger.error("Error in synchronous isDominantlyWhite for imageId {}: {}", imageIdForLog, e.getMessage(), e);
+            return false;
         }
     }
 }

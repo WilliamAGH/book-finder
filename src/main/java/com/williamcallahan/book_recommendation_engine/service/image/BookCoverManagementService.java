@@ -32,6 +32,8 @@ import reactor.core.publisher.Mono;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.concurrent.CompletableFuture;
+
 @Service
 public class BookCoverManagementService {
 
@@ -101,9 +103,10 @@ public class BookCoverManagementService {
      * - Uses book's existing cover URL or a placeholder if no cached version is found
      * - Initiates an asynchronous background process to find and cache the best quality cover
      * @param book The book to retrieve the cover image for
+     * @param fetchFromExternalApis If true, background processing can hit external APIs.
      * @return Mono<CoverImages> object containing preferred and fallback URLs, and the source
      */
-    public Mono<CoverImages> getInitialCoverUrlAndTriggerBackgroundUpdate(Book book) {
+    public Mono<CoverImages> getInitialCoverUrlAndTriggerBackgroundUpdate(Book book, boolean fetchFromExternalApis) {
         String localPlaceholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
 
         if (!cacheEnabled) {
@@ -139,12 +142,12 @@ public class BookCoverManagementService {
                      logger.debug("S3 check: Optional<ImageDetails> was empty for identifier {}", identifierKey);
                 }
                 // S3 miss, invalid details, or empty Optional, proceed to check other caches
-                return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
+                return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath, fetchFromExternalApis);
             })
             .onErrorResume(e -> { // This catches errors from s3BookCoverService.fetchCover(book) or the flatMap processing
                 logger.warn("Error during S3 fetch or processing for identifier {}: {}", identifierKey, e.getMessage());
                 // Error in S3 fetch or its processing, proceed to check other caches
-                return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
+                return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath, fetchFromExternalApis);
             })
             .defaultIfEmpty(createPlaceholderCoverImages(book.getId() + " (all checks failed or resulted in empty)"));
     }
@@ -155,9 +158,10 @@ public class BookCoverManagementService {
      * @param book book object to find cover for
      * @param identifierKey cache key for lookups
      * @param localPlaceholderPath path to placeholder image
+     * @param fetchFromExternalApis If true, background processing can hit external APIs.
      * @return Mono with best available cover images
      */
-    private Mono<CoverImages> checkMemoryCachesAndDefaults(Book book, String identifierKey, String localPlaceholderPath) {
+    private Mono<CoverImages> checkMemoryCachesAndDefaults(Book book, String identifierKey, String localPlaceholderPath, boolean fetchFromExternalApis) {
         // Check final in-memory cache
         ImageDetails finalCachedImageDetails = coverCacheManager.getFinalImageDetails(identifierKey);
         if (finalCachedImageDetails != null && finalCachedImageDetails.getUrlOrPath() != null) {
@@ -194,8 +198,8 @@ public class BookCoverManagementService {
         provisionalResult.setSource(inferredProvisionalSource);
         provisionalResult.setFallbackUrl(determineFallbackUrl(book, urlToUseAsPreferred, localPlaceholderPath));
         
-        // Trigger background processing
-        processCoverInBackground(book, urlToUseAsPreferred.equals(localPlaceholderPath) ? null : urlToUseAsPreferred);
+        // Trigger background processing asynchronously, passing the flag along
+        processCoverInBackgroundAsync(book, urlToUseAsPreferred.equals(localPlaceholderPath) ? null : urlToUseAsPreferred, fetchFromExternalApis);
         return Mono.just(provisionalResult);
     }
     
@@ -247,27 +251,34 @@ public class BookCoverManagementService {
      * - Publishes a BookCoverUpdatedEvent
      * @param book The book to find the cover image for
      * @param provisionalUrlHint A hint URL that might have been used for initial display
+     * @param fetchFromExternalApis If true, allows fetching from external APIs.
      */
     @Async
-    public void processCoverInBackground(Book book, String provisionalUrlHint) {
+    public CompletableFuture<Void> processCoverInBackground(Book book, String provisionalUrlHint, boolean fetchFromExternalApis) {
         if (!cacheEnabled || book == null) {
             logger.debug("Background processing skipped: cache disabled or book is null");
-            return;
+            return CompletableFuture.completedFuture(null);
+        }
+
+        if (!fetchFromExternalApis) {
+            logger.info("Background: External API fetch is disabled for this context (Book ID: {}). Cover processing will rely on hints and S3/local cache only.", book.getId());
+            // If not fetching from external APIs, we might still want to process hints or check S3 if that's considered non-external.
+            // For now, the flag is passed down to CoverSourceFetchingService which will make the decision.
         }
 
         ImageProvenanceData provenanceData = new ImageProvenanceData();
         String identifierKey = ImageCacheUtils.getIdentifierKey(book);
         if (identifierKey == null) {
             logger.warn("Background: Could not determine identifierKey for book with ID: {}. Aborting", book.getId());
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         final String bookIdForLog = book.getId() != null ? book.getId() : identifierKey;
         provenanceData.setBookId(bookIdForLog);
 
-        logger.info("Background: Starting full cover processing for identifierKey: {}, Book ID: {}, Title: {}",
-            identifierKey, bookIdForLog, book.getTitle());
+        logger.info("Background: Starting full cover processing for identifierKey: {}, Book ID: {}, Title: {}. FetchExternalAPIs: {}",
+            identifierKey, bookIdForLog, book.getTitle(), fetchFromExternalApis);
 
-        coverSourceFetchingService.getBestCoverImageUrlAsync(book, provisionalUrlHint, provenanceData)
+        return coverSourceFetchingService.getBestCoverImageUrlAsync(book, provisionalUrlHint, provenanceData, fetchFromExternalApis)
             .thenAcceptAsync(finalImageDetails -> {
                 String localPlaceholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
                 if (finalImageDetails == null || finalImageDetails.getUrlOrPath() == null || 
@@ -312,7 +323,23 @@ public class BookCoverManagementService {
                     try {
                         Path cacheDir = Paths.get(localDiskCoverCacheService.getCacheDirString());
                         // Ensure finalImageDetails.getUrlOrPath() is not null before creating Path
-                        Path relativeImagePath = Paths.get(finalImageDetails.getUrlOrPath()).getFileName(); 
+                        String urlOrPath = finalImageDetails.getUrlOrPath();
+                        if (urlOrPath == null) {
+                            logger.warn("Background: finalImageDetails.getUrlOrPath() is null for BookID {}, cannot upload to S3. Using local details.", bookIdForLog);
+                            coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
+                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                            return;
+                        }
+                        
+                        Path fullPath = Paths.get(urlOrPath);
+                        Path relativeImagePath = fullPath.getFileName();
+                        if (relativeImagePath == null) {
+                            logger.warn("Background: Could not extract filename from path {} for BookID {}, cannot upload to S3. Using local details.", urlOrPath, bookIdForLog);
+                            coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
+                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                            return;
+                        }
+                        
                         Path localImagePath = cacheDir.resolve(relativeImagePath);
 
                         if (!Files.exists(localImagePath)) {
@@ -374,7 +401,7 @@ public class BookCoverManagementService {
                     bookIdForLog,
                     ex.getMessage(), ex);
 
-                coverCacheManager.invalidateProvisionalUrl(identifierKey); // identifierKey should be non-null here due to earlier check
+                coverCacheManager.invalidateProvisionalUrl(identifierKey);
 
                 ImageDetails placeholderOnError = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-exception");
 
@@ -389,5 +416,16 @@ public class BookCoverManagementService {
                 }
                 return null;
             });
+    }
+
+    /**
+     * Public async entry point for background cover processing.
+     * @param book The book to process cover for
+     * @param provisionalUrlHint Hint URL for provisional cover
+     * @param fetchFromExternalApis Flag to allow external API fetch
+     * @return CompletableFuture<Void> representing the asynchronous processing
+     */
+    public CompletableFuture<Void> processCoverInBackgroundAsync(Book book, String provisionalUrlHint, boolean fetchFromExternalApis) {
+        return processCoverInBackground(book, provisionalUrlHint, fetchFromExternalApis);
     }
 }

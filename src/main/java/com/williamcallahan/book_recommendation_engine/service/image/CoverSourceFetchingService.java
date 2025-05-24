@@ -15,11 +15,13 @@ import com.williamcallahan.book_recommendation_engine.types.ImageAttemptStatus;
 import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.types.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.types.ExternalCoverService;
 import com.williamcallahan.book_recommendation_engine.types.LongitoodService;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -35,7 +37,7 @@ public class CoverSourceFetchingService {
     private static final Logger logger = LoggerFactory.getLogger(CoverSourceFetchingService.class);
 
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
-    private final S3BookCoverService s3BookCoverService;
+    private final ExternalCoverService s3BookCoverService;
     private final OpenLibraryServiceImpl openLibraryService;
     private final LongitoodService longitoodService;
     private final GoogleBooksService googleBooksService;
@@ -59,7 +61,7 @@ public class CoverSourceFetchingService {
      */
     public CoverSourceFetchingService(
             LocalDiskCoverCacheService localDiskCoverCacheService,
-            S3BookCoverService s3BookCoverService,
+            @Qualifier("s3BookCoverService") ExternalCoverService s3BookCoverService,
             OpenLibraryServiceImpl openLibraryService,
             LongitoodService longitoodService,
             GoogleBooksService googleBooksService,
@@ -79,9 +81,10 @@ public class CoverSourceFetchingService {
      * @param book The book to find the cover image for
      * @param provisionalUrlHint A hint URL that might contain a usable cover image
      * @param provenanceData Container for tracking image source details and attempts
+     * @param fetchFromExternalApis If true, allows fetching from Google/OpenLibrary etc. If false, only uses hints and S3/local cache.
      * @return CompletableFuture containing ImageDetails of the best found image, or a placeholder
      */
-    public CompletableFuture<ImageDetails> getBestCoverImageUrlAsync(Book book, String provisionalUrlHint, ImageProvenanceData provenanceData) {
+    public CompletableFuture<ImageDetails> getBestCoverImageUrlAsync(Book book, String provisionalUrlHint, ImageProvenanceData provenanceData, boolean fetchFromExternalApis) {
         String bookIdForLog = ImageCacheUtils.getIdentifierKey(book) != null ? ImageCacheUtils.getIdentifierKey(book) : "unknown_book_id";
         if (provenanceData.getBookId() == null) { // Ensure bookId is set in provenance
             provenanceData.setBookId(bookIdForLog);
@@ -94,7 +97,7 @@ public class CoverSourceFetchingService {
 
         return hintProcessingChain
             .thenCompose(hintCandidates ->
-                fetchFromS3AndThenRemainingSources(book, bookIdForLog, provenanceData, hintCandidates)
+                fetchFromS3AndThenRemainingSources(book, bookIdForLog, provenanceData, hintCandidates, fetchFromExternalApis)
             )
             .exceptionally(overallEx -> { // Catch-all for catastrophic failure in the chain
                 logger.error("Overall catastrophic exception in getBestCoverImageUrlAsync for Book ID {}: {}. Returning placeholder.", bookIdForLog, overallEx.getMessage(), overallEx);
@@ -193,10 +196,11 @@ public class CoverSourceFetchingService {
      * @param book The book object
      * @param bookIdForLog Identifier for logging
      * @param provenanceData Container for tracking attempts
-     * @param existingCandidates Candidates gathered from prior steps (e.g., hints)
+     * @param existingCandidates Candidates gathered from prior steps (hints, S3)
+     * @param fetchFromExternalApis Controls if external APIs (Google, OL) should be queried.
      * @return CompletableFuture with the best ImageDetails found
      */
-    private CompletableFuture<ImageDetails> fetchFromS3AndThenRemainingSources(Book book, String bookIdForLog, ImageProvenanceData provenanceData, List<ImageDetails> existingCandidates) {
+    private CompletableFuture<ImageDetails> fetchFromS3AndThenRemainingSources(Book book, String bookIdForLog, ImageProvenanceData provenanceData, List<ImageDetails> existingCandidates, boolean fetchFromExternalApis) {
         List<ImageDetails> candidatesSoFar = new ArrayList<>(existingCandidates);
 
         return tryS3(book, bookIdForLog, provenanceData)
@@ -208,13 +212,27 @@ public class CoverSourceFetchingService {
                     logger.debug("Book ID {}: S3 did not provide valid image details or returned placeholder. Not adding to candidates from S3.", bookIdForLog);
                 }
                 // Provenance for S3 attempt is handled within tryS3.
-                return fetchFromRemainingExternalSources(book, bookIdForLog, provenanceData, candidatesSoFar);
+                if (fetchFromExternalApis) {
+                    return fetchFromRemainingExternalSources(book, bookIdForLog, provenanceData, candidatesSoFar);
+                } else {
+                    logger.debug("Book ID {}: Skipping external sources as fetchFromExternalApis is false. Selecting from {} current candidates.", bookIdForLog, candidatesSoFar.size());
+                    if (candidatesSoFar.isEmpty()) {
+                        return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "no-external-fetch-no-candidates"));
+                    }
+                    return CompletableFuture.completedFuture(selectBestImageDetails(candidatesSoFar, bookIdForLog, provenanceData));
+                }
             })
             .exceptionallyCompose(s3Ex -> { // Exception from tryS3 or its chain
-                logger.error("Exception during S3 fetch for Book ID {}: {}. Proceeding to other external sources.", bookIdForLog, s3Ex.getMessage(), s3Ex);
-                // S3 attempt provenance should have been added in tryS3 (if it reached that part).
-                // Pass existingCandidates (which are from hints) to the next stage.
-                return fetchFromRemainingExternalSources(book, bookIdForLog, provenanceData, candidatesSoFar);
+                logger.error("Exception during S3 fetch for Book ID {}: {}. Proceeding based on fetchFromExternalApis flag.", bookIdForLog, s3Ex.getMessage(), s3Ex);
+                if (fetchFromExternalApis) {
+                    return fetchFromRemainingExternalSources(book, bookIdForLog, provenanceData, candidatesSoFar);
+                } else {
+                     logger.debug("Book ID {}: Skipping external sources due to S3 error and fetchFromExternalApis is false. Selecting from {} current candidates.", bookIdForLog, candidatesSoFar.size());
+                    if (candidatesSoFar.isEmpty()) {
+                        return CompletableFuture.completedFuture(localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "s3-error-no-external-fetch-no-candidates"));
+                    }
+                    return CompletableFuture.completedFuture(selectBestImageDetails(candidatesSoFar, bookIdForLog, provenanceData));
+                }
             });
     }
 
