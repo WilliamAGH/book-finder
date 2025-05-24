@@ -27,6 +27,7 @@ import org.springframework.lang.NonNull;
 
 import java.lang.reflect.Method;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 @EnableAsync
@@ -59,6 +60,7 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
      * - Maximum pool of 100 threads for high load periods
      * - Queue capacity of 500 tasks before rejecting new requests
      * - Descriptive thread naming pattern for monitoring
+     * - Fallback to caller thread when saturated (CallerRunsPolicy)
      */
     @Bean("mvcTaskExecutor")
     public AsyncTaskExecutor mvcTaskExecutor() {
@@ -69,6 +71,7 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
         executor.setThreadNamePrefix("mvc-async-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60); // Wait up to 60 seconds for tasks to complete
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
     }
@@ -83,6 +86,7 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
      * - Max pool size also based on available processors (can be slightly higher for burst).
      * - Smaller queue capacity as tasks are expected to be CPU-bound and long-running.
      * - Descriptive thread naming pattern for monitoring.
+     * - Fallback to caller thread when saturated (CallerRunsPolicy)
      */
     @Bean("imageProcessingExecutor")
     public AsyncTaskExecutor imageProcessingExecutor() {
@@ -94,12 +98,20 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
         executor.setThreadNamePrefix("image-proc-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60); // Wait up to 60 seconds for tasks to complete
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
     }
 
     /**
      * Primary executor for @Async methods. Named 'taskExecutor' so Spring picks it up by default.
+     *
+     * Features:
+     * - Core pool of 10 threads for handling typical load
+     * - Maximum pool of 50 threads for high load periods
+     * - Queue capacity of 100 tasks before rejecting new requests
+     * - Descriptive thread naming pattern for monitoring
+     * - Fallback to caller thread when saturated (CallerRunsPolicy)
      */
     @Override
     @Bean(name = "taskExecutor")
@@ -111,6 +123,7 @@ public class AsyncConfig implements WebMvcConfigurer, AsyncConfigurer {
         executor.setThreadNamePrefix("Async-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
     }

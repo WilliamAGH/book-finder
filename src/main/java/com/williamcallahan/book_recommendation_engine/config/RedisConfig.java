@@ -68,10 +68,11 @@ public class RedisConfig {
 
     /**
      * Creates JedisPooled instance for all Redis operations
+     * Note: Shutdown is handled by GracefulShutdownConfig to ensure proper ordering
      *
      * @return Configured JedisPooled instance
      */
-    @Bean(destroyMethod = "close")
+    @Bean
     @Primary
     public JedisPooled jedisPooled() {
         HostAndPort hostAndPort = createHostAndPort();
