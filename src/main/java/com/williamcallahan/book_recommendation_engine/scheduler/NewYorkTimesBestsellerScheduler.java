@@ -56,7 +56,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
 @Conditional(S3EnvironmentCondition.class)
-@SuppressWarnings("deprecation")
 public class NewYorkTimesBestsellerScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesBestsellerScheduler.class);
@@ -150,6 +149,7 @@ public class NewYorkTimesBestsellerScheduler {
      * Respects configured rate limits for API calls
      */
     @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
+    @SuppressWarnings("deprecation")
     public void processNewYorkTimesBestsellers() {
         if (!schedulerEnabled) {
             logger.info("New York Times Bestseller Scheduler is disabled.");
@@ -177,8 +177,9 @@ public class NewYorkTimesBestsellerScheduler {
 
             JsonNode nytOverview = newYorkTimesService.fetchBestsellerListOverview().toFuture().join();
             if (nytOverview == null || !nytOverview.has("results") || !nytOverview.get("results").has("lists")) {
-                logger.error("Failed to fetch valid NYT bestseller overview or overview is empty.");
-                return;
+                String errorMsg = "Failed to fetch valid NYT bestseller overview or overview is empty. Check NYT API status and configuration.";
+                logger.error(errorMsg);
+                throw new RuntimeException(errorMsg);
             }
 
             ArrayNode lists = (ArrayNode) nytOverview.get("results").get("lists");
@@ -267,7 +268,8 @@ public class NewYorkTimesBestsellerScheduler {
             Map<String, String> isbnToGoogleIdMap = new HashMap<>(isbnToGoogleIdFromRedis);
             
             // Check if the API circuit breaker is open (rate limit exceeded)
-            if (!apiCircuitBreakerService.isApiCallAllowed().join()) {
+            boolean circuitAllowed = apiCircuitBreakerService.isApiCallAllowed().join();
+            if (!circuitAllowed) {
                 logger.warn("API Circuit breaker is OPEN - skipping Google Books API calls. {} ISBNs will use fallback sources.", isbnsToFetchGoogleId.size());
                 isbnsToFetchGoogleId.clear(); // Don't try to fetch from API
             }
@@ -277,6 +279,7 @@ public class NewYorkTimesBestsellerScheduler {
                 try {
                     // Estimate calls for this batch operation for the job's total call count.
                     // Actual API calls and rate limiting are handled within GoogleBooksService.
+                    // The googleBooksApiMaxCallsPerJob property serves as a high-level guard for this scheduler job.
                     int estimatedCallsForThisBatch = Math.min(isbnsToFetchGoogleId.size() / ISBN_PROCESSING_BATCH_SIZE + 1, googleBooksApiMaxCallsPerJob - googleBooksApiCallsThisRun); // Rough estimate
                     
                     // GoogleBooksService.fetchGoogleBookIdsForMultipleIsbns internally uses Resilience4j via its calls to searchBooks 
@@ -369,8 +372,8 @@ public class NewYorkTimesBestsellerScheduler {
                 logger.info("Redis is not available or check failed; will attempt to fetch all {} Google Book IDs from API.", googleBookIdsForFullFetch.size());
             }
             
-            // Check circuit breaker before fetching full book data
-            if (!apiCircuitBreakerService.isApiCallAllowed().join()) {
+            // Skip full book data fetch if circuit is open
+            if (!circuitAllowed) {
                 logger.warn("API Circuit breaker is OPEN - skipping full book data fetch from Google Books API for {} IDs", googleBookIdsToFetchFromApi.size());
                 googleBookIdsToFetchFromApi.clear();
             }
@@ -410,11 +413,11 @@ public class NewYorkTimesBestsellerScheduler {
                 Book preFetchedGoogleBook = (currentBookGoogleId != null) ? fullGoogleBooksDataMap.get(currentBookGoogleId) : null;
                 
                 // Delegate individual book processing to the new service
-                Optional<String> processedBookIdentifierOpt = nytIndividualBookProcessorService.processBook(
+                Optional<String> processedBookIdentifierOpt = nytIndividualBookProcessorService.processBookAsync(
                     bookContext.nytBookApiNode(),
                     preFetchedGoogleBook,
                     currentBookGoogleId // Pass the googleBookId known at this stage
-                );
+                ).join();
 
                 // If the book was processed and an existing S3 key was found (because it was already in Redis),
                 // update the current S3 list entry.
