@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import org.springframework.core.task.AsyncTaskExecutor;
 
 import java.io.InputStream;
 import java.io.PushbackInputStream;
@@ -38,6 +39,7 @@ import java.util.zip.GZIPInputStream;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
+import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("unused")
 @Service("jsonS3ToRedis_JsonS3ToRedisService")
@@ -51,6 +53,7 @@ public class JsonS3ToRedisService {
     private final RedisJsonService redisJsonService;
     private final ObjectMapper objectMapper;
     private final CachedBookRepository cachedBookRepository;
+    private final AsyncTaskExecutor mvcTaskExecutor;
 
     // S3 paths will be accessed via s3Service getters
     private final String googleBooksPrefix;
@@ -59,11 +62,13 @@ public class JsonS3ToRedisService {
     public JsonS3ToRedisService(@Qualifier("jsonS3ToRedis_S3Service") S3Service s3Service,
                                 @Qualifier("jsonS3ToRedis_RedisJsonService") RedisJsonService redisJsonService,
                                 ObjectMapper objectMapper,
-                                CachedBookRepository cachedBookRepository) {
+                                CachedBookRepository cachedBookRepository,
+                                @Qualifier("mvcTaskExecutor") AsyncTaskExecutor mvcTaskExecutor) {
         this.s3Service = s3Service;
         this.redisJsonService = redisJsonService;
         this.objectMapper = objectMapper;
         this.cachedBookRepository = cachedBookRepository;
+        this.mvcTaskExecutor = mvcTaskExecutor;
         this.googleBooksPrefix = s3Service.getGoogleBooksPrefix();
         this.nytBestsellersKey = s3Service.getNytBestsellersKey();
         log.info("JsonS3ToRedisService initialized. Google Books S3 Prefix: {}, NYT Bestsellers S3 Key: {}", googleBooksPrefix, nytBestsellersKey);
@@ -71,16 +76,19 @@ public class JsonS3ToRedisService {
 
     /**
      * Orchestrates the entire migration process from S3 to Redis
-     * Executes both Google Books ingestion and NYT Bestsellers merging
      */
-    public void performMigration() {
-        log.info("Starting S3 JSON to Redis migration process...");
-
-        ingestGoogleBooksData();
-        mergeNytBestsellersData();
-
-        log.info("S3 JSON to Redis migration process finished.");
-        log.info("REMINDER: Manually create your RediSearch index(es) after migration if applicable.");
+    public CompletableFuture<Void> performMigrationAsync() {
+        log.info("Starting S3 JSON to Redis migration process asynchronously...");
+        return ingestGoogleBooksDataAsync()
+            .thenCompose(v -> mergeNytBestsellersDataAsync())
+            .whenComplete((v, ex) -> {
+                if (ex != null) {
+                    log.error("S3 JSON to Redis migration process failed.", ex);
+                } else {
+                    log.info("S3 JSON to Redis migration process finished.");
+                    log.info("REMINDER: Manually create/update your RediSearch index(es) after migration if applicable.");
+                }
+            });
     }
 
     /**
@@ -88,7 +96,7 @@ public class JsonS3ToRedisService {
      * Processes all JSON files under the Google Books prefix in S3
      * Uses ISBN-13 as primary identifier with fallback to Google Books ID
      */
-    private void ingestGoogleBooksData() {
+    private void ingestGoogleBooksDataSync() {
         log.info("--- Phase 1: Ingesting Google Books data from S3 prefix: {} ---", googleBooksPrefix);
         List<String> bookKeys = s3Service.listObjectKeys(googleBooksPrefix).join();
         AtomicInteger processedCount = new AtomicInteger(0);
@@ -198,6 +206,10 @@ public class JsonS3ToRedisService {
         log.info("--- Phase 1 Complete: Ingested {} Google Books records. Skipped {} records due to no identifier. ---", processedCount.get(), skippedNoIdCount.get());
     }
 
+    private CompletableFuture<Void> ingestGoogleBooksDataAsync() {
+        return CompletableFuture.runAsync(this::ingestGoogleBooksDataSync, mvcTaskExecutor);
+    }
+
     /**
      * Extracts ISBN-13 from Google Books industryIdentifiers list
      * 
@@ -248,8 +260,7 @@ public class JsonS3ToRedisService {
      * Uses ISBN-13 to match NYT data with Google Books data
      * Adds metadata including bestseller date, rank, and buy links
      */
-    @SuppressWarnings("unchecked")
-    private void mergeNytBestsellersData() {
+    private void mergeNytBestsellersDataSync() {
         log.info("--- Phase 2: Merging NYT Bestsellers data from S3 key: {} ---", nytBestsellersKey);
         AtomicInteger processedCount = new AtomicInteger(0);
         AtomicInteger notFoundCount = new AtomicInteger(0);
@@ -269,13 +280,16 @@ public class JsonS3ToRedisService {
             } // finalNytInputStream is closed here
 
             if (nytData != null && nytData.containsKey("results")) {
+                @SuppressWarnings("unchecked")
                 Map<String, Object> results = (Map<String, Object>) nytData.get("results");
                 if (results != null && results.containsKey("lists")) {
+                    @SuppressWarnings("unchecked")
                     List<Map<String, Object>> lists = (List<Map<String, Object>>) results.get("lists");
                     String bestsellerDate = (String) results.get("bestsellers_date");
 
                     for (Map<String, Object> bookList : lists) {
                         if (bookList.containsKey("books")) {
+                            @SuppressWarnings("unchecked")
                             List<Map<String, Object>> books = (List<Map<String, Object>>) bookList.get("books");
                             for (Map<String, Object> nytBook : books) {
                                 String nytIsbn13 = extractIsbn13FromNytBooks(nytBook);
@@ -383,7 +397,11 @@ public class JsonS3ToRedisService {
         log.info("--- Phase 2 Complete: Merged {} NYT bestseller entries. {} NYT entries not found in Redis. {} NYT entries skipped due to no ISBN. ---",
                 processedCount.get(), notFoundCount.get(), skippedNoIsbnCount.get());
     }
-    
+
+    private CompletableFuture<Void> mergeNytBestsellersDataAsync() {
+        return CompletableFuture.runAsync(this::mergeNytBestsellersDataSync, mvcTaskExecutor);
+    }
+
     /**
      * Extracts ISBN-13 from NYT Bestsellers book data
      * 

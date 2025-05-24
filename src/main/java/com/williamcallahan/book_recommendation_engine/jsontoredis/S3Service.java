@@ -36,6 +36,8 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import jakarta.annotation.PreDestroy;
 
 @Service("jsonS3ToRedis_S3Service")
 @Profile("jsontoredis")
@@ -43,6 +45,7 @@ public class S3Service {
 
     private static final Logger log = LoggerFactory.getLogger(S3Service.class);
 
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private final S3Client s3Client;
     private final AsyncTaskExecutor mvcTaskExecutor;
     private final String bucketName;
@@ -76,6 +79,16 @@ public class S3Service {
     }
 
     /**
+     * Graceful shutdown of S3 service operations for jsontoredis profile
+     * Prevents new operations from starting during shutdown
+     */
+    @PreDestroy
+    public void shutdown() {
+        log.info("Shutting down jsontoredis S3Service - disabling new operations");
+        shuttingDown.set(true);
+    }
+
+    /**
      * Lists object keys under a given prefix in the configured bucket asynchronously
      * Handles pagination using AWS SDK v2
      *
@@ -83,6 +96,11 @@ public class S3Service {
      * @return A CompletableFuture containing a list of S3 object keys matching the prefix
      */
     public CompletableFuture<List<String>> listObjectKeys(String prefix) {
+        if (shuttingDown.get()) {
+            log.warn("S3Service is shutting down, rejecting listObjectKeys request for prefix: {}", prefix);
+            return CompletableFuture.completedFuture(new ArrayList<>());
+        }
+        
         // Check if executor is shutdown to avoid RejectedExecutionException
         boolean executorShutdown = false;
         if (mvcTaskExecutor instanceof ThreadPoolTaskExecutor) {
@@ -239,6 +257,7 @@ public class S3Service {
 
             } catch (NoSuchKeyException e) {
                 log.error("Cannot move S3 object: Source key {} not found in bucket {}.", sourceKey, bucketName, e);
+                throw new RuntimeException("Source key not found: " + sourceKey, e);
             } catch (Exception e) {
                 log.error("Error moving S3 object from {} to {}: {}", sourceKey, destinationKey, e.getMessage(), e);
                 throw new RuntimeException("Failed to move S3 object from " + sourceKey + " to " + destinationKey, e);

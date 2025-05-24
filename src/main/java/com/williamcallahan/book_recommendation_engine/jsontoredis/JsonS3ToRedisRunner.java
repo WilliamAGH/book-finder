@@ -62,7 +62,7 @@ public class JsonS3ToRedisRunner implements CommandLineRunner {
         // 2. Perform Migration
         log.info("Proceeding with S3 JSON to Redis migration.");
         try {
-            jsonS3ToRedisService.performMigration();
+            jsonS3ToRedisService.performMigrationAsync().join();
             log.info("S3 JSON to Redis migration process completed by runner.");
         } catch (Exception e) {
             log.error("S3 JSON to Redis migration process failed with an error: {}", e.getMessage(), e);
