@@ -39,9 +39,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -250,9 +248,7 @@ public class BookReactiveCacheService {
         return books.stream()
             .filter(book -> {
                 if (book != null && book.getPublishedDate() != null) {
-                    Calendar cal = Calendar.getInstance();
-                    cal.setTime(book.getPublishedDate());
-                    return cal.get(Calendar.YEAR) == publishedYear;
+                    return book.getPublishedDate().getYear() == publishedYear;
                 }
                 return false;
             })
@@ -282,8 +278,12 @@ public class BookReactiveCacheService {
             }
             
             // Also cache in Redis for persistence across restarts
-            redisCacheService.cacheSearchResultsAsync(cacheKey, bookIdsToCache).join();
-            logger.info("Cached search key '{}' with {} book IDs in Redis.", cacheKey, bookIdsToCache.size());
+            redisCacheService.cacheSearchResultsAsync(cacheKey, bookIdsToCache)
+                .thenRun(() -> logger.info("Cached search key '{}' with {} book IDs in Redis.", cacheKey, bookIdsToCache.size()))
+                .exceptionally(e -> {
+                    logger.error("Failed to cache search results in Redis: {}", e.getMessage());
+                    return null;
+                });
         }
     }
 
@@ -366,43 +366,47 @@ public class BookReactiveCacheService {
                         return Mono.just(cachedBookToProcess);
                     })
                     .flatMap(bookToSave -> {
-                        // Ensure slug and embedding (blocking async slug generation)
-                        bookSlugService.ensureBookHasSlugAsync(bookToSave).join();
-                        // Only generate embedding if it doesn't exist or is wrong dimension
-                        if (embeddingService.shouldGenerateEmbedding(bookToSave)) {
-                            return embeddingService.generateEmbeddingForBook(bookToSave)
-                                .onErrorResume(error -> {
-                                    logger.debug("Embedding generation failed for book UUID {}, continuing without embedding: {}", 
-                                               bookToSave.getId(), error.getMessage());
-                                    return Mono.empty(); // Continue without embedding
-                                })
-                                .flatMap(embedding -> {
-                                    if (embedding != null) {
-                                        bookToSave.setEmbedding(embedding);
-                                    }
-                                    return Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
-                                        .subscribeOn(Schedulers.boundedElastic())
-                                        .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {}, Title: {}", savedBook.getId(), savedBook.getTitle()))
-                                        .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
-                                        .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook())) // Cache in simple Redis cache as well
-                                        .then();
-                                })
-                                .switchIfEmpty(Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
+                        Mono<Void> slugMono = Mono.fromFuture(bookSlugService.ensureBookHasSlugAsync(bookToSave)).then();
+
+                        Mono<Void> operationMono = Mono.defer(() -> {
+                            if (embeddingService.shouldGenerateEmbedding(bookToSave)) {
+                                return embeddingService.generateEmbeddingForBook(bookToSave)
+                                    .onErrorResume(error -> {
+                                        logger.debug("Embedding generation failed for book UUID {}, continuing without embedding: {}",
+                                                   bookToSave.getId(), error.getMessage());
+                                        return Mono.empty(); // Continue without embedding
+                                    })
+                                    .flatMap(embedding -> {
+                                        if (embedding != null) {
+                                            bookToSave.setEmbedding(embedding);
+                                        }
+                                        return Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
+                                            .subscribeOn(Schedulers.boundedElastic())
+                                            .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {}, Title: {}", savedBook.getId(), savedBook.getTitle()))
+                                            .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
+                                            .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook()))
+                                            .then();
+                                    })
+                                    .switchIfEmpty( // Removed Mono.defer()
+                                        Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
+                                            .subscribeOn(Schedulers.boundedElastic())
+                                            .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {} (no embedding), Title: {}", savedBook.getId(), savedBook.getTitle()))
+                                            .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
+                                            .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook()))
+                                            .then()
+                                    );
+                            } else {
+                                // Embedding already exists and is correct dimension
+                                logger.debug("Embedding already exists for book UUID: {}", bookToSave.getId());
+                                return Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
                                     .subscribeOn(Schedulers.boundedElastic())
-                                    .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {} (no embedding), Title: {}", savedBook.getId(), savedBook.getTitle()))
+                                    .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {}, Title: {}", savedBook.getId(), savedBook.getTitle()))
                                     .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
                                     .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook()))
-                                    .then());
-                        } else {
-                            // Embedding already exists and is correct dimension
-                            logger.debug("Embedding already exists for book UUID: {}", bookToSave.getId());
-                            return Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
-                                .subscribeOn(Schedulers.boundedElastic())
-                                .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {}, Title: {}", savedBook.getId(), savedBook.getTitle()))
-                                .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
-                                .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook())) // Cache in simple Redis cache as well
-                                .then();
-                        }
+                                    .then();
+                            }
+                        });
+                        return slugMono.then(operationMono);
                     });
             })
             .onErrorResume(e -> {
@@ -416,10 +420,10 @@ public class BookReactiveCacheService {
         // This logic needs to be robust. Assumes book object has ISBNs and GoogleID populated if available.
         String bookIsbn13 = book.getIsbn13();
         String bookIsbn10 = book.getIsbn10();
-        // Assuming book.getId() is the Google Books ID if other identifiers are not primary.
-        // Or, if Book model had a specific getGoogleBooksId(), we'd use that.
-        // For now, let's assume book.getId() is the Google Books ID if it's the only one.
-        String googleId = book.getId(); // This is often the Google Books ID from source.
+        // Assuming book.getId() is the Google Books ID if other identifiers are not primary
+        // Or, if Book model had a specific getGoogleBooksId(), we'd use that
+        // For now, let's assume book.getId() is the Google Books ID if it's the only one
+        String googleId = book.getId(); // This is often the Google Books ID from source
 
         if (bookIsbn13 != null && !bookIsbn13.isEmpty()) {
             Optional<CachedBook> existing = cachedBookRepository.findByIsbn13(bookIsbn13);
@@ -436,7 +440,7 @@ public class BookReactiveCacheService {
                  if (existing.isPresent() && existing.get().getId() != null && UuidUtil.isUuid(existing.get().getId())) return existing.get().getId();
             }
         }
-        // If no existing UUID found, generate a new one, but only if we have some identifier to link it to.
+        // If no existing UUID found, generate a new one, but only if we have some identifier to link it to
         if (bookIsbn13 != null || bookIsbn10 != null || (googleId != null && !googleId.isEmpty())) {
             return UuidUtil.getTimeOrderedEpoch().toString();
         }
@@ -547,7 +551,7 @@ public class BookReactiveCacheService {
                 modified = true;
             }
             if (newBookData.getPublishedDate() != null) {
-                LocalDateTime newLdt = newBookData.getPublishedDate().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime();
+                LocalDateTime newLdt = newBookData.getPublishedDate().atStartOfDay();
                 if (primaryCachedBook.getPublishedDate() == null || newLdt.isAfter(primaryCachedBook.getPublishedDate())) {
                      primaryCachedBook.setPublishedDate(newLdt);
                      modified = true;

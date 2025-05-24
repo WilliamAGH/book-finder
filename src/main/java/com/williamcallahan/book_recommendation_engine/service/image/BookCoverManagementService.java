@@ -327,7 +327,7 @@ public class BookCoverManagementService {
                         if (urlOrPath == null) {
                             logger.warn("Background: finalImageDetails.getUrlOrPath() is null for BookID {}, cannot upload to S3. Using local details.", bookIdForLog);
                             coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
-                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                            // Don't publish event with null URL - it could cause issues in listeners
                             return;
                         }
                         

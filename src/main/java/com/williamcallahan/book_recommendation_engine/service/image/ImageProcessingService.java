@@ -252,35 +252,33 @@ public class ImageProcessingService {
      */
     @Async("imageProcessingExecutor")
     public CompletableFuture<Boolean> isDominantlyWhiteAsync(byte[] rawImageBytes, String imageIdForLog) {
-        return CompletableFuture.supplyAsync(() -> {
-            if (rawImageBytes == null || rawImageBytes.length == 0) {
-                logger.warn("Image ID {}: Raw image bytes are null or empty for dominant white check.", imageIdForLog);
-                return false;
+        if (rawImageBytes == null || rawImageBytes.length == 0) {
+            logger.warn("Image ID {}: Raw image bytes are null or empty for dominant white check.", imageIdForLog);
+            return CompletableFuture.completedFuture(false);
+        }
+
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
+            BufferedImage rawOriginalImage = ImageIO.read(bais);
+            if (rawOriginalImage == null) {
+                logger.warn("Image ID {}: Could not read raw bytes into a BufferedImage for dominant white check. Image format might be unsupported or corrupt.", imageIdForLog);
+                return CompletableFuture.completedFuture(false);
             }
 
-            try (ByteArrayInputStream bais = new ByteArrayInputStream(rawImageBytes)) {
-                BufferedImage rawOriginalImage = ImageIO.read(bais);
-                if (rawOriginalImage == null) {
-                    logger.warn("Image ID {}: Could not read raw bytes into a BufferedImage for dominant white check. Image format might be unsupported or corrupt.", imageIdForLog);
-                    return false;
-                }
+            // Convert to a standard RGB colorspace for consistent analysis
+            BufferedImage imageInRGB = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = imageInRGB.createGraphics();
+            g.drawImage(rawOriginalImage, 0, 0, null);
+            g.dispose();
 
-                // Convert to a standard RGB colorspace for consistent analysis
-                BufferedImage imageInRGB = new BufferedImage(rawOriginalImage.getWidth(), rawOriginalImage.getHeight(), BufferedImage.TYPE_INT_RGB);
-                Graphics2D g = imageInRGB.createGraphics();
-                g.drawImage(rawOriginalImage, 0, 0, null);
-                g.dispose();
+            return CompletableFuture.completedFuture(isDominantlyWhite(imageInRGB, imageIdForLog));
 
-                return isDominantlyWhite(imageInRGB, imageIdForLog);
-
-            } catch (IOException e) {
-                logger.error("Image ID {}: IOException during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
-                return false;
-            } catch (Exception e) {
-                logger.error("Image ID {}: Unexpected exception during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
-                return false;
-            }
-        });
+        } catch (IOException e) {
+            logger.error("Image ID {}: IOException during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
+            return CompletableFuture.completedFuture(false);
+        } catch (Exception e) {
+            logger.error("Image ID {}: Unexpected exception during dominant white check from bytes: {}", imageIdForLog, e.getMessage(), e);
+            return CompletableFuture.completedFuture(false);
+        }
     }
 
     /**

@@ -49,7 +49,6 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.util.concurrent.CompletableFuture;
 import java.util.Optional;
-import org.springframework.scheduling.annotation.Async;
 
 @Service
 public class S3BookCoverService implements ExternalCoverService {
@@ -301,12 +300,10 @@ public class S3BookCoverService implements ExternalCoverService {
             });
     }
 
-    @Async
     public CompletableFuture<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadCoverToS3Future(String imageUrl, String bookId, String source) {
         return uploadCoverToS3Async(imageUrl, bookId, source).toFuture();
     }
 
-    @Async
     public CompletableFuture<com.williamcallahan.book_recommendation_engine.types.ImageDetails> uploadCoverToS3Future(String imageUrl, String bookId) {
         String derivedSource = "google-books";
         if (imageUrl != null) {
