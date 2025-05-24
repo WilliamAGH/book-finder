@@ -37,6 +37,13 @@ public class MigrationMonitorController {
         JsonS3ToRedisService.MigrationProgress progress = 
             jsonS3ToRedisService.getMigrationProgress();
         
+        if (progress == null) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("status", "unavailable");
+            errorResponse.put("error", "Migration progress not available");
+            return ResponseEntity.ok(errorResponse);
+        }
+        
         Map<String, Object> response = new HashMap<>();
         response.put("status", "running");
         response.put("progress", progress.toMap());
@@ -53,6 +60,14 @@ public class MigrationMonitorController {
     public ResponseEntity<Map<String, Object>> getMigrationErrors() {
         JsonS3ToRedisService.ErrorAggregator errorAggregator = 
             jsonS3ToRedisService.getErrorAggregator();
+
+        if (errorAggregator == null) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("totalErrors", 0);
+            errorResponse.put("errorsByType", java.util.Collections.emptyMap());
+            errorResponse.put("recentErrors", java.util.Collections.emptyList());
+            return ResponseEntity.ok(errorResponse);
+        }
         
         Map<String, Object> response = new HashMap<>();
         response.put("totalErrors", errorAggregator.getErrors().size());
@@ -88,18 +103,37 @@ public class MigrationMonitorController {
         // Add progress info
         JsonS3ToRedisService.MigrationProgress progress = 
             jsonS3ToRedisService.getMigrationProgress();
-        response.put("progress", progress.toMap());
+        
+        if (progress == null) {
+            response.put("progress", "Migration progress not available");
+            response.put("status", "unavailable"); // Or some other appropriate status
+        } else {
+            response.put("progress", progress.toMap());
+            // Calculate status based on progress if available
+            boolean isComplete = progress.getProcessed() + progress.getFailed() + 
+                               progress.getSkipped() >= progress.getTotal();
+            response.put("status", isComplete ? "completed" : "running");
+        }
         
         // Add error summary
         JsonS3ToRedisService.ErrorAggregator errorAggregator = 
             jsonS3ToRedisService.getErrorAggregator();
-        response.put("errorCount", errorAggregator.getErrors().size());
-        response.put("errorsByType", errorAggregator.getErrorCountsByType());
+
+        if (errorAggregator == null) {
+            response.put("errorCount", 0);
+            response.put("errorsByType", java.util.Collections.emptyMap());
+        } else {
+            response.put("errorCount", errorAggregator.getErrors().size());
+            response.put("errorsByType", errorAggregator.getErrorCountsByType());
+        }
         
-        // Add status
-        boolean isComplete = progress.getProcessed() + progress.getFailed() + 
-                           progress.getSkipped() >= progress.getTotal();
-        response.put("status", isComplete ? "completed" : "running");
+        // If progress was null, status might need adjustment or be set to a default
+        if (progress == null && response.get("status") == null) {
+             response.put("status", "unavailable");
+        } else if (progress == null && errorAggregator != null) {
+            // If progress is unavailable but we have error info, status might be "running_with_issues" or similar
+            // For now, keeping it simple; if progress is null, status is based on that
+        }
         
         return ResponseEntity.ok(response);
     }
@@ -111,11 +145,12 @@ public class MigrationMonitorController {
         int completed = progress.getProcessed() + progress.getFailed() + progress.getSkipped();
         int remaining = progress.getTotal() - completed;
         
-        if (completed == 0 || remaining <= 0) {
+        long elapsedSeconds = progress.getElapsedTime().getSeconds();
+        if (completed == 0 || remaining <= 0 || elapsedSeconds <= 0) {
             return "N/A";
         }
         
-        double rate = (double) completed / progress.getElapsedTime().getSeconds();
+        double rate = (double) completed / elapsedSeconds;
         long estimatedSecondsRemaining = (long) (remaining / rate);
         
         return formatDuration(estimatedSecondsRemaining);
