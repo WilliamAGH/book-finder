@@ -29,9 +29,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
-
+import org.springframework.scheduling.annotation.Async;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class CacheMaintenanceService {
@@ -62,17 +63,18 @@ public class CacheMaintenanceService {
         }
     }
 
+    @Async
     @EventListener
-    public void handleBookCoverUpdate(BookCoverUpdatedEvent event) {
+    public CompletableFuture<Void> handleBookCoverUpdate(BookCoverUpdatedEvent event) {
         if (event.getGoogleBookId() == null) {
             logger.warn("BookCoverUpdatedEvent received with null googleBookId.");
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         String bookId = event.getGoogleBookId();
         String newCoverUrl = event.getNewCoverUrl();
         if (newCoverUrl == null || newCoverUrl.isEmpty()) {
             logger.warn("BookCoverUpdatedEvent received with null/empty cover URL for book ID {}.", bookId);
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         // Update L1 in-memory cache
@@ -109,13 +111,13 @@ public class CacheMaintenanceService {
         });
 
         // Evict from Redis Cache (Reactive)
-        // For simplicity, evict. If the book is requested again, it will be re-fetched and re-cached with new cover.
         redisCacheService.evictBookReactive(bookId).subscribe(
             null, // onComplete
             error -> logger.error("Error evicting book ID {} from Redis during cover update: {}", bookId, error.getMessage())
         );
         
         logger.info("Processed cache updates for book ID {} due to BookCoverUpdatedEvent.", bookId);
+        return CompletableFuture.completedFuture(null);
     }
 
     /**
