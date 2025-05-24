@@ -117,34 +117,33 @@ public class BookCacheWarmingScheduler {
                             CompletableFuture<Void> warmingFuture = new CompletableFuture<>();
                             warmingFutures.add(warmingFuture);
                             executor.schedule(() -> {
-                                try {
-                                    boolean inCache = bookCacheFacadeService.isBookInCache(bookId).join();
-                                    if (inCache) {
-                                        existingCount.incrementAndGet();
-                                        logger.debug("Book {} already in cache, skipping warming", bookId);
-                                        warmingFuture.complete(null);
-                                    } else {
-                                        logger.info("Warming cache for book ID: {}", bookId);
-                                        googleBooksService.getBookById(bookId)
-                                            .thenAccept(book -> {
-                                                if (book != null) {
-                                                    warmedCount.incrementAndGet();
-                                                    logger.info("Successfully warmed cache for book: {}",
-                                                        book.getTitle() != null ? book.getTitle() : bookId);
-                                                }
-                                                warmingFuture.complete(null);
-                                            })
-                                            .exceptionally(ex -> {
-                                                logger.error("Error warming cache for book {}: {}", bookId, ex.getMessage());
-                                                warmingFuture.completeExceptionally(ex);
-                                                return null;
-                                            });
-                                        recentlyWarmedBooks.add(bookId);
-                                    }
-                                } catch (Exception e) {
-                                    logger.error("Error in cache warming task for book {}: {}", bookId, e.getMessage());
-                                    warmingFuture.completeExceptionally(e);
-                                }
+                                bookCacheFacadeService.isBookInCache(bookId)
+                                    .thenCompose(inCache -> {
+                                        if (inCache) {
+                                            existingCount.incrementAndGet();
+                                            logger.debug("Book {} already in cache, skipping warming", bookId);
+                                            return CompletableFuture.completedFuture(null);
+                                        } else {
+                                            logger.info("Warming cache for book ID: {}", bookId);
+                                            recentlyWarmedBooks.add(bookId);
+                                            return googleBooksService.getBookById(bookId)
+                                                .thenAccept(book -> {
+                                                    if (book != null) {
+                                                        warmedCount.incrementAndGet();
+                                                        logger.info("Successfully warmed cache for book: {}",
+                                                            book.getTitle() != null ? book.getTitle() : bookId);
+                                                    }
+                                                });
+                                        }
+                                    })
+                                    .whenComplete((result, ex) -> {
+                                        if (ex != null) {
+                                            logger.error("Error warming cache for book {}: {}", bookId, ex.getMessage());
+                                            warmingFuture.completeExceptionally(ex);
+                                        } else {
+                                            warmingFuture.complete(null);
+                                        }
+                                    });
                             }, i * delayMillis, TimeUnit.MILLISECONDS);
                         }
                         executor.shutdown();
@@ -160,7 +159,11 @@ public class BookCacheWarmingScheduler {
                         logger.error("Error during asynchronous book cache warming: {}", e.getMessage(), e);
                         return null;
                     })
-                    .join(); // Wait for completion but don't return anything
+                    .thenRun(() -> logger.debug("Cache warming async operation completed"))
+                    .exceptionally(ex -> {
+                        logger.error("Final error in cache warming async operation: {}", ex.getMessage());
+                        return null;
+                    });
             } catch (Exception e) {
                 logger.error("Error in cache warming async execution: {}", e.getMessage(), e);
             }

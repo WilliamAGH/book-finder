@@ -94,7 +94,7 @@ public class CacheMaintenanceService {
                     if (optionalCachedBook.isPresent()) {
                         CachedBook dbBook = optionalCachedBook.get();
                         dbBook.setCoverImageUrl(newCoverUrl);
-                        return Mono.fromCallable(() -> cachedBookRepository.save(dbBook));
+                        return Mono.fromFuture(cachedBookRepository.saveAsync(dbBook));
                     }
                     return Mono.empty();
                 })

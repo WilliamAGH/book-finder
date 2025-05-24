@@ -15,6 +15,8 @@
 package com.williamcallahan.book_recommendation_engine.cli;
 
 import com.williamcallahan.book_recommendation_engine.repository.RedisBookMaintenanceService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
@@ -24,6 +26,7 @@ import java.util.Map;
 @ShellComponent
 public class RedisMaintenanceCommands {
 
+    private static final Logger logger = LoggerFactory.getLogger(RedisMaintenanceCommands.class);
     private final RedisBookMaintenanceService maintenanceService;
 
     /**
@@ -46,7 +49,12 @@ public class RedisMaintenanceCommands {
         key = "redis diagnose-integrity"
     )
     public Map<String, Integer> diagnoseIntegrity() {
-        return maintenanceService.diagnoseCacheIntegrity();
+        try {
+            return maintenanceService.diagnoseCacheIntegrity();
+        } catch (Exception e) {
+            logger.error("Failed to diagnose cache integrity: {}", e.getMessage(), e);
+            return Map.of("error", 1, "total_keys", 0, "valid_json", 0, "valid_redisJson", 0, "corrupted", 0);
+        }
     }
 
     /**
@@ -63,11 +71,16 @@ public class RedisMaintenanceCommands {
     public String repairCache(
         @ShellOption(defaultValue = "false", help = "Dry run only, no changes applied") boolean dryRun
     ) {
-        int count = maintenanceService.repairCorruptedCache(dryRun);
-        if (dryRun) {
-            return String.format("Dry run: %d keys would be repaired", count);
-        } else {
-            return String.format("Repaired %d keys", count);
+        try {
+            int count = maintenanceService.repairCorruptedCache(dryRun);
+            if (dryRun) {
+                return String.format("Dry run: %d keys would be repaired", count);
+            } else {
+                return String.format("Repaired %d keys", count);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to repair cache: {}", e.getMessage(), e);
+            return String.format("Cache repair failed: %s", e.getMessage());
         }
     }
 
@@ -82,7 +95,12 @@ public class RedisMaintenanceCommands {
         key = "redis migrate-format"
     )
     public String migrateFormat() {
-        int count = maintenanceService.migrateBookDataFormat();
-        return String.format("Format migration processed/verified %d entries", count);
+        try {
+            int count = maintenanceService.migrateBookDataFormat();
+            return String.format("Format migration processed/verified %d entries", count);
+        } catch (Exception e) {
+            logger.error("Failed to migrate format: {}", e.getMessage(), e);
+            return String.format("Format migration failed: %s", e.getMessage());
+        }
     }
 }

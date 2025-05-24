@@ -316,8 +316,7 @@ public class BookReactiveCacheService {
                 }
                 
                 // Try to fetch existing CachedBook by UUID
-                return Mono.fromCallable(() -> cachedBookRepository.findById(bookUuid))
-                    .subscribeOn(Schedulers.boundedElastic())
+                return Mono.fromFuture(cachedBookRepository.findByIdAsync(bookUuid))
                     .flatMap(existingCachedBookOpt -> {
                         CachedBook cachedBookToProcess;
                         boolean isNewEntry = !existingCachedBookOpt.isPresent();
@@ -380,16 +379,14 @@ public class BookReactiveCacheService {
                                         if (embedding != null) {
                                             bookToSave.setEmbedding(embedding);
                                         }
-                                        return Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
-                                            .subscribeOn(Schedulers.boundedElastic())
+                                        return Mono.fromFuture(cachedBookRepository.saveAsync(bookToSave))
                                             .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {}, Title: {}", savedBook.getId(), savedBook.getTitle()))
                                             .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
                                             .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook()))
                                             .then();
                                     })
                                     .switchIfEmpty( // Removed Mono.defer()
-                                        Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
-                                            .subscribeOn(Schedulers.boundedElastic())
+                                        Mono.fromFuture(cachedBookRepository.saveAsync(bookToSave))
                                             .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {} (no embedding), Title: {}", savedBook.getId(), savedBook.getTitle()))
                                             .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
                                             .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook()))
@@ -398,8 +395,7 @@ public class BookReactiveCacheService {
                             } else {
                                 // Embedding already exists and is correct dimension
                                 logger.debug("Embedding already exists for book UUID: {}", bookToSave.getId());
-                                return Mono.fromCallable(() -> cachedBookRepository.save(bookToSave))
-                                    .subscribeOn(Schedulers.boundedElastic())
+                                return Mono.fromFuture(cachedBookRepository.saveAsync(bookToSave))
                                     .doOnSuccess(savedBook -> logger.info("Successfully saved/updated CachedBook UUID: {}, Title: {}", savedBook.getId(), savedBook.getTitle()))
                                     .doOnError(e -> logger.error("Error saving CachedBook UUID {}: {}", bookToSave.getId(), e.getMessage()))
                                     .then(redisCacheService.cacheBookReactive(bookToSave.getId(), bookToSave.toBook()))
