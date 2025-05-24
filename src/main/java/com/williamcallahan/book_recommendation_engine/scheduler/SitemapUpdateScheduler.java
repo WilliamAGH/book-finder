@@ -46,11 +46,11 @@ public class SitemapUpdateScheduler {
     // For testing, you might use a shorter interval like: @Scheduled(fixedRate = 60000) // Every minute
     public void scheduleSitemapBookIdUpdate() {
         logger.info("Scheduler triggered: Updating accumulated book IDs in S3.");
-        try {
-            bookSitemapService.updateAccumulatedBookIdsInS3();
-            logger.info("Scheduler finished: Accumulated book ID update process completed.");
-        } catch (Exception e) {
-            logger.error("Error during scheduled sitemap book ID update:", e);
-        }
+        bookSitemapService.updateAccumulatedBookIdsInS3Async()
+            .thenRun(() -> logger.info("Scheduler finished: Accumulated book ID update process completed."))
+            .exceptionally(e -> {
+                logger.error("Error during scheduled sitemap book ID update:", e);
+                return null;
+            });
     }
 }

@@ -10,20 +10,18 @@
 package com.williamcallahan.book_recommendation_engine.scheduler;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
 import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -31,6 +29,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Scheduler for warming book caches to minimize Google Books API calls
@@ -39,6 +38,7 @@ import java.util.stream.Collectors;
  * - Uses rate-limited execution to avoid overloading the API
  * - Provides configurable cache warming behavior via properties
  */
+@Component
 @Configuration
 @EnableScheduling
 public class BookCacheWarmingScheduler {
@@ -48,7 +48,6 @@ public class BookCacheWarmingScheduler {
     private final BookCacheFacadeService bookCacheFacadeService;
     private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
-    private final ApplicationContext applicationContext;
     
     // Keep track of which books have been warmed recently to avoid duplicates
     private final Set<String> recentlyWarmedBooks = ConcurrentHashMap.newKeySet();
@@ -67,13 +66,11 @@ public class BookCacheWarmingScheduler {
     private int recentlyViewedDays;
 
     public BookCacheWarmingScheduler(BookCacheFacadeService bookCacheFacadeService,
-                                     GoogleBooksService googleBooksService,
-                                     RecentlyViewedService recentlyViewedService,
-                                     ApplicationContext applicationContext) {
+                                     @Autowired(required = false) GoogleBooksService googleBooksService,
+                                     RecentlyViewedService recentlyViewedService) {
         this.bookCacheFacadeService = bookCacheFacadeService;
         this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
-        this.applicationContext = applicationContext;
     }
 
     /**
@@ -87,127 +84,77 @@ public class BookCacheWarmingScheduler {
             return;
         }
 
-        logger.info("Starting scheduled book cache warming");
-        
-        // Get books to warm (recently viewed, popular, etc.)
-        List<String> bookIdsToWarm = getBookIdsToWarm();
-        
-        // Clean up our tracking set if it gets too large
-        if (recentlyWarmedBooks.size() > 500) {
-            recentlyWarmedBooks.clear();
-        }
-        
-        // If no books to warm, we're done
-        if (bookIdsToWarm.isEmpty()) {
-            logger.info("No books to warm in cache");
+        if (googleBooksService == null) {
+            logger.warn("GoogleBooksService is not available, skipping cache warming");
             return;
         }
-        
-        // Rate-limited warming to avoid overwhelming the API
-        AtomicInteger warmedCount = new AtomicInteger(0);
-        AtomicInteger existingCount = new AtomicInteger(0);
-        
-        ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
-        
-        try {
-            // Calculate delay between books based on rate limit
-            final long delayMillis = (60 * 1000) / rateLimit;
-            
-            // Check current API call count from metrics if possible
-            // Inject ApiRequestMonitor if available
-            int currentHourlyRequests = 0;
-            try {
-                ApiRequestMonitor apiRequestMonitor = applicationContext.getBean(ApiRequestMonitor.class);
-                currentHourlyRequests = apiRequestMonitor.getCurrentHourlyRequests();
-                logger.info("Current hourly API request count: {}. Will adjust cache warming accordingly.", currentHourlyRequests);
-            } catch (Exception e) {
-                logger.warn("Could not get ApiRequestMonitor metrics: {}", e.getMessage());
-            }
-            
-            // Calculate how many books we can warm based on current API usage
-            // We want to leave some headroom for user requests
-            int hourlyLimit = rateLimit * 60; // Max requests per hour based on rate limit
-            int requestBudget = Math.max(0, hourlyLimit / 2 - currentHourlyRequests); // Use at most half the remaining budget
-            int booksToWarm = Math.min(Math.min(bookIdsToWarm.size(), maxBooksPerRun), requestBudget);
-            
-            logger.info("Warming {} books based on rate limit {} per minute and current API usage", 
-                    booksToWarm, rateLimit);
-            
-            for (int i = 0; i < booksToWarm; i++) {
-                final String bookId = bookIdsToWarm.get(i);
-                
-                // Schedule each book to be warmed with a delay
-                executor.schedule(() -> {
-                    try {
-                        // Check if book is already in cache first
-                        boolean inCache = bookCacheFacadeService.isBookInCache(bookId);
-                        
-                        if (inCache) {
-                            existingCount.incrementAndGet();
-                            logger.debug("Book {} already in cache, skipping warming", bookId);
-                        } else {
-                            // Not in cache, warm it
-                            logger.info("Warming cache for book ID: {}", bookId);
-                            googleBooksService.getBookById(bookId)
-                                .thenAccept(book -> {
-                                    if (book != null) {
-                                        warmedCount.incrementAndGet();
-                                        logger.info("Successfully warmed cache for book: {}", 
-                                                book.getTitle() != null ? book.getTitle() : bookId);
-                                    }
-                                })
-                                .exceptionally(ex -> {
-                                    logger.error("Error warming cache for book {}: {}", bookId, ex.getMessage());
-                                    return null;
-                                });
-                            
-                            // Track that we've warmed this book
-                            recentlyWarmedBooks.add(bookId);
+
+        logger.info("Starting scheduled book cache warming");
+
+        // Asynchronously fetch recently viewed books and warm cache
+        recentlyViewedService.getRecentlyViewedBooksAsync()
+            .thenApply(books -> books.stream()
+                .map(Book::getId)
+                .filter(id -> id != null && !id.isEmpty() && !recentlyWarmedBooks.contains(id))
+                .collect(Collectors.toList()))
+            .thenAcceptAsync(bookIdsToWarm -> {
+                // Clean up tracking set if it gets too large
+                if (recentlyWarmedBooks.size() > 500) {
+                    recentlyWarmedBooks.clear();
+                }
+                if (bookIdsToWarm.isEmpty()) {
+                    logger.info("No books to warm in cache");
+                    return;
+                }
+                AtomicInteger warmedCount = new AtomicInteger(0);
+                AtomicInteger existingCount = new AtomicInteger(0);
+                ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
+                long delayMillis = (60L * 1000L) / rateLimit;
+                int booksToWarmCount = Math.min(bookIdsToWarm.size(), maxBooksPerRun);
+
+                for (int i = 0; i < booksToWarmCount; i++) {
+                    final String bookId = bookIdsToWarm.get(i);
+                    executor.schedule(() -> {
+                        try {
+                            boolean inCache = bookCacheFacadeService.isBookInCache(bookId).join();
+                            if (inCache) {
+                                existingCount.incrementAndGet();
+                                logger.debug("Book {} already in cache, skipping warming", bookId);
+                            } else {
+                                logger.info("Warming cache for book ID: {}", bookId);
+                                googleBooksService.getBookById(bookId)
+                                    .thenAccept(book -> {
+                                        if (book != null) {
+                                            warmedCount.incrementAndGet();
+                                            logger.info("Successfully warmed cache for book: {}", book.getTitle() != null ? book.getTitle() : bookId);
+                                        }
+                                    })
+                                    .exceptionally(ex -> {
+                                        logger.error("Error warming cache for book {}: {}", bookId, ex.getMessage());
+                                        return null;
+                                    });
+                                recentlyWarmedBooks.add(bookId);
+                            }
+                        } catch (Exception e) {
+                            logger.error("Error in cache warming task for book {}: {}", bookId, e.getMessage());
                         }
-                    } catch (Exception e) {
-                        logger.error("Error in cache warming task for book {}: {}", bookId, e.getMessage());
+                    }, i * delayMillis, TimeUnit.MILLISECONDS);
+                }
+                executor.shutdown();
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        executor.awaitTermination(booksToWarmCount * delayMillis + 10000L, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException e) {
+                        logger.error("Interrupted while waiting for cache warming tasks to finish", e);
+                        Thread.currentThread().interrupt();
                     }
-                }, i * delayMillis, TimeUnit.MILLISECONDS);
-            }
-            
-            // Make sure all tasks have a chance to complete
-            executor.shutdown();
-            executor.awaitTermination(maxBooksPerRun * delayMillis + 10000, TimeUnit.MILLISECONDS);
-            
-            logger.info("Book cache warming completed. Warmed: {}, Already in cache: {}, Total: {}", 
-                    warmedCount.get(), existingCount.get(), 
-                    warmedCount.get() + existingCount.get());
-            
-        } catch (Exception e) {
-            logger.error("Error during book cache warming: {}", e.getMessage());
-        } finally {
-            if (!executor.isTerminated()) {
-                executor.shutdownNow();
-            }
-        }
-    }
-    
-    /**
-     * Get a list of book IDs to warm in the cache, based on recently viewed books.
-     * This currently prioritizes recently viewed books that have not been warmed recently.
-     * (Future consideration: popular/trending books or those specifically marked for warming could be added.)
-     * 
-     * @return List of book IDs to warm
-     */
-    private List<String> getBookIdsToWarm() {
-        List<String> result = new ArrayList<>();
-        
-        // 1. Recently viewed books
-        List<String> recentlyViewedIds = recentlyViewedService.getRecentlyViewedBooks().stream()
-            .map(Book::getId)
-            .filter(id -> id != null && !id.isEmpty())
-            .collect(Collectors.toList());
-        for (String id : recentlyViewedIds) {
-            if (!recentlyWarmedBooks.contains(id)) {
-                result.add(id);
-            }
-        }
-        
-        return result;
+                    logger.info("Book cache warming completed. Warmed: {}, Already in cache: {}, Total: {}",
+                        warmedCount.get(), existingCount.get(), warmedCount.get() + existingCount.get());
+                });
+            })
+            .exceptionally(e -> {
+                logger.error("Error during asynchronous book cache warming: {}", e.getMessage(), e);
+                return null;
+            });
     }
 }
