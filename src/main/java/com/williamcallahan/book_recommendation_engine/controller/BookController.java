@@ -553,7 +553,11 @@ public class BookController {
                         return Mono.just(book); // Return the book with default/existing cover info
                     })
             )
-            .doOnSuccess(recentlyViewedService::addToRecentlyViewed) // No null check needed as stream errors out if book not found
+            .doOnSuccess(book -> {
+                if (book != null) {
+                    recentlyViewedService.addToRecentlyViewedAsync(book);
+                }
+            }) // No null check needed as stream errors out if book not found
             .map(book -> ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body((Object)book)) // Map to ResponseEntity
             // The switchIfEmpty below is now less likely to be the primary "not found" path for the book ID itself,
             // but could still handle cases where bookImageOrchestrationService returns an empty Mono (if its internal onErrorResume was removed)

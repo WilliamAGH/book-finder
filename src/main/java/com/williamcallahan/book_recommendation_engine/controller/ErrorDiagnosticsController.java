@@ -27,7 +27,11 @@ import java.util.Map;
 @ConditionalOnWebApplication
 public class ErrorDiagnosticsController implements ErrorController {
 
-    private ErrorAttributes errorAttributes;
+    private final ErrorAttributes errorAttributes;
+    
+    public ErrorDiagnosticsController(ErrorAttributes errorAttributes) {
+        this.errorAttributes = errorAttributes;
+    }
 
     /**
      * Handles all application errors and prepares diagnostic information

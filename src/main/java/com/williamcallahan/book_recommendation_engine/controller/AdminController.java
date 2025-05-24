@@ -17,6 +17,13 @@ import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBest
 import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarmingScheduler;
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
 import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerService;
+import com.williamcallahan.book_recommendation_engine.service.BookDataConsolidationService;
+import com.williamcallahan.book_recommendation_engine.service.EmbeddingService;
+import com.williamcallahan.book_recommendation_engine.repository.RedisCachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.model.CachedBook;
+
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,11 +49,17 @@ public class AdminController {
     private final NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler;
     private final BookCacheWarmingScheduler bookCacheWarmingScheduler;
     private final ApiCircuitBreakerService apiCircuitBreakerService;
+    private final BookDataConsolidationService bookDataConsolidationService;
+    private final RedisCachedBookRepository redisCachedBookRepository;
+    private final EmbeddingService embeddingService;
 
     public AdminController(@Autowired(required = false) S3CoverCleanupService s3CoverCleanupService,
                            @Autowired(required = false) NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler,
                            BookCacheWarmingScheduler bookCacheWarmingScheduler,
                            ApiCircuitBreakerService apiCircuitBreakerService,
+                           BookDataConsolidationService bookDataConsolidationService,
+                           @Autowired(required = false) RedisCachedBookRepository redisCachedBookRepository,
+                           EmbeddingService embeddingService,
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
                            @Value("${app.s3.cleanup.quarantine-prefix:images/non-covers-pages/}") String configuredQuarantinePrefix) {
@@ -54,6 +67,9 @@ public class AdminController {
         this.newYorkTimesBestsellerScheduler = newYorkTimesBestsellerScheduler;
         this.bookCacheWarmingScheduler = bookCacheWarmingScheduler;
         this.apiCircuitBreakerService = apiCircuitBreakerService;
+        this.bookDataConsolidationService = bookDataConsolidationService;
+        this.redisCachedBookRepository = redisCachedBookRepository;
+        this.embeddingService = embeddingService;
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
         this.configuredQuarantinePrefix = configuredQuarantinePrefix;
@@ -97,7 +113,7 @@ public class AdminController {
         // Note: This is a synchronous call. For very long operations,
         // consider making performDryRun @Async or wrapping this call
         try {
-            com.williamcallahan.book_recommendation_engine.types.DryRunSummary summary = s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse);
+            com.williamcallahan.book_recommendation_engine.types.DryRunSummary summary = s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse).join();
             
             StringBuilder responseBuilder = new StringBuilder();
             responseBuilder.append(String.format(
@@ -168,7 +184,7 @@ public class AdminController {
 
         try {
             com.williamcallahan.book_recommendation_engine.types.MoveActionSummary summary = 
-                s3CoverCleanupService.performMoveAction(sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse);
+                s3CoverCleanupService.performMoveAction(sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse).join();
             
             logger.info("S3 Cover Cleanup Move Action completed. Summary: {}", summary.toString());
             return ResponseEntity.ok(summary);
@@ -183,9 +199,9 @@ public class AdminController {
     }
 
     /**
-     * Triggers the New York Times Bestseller processing job.
+     * Triggers the New York Times Bestseller processing job
      *
-     * @return A ResponseEntity indicating the outcome of the trigger.
+     * @return A ResponseEntity indicating the outcome of the trigger
      */
     @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> triggerNytBestsellerProcessing() {
@@ -199,8 +215,8 @@ public class AdminController {
         
         try {
             // It's good practice to run schedulers asynchronously if they are long-running,
-            // but for a manual trigger, a direct call might be acceptable depending on execution time.
-            // If processNewYorkTimesBestsellers is very long, consider wrapping in an async task.
+            // but for a manual trigger, a direct call might be acceptable depending on execution time
+            // If processNewYorkTimesBestsellers is very long, consider wrapping in an async task
             newYorkTimesBestsellerScheduler.processNewYorkTimesBestsellers();
             String successMessage = "Successfully triggered New York Times Bestseller processing job.";
             logger.info(successMessage);
@@ -213,9 +229,9 @@ public class AdminController {
     }
 
     /**
-     * Triggers the Book Cache Warming job.
+     * Triggers the Book Cache Warming job
      *
-     * @return A ResponseEntity indicating the outcome of the trigger.
+     * @return A ResponseEntity indicating the outcome of the trigger
      */
     @PostMapping(value = "/trigger-cache-warming", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> triggerCacheWarming() {
@@ -233,7 +249,7 @@ public class AdminController {
     }
 
     /**
-     * Gets the current status of the API circuit breaker.
+     * Gets the current status of the API circuit breaker
      *
      * @return A ResponseEntity containing the circuit breaker status
      */
@@ -241,7 +257,7 @@ public class AdminController {
     public ResponseEntity<String> getCircuitBreakerStatus() {
         logger.info("Admin endpoint /admin/circuit-breaker/status invoked.");
         try {
-            String status = apiCircuitBreakerService.getCircuitStatus();
+            String status = apiCircuitBreakerService.getCircuitStatus().join();
             logger.info("Circuit breaker status retrieved: {}", status);
             return ResponseEntity.ok(status);
         } catch (Exception e) {
@@ -252,7 +268,7 @@ public class AdminController {
     }
 
     /**
-     * Manually resets the API circuit breaker to CLOSED state.
+     * Manually resets the API circuit breaker to CLOSED state
      *
      * @return A ResponseEntity indicating the outcome of the reset
      */
@@ -269,5 +285,185 @@ public class AdminController {
             logger.error(errorMessage, e);
             return ResponseEntity.internalServerError().body(errorMessage);
         }
+    }
+
+    /**
+     * Triggers the book data consolidation process in Redis
+     *
+     * @param dryRun Optional request parameter to perform a dry run without actual changes. Defaults to true
+     * @return A ResponseEntity containing the consolidation summary
+     */
+    @PostMapping(value = "/data/consolidate-books", produces = MediaType.TEXT_PLAIN_VALUE) // Changed to TEXT_PLAIN for simple ack
+    public ResponseEntity<String> triggerBookDataConsolidation( // Return type changed
+            @RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+        
+        logger.info("Admin endpoint /admin/data/consolidate-books invoked. Dry run: {}", dryRun);
+
+        if (bookDataConsolidationService == null) {
+            String errorMessage = "BookDataConsolidationService is not available.";
+            logger.warn(errorMessage);
+            return ResponseEntity.status(503).body(errorMessage); // Service Unavailable
+        }
+        
+        try {
+            // Call the @Async method. It will run in a separate thread.
+            bookDataConsolidationService.consolidateBookDataAsync(dryRun);
+            
+            String ackMessage = "Book data consolidation process started. Dry run: " + dryRun + ". Check logs for completion status and summary.";
+            logger.info(ackMessage);
+            return ResponseEntity.ok(ackMessage); // Immediate acknowledgment
+            
+        } catch (Exception e) {
+            // This catch block might not be hit if the @Async method itself throws an unhandled exception,
+            // unless the call to the async method itself fails (e.g., proxy issues).
+            // Async exceptions are typically handled by an AsyncUncaughtExceptionHandler.
+            String errorMessage = String.format(
+                "Failed to START book data consolidation. Dry run: %b. Error: %s",
+                dryRun, e.getMessage()
+            );
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
+        }
+    }
+
+    /**
+     * Diagnoses Redis cache integrity to identify corrupted data
+     *
+     * @return A ResponseEntity containing cache integrity statistics
+     */
+    @GetMapping(value = "/cache/diagnose", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> diagnoseCacheIntegrity() {
+        logger.info("Admin endpoint /admin/cache/diagnose invoked.");
+        
+        if (redisCachedBookRepository == null) {
+            String errorMessage = "Redis Cached Book Repository is not available. Redis integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}");
+        }
+        
+        try {
+            java.util.Map<String, Integer> stats = redisCachedBookRepository.diagnoseCacheIntegrity();
+            logger.info("Cache integrity diagnosis completed: {}", stats);
+            return ResponseEntity.ok(stats);
+        } catch (Exception e) {
+            String errorMessage = "Failed to diagnose cache integrity: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
+        }
+    }
+
+    /**
+     * Cleans up corrupted cache entries
+     *
+     * @param dryRun Optional request parameter to perform a dry run without actual cleanup. Defaults to true.
+     * @return A ResponseEntity containing the cleanup summary
+     */
+    @PostMapping(value = "/cache/cleanup", produces = MediaType.APPLICATION_JSON_VALUE)
+    public CompletableFuture<ResponseEntity<?>> cleanupCorruptedCache(
+            @RequestParam(name = "dryRun", defaultValue = "true") boolean dryRun) {
+        
+        logger.info("Admin endpoint /admin/cache/cleanup invoked. Dry run: {}", dryRun);
+        
+        if (redisCachedBookRepository == null) {
+            String errorMessage = "Redis Cached Book Repository is not available. Redis integration may be disabled.";
+            logger.warn(errorMessage);
+            return CompletableFuture.completedFuture(
+                ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}")
+            );
+        }
+        
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                int repairedCount = redisCachedBookRepository.repairCorruptedCache(dryRun);
+                java.util.Map<String, Object> result = new java.util.HashMap<>();
+                result.put("repairedCount", repairedCount);
+                result.put("dryRun", dryRun);
+                result.put("message", dryRun ? 
+                    "Dry run completed. " + repairedCount + " corrupted keys identified for repair." :
+                    "Repair completed. " + repairedCount + " corrupted keys repaired.");
+                
+                logger.info("Cache repair completed. Keys processed: {}, Dry run: {}", repairedCount, dryRun);
+                return ResponseEntity.ok(result);
+            } catch (Exception e) {
+                String errorMessage = String.format("Failed to repair corrupted cache. Dry run: %b. Error: %s", dryRun, e.getMessage());
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
+            }
+        });
+    }
+
+    /**
+     * Generates embeddings for books that don't have them
+     * Useful for batch processing existing books
+     */
+    @PostMapping("/embeddings/generate")
+    public CompletableFuture<ResponseEntity<String>> generateMissingEmbeddings(
+            @RequestParam(value = "limit", defaultValue = "100") int limit,
+            @RequestParam(value = "dryRun", defaultValue = "true") boolean dryRun) {
+        
+        if (redisCachedBookRepository == null) {
+            return CompletableFuture.completedFuture(
+                ResponseEntity.badRequest().body("Repository service is not available.")
+            );
+        }
+        
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                logger.info("Starting embedding generation. Limit: {}, Dry run: {}", limit, dryRun);
+                
+                // Get books without embeddings or with wrong dimension
+                var books = new ArrayList<CachedBook>();
+                for (CachedBook book : redisCachedBookRepository.findAll()) {
+                    if (embeddingService.shouldGenerateEmbedding(book)) {
+                        books.add(book);
+                        if (books.size() >= limit) break;
+                    }
+                }
+                
+                if (books.isEmpty()) {
+                    String message = "No books found needing embedding generation.";
+                    logger.info(message);
+                    return ResponseEntity.ok(message);
+                }
+                
+                if (dryRun) {
+                    String message = String.format("Dry run: Found %d books that need embeddings generated.", books.size());
+                    logger.info(message);
+                    return ResponseEntity.ok(message);
+                }
+                
+                int processed = 0;
+                int errors = 0;
+                
+                for (var book : books) {
+                    try {
+                        var embedding = embeddingService.generateEmbeddingForBook(book).block();
+                        if (embedding != null) {
+                            book.setEmbedding(embedding);
+                            redisCachedBookRepository.save(book);
+                            processed++;
+                            
+                            if (processed % 10 == 0) {
+                                logger.info("Generated embeddings for {} books...", processed);
+                            }
+                        }
+                    } catch (Exception e) {
+                        errors++;
+                        logger.warn("Failed to generate embedding for book {}: {}", book.getId(), e.getMessage());
+                    }
+                }
+                
+                String message = String.format("Embedding generation completed. Processed: %d, Errors: %d, Total found: %d", 
+                    processed, errors, books.size());
+                logger.info(message);
+                return ResponseEntity.ok(message);
+                
+            } catch (Exception e) {
+                String errorMessage = String.format("Failed to generate embeddings. Limit: %d, Dry run: %b. Error: %s", 
+                    limit, dryRun, e.getMessage());
+                logger.error(errorMessage, e);
+                return ResponseEntity.internalServerError().body(errorMessage);
+            }
+        });
     }
 }

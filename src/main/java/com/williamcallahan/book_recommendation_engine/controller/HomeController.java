@@ -25,6 +25,8 @@ import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkServi
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
+import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -36,9 +38,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.time.Duration;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
+import java.util.Date;
 import java.util.List;
 import java.util.Collections;
 import java.util.ArrayList;
@@ -46,11 +50,14 @@ import java.util.Arrays;
 import java.util.Random;
 import java.util.stream.Collectors;
 import java.util.Set;
+import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Objects;
+import reactor.core.scheduler.Schedulers;
 
 @Controller
 public class HomeController {
@@ -65,10 +72,11 @@ public class HomeController {
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
     private final AffiliateLinkService affiliateLinkService;
     private final NewYorkTimesService newYorkTimesService;
+    private final CachedBookRepository cachedBookRepository;
     private final boolean isYearFilteringEnabled;
 
-    private static final int MAX_RECENT_BOOKS = 8;
-    private static final int MAX_BESTSELLERS = 8;
+    private static final int MAX_RECENT_BOOKS = 12;
+    private static final int MAX_BESTSELLERS = 12;
     
     private static final List<String> EXPLORE_QUERIES = Arrays.asList(
             "Classic literature",
@@ -132,7 +140,8 @@ public class HomeController {
                           LocalDiskCoverCacheService localDiskCoverCacheService,
                           AffiliateLinkService affiliateLinkService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled,
-                          NewYorkTimesService newYorkTimesService) {
+                          NewYorkTimesService newYorkTimesService,
+                          CachedBookRepository cachedBookRepository) {
         this.bookCacheFacadeService = bookCacheFacadeService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
@@ -143,6 +152,7 @@ public class HomeController {
         this.affiliateLinkService = affiliateLinkService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
         this.newYorkTimesService = newYorkTimesService;
+        this.cachedBookRepository = cachedBookRepository;
     }
 
     /**
@@ -166,15 +176,16 @@ public class HomeController {
         model.addAttribute("keywords", "book recommendations, find books, book suggestions, reading, literature, home");
 
         // Fetch Current Bestsellers from New York Times (via S3/Cache)
+        // For homepage, set fetchFromExternalApis to false
         Mono<List<Book>> bestsellersMono = newYorkTimesService.getCurrentBestSellers("hardcover-fiction", MAX_BESTSELLERS)
-            .flatMap(this::processBooksCovers)
+            .flatMap(books -> this.processBooksCovers(books, false)) 
             .map(bookList -> bookList.stream()
                 .filter(this::isActualCover)
                 .collect(Collectors.toList())
             )
             .map(this::deduplicateBooksById)
             .map(bookList -> {
-                bookList.forEach(duplicateBookService::populateDuplicateEditions);
+                bookList.forEach(book -> duplicateBookService.populateDuplicateEditionsAsync(book).join());
                 return bookList;
             })
             .doOnSuccess(bestsellers -> model.addAttribute("currentBestsellers", bestsellers))
@@ -184,46 +195,49 @@ public class HomeController {
             })
             .onErrorReturn(Collections.emptyList());
 
-        // Add recently viewed books to the model
-        List<Book> initialRecentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
+        // Add recently viewed books to the model  
+        Mono<List<Book>> initialRecentBooksMono = Mono.fromFuture(recentlyViewedService.getRecentlyViewedBooksAsync());
         
-        Mono<List<Book>> recentBooksMono;
-        List<Book> trimmedRecentBooks = initialRecentBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
+        Mono<List<Book>> recentBooksMono = initialRecentBooksMono
+            .flatMap(initialRecentBooks -> {
+                List<Book> trimmedRecentBooks = initialRecentBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
 
-        if (trimmedRecentBooks.size() < MAX_RECENT_BOOKS) {
-            // If fewer than MAX_RECENT_BOOKS are viewed, fetch more to fill up to MAX_RECENT_BOOKS
-            int needed = MAX_RECENT_BOOKS - trimmedRecentBooks.size();
-            String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
-            logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
-            
-            recentBooksMono = bookCacheFacadeService.searchBooksReactive(randomQuery, 0, needed, null, null, null)
-                .map(defaultBooks -> {
-                    List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
-                    List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
-                    for (Book defaultBook : booksToAdd) {
-                        if (combinedBooks.size() >= MAX_RECENT_BOOKS) break;
-                        // Ensure no duplicates by ID from already present recent books
-                        if (trimmedRecentBooks.stream().noneMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
-                            combinedBooks.add(defaultBook);
-                        }
-                    }
-                    // If still not enough, just return what we have combined
-                    return combinedBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
-                })
-                .defaultIfEmpty(trimmedRecentBooks); // If google books call fails or empty, use original recentBooks
-        } else {
-            recentBooksMono = Mono.just(trimmedRecentBooks);
-        }
+                if (trimmedRecentBooks.size() < MAX_RECENT_BOOKS) {
+                    // If fewer than MAX_RECENT_BOOKS are viewed, fetch more from cache to fill up to MAX_RECENT_BOOKS
+                    int needed = MAX_RECENT_BOOKS - trimmedRecentBooks.size();
+                    logger.info("Fetching {} additional books from cache for homepage (no API calls)", needed);
+                    
+                    // Get random cached books instead of making API calls
+                    return getRandomCachedBooks(needed, trimmedRecentBooks, bestsellersMono)
+                        .map(defaultBooks -> {
+                            List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
+                            List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
+                            for (Book defaultBook : booksToAdd) {
+                                if (combinedBooks.size() >= MAX_RECENT_BOOKS) break;
+                                // Ensure no duplicates by ID from already present recent books
+                                if (trimmedRecentBooks.stream().noneMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
+                                    combinedBooks.add(defaultBook);
+                                }
+                            }
+                            // If still not enough, just return what we have combined
+                            return combinedBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
+                        })
+                        .defaultIfEmpty(trimmedRecentBooks); // If cache query fails or empty, use original recentBooks
+                } else {
+                    return Mono.just(trimmedRecentBooks);
+                }
+            });
 
+        // For homepage, set fetchFromExternalApis to false
         Mono<List<Book>> processedRecentBooksMono = recentBooksMono
-            .flatMap(this::processBooksCovers)
+            .flatMap(books -> this.processBooksCovers(books, false))
             .map(bookList -> bookList.stream()
                 .filter(this::isActualCover)
                 .collect(Collectors.toList())
             )
             .map(this::deduplicateBooksById)
             .map(bookList -> {
-                bookList.forEach(duplicateBookService::populateDuplicateEditions);
+                bookList.forEach(book -> duplicateBookService.populateDuplicateEditionsAsync(book).join());
                 return bookList;
             })
             .doOnSuccess(recent -> model.addAttribute("recentBooks", recent))
@@ -235,8 +249,25 @@ public class HomeController {
 
         // Combine both operations and then return the view name
         return Mono.zip(bestsellersMono, processedRecentBooksMono)
+            .timeout(Duration.ofSeconds(25)) // Add a timeout for the combined data fetching
             .map(tuple -> "index")
-            .onErrorReturn("index"); // Fallback to rendering index even if one stream fails
+            .doOnError(e -> {
+                if (e instanceof java.util.concurrent.TimeoutException) {
+                    logger.warn("Homepage data fetching timed out. Rendering with potentially partial data.");
+                    // Model attributes should have been set by doOnSuccess/doOnError of individual Monos
+                    // or will default to empty if those also timed out or errored before setting.
+                } else {
+                    logger.error("Error in homepage data aggregation: {}", e.getMessage());
+                }
+                // Ensure essential model attributes for rendering 'index' are present if not already set
+                if (!model.containsAttribute("currentBestsellers")) {
+                    model.addAttribute("currentBestsellers", Collections.emptyList());
+                }
+                if (!model.containsAttribute("recentBooks")) {
+                    model.addAttribute("recentBooks", Collections.emptyList());
+                }
+            })
+            .onErrorReturn("index"); // Fallback to rendering index even if one stream fails or times out
     }
 
     // Helper predicate for filtering out known placeholder images
@@ -277,8 +308,92 @@ public class HomeController {
         return t -> seen.add(keyExtractor.apply(t));
     }
     
+    /**
+     * Get random cached books from Redis without making API calls
+     * Filters out books already shown as bestsellers or recently viewed
+     * Prioritizes books from 2024 and 2025 with good quality covers
+     * Uses efficient Redis queries for better performance
+     */
+    private Mono<List<Book>> getRandomCachedBooks(int count, List<Book> recentBooks, Mono<List<Book>> bestsellersMono) {
+        return bestsellersMono.defaultIfEmpty(Collections.emptyList())
+            .flatMap(bestsellers -> Mono.fromCallable(() -> {
+                try {
+                    // Create exclusion set for already displayed books
+                    Set<String> excludeIds = new HashSet<>();
+                    recentBooks.forEach(book -> excludeIds.add(book.getId()));
+                    bestsellers.forEach(book -> excludeIds.add(book.getId()));
+                    
+                    // Use new efficient repository method to get recent books with good covers
+                    List<CachedBook> recentCachedBooks = cachedBookRepository
+                        .findRandomRecentBooksWithGoodCovers(count, excludeIds);
+                    
+                    if (recentCachedBooks.isEmpty()) {
+                        logger.info("No recent books with good covers found in cache");
+                        return Collections.<Book>emptyList();
+                    }
+                    
+                    // Convert CachedBooks to Books
+                    List<Book> selectedBooks = recentCachedBooks.stream()
+                        .map(this::convertToBook)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toList());
+                    
+                    logger.info("Found {} recent books (2024-2025) with good covers for homepage display", 
+                               selectedBooks.size());
+                    return selectedBooks;
+                    
+                } catch (Exception e) {
+                    logger.error("Error getting random cached books: {}", e.getMessage(), e);
+                    return Collections.<Book>emptyList();
+                }
+            }).subscribeOn(Schedulers.boundedElastic()));
+    }
+    
+    
+    /**
+     * Convert CachedBook to Book model
+     */
+    private Book convertToBook(CachedBook cachedBook) {
+        if (cachedBook == null) return null;
+        
+        Book book = new Book();
+        book.setId(cachedBook.getId());
+        book.setTitle(cachedBook.getTitle());
+        book.setAuthors(cachedBook.getAuthors());
+        book.setPublisher(cachedBook.getPublisher());
+        // Convert LocalDateTime to Date
+        if (cachedBook.getPublishedDate() != null) {
+            book.setPublishedDate(Date.from(cachedBook.getPublishedDate()
+                .atZone(java.time.ZoneId.systemDefault()).toInstant()));
+        }
+        book.setDescription(cachedBook.getDescription());
+        book.setPageCount(cachedBook.getPageCount());
+        book.setCategories(cachedBook.getCategories());
+        // Convert BigDecimal to Double
+        if (cachedBook.getAverageRating() != null) {
+            book.setAverageRating(cachedBook.getAverageRating().doubleValue());
+        }
+        book.setRatingsCount(cachedBook.getRatingsCount());
+        book.setLanguage(cachedBook.getLanguage());
+        book.setPreviewLink(cachedBook.getPreviewLink());
+        book.setInfoLink(cachedBook.getInfoLink());
+        book.setCoverImageUrl(cachedBook.getCoverImageUrl());
+        book.setIsbn10(cachedBook.getIsbn10());
+        book.setIsbn13(cachedBook.getIsbn13());
+        // CachedBook doesn't have printType, skip it
+        // book.setPrintType(cachedBook.getPrintType());
+        // Book doesn't have setGoogleBooksId, use the googleBooksId field
+        book.setId(cachedBook.getGoogleBooksId() != null ? cachedBook.getGoogleBooksId() : cachedBook.getId());
+        // CachedBook doesn't have these cover image fields, skip them
+        // book.setCoverImageWidth(cachedBook.getCoverImageWidth());
+        // book.setCoverImageHeight(cachedBook.getCoverImageHeight());
+        // book.setCoverHighResolution(cachedBook.isCoverHighResolution());
+        book.setCachedRecommendationIds(cachedBook.getCachedRecommendationIds());
+        return book;
+    }
+    
     // Helper method to process covers for a list of books
-    private Mono<List<Book>> processBooksCovers(List<Book> books) {
+    private Mono<List<Book>> processBooksCovers(List<Book> books, boolean fetchFromExternalApis) {
         if (books == null || books.isEmpty()) {
             return Mono.just(Collections.emptyList());
         }
@@ -287,7 +402,8 @@ public class HomeController {
                 if (book == null) {
                     return Mono.justOrEmpty(null); 
                 }
-                return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+                // Pass the fetchFromExternalApis flag
+                return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book, fetchFromExternalApis)
                     .map(coverImagesResult -> {
                         book.setCoverImages(coverImagesResult);
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
@@ -446,7 +562,8 @@ public class HomeController {
                     return Mono.empty(); // No book found, propagate empty to handle later
                 }
                 // Book found, now fetch its cover images
-                return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+                // For detail page, allow external API fetch for covers
+                return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book, true) 
                     .map(coverImagesResult -> {
                         book.setCoverImages(coverImagesResult);
                         String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg";
@@ -471,7 +588,7 @@ public class HomeController {
                         model.addAttribute("keywords", generateKeywords(book));
 
                         // Populate other editions/duplicates
-                        duplicateBookService.populateDuplicateEditions(book);
+                        duplicateBookService.populateDuplicateEditionsAsync(book).join();
 
                         // Generate Affiliate Links
                         Map<String, String> affiliateLinks = new HashMap<>();
@@ -480,21 +597,21 @@ public class HomeController {
                         String title = book.getTitle(); // Get the book title
 
                         if (isbn13 != null) {
-                            affiliateLinks.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
-                            affiliateLinks.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId));
+                            affiliateLinks.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId).join());
+                            affiliateLinks.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId).join());
                         }
                         // Pass ASIN, title, and associate tag to the updated Audible link generator
-                        affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag));
+                        affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag).join());
                         // Generate Amazon affiliate link using ISBN or title
                         String isbnForAmazon = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
                         if (isbnForAmazon != null) {
-                            affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag));
+                            affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag).join());
                         }
                         
                         model.addAttribute("affiliateLinks", affiliateLinks);
 
                         try {
-                            recentlyViewedService.addToRecentlyViewed(book);
+                            recentlyViewedService.addToRecentlyViewedAsync(book);
                         } catch (Exception e) {
                             logger.warn("Failed to add book to recently viewed for book ID {}: {}", book.getId(), e.getMessage());
                         }
@@ -523,7 +640,7 @@ public class HomeController {
                         model.addAttribute("keywords", generateKeywords(book));
                         
                         // Populate other editions/duplicates even on cover error, if book object exists
-                        duplicateBookService.populateDuplicateEditions(book);
+                        duplicateBookService.populateDuplicateEditionsAsync(book).join();
 
                         // Generate Affiliate Links even on cover error, if book object exists
                         Map<String, String> affiliateLinksOnError = new HashMap<>();
@@ -531,14 +648,14 @@ public class HomeController {
                         String asinOnError = book.getAsin();
 
                         if (isbn13OnError != null) {
-                            affiliateLinksOnError.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
-                            affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId));
+                            affiliateLinksOnError.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId).join());
+                            affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId).join());
                         }
-                        affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag));
+                        affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag).join());
                         // Generate Amazon affiliate link on error fallback
                         String isbnForAmazonOnError = (isbn13OnError != null && !isbn13OnError.isEmpty()) ? isbn13OnError : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
                         if (isbnForAmazonOnError != null) {
-                            affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag));
+                            affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag).join());
                         }
                         
                         model.addAttribute("affiliateLinks", affiliateLinksOnError);
@@ -560,7 +677,8 @@ public class HomeController {
                     .flatMap(similarBooksList -> Flux.fromIterable(similarBooksList)
                         .concatMap(similarBook -> {
                             if (similarBook == null) return Mono.justOrEmpty(null);
-                            return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook)
+                            // For similar books on detail page, allow external API fetch for covers
+                            return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook, true) 
                                 .map(coverResult -> {
                                     similarBook.setCoverImages(coverResult);
                                     if (coverResult != null && coverResult.getPreferredUrl() != null) {

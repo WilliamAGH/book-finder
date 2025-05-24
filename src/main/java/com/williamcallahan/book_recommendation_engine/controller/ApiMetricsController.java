@@ -7,6 +7,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * REST controller for accessing API usage metrics
@@ -40,7 +42,7 @@ public class ApiMetricsController {
      * @return Plain text report of current API metrics
      */
     @GetMapping(value = "/report", produces = MediaType.TEXT_PLAIN_VALUE)
-    public String getApiMetricsReport() {
+    public CompletableFuture<String> getApiMetricsReport() {
         return apiRequestMonitor.generateReport();
     }
 
@@ -51,7 +53,7 @@ public class ApiMetricsController {
      */
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     @ResponseBody
-    public Map<String, Object> getApiMetrics() {
+    public CompletableFuture<Map<String, Object>> getApiMetrics() {
         return apiRequestMonitor.getMetricsMap();
     }
 
@@ -60,7 +62,7 @@ public class ApiMetricsController {
      * @return Current hour's request count
      */
     @GetMapping("/hourly-count")
-    public int getHourlyRequestCount() {
+    public CompletableFuture<Integer> getHourlyRequestCount() {
         return apiRequestMonitor.getCurrentHourlyRequests();
     }
 
@@ -69,7 +71,7 @@ public class ApiMetricsController {
      * @return Current day's request count
      */
     @GetMapping("/daily-count")
-    public int getDailyRequestCount() {
+    public CompletableFuture<Integer> getDailyRequestCount() {
         return apiRequestMonitor.getCurrentDailyRequests();
     }
 
@@ -78,7 +80,7 @@ public class ApiMetricsController {
      * @return Total API request count
      */
     @GetMapping("/total-count")
-    public long getTotalRequestCount() {
+    public CompletableFuture<Long> getTotalRequestCount() {
         return apiRequestMonitor.getTotalRequests();
     }
 }
