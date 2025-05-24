@@ -13,10 +13,12 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.service.image.ImageProcessingService;
 import com.williamcallahan.book_recommendation_engine.types.DryRunSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
@@ -25,6 +27,7 @@ import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
+@Conditional(S3EnvironmentCondition.class)
 public class S3CoverCleanupService {
 
     private static final Logger logger = LoggerFactory.getLogger(S3CoverCleanupService.class);

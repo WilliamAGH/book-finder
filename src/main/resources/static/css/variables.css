@@ -82,6 +82,12 @@
 
   --placeholder-text-color: var(--grey-500);
   --placeholder-bg-color: var(--grey-100);
+
+  --text-color: var(--text-color-primary);
+  --popular-tag-border: var(--border-color);
+  --footer-background-color: var(--grey-900); /* Default for light, overridden in dark */
+  --footer-text-color: var(--grey-200); /* Default for light, overridden in dark */
+  --section-bg-color: var(--grey-100); /* Default for light, can be overridden */
   
   --dropdown-bg: var(--card-bg);
   --dropdown-border-color: var(--border-color);
@@ -180,6 +186,10 @@
   --dropdown-item-hover-text: var(--text-color-primary);
   --dropdown-item-active-bg: rgba(var(--brand-secondary-rgb), 0.2);
   --dropdown-item-active-text: var(--brand-secondary-light);
+
+  --footer-background-color: var(--input-bg); /* Was --grey-900 in light, now uses a dark theme bg */
+  --footer-text-color: var(--text-color-secondary); /* Was --grey-200 in light, now uses a light grey for dark bg */
+  --section-bg-color: var(--input-bg); /* Was --grey-100 in light, now uses a dark theme bg for sections */
   
   --navbar-bg-dark: var(--bg-color); /* Navbar matches very dark page background */
 

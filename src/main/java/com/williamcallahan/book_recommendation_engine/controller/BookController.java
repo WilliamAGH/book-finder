@@ -15,7 +15,7 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
@@ -24,7 +24,6 @@ import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPrefe
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -51,31 +50,29 @@ import reactor.core.scheduler.Schedulers;
 public class BookController {
     private static final Logger logger = LoggerFactory.getLogger(BookController.class);
     
-    private final BookCacheService bookCacheService; 
+    private final BookCacheFacadeService bookCacheFacadeService;
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
     private final BookImageOrchestrationService bookImageOrchestrationService;
     private final S3RetryService s3RetryService;
 
-    @Autowired
     private boolean isYearFilteringEnabled;
     
     /**
      * Constructs the BookController with all required services
      *
-     * @param bookCacheService Service for caching and retrieving book data
+     * @param bookCacheFacadeService Service for caching and retrieving book data
      * @param recentlyViewedService Service for tracking recently viewed books
      * @param recommendationService Service for generating book recommendations
      * @param bookImageOrchestrationService Service for book cover image processing
      * @param s3RetryService Service for S3 operations with retries
      */
-    @Autowired
-    public BookController(BookCacheService bookCacheService, 
+    public BookController(BookCacheFacadeService bookCacheFacadeService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
                           BookImageOrchestrationService bookImageOrchestrationService,
                           S3RetryService s3RetryService) {
-        this.bookCacheService = bookCacheService; 
+        this.bookCacheFacadeService = bookCacheFacadeService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookImageOrchestrationService = bookImageOrchestrationService;
@@ -154,7 +151,7 @@ public class BookController {
         final String actualQueryForApi = finalQueryForProcessing;
         final Integer actualPublishedYearForApi = finalEffectivePublishedYear;
 
-        return bookCacheService.searchBooksReactive(actualQueryForApi, startIndex, maxResults, actualPublishedYearForApi, null, null)
+        return bookCacheFacadeService.searchBooksReactive(actualQueryForApi, startIndex, maxResults, actualPublishedYearForApi, null, null)
             .flatMap(paginatedBooks -> {
                 List<Book> currentPaginatedBooks = (paginatedBooks == null) ? Collections.emptyList() : paginatedBooks;
 
@@ -328,8 +325,8 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheService for searching books by title
-        return bookCacheService.searchBooksReactive("intitle:" + title, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
+        // Use BookCacheFacadeService for searching books by title
+        return bookCacheFacadeService.searchBooksReactive("intitle:" + title, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -396,8 +393,8 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheService for searching books by author
-        return bookCacheService.searchBooksReactive("inauthor:" + author, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
+        // Use BookCacheFacadeService for searching books by author
+        return bookCacheFacadeService.searchBooksReactive("inauthor:" + author, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -464,8 +461,8 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheService for searching books by ISBN
-        return bookCacheService.getBooksByIsbnReactive(isbn)
+        // Use BookCacheFacadeService for searching books by ISBN
+        return bookCacheFacadeService.getBooksByIsbnReactive(isbn)
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -532,9 +529,15 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheService to get book by ID
-        return bookCacheService.getBookByIdReactive(id)
-            .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID: " + id, null)))
+        // Use BookCacheFacadeService to get book by ID
+        return bookCacheFacadeService.getBookByIdReactive(id)
+            // If not found by volume ID, fallback to ISBN-based search
+            .switchIfEmpty(
+                bookCacheFacadeService.getBooksByIsbnReactive(id)
+                    .filter(list -> list != null && !list.isEmpty())
+                    .map(list -> list.get(0))
+                    .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID or ISBN: " + id, null)))
+            )
             .flatMap(book -> // This flatMap only executes if book was found
                 Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, effectivelyFinalPreferredSource, effectivelyFinalResolutionPreference))
                     .map(processedBookFromService -> processedBookFromService)
@@ -710,7 +713,7 @@ public class BookController {
     public Mono<ResponseEntity<Book>> createBook(@RequestBody Book book) {
         logger.info("Attempting to create book: {}", book.getTitle());
         return Mono.defer(() -> {
-            bookCacheService.cacheBook(book); // This call can throw IllegalArgumentException
+            bookCacheFacadeService.cacheBook(book); // This call can throw IllegalArgumentException
             // Assuming book.getId() is populated by cacheBook or by the service call.
             // If not, the URI creation will be problematic.
             if (book.getId() == null) {
@@ -752,7 +755,7 @@ public class BookController {
     public Mono<ResponseEntity<Void>> deleteBook(@PathVariable String id) {
         logger.info("Attempting to delete book with ID: {}", id);
         // Always attempt deletion and return 200 OK, even if book was not found
-        return Mono.fromRunnable(() -> bookCacheService.removeBook(id))
+        return Mono.fromRunnable(() -> bookCacheFacadeService.removeBook(id))
             .then(Mono.just(ResponseEntity.ok().<Void>build()))
             .onErrorResume(IllegalArgumentException.class, e -> {
                 logger.error("Validation error deleting book with ID {}: {}", id, e.getMessage());
@@ -783,13 +786,13 @@ public class BookController {
         // Set the ID from the path
         bookUpdate.setId(id);
         
-        return bookCacheService.getBookByIdReactive(id)
+        return bookCacheFacadeService.getBookByIdReactive(id)
             // If book does not exist, still proceed to update (upsert behavior)
             .defaultIfEmpty(bookUpdate)
             .flatMap(existingBook -> {
                 // Update the book in the cache/database
                 return Mono.fromCallable(() -> {
-                    bookCacheService.updateBook(bookUpdate);
+                    bookCacheFacadeService.updateBook(bookUpdate);
                     return bookUpdate;
                 })
                 .map(updatedBook -> ResponseEntity.ok().body(updatedBook));

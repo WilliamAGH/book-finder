@@ -1,0 +1,503 @@
+{
+  "groups": [
+    {
+      "name": "google.books.api",
+      "description": "Google Books API configuration properties"
+    },
+    {
+      "name": "s3",
+      "description": "S3 compatible storage configuration properties"
+    },
+    {
+      "name": "app.cover-cache",
+      "description": "Book cover caching configuration properties"
+    },
+    {
+      "name": "app.cache",
+      "description": "Application caching configuration properties"
+    },
+    {
+      "name": "app.embedding",
+      "description": "Embedding service configuration properties"
+    },
+    {
+      "name": "app.environment",
+      "description": "Environment-specific configuration properties"
+    },
+    {
+      "name": "app.nyt",
+      "description": "New York Times API configuration properties"
+    },
+    {
+      "name": "affiliate",
+      "description": "Affiliate link configuration properties"
+    },
+    {
+      "name": "openlibrary.data.api",
+      "description": "OpenLibrary API configuration properties"
+    },
+    {
+      "name": "app.security",
+      "description": "Application security configuration properties"
+    },
+    {
+      "name": "app.feature",
+      "description": "Feature flag configuration properties"
+    },
+    {
+      "name": "nyt.api",
+      "description": "New York Times API credentials"
+    },
+    {
+      "name": "app.s3.cleanup",
+      "description": "S3 cleanup utility configuration properties"
+    },
+    {
+      "name": "jsontoredis.s3",
+      "description": "JSON to Redis S3 configuration properties"
+    },
+    {
+      "name": "sitemap.s3",
+      "description": "Sitemap S3 configuration properties"
+    },
+    {
+      "name": "book.cover",
+      "description": "Book cover processing configuration properties"
+    },
+    {
+      "name": "healthcheck",
+      "description": "Health check configuration properties"
+    }
+  ],
+  "properties": [
+    {
+      "name": "google.books.api.base-url",
+      "type": "java.lang.String",
+      "description": "Base URL for Google Books API",
+      "defaultValue": "https://www.googleapis.com/books/v1"
+    },
+    {
+      "name": "google.books.api.key",
+      "type": "java.lang.String",
+      "description": "API key for Google Books API"
+    },
+    {
+      "name": "google.books.api.max-results",
+      "type": "java.lang.Integer",
+      "description": "Maximum number of results to return from Google Books API",
+      "defaultValue": 40
+    },
+    {
+      "name": "google.books.api.connect-timeout",
+      "type": "java.lang.Integer",
+      "description": "Connection timeout in milliseconds",
+      "defaultValue": 5000
+    },
+    {
+      "name": "google.books.api.read-timeout",
+      "type": "java.lang.Integer",
+      "description": "Read timeout in milliseconds",
+      "defaultValue": 5000
+    },
+    {
+      "name": "google.books.api.request-limit-per-minute",
+      "type": "java.lang.Integer",
+      "description": "Maximum requests allowed per minute",
+      "defaultValue": 60
+    },
+    {
+      "name": "s3.bucket-name",
+      "type": "java.lang.String",
+      "description": "Name of the S3 bucket"
+    },
+    {
+      "name": "s3.cdn-url",
+      "type": "java.lang.String",
+      "description": "CDN URL for S3 assets"
+    },
+    {
+      "name": "s3.server-url",
+      "type": "java.lang.String",
+      "description": "S3 server URL"
+    },
+    {
+      "name": "s3.access-key-id",
+      "type": "java.lang.String",
+      "description": "S3 access key ID"
+    },
+    {
+      "name": "s3.secret-access-key",
+      "type": "java.lang.String",
+      "description": "S3 secret access key"
+    },
+    {
+      "name": "s3.region",
+      "type": "java.lang.String",
+      "description": "S3 region"
+    },
+    {
+      "name": "s3.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable S3 storage",
+      "defaultValue": true
+    },
+    {
+      "name": "s3.retry.max-attempts",
+      "type": "java.lang.Integer",
+      "description": "Maximum retry attempts for S3 operations",
+      "defaultValue": 3
+    },
+    {
+      "name": "s3.retry.initial-backoff-ms",
+      "type": "java.lang.Integer",
+      "description": "Initial backoff time in milliseconds for S3 retries",
+      "defaultValue": 200
+    },
+    {
+      "name": "s3.retry.backoff-multiplier",
+      "type": "java.lang.Double",
+      "description": "Backoff multiplier for S3 retries",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "app.cover-cache.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable cover image caching",
+      "defaultValue": true
+    },
+    {
+      "name": "app.cover-cache.dir",
+      "type": "java.lang.String",
+      "description": "Directory for storing cached cover images",
+      "defaultValue": "covers"
+    },
+    {
+      "name": "app.cover-cache.max-age-days",
+      "type": "java.lang.Integer",
+      "description": "Maximum age in days for cached cover images",
+      "defaultValue": 30
+    },
+    {
+      "name": "app.cover-cache.cleanup-interval-hours",
+      "type": "java.lang.Integer",
+      "description": "Cleanup interval in hours for cached cover images",
+      "defaultValue": 24
+    },
+    {
+      "name": "app.cover-cache.max-file-size-bytes",
+      "type": "java.lang.Long",
+      "description": "Maximum file size in bytes for cached cover images",
+      "defaultValue": 5242880
+    },
+    {
+      "name": "app.cache.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable application caching",
+      "defaultValue": true
+    },
+    {
+      "name": "app.cache.book.ttl",
+      "type": "java.lang.String",
+      "description": "Time-to-live for book cache entries",
+      "defaultValue": "24h"
+    },
+    {
+      "name": "app.embedding.service.url",
+      "type": "java.lang.String",
+      "description": "URL for external embedding service"
+    },
+    {
+      "name": "app.environment.mode",
+      "type": "java.lang.String",
+      "description": "Application environment mode (development, production)"
+    },
+    {
+      "name": "app.nyt.api.base-url",
+      "type": "java.lang.String",
+      "description": "Base URL for New York Times API",
+      "defaultValue": "https://api.nytimes.com/svc/books/v3"
+    },
+    {
+      "name": "app.nyt.scheduler.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable NYT data sync scheduler",
+      "defaultValue": true
+    },
+    {
+      "name": "app.nyt.scheduler.cron",
+      "type": "java.lang.String",
+      "description": "Cron expression for NYT scheduler",
+      "defaultValue": "0 0 4 * * SUN"
+    },
+    {
+      "name": "app.nyt.scheduler.google.books.api.rate-limit-per-second",
+      "type": "java.lang.Integer",
+      "description": "Rate limit per second for Google Books API calls in NYT scheduler",
+      "defaultValue": 1
+    },
+    {
+      "name": "app.nyt.scheduler.google.books.api.max-calls-per-job",
+      "type": "java.lang.Integer",
+      "description": "Maximum API calls per job in NYT scheduler",
+      "defaultValue": 200
+    },
+    {
+      "name": "app.nyt.scheduler.google.books.api.batch-delay-ms",
+      "type": "java.lang.Long",
+      "description": "Batch delay in milliseconds for Google Books API calls",
+      "defaultValue": 200
+    },
+    {
+      "name": "affiliate.barnesandnoble.publisher-id",
+      "type": "java.lang.String",
+      "description": "Barnes & Noble affiliate publisher ID"
+    },
+    {
+      "name": "affiliate.barnesandnoble.website-id",
+      "type": "java.lang.String",
+      "description": "Barnes & Noble affiliate website ID"
+    },
+    {
+      "name": "affiliate.bookshop.affiliate-id",
+      "type": "java.lang.String",
+      "description": "Bookshop affiliate ID"
+    },
+    {
+      "name": "affiliate.amazon.associate-tag",
+      "type": "java.lang.String",
+      "description": "Amazon Associates tag"
+    },
+    {
+      "name": "sitemap.s3.accumulated-ids-key",
+      "type": "java.lang.String",
+      "description": "S3 key for accumulated book IDs in sitemap"
+    },
+    {
+      "name": "book.cover.debug-mode",
+      "type": "java.lang.Boolean",
+      "description": "Enable debug mode for book cover processing",
+      "defaultValue": false
+    },
+    {
+      "name": "openlibrary.data.api.url",
+      "type": "java.lang.String",
+      "description": "OpenLibrary Data API URL",
+      "defaultValue": "https://openlibrary.org"
+    },
+    {
+      "name": "openlibrary.data.api.request-limit-per-second",
+      "type": "java.lang.Integer",
+      "description": "Request limit per second for OpenLibrary API",
+      "defaultValue": 1
+    },
+    {
+      "name": "healthcheck.test-book-id",
+      "type": "java.lang.String",
+      "description": "Test book ID for health checks"
+    },
+    {
+      "name": "app.security.admin.password",
+      "type": "java.lang.String",
+      "description": "Admin password for security"
+    },
+    {
+      "name": "app.security.user.password",
+      "type": "java.lang.String",
+      "description": "User password for security"
+    },
+    {
+      "name": "nyt.api.key",
+      "type": "java.lang.String",
+      "description": "New York Times API key"
+    },
+    {
+      "name": "nyt.api.base-url",
+      "type": "java.lang.String",
+      "description": "Base URL for New York Times API",
+      "defaultValue": "https://api.nytimes.com/svc/books/v3"
+    },
+    {
+      "name": "nyt.api.secret",
+      "type": "java.lang.String",
+      "description": "New York Times API secret"
+    },
+    {
+      "name": "app.s3.cleanup.prefix",
+      "type": "java.lang.String",
+      "description": "S3 prefix for cleanup operations",
+      "defaultValue": "images/book-covers/"
+    },
+    {
+      "name": "app.s3.cleanup.default-batch-limit",
+      "type": "java.lang.Integer",
+      "description": "Default batch limit for S3 cleanup",
+      "defaultValue": 100
+    },
+    {
+      "name": "app.s3.cleanup.quarantine-prefix",
+      "type": "java.lang.String",
+      "description": "S3 prefix for quarantined items",
+      "defaultValue": "images/non-covers-pages/"
+    },
+    {
+      "name": "app.feature.year-filtering.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable year filtering feature",
+      "defaultValue": false
+    },
+    {
+      "name": "app.feature.embedding-service.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable embedding service feature",
+      "defaultValue": false
+    },
+    {
+      "name": "jsontoredis.s3.google-books-prefix",
+      "type": "java.lang.String",
+      "description": "S3 prefix for Google Books JSON data",
+      "defaultValue": "books/v1/"
+    },
+    {
+      "name": "jsontoredis.s3.nyt-bestsellers-key",
+      "type": "java.lang.String",
+      "description": "S3 key for NYT bestsellers JSON data",
+      "defaultValue": "nyt-bestsellers/latest.json"
+    },
+    {
+      "name": "google.books.api.cache.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable/disable Google Books API caching",
+      "defaultValue": true
+    },
+    {
+      "name": "google.books.api.cache.ttl-minutes",
+      "type": "java.lang.Integer",
+      "description": "Cache TTL in minutes for Google Books API responses",
+      "defaultValue": 1440
+    },
+    {
+      "name": "google.books.api.prefer-cache",
+      "type": "java.lang.Boolean",
+      "description": "Prefer cached responses over fresh API calls",
+      "defaultValue": false
+    },
+    {
+      "name": "google.books.api.mock-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable mock responses for Google Books API",
+      "defaultValue": false
+    },
+    {
+      "name": "app.security.headers.content-security-policy.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable Content Security Policy headers",
+      "defaultValue": false
+    },
+    {
+      "name": "app.security.headers.referrer-policy",
+      "type": "java.lang.String",
+      "description": "Referrer policy header value",
+      "defaultValue": "strict-origin-when-cross-origin"
+    },
+    {
+      "name": "app.clicky.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable Clicky analytics integration",
+      "defaultValue": false
+    },
+    {
+      "name": "app.clicky.site-id",
+      "type": "java.lang.String",
+      "description": "Clicky analytics site ID"
+    },
+    {
+      "name": "app.book.covers.cdn-domain",
+      "type": "java.lang.String",
+      "description": "Primary CDN domain for book cover images"
+    },
+    {
+      "name": "app.book.covers.additional-domains",
+      "type": "java.lang.String",
+      "description": "Additional domains for book cover images (comma-separated)"
+    },
+    {
+      "name": "app.mock.response.directory",
+      "type": "java.lang.String",
+      "description": "Directory containing mock API response files",
+      "defaultValue": "src/test/resources/mock-responses"
+    },
+    {
+      "name": "app.s3-cache.always-check-first",
+      "type": "java.lang.Boolean",
+      "description": "Always check S3 cache before making API calls",
+      "defaultValue": false
+    },
+    {
+      "name": "app.api-client.mock-when-possible",
+      "type": "java.lang.Boolean",
+      "description": "Use mock responses when available",
+      "defaultValue": false
+    },
+    {
+      "name": "app.local-cache.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable local disk caching",
+      "defaultValue": false
+    },
+    {
+      "name": "app.local-cache.directory",
+      "type": "java.lang.String",
+      "description": "Local cache directory path",
+      "defaultValue": ".cache"
+    },
+    {
+      "name": "app.local-cache.book-data.ttl-hours",
+      "type": "java.lang.Integer",
+      "description": "TTL in hours for local cached book data",
+      "defaultValue": 24
+    },
+    {
+      "name": "app.api.deduplicate-requests",
+      "type": "java.lang.Boolean",
+      "description": "Deduplicate in-flight API requests",
+      "defaultValue": true
+    },
+    {
+      "name": "app.api.in-flight-request-timeout-seconds",
+      "type": "java.lang.Integer",
+      "description": "Timeout in seconds for in-flight request deduplication",
+      "defaultValue": 30
+    },
+    {
+      "name": "app.cache.warming.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable cache warming scheduler",
+      "defaultValue": false
+    },
+    {
+      "name": "app.cache.warming.cron",
+      "type": "java.lang.String",
+      "description": "Cron expression for cache warming schedule",
+      "defaultValue": "0 0 2 * * ?"
+    },
+    {
+      "name": "app.cache.warming.rate-limit-per-minute",
+      "type": "java.lang.Integer",
+      "description": "Rate limit per minute for cache warming",
+      "defaultValue": 10
+    },
+    {
+      "name": "app.cache.warming.max-books-per-run",
+      "type": "java.lang.Integer",
+      "description": "Maximum books to warm per cache warming run",
+      "defaultValue": 100
+    },
+    {
+      "name": "app.cache.warming.recently-viewed-days",
+      "type": "java.lang.Integer",
+      "description": "Number of days to consider for recently viewed books",
+      "defaultValue": 7
+    }
+  ],
+  "hints": []
+}

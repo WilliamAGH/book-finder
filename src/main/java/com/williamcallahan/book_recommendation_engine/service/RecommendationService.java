@@ -1,13 +1,28 @@
+/**
+ * Service for generating book recommendations based on various similarity criteria
+ * This class is responsible for generating book recommendations using a combination of strategies:
+ * 
+ * - Uses multi-faceted approach combining author, category, and text-based matching
+ * - Implements scoring algorithm to rank recommendations by relevance
+ * - Supports language-aware filtering to match source book language
+ * - Provides reactive API for non-blocking recommendation generation
+ * - Handles category normalization for better cross-book matching
+ * - Implements keyword extraction with stop word filtering
+ * - Caches recommendations for improved performance and reduced API usage
+ * - Updates recommendation IDs in source book for persistent recommendation history
+ *
+ * @author William Callahan
+ */
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -18,19 +33,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
-/**
- * Service for generating book recommendations based on various similarity criteria
- *
- * @author William Callahan
- *
- * - Uses multi-faceted approach combining author, category, and text-based matching
- * - Implements scoring algorithm to rank recommendations by relevance
- * - Supports language-aware filtering to match source book language
- * - Provides reactive API for non-blocking recommendation generation
- * - Handles category normalization for better cross-book matching
- * - Implements keyword extraction with stop word filtering
- */
 @Service
 public class RecommendationService {
     private static final Logger logger = LoggerFactory.getLogger(RecommendationService.class);
@@ -42,21 +44,20 @@ public class RecommendationService {
             "which", "its", "into", "then", "also"
     ));
 
-    private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheService
-    private final BookCacheService bookCacheService;
+    private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheFacadeService
+    private final BookCacheFacadeService bookCacheFacadeService;
 
     /**
      * Constructs the RecommendationService with required dependencies
      * 
      * @param googleBooksService Service for searching books in Google Books API
-     * @param bookCacheService Service for retrieving cached book information
+     * @param bookCacheFacadeService Service for retrieving cached book information
      * 
-     * @implNote Uses both GoogleBooksService for searches and BookCacheService for book details
+     * @implNote Uses both GoogleBooksService for searches and BookCacheFacadeService for book details
      */
-    @Autowired
-    public RecommendationService(GoogleBooksService googleBooksService, BookCacheService bookCacheService) {
+    public RecommendationService(GoogleBooksService googleBooksService, BookCacheFacadeService bookCacheFacadeService) {
         this.googleBooksService = googleBooksService;
-        this.bookCacheService = bookCacheService;
+        this.bookCacheFacadeService = bookCacheFacadeService;
     }
 
     /**
@@ -73,54 +74,133 @@ public class RecommendationService {
     public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
         final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
 
-        // Use BookCacheService to get the source book
-        return bookCacheService.getBookByIdReactive(bookId) 
+        return bookCacheFacadeService.getBookByIdReactive(bookId)
             .flatMap(sourceBook -> {
                 if (sourceBook == null) {
-                    logger.warn("Cannot get recommendations - source book with ID {} not found via BookCacheService", bookId);
+                    logger.warn("Cannot get recommendations - source book with ID {} not found.", bookId);
                     return Mono.just(Collections.<Book>emptyList());
                 }
 
-                Flux<ScoredBook> authorsFlux = findBooksByAuthorsReactive(sourceBook);
-                Flux<ScoredBook> categoriesFlux = findBooksByCategoriesReactive(sourceBook);
-                Flux<ScoredBook> textFlux = findBooksByTextReactive(sourceBook);
+                // Tier 1: Try to use cached recommendation IDs from the sourceBook object
+                List<String> cachedIds = sourceBook.getCachedRecommendationIds();
+                if (cachedIds != null && !cachedIds.isEmpty()) {
+                    logger.info("Found {} cached recommendation IDs for book {}.", cachedIds.size(), bookId);
+                    // Fetch full Book objects for these IDs
+                    // Shuffle to provide variety if we have more cached IDs than needed
+                    List<String> idsToFetch = new ArrayList<>(cachedIds);
+                    Collections.shuffle(idsToFetch);
+                    if (idsToFetch.size() > effectiveCount * 2) { // Fetch a bit more to allow for filtering
+                        idsToFetch = idsToFetch.subList(0, effectiveCount * 2);
+                    }
 
-                return Flux.merge(authorsFlux, categoriesFlux, textFlux)
-                    .collect(Collectors.toMap(
-                        scoredBook -> scoredBook.getBook().getId(), // Key: book ID
-                        scoredBook -> scoredBook,                  // Value: ScoredBook itself
-                        (sb1, sb2) -> {                             // Merge function for duplicates
-                            sb1.setScore(sb1.getScore() + sb2.getScore()); // Accumulate scores
-                            return sb1;
-                        },
-                        HashMap::new // Supplier for the map
-                    ))
-                    .map(recommendationMap -> {
-                        String sourceLang = sourceBook.getLanguage(); // Get language of the source book
-                        boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
-
-                        List<Book> recommendations = recommendationMap.values().stream()
-                            .sorted(Comparator.comparing(ScoredBook::getScore).reversed())
-                            .map(ScoredBook::getBook)
-                            .filter(book -> !book.getId().equals(sourceBook.getId())) // Exclude the source book
-                            .filter(recommendedBook -> { // Add language filter
-                                if (!filterByLanguage) {
-                                    return true; // Don't filter if source language is unknown
-                                }
-                                String recommendedLang = recommendedBook.getLanguage();
-                                // Use Objects.equals for null-safe comparison
-                                return Objects.equals(sourceLang, recommendedLang);
+                    return Flux.fromIterable(idsToFetch)
+                        .flatMap(recId -> bookCacheFacadeService.getBookByIdReactiveFromCacheOnly(recId) // Use cache-only method
+                            .filter(Objects::nonNull) // Ensure book exists in cache
+                            .filter(recBook -> !recBook.getId().equals(sourceBook.getId())) // Exclude source book
+                            .filter(recBook -> { // Language filter
+                                String sourceLang = sourceBook.getLanguage();
+                                boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
+                                if (!filterByLanguage) return true;
+                                return Objects.equals(sourceLang, recBook.getLanguage());
                             })
-                            .limit(effectiveCount)
-                            .collect(Collectors.toList());
-                        logger.info("Generated {} recommendations for book ID: {} (Language filter active: {})", recommendations.size(), sourceBook.getId(), filterByLanguage);
-                        return recommendations;
-                    });
+                        )
+                        .collectList()
+                        .flatMap(cachedBooks -> {
+                            if (cachedBooks.size() >= effectiveCount) {
+                                logger.info("Serving {} recommendations for book {} from S3/cached IDs.", Math.min(cachedBooks.size(), effectiveCount), bookId);
+                                return Mono.just(cachedBooks.stream().limit(effectiveCount).collect(Collectors.toList()));
+                            } else {
+                                logger.info("Cached recommendations for book {} are insufficient ({} found, {} needed). Fetching from API.", bookId, cachedBooks.size(), effectiveCount);
+                                return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
+                            }
+                        });
+                } else {
+                    logger.info("No cached recommendation IDs for book {}. Fetching from API.", bookId);
+                    return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
+                }
             })
-            .switchIfEmpty(Mono.<List<Book>>defer(() -> {
-                logger.warn("Source book with ID {} not found, returning empty recommendations.", bookId);
-                return Mono.just(Collections.<Book>emptyList());
-            }));
+            .switchIfEmpty(Mono.just(Collections.emptyList())); // If the whole chain above is empty, provide an empty list.
+    }
+
+    /**
+     * Fetches book recommendations using the Google Books API and updates the cache
+     * This is a fallback method used when cached recommendations are unavailable or insufficient
+     * 
+     * @param sourceBook The book to find recommendations for
+     * @param effectiveCount The desired number of recommendations to return
+     * @return Mono emitting a list of recommended books
+     * 
+     * @implNote Uses a multi-strategy approach:
+     * 1. Retrieves books by same authors (via findBooksByAuthorsReactive)
+     * 2. Retrieves books in similar categories (via findBooksByCategoriesReactive)
+     * 3. Retrieves books with matching keywords (via findBooksByTextReactive)
+     * 4. Merges results, with duplicates having their scores combined
+     * 5. Filters by language and excludes the source book itself
+     * 6. Updates the source book's cached recommendation IDs for future use
+     */
+    private Mono<List<Book>> fetchRecommendationsFromApiAndUpdateCache(Book sourceBook, int effectiveCount) {
+        Flux<ScoredBook> authorsFlux = findBooksByAuthorsReactive(sourceBook);
+        Flux<ScoredBook> categoriesFlux = findBooksByCategoriesReactive(sourceBook);
+        Flux<ScoredBook> textFlux = findBooksByTextReactive(sourceBook);
+
+        return Flux.merge(authorsFlux, categoriesFlux, textFlux)
+            .collect(Collectors.toMap(
+                scoredBook -> scoredBook.getBook().getId(),
+                scoredBook -> scoredBook,
+                (sb1, sb2) -> {
+                    sb1.setScore(sb1.getScore() + sb2.getScore());
+                    return sb1;
+                },
+                HashMap::new
+            ))
+            .flatMap(recommendationMap -> {
+                String sourceLang = sourceBook.getLanguage();
+                boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
+
+                List<Book> recommendations = recommendationMap.values().stream()
+                    .sorted(Comparator.comparing(ScoredBook::getScore).reversed())
+                    .map(ScoredBook::getBook)
+                    .filter(book -> !book.getId().equals(sourceBook.getId()))
+                    .filter(recommendedBook -> {
+                        if (!filterByLanguage) return true;
+                        String recommendedLang = recommendedBook.getLanguage();
+                        return Objects.equals(sourceLang, recommendedLang);
+                    })
+                    .collect(Collectors.toList()); // Collect all potential recommendations before limiting
+
+                if (!recommendations.isEmpty()) {
+                    List<String> newRecommendationIds = recommendations.stream()
+                        .map(Book::getId)
+                        .distinct()
+                        .collect(Collectors.toList());
+                    
+                    sourceBook.addRecommendationIds(newRecommendationIds);
+                    
+                    // Proactively cache each of the newly found recommended books
+                    Mono<Void> cacheIndividualRecommendedBooksMono = Flux.fromIterable(recommendations)
+                        .flatMap(recommendedBook -> {
+                            // Ensure rawJsonResponse is set if it's available and BookCacheFacadeService uses it
+                            // This might already be handled by BookJsonParser
+                            return bookCacheFacadeService.cacheBookReactive(recommendedBook);
+                        })
+                        .then();
+                    
+                    // Save the updated sourceBook with new recommendation IDs, after caching individual books
+                    return cacheIndividualRecommendedBooksMono
+                        .then(bookCacheFacadeService.cacheBookReactive(sourceBook))
+                        .then(Mono.fromRunnable(() -> logger.info("Updated cachedRecommendationIds for book {} with {} new IDs and cached {} individual recommended books.", sourceBook.getId(), newRecommendationIds.size(), recommendations.size())))
+                        .thenReturn(recommendations.stream().limit(effectiveCount).collect(Collectors.toList())) // Return limited list after saving
+                        .doOnSuccess(finalList -> logger.info("Fetched {} total potential recommendations for book ID {} from API, updated cache. Returning {} recommendations.", recommendations.size(), sourceBook.getId(), finalList.size()))
+                        .onErrorResume(e -> {
+                            logger.error("Error saving updated source book {} to cache after fetching recommendations: {}", sourceBook.getId(), e.getMessage());
+                            // Still return the recommendations even if caching fails for this update
+                            return Mono.just(recommendations.stream().limit(effectiveCount).collect(Collectors.toList()));
+                        });
+                } else {
+                     logger.info("No recommendations generated from API for book ID: {}", sourceBook.getId());
+                    return Mono.just(Collections.emptyList());
+                }
+            });
     }
     
     /**
@@ -301,26 +381,49 @@ public class RecommendationService {
      * Helper class to track books with their calculated similarity scores
      * 
      * Encapsulates:  
-     * - Book object
-     * - Similarity score that can be accumulated from multiple sources
+     * - Book object with all its metadata
+     * - Similarity score that accumulates across multiple recommendation strategies
+     * - Used for ranking recommendations by relevance
+     * - Allows scores to be combined when a book is found by multiple strategies
      */
     private static class ScoredBook {
         private final Book book;
         private double score;
         
+        /**
+         * Constructs a new ScoredBook with the given book and initial score
+         * 
+         * @param book The book to be scored
+         * @param score The initial similarity score
+         */
         public ScoredBook(Book book, double score) {
             this.book = book;
             this.score = score;
         }
         
+        /**
+         * Gets the book object
+         * 
+         * @return The book
+         */
         public Book getBook() {
             return book;
         }
         
+        /**
+         * Gets the current similarity score
+         * 
+         * @return The similarity score
+         */
         public double getScore() {
             return score;
         }
         
+        /**
+         * Updates the similarity score (used when combining scores from multiple sources)
+         * 
+         * @param score The new score to set
+         */
         public void setScore(double score) {
             this.score = score;
         }

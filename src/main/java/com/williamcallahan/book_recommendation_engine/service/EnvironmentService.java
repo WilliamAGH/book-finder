@@ -13,7 +13,6 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Service;
@@ -27,7 +26,6 @@ public class EnvironmentService {
      *
      * @param environment Spring Environment configuration object
      */
-    @Autowired
     public EnvironmentService(Environment environment) {
         this.environment = environment;
     }

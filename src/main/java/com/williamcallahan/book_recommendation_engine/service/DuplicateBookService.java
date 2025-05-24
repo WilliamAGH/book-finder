@@ -17,7 +17,6 @@ import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -40,7 +39,6 @@ public class DuplicateBookService {
      *
      * @param cachedBookRepository Repository for querying cached book information
      */
-    @Autowired
     public DuplicateBookService(CachedBookRepository cachedBookRepository) {
         this.cachedBookRepository = cachedBookRepository;
     }
@@ -291,4 +289,4 @@ public class DuplicateBookService {
         }
         return modified;
     }
-} 
+}

@@ -1,0 +1,61 @@
+# RedisSearch Schema & Sample Queries
+
+# -----------------------------------------------------------------------------
+# Existing Books Index (JSON)
+# -----------------------------------------------------------------------------
+FT.CREATE idx:books ON JSON
+  PREFIX 1 "book:"
+  SCHEMA
+    $.title                         AS title       TEXT    WEIGHT 5
+    $.authors[*]                    AS author      TAG
+    $.description                   AS desc        TEXT    WEIGHT 1
+    $.categories[*]                 AS category    TAG
+    $.isbn10                        AS isbn10      TAG     SORTABLE
+    $.isbn13                        AS isbn13      TAG     SORTABLE
+    $.publisher                     AS publisher   TAG
+    $.language                      AS lang        TAG
+    $.averageRating                 AS rating      NUMERIC SORTABLE
+    $.ratingsCount                  AS ratings     NUMERIC SORTABLE
+    $.pageCount                     AS pages       NUMERIC SORTABLE
+    $.publishedDate                 AS pubDate     TAG
+    $.coverImageWidth               AS imgW        NUMERIC
+    $.coverImageHeight              AS imgH        NUMERIC
+    $.isCoverHighResolution         AS highRes     TAG
+    $.cachedRecommendationIds[*]    AS recIds      TAG
+
+# -----------------------------------------------------------------------------
+# Extended CachedBooks Index with Embeddings (JSON)
+# -----------------------------------------------------------------------------
+FT.CREATE idx:cached_books_vector ON JSON
+  PREFIX 1 "cached_book:"
+  SCHEMA
+    $.title                         AS title       TEXT    WEIGHT 5
+    $.authors[*]                    AS author      TAG
+    $.description                   AS desc        TEXT    WEIGHT 1
+    $.categories[*]                 AS category    TAG
+    $.isbn10                        AS isbn10      TAG     SORTABLE
+    $.isbn13                        AS isbn13      TAG     SORTABLE
+    $.publisher                     AS publisher   TAG
+    $.language                      AS lang        TAG
+    $.averageRating                 AS rating      NUMERIC SORTABLE
+    $.ratingsCount                  AS ratings     NUMERIC SORTABLE
+    $.pageCount                     AS pages       NUMERIC SORTABLE
+    $.publishedDate                 AS pubDate     TAG
+    $.cachedRecommendationIds[*]    AS recIds      TAG
+    # Embedding vector field (float32 array, cosine similarity)
+    $.embedding.values              AS embedding   VECTOR  HNSW 6 TYPE FLOAT32 DIM 384 DISTANCE_METRIC COSINE
+
+# -----------------------------------------------------------------------------
+# Sample Vector KNN Search (Dialiect 2)
+# -----------------------------------------------------------------------------
+# Replace <BINARY_VECTOR_BYTES> with your raw float32 byte vector blob
+FT.SEARCH idx:cached_books_vector '*=>[KNN 10 @embedding $vec AS score]' \
+  PARAMS 2 vec <BINARY_VECTOR_BYTES> \
+  RETURN 3 $.title AS title $.authors[*] AS authors $.isbn13 AS isbn13 \
+  DIALECT 2
+
+# -----------------------------------------------------------------------------
+# Fallback Non-Vector Search by Category Example
+# -----------------------------------------------------------------------------
+FT.SEARCH idx:books '@category:{Science}' \
+  RETURN 2 $.title AS title $.publisher AS publisher 

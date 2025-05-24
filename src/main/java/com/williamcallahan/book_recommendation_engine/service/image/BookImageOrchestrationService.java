@@ -19,7 +19,6 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -59,7 +58,6 @@ public class BookImageOrchestrationService {
      *
      * @param bookCoverManagementService The service for cache management and background processing
      */
-    @Autowired
     public BookImageOrchestrationService(BookCoverManagementService bookCoverManagementService) {
         this.bookCoverManagementService = bookCoverManagementService;
     }

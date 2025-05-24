@@ -1,15 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.controller;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.web.error.ErrorAttributeOptions;
-import org.springframework.boot.web.servlet.error.ErrorAttributes;
-import org.springframework.boot.web.servlet.error.ErrorController;
-import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.context.request.WebRequest;
-import java.util.Map;
-
 /**
  * Controller for handling application errors and providing diagnostic information
  *
@@ -22,10 +10,23 @@ import java.util.Map;
  * - Provides enhanced error details for debugging
  * - Extracts exception type information when available
  */
+
+package com.williamcallahan.book_recommendation_engine.controller;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.web.error.ErrorAttributeOptions;
+import org.springframework.boot.web.servlet.error.ErrorAttributes;
+import org.springframework.boot.web.servlet.error.ErrorController;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.context.request.WebRequest;
+import java.util.Map;
+
 @Controller
+@ConditionalOnWebApplication
 public class ErrorDiagnosticsController implements ErrorController {
 
-    @Autowired
     private ErrorAttributes errorAttributes;
 
     /**

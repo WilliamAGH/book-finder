@@ -42,6 +42,9 @@ class GoogleBooksServiceTest {
     @Mock
     private GoogleApiFetcher googleApiFetcherMock;
 
+    @Mock // Added mock for BookDataOrchestrator
+    private BookDataOrchestrator bookDataOrchestratorMock;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -57,7 +60,8 @@ class GoogleBooksServiceTest {
         googleBooksService = new GoogleBooksService(
                 objectMapper, 
                 apiRequestMonitorMock,
-                googleApiFetcherMock
+                googleApiFetcherMock,
+                bookDataOrchestratorMock // Pass the new mock
         );
 
         // @Value fields are no longer in GoogleBooksService, they are in GoogleApiFetcher

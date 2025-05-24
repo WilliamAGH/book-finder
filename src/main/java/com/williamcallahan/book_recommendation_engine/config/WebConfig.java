@@ -24,8 +24,8 @@ import java.nio.file.Paths;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    @Value("${app.cover-cache.dir:covers}")
-    private String coverCacheDirName; // This should match the directory name used in URLs, e.g., "covers"
+    @Value("${app.cover-cache.dir:book-covers}")
+    private String coverCacheDirName; // This should match the directory name used in URLs, e.g., "book-covers"
 
     /**
      * Configures resource handlers for static content serving
@@ -63,4 +63,4 @@ public class WebConfig implements WebMvcConfigurer {
                                         "classpath:/public/");
         }
     }
-} 
+}

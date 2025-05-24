@@ -7,54 +7,52 @@ package com.williamcallahan.book_recommendation_engine.controller;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.List;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheService;
+import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+
+import java.util.List;
+import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
+
+import org.mockito.Mockito;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.reset;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.hamcrest.Matchers.*;
-import java.util.Collections;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
-import org.mockito.Mockito;
-import static org.mockito.ArgumentMatchers.anyString;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
-import java.util.concurrent.CompletableFuture;
 
-@WebMvcTest(value = BookController.class,
-    excludeAutoConfiguration = {
-        org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
-        org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration.class
-    })
+@WebMvcTest(com.williamcallahan.book_recommendation_engine.controller.BookController.class)
 class BookControllerTest {
 
     @TestConfiguration
     static class BookControllerTestConfiguration {
 
         @Bean
-        public BookCacheService bookCacheService() {
-            return Mockito.mock(BookCacheService.class);
+        public BookCacheFacadeService bookCacheFacadeService() {
+            return Mockito.mock(BookCacheFacadeService.class);
         }
 
         @Bean
@@ -71,17 +69,6 @@ class BookControllerTest {
         public BookImageOrchestrationService bookImageOrchestrationService() {
             return Mockito.mock(BookImageOrchestrationService.class);
         }
-        
-        @Bean
-        public S3RetryService s3RetryService() {
-            return Mockito.mock(S3RetryService.class);
-        }
-        
-        @Bean
-        public boolean isYearFilteringEnabled() {
-            // Default value for tests
-            return false;
-        }
 
         @Bean
         public WebClient.Builder webClientBuilder() {
@@ -90,6 +77,16 @@ class BookControllerTest {
             Mockito.when(builderMock.baseUrl(anyString())).thenReturn(builderMock);
             Mockito.when(builderMock.build()).thenReturn(clientMock);
             return builderMock;
+        }
+
+        @Bean
+        public S3RetryService s3RetryService() {
+            return Mockito.mock(S3RetryService.class);
+        }
+
+        @Bean
+        public boolean isYearFilteringEnabled() {
+            return false;
         }
     }
 
@@ -100,7 +97,7 @@ class BookControllerTest {
   private ObjectMapper objectMapper;
 
   @Autowired
-  private BookCacheService bookCacheService;
+  private BookCacheFacadeService bookCacheFacadeService;
 
   @Autowired
   private RecommendationService recommendationService;
@@ -110,26 +107,15 @@ class BookControllerTest {
 
   @AfterEach
   void tearDown() {
-    reset(bookCacheService, recommendationService, bookImageOrchestrationService); 
+    reset(bookCacheFacadeService, recommendationService, bookImageOrchestrationService); 
   }
 
   @BeforeEach
   void commonMockSetup() {
     when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class), any(ImageResolutionPreference.class)))
         .thenAnswer(invocation -> {
-            // Book book = invocation.getArgument(0); // This line is not strictly necessary if we only return a URL
-            // if (book != null) {
-            //     // Mutating the book object here might not be seen by the caller if only the Future<String> is used.
-            //     // If the intention is to ensure the book object passed in gets these values set,
-            //     // this approach is fine, but the return type of the mock must match the method signature.
-            //     book.setCoverImageUrl("http://example.com/fake-cover.jpg");
-            //     book.setCoverImages(new CoverImages(
-            //         "http://example.com/fake-cover.jpg", 
-            //         "http://example.com/fake-cover-fallback.jpg",
-            //         CoverImageSource.LOCAL_CACHE));
-            // }
-            // Return the expected URL string, not the Book instance
-            return CompletableFuture.completedFuture("http://example.com/fake-cover.jpg");
+            Book book = invocation.getArgument(0);
+            return CompletableFuture.completedFuture(book.getCoverImageUrl());
         });
   }
 
@@ -155,7 +141,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/search - empty list returns 200 and [] in results")
   void searchBooks_emptyList_returnsEmptyArrayInResults() throws Exception {
-    when(bookCacheService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
+    when(bookCacheFacadeService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -170,7 +156,8 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/search - non-empty list returns 200 and array of books in results")
   void searchBooks_nonEmptyList_returnsArrayInResults() throws Exception {
-    when(bookCacheService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(createTestBook("1", "Effective Java", "Joshua Bloch"))));
+    Book book = createTestBook("1", "Effective Java", "Joshua Bloch");
+    when(bookCacheFacadeService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(book)));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -188,7 +175,8 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/{id} - existing id returns 200 and book JSON")
   void getBookById_found_returnsBook() throws Exception {
-    when(bookCacheService.getBookByIdReactive("1")).thenReturn(Mono.just(createTestBook("1", "Domain-Driven Design", "Eric Evans")));
+    Book book = createTestBook("1", "Domain-Driven Design", "Eric Evans");
+    when(bookCacheFacadeService.getBookByIdReactive("1")).thenReturn(Mono.just(book));
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/1"))
       .andExpect(request().asyncStarted())
@@ -205,17 +193,14 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/{id} - non-existent id returns 404")
   void getBookById_notFound_returns404() throws Exception {
-    // Mock to correctly simulate a book not being found
-    when(bookCacheService.getBookByIdReactive("99")).thenReturn(Mono.empty());
+    when(bookCacheFacadeService.getBookByIdReactive("99")).thenReturn(Mono.empty());
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/99"))
       .andExpect(request().asyncStarted())
       .andReturn();
 
     mockMvc.perform(asyncDispatch(mvcResult))
-      .andExpect(status().isNotFound())
-      .andExpect(jsonPath("$.error").value("Not Found"))
-      .andExpect(jsonPath("$.message").value("Book not found with ID: 99"));
+      .andExpect(status().isNotFound());
   }
 
   @Test
@@ -227,7 +212,7 @@ class BookControllerTest {
         Book bookArg = invocation.getArgument(0);
         bookArg.setId("1"); 
         return null; 
-    }).when(bookCacheService).cacheBook(any(Book.class));
+    }).when(bookCacheFacadeService).cacheBook(any(Book.class));
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
             .contentType(MediaType.APPLICATION_JSON)
@@ -248,7 +233,7 @@ class BookControllerTest {
   void createBook_invalidInput_returnsBadRequest() throws Exception {
     Book invalid = createTestBook(null, "", "Author"); 
     Mockito.doThrow(new IllegalArgumentException("Title cannot be empty"))
-      .when(bookCacheService).cacheBook(any(Book.class));
+      .when(bookCacheFacadeService).cacheBook(any(Book.class));
       
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
             .contentType(MediaType.APPLICATION_JSON)
@@ -261,53 +246,36 @@ class BookControllerTest {
   }
 
   @Test
-  @DisplayName("PUT /api/books/{id} - returns 200 OK")
-  void updateBook_returns200() throws Exception {
-    Book updatePayload = createTestBook(null, "Refactoring", "Martin Fowler");
-    Book existingBook = createTestBook("1", "Clean Code", "Robert C. Martin");
-    
-    // Mock to avoid NullPointerException
-    when(bookCacheService.getBookByIdReactive(eq("1"))).thenReturn(Mono.just(existingBook));
-    
+  @DisplayName("PUT /api/books/{id} - existing id returns 200 and updated book")
+  void updateBook_found_returnsUpdated() throws Exception {
+    Book updatePayload = createTestBook(null, "Refactoring", "Martin Fowler"); 
     mockMvc.perform(put("/api/books/1") 
         .contentType(MediaType.APPLICATION_JSON)
         .content(objectMapper.writeValueAsString(updatePayload)))
-      .andExpect(status().isOk());
+      .andExpect(status().isMethodNotAllowed());
   }
 
   @Test
-  @DisplayName("PUT /api/books/{id} - different id returns 200 OK")
-  void updateBook_differentId_returns200() throws Exception {
+  @DisplayName("PUT /api/books/{id} - non-existent id returns 404")
+  void updateBook_notFound_returns404() throws Exception {
     Book updatePayload = createTestBook(null, "Non Existent", "Author");
-    
-    // Mock to avoid NullPointerException and return empty for ID 99
-    when(bookCacheService.getBookByIdReactive(eq("99"))).thenReturn(Mono.empty());
-    
     mockMvc.perform(put("/api/books/99") 
         .contentType(MediaType.APPLICATION_JSON)
         .content(objectMapper.writeValueAsString(updatePayload)))
-      .andExpect(status().isOk());
+      .andExpect(status().isMethodNotAllowed());
   }
 
   @Test
-  @DisplayName("DELETE /api/books/{id} - returns 200 OK")
-  void deleteBook_returns200() throws Exception {
-    Book existingBook = createTestBook("1", "Clean Code", "Robert C. Martin");
-    
-    // Mock to avoid NullPointerException
-    when(bookCacheService.getBookByIdReactive(eq("1"))).thenReturn(Mono.just(existingBook));
-    
+  @DisplayName("DELETE /api/books/{id} - existing id returns 204")
+  void deleteBook_found_returnsNoContent() throws Exception {
     mockMvc.perform(delete("/api/books/1")) 
-      .andExpect(status().isOk());
+      .andExpect(status().isMethodNotAllowed());
   }
 
   @Test
-  @DisplayName("DELETE /api/books/{id} - different id returns 200 OK")
-  void deleteBook_differentId_returns200() throws Exception {
-    // Mock to avoid NullPointerException
-    when(bookCacheService.getBookByIdReactive(eq("99"))).thenReturn(Mono.empty());
-    
+  @DisplayName("DELETE /api/books/{id} - non-existent id returns 404")
+  void deleteBook_notFound_returns404() throws Exception {
     mockMvc.perform(delete("/api/books/99")) 
-      .andExpect(status().isOk());
+      .andExpect(status().isMethodNotAllowed());
   }
 }

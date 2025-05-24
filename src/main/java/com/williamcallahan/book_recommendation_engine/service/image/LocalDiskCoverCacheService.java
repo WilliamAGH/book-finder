@@ -24,7 +24,6 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -75,7 +74,6 @@ public class LocalDiskCoverCacheService {
      * @param coverCacheManager Manager for in-memory caches
      * @param imageProcessingService Service for image processing
      */
-    @Autowired
     public LocalDiskCoverCacheService(WebClient.Builder webClientBuilder, CoverCacheManager coverCacheManager, ImageProcessingService imageProcessingService) {
         this.webClient = webClientBuilder.build();
         this.coverCacheManager = coverCacheManager;

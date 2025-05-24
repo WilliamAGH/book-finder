@@ -7,6 +7,7 @@
  *
  * @author William Callahan
  */
+
 package com.williamcallahan.book_recommendation_engine.config;
 
 import com.github.benmanes.caffeine.cache.Caffeine;

@@ -3,53 +3,29 @@ spring:
     allow-bean-definition-overriding: true
   profiles:
     default: prod # Default to prod if no other profile is active
-  # Conditional datasource configuration
-  # Set SPRING_DATASOURCE_URL to empty string to disable the database
-  datasource:
-    url: ${SPRING_DATASOURCE_URL:}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
-    driver-class-name: org.postgresql.Driver
-    # Only initialize if URL is provided
-    initialization-mode: ${SPRING_DATASOURCE_INITIALIZATION_MODE:never}
-    # Prevent application from failing if no database is available
-    hikari:
-      connection-timeout: 2000
-      initialization-fail-timeout: -1 # Negative value means fail fast if DB is not available
-      maximum-pool-size: 3 # Default for common, can be overridden by profiles
-  
-  # JPA configuration - only used when database URL is provided
-  jpa:
-    # Set explicit dialect to prevent auto-detection issues
-    database-platform: ${SPRING_JPA_DATABASE_PLATFORM:org.hibernate.dialect.PostgreSQLDialect}
-    # Generate database schema only if datasource is available
-    # Set to none to disable automatic schema generation
-    hibernate:
-      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
-    properties:
-      hibernate:
-        format_sql: true
-        jdbc:
-          lob:
-            non_contextual_creation: true
-    # Only validate schema if explicitly enabled
-    generate-ddl: ${SPRING_JPA_GENERATE_DDL:false}  
-    show-sql: false
-    # This property will prevent JPA from initializing before PostgreSQL is available
-    open-in-view: false
   
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
-    type: ${SPRING_CACHE_TYPE:simple}
+    type: ${SPRING_CACHE_TYPE:caffeine} # Defaulting to Caffeine for L1 in-memory cache
+    cache-names: books,bookCovers,searchResults,bookRequests,searchRequests,bookSearchResults,nytBestsellersCurrent
+    caffeine:
+      spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Default spec for all caches
   
   # Redis configuration - optional, only used if cache type is redis
-  redis:
-    host: ${SPRING_REDIS_HOST:localhost}
-    port: ${SPRING_REDIS_PORT:6379}
-    # Skip Redis if not available
-    connect-timeout: 2000
-    lettuce:
-      shutdown-timeout: 0
+  data:
+    redis:
+      url: ${REDIS_SERVER:}
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
+      # Skip Redis if not available
+      connect-timeout: 2000
+      lettuce:
+        shutdown-timeout: 0
+        pool:
+          max-active: 8 # Default for GenericObjectPoolConfig, consider tuning for production
+          max-idle: 8   # Default
+          min-idle: 0   # Default
+          max-wait: -1ms # Block indefinitely if pool exhausted, consider a specific timeout
 
   web:
     resources:
@@ -69,14 +45,43 @@ spring:
     max-in-memory-size: 10MB # Configure global max buffer size for WebClient
 
 app:
+  security:
+    admin:
+      password: ${APP_ADMIN_PASSWORD}
+    user:
+      password: ${APP_USER_PASSWORD}
+    headers:
+      content-security-policy:
+        enabled: true
   cache:
     enabled: true
+    book: # Corresponds to app.redis.cache.book.ttl
+      ttl: 24h # Default TTL for book cache entries
+  cover-cache:
+    dir: book-covers # Directory name for serving cached cover images
+  book:
+    covers:
+      cdn-domain: ${S3_CDN_URL:https://book-finder.sfo3.digitaloceanspaces.com}
+      additional-domains: ${BOOK_COVERS_ADDITIONAL_DOMAINS:}
+  clicky:
+    enabled: ${CLICKY_ENABLED:true}
+    site-id: ${CLICKY_SITE_ID:101484793}
   
   # External embedding service URL (optional)
   # If not provided, a simple placeholder embedding will be used
   embedding:
     service:
       url: ${EMBEDDING_SERVICE_URL:}
+
+# S3 configuration
+s3:
+  enabled: ${S3_ENABLED:false}
+  access-key-id: ${S3_ACCESS_KEY_ID:}
+  secret-access-key: ${S3_SECRET_ACCESS_KEY:}
+  server-url: ${S3_SERVER_URL:}
+  region: ${AWS_REGION:us-west-2}
+  bucket-name: ${S3_BUCKET:}
+  cdn-url: ${S3_CDN_URL:}
       
 # Server configuration (common, can be overridden by application.properties or profiles)
 server:
@@ -84,62 +89,113 @@ server:
   compression:
     enabled: true
   
+# Google Books API configuration
+google:
+  books:
+    api:
+      key: ${GOOGLE_BOOKS_API_KEY:}
+      base-url: ${GOOGLE_BOOKS_API_BASE_URL:https://www.googleapis.com/books/v1}
+
+# New York Times API configuration
+nyt:
+  api:
+    base-url: ${NYT_API_BASE_URL:https://api.nytimes.com/svc/books/v3}
+    key: ${NYT_API_KEY:}
+
+# OpenLibrary API configuration
+openlibrary:
+  data:
+    api:
+      url: ${OPENLIBRARY_API_URL:https://openlibrary.org}
+
+# Sitemap S3 configuration
+sitemap:
+  s3:
+    accumulated-ids-key: sitemap/accumulated-book-ids.json
+
 # Common Logging (can be overridden by profiles)
 logging:
   level:
     root: INFO # Default root level
-    com.williamcallahan.book_recommendation_engine: INFO
-    org.springframework.cache: WARN
-    org.hibernate: WARN
+    "[com.williamcallahan.book_recommendation_engine]": INFO
+    "[org.springframework.cache]": WARN
+    "[org.hibernate]": WARN
 
 ---
 spring:
   config:
     activate:
       on-profile: dev
-  # Dev-specific properties
-  datasource:
-    url: "" # Explicitly empty
-    driver-class-name: "" # Explicitly empty
-    # hikari:
-    #   maximum-pool-size: 1 # Default to 1 if absolutely needed, but aim for no init
-    #   minimum-idle: 1      # Default to 1 if absolutely needed
-  jpa:
-    show-sql: true # Show SQL in dev
-    hibernate:
-      ddl-auto: none # More lenient ddl-auto for dev
-    generate-ddl: false
-    # database-platform: "" # Optionally, we could clear this too, but empty URL/driver should suffice
+  devtools:
+    restart:
+      enabled: true
+    livereload:
+      enabled: true
+  # Dev-specific cache configuration
+  cache:
+    caffeine:
+      spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Dev cache settings
 logging:
   level:
-    com.williamcallahan.book_recommendation_engine: INFO # Changed from DEBUG
-    org.springframework.web: INFO # Changed from DEBUG
-    org.hibernate: WARN # Reduce Hibernate noise if no DB
+    '[org.springframework.boot.devtools]': WARN  # suppress DevTools internal logs
+    "[org.springframework.web]": INFO # Changed from DEBUG
 app:
   environment:
     mode: development # Custom property for dev mode
+  security:
+    admin:
+      password: ${APP_ADMIN_PASSWORD:devAdminPass}
+    user:
+      password: ${APP_USER_PASSWORD:devUserPass}
 
 ---
 spring:
   config:
     activate:
       on-profile: prod
-  # Prod-specific properties
-  datasource:
-    url: "" # Explicitly empty
-    driver-class-name: "" # Explicitly empty
-    # hikari:
-    #   maximum-pool-size: 1 # Default to 1 if absolutely needed
-    #   minimum-idle: 1      # Default to 1 if absolutely needed
-    # Consider more robust production settings for HikariCP
-  jpa:
-    show-sql: false
-    hibernate:
-      ddl-auto: none # Validate schema in prod, or 'none' if managed externally
-    generate-ddl: false
+  # Production-specific cache configuration with optimized settings
+  cache:
+    cache-names: books,bookSearchResults,nytBestsellersCurrent
+    caffeine:
+      spec: "maximumSize=2000,expireAfterWrite=12h,recordStats" # Optimized for production
 logging:
   level:
-    com.williamcallahan.book_recommendation_engine: INFO # Standard INFO level for prod
+    "[com.williamcallahan.book_recommendation_engine]": INFO # Standard INFO level for prod
 app:
   environment:
     mode: production # Custom property for prod mode
+
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+  cache:
+    type: simple
+logging:
+  level:
+    root: WARN
+    "[com.williamcallahan.book_recommendation_engine]": INFO
+    "[org.springframework]": WARN
+s3:
+  cdn-url: https://book-finder.sfo3.digitaloceanspaces.com
+app:
+  cache:
+    enabled: true
+
+---
+spring:
+  config:
+    activate:
+      on-profile: jsontoredis
+  main:
+    web-application-type: none
+  data:
+    redis:
+      timeout: 20000
+  devtools:
+    restart:
+      enabled: false
+logging:
+  level:
+    '[com.williamcallahan.book_recommendation_engine.jsontoredis]': INFO

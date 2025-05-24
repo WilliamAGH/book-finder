@@ -25,6 +25,7 @@ import com.williamcallahan.book_recommendation_engine.service.GoogleApiFetcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
@@ -35,6 +36,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.function.Function;
+import java.util.function.BinaryOperator;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -49,22 +52,29 @@ public class GoogleBooksService {
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
+    private final BookDataOrchestrator bookDataOrchestrator; // Added for fetchMultipleBooksByIds
+
+    private static final int ISBN_BATCH_QUERY_SIZE = 5; // Reduced batch size for ISBN OR queries
+    
+    @Value("${app.nyt.scheduler.google.books.api.batch-delay-ms:200}") // Configurable delay
+    private long isbnBatchDelayMs;
 
     /**
-     * Constructs a GoogleBooksService with necessary dependencies.
+     * Constructs a GoogleBooksService with necessary dependencies
      *
      * @param objectMapper Jackson ObjectMapper for JSON processing
      * @param apiRequestMonitor Service for monitoring API usage metrics
      * @param googleApiFetcher Service for direct Google API calls
      */
-    @Autowired
     public GoogleBooksService(
             ObjectMapper objectMapper,
             ApiRequestMonitor apiRequestMonitor,
-            GoogleApiFetcher googleApiFetcher) {
+            GoogleApiFetcher googleApiFetcher,
+            BookDataOrchestrator bookDataOrchestrator) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
+        this.bookDataOrchestrator = bookDataOrchestrator;
     }
 
     /**
@@ -254,6 +264,38 @@ public class GoogleBooksService {
     }
 
     /**
+     * Fetches the Google Books ID for a given ISBN
+     * This method is specifically for the NYT scheduler to minimize data transfer
+     * when only the ID is needed
+     *
+     * @param isbn The ISBN (10 or 13) to search for
+     * @return Mono emitting the Google Books ID, or empty if not found or error
+     */
+    @RateLimiter(name = "googleBooksServiceRateLimiter") // Apply rate limiting
+    public Mono<String> fetchGoogleBookIdByIsbn(String isbn) {
+        logger.debug("Fetching Google Book ID for ISBN: {}", isbn);
+        return searchBooks("isbn:" + isbn, 0, "relevance", null)
+            .map(responseNode -> {
+                if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray() && responseNode.get("items").size() > 0) {
+                    JsonNode firstItem = responseNode.get("items").get(0);
+                    if (firstItem.has("id")) {
+                        String googleId = firstItem.get("id").asText();
+                        logger.info("Found Google Book ID: {} for ISBN: {}", googleId, isbn);
+                        return googleId;
+                    }
+                }
+                logger.warn("No Google Book ID found for ISBN: {}", isbn);
+                return null; // Will be filtered by filter(Objects::nonNull) or handled by switchIfEmpty
+            })
+            .filter(Objects::nonNull) // Ensure we only proceed if an ID was found
+            .doOnError(e -> {
+                logger.error("Error fetching Google Book ID for ISBN {}: {}", isbn, e.getMessage(), e);
+                apiRequestMonitor.recordFailedRequest("volumes/search/isbn_to_id/" + isbn, e.getMessage());
+            })
+            .onErrorResume(e -> Mono.empty()); // On error, return an empty Mono
+    }
+
+    /**
      * Retrieve a specific book by its Google Books volume ID
      * This method now delegates to GoogleApiFetcher for the authenticated API call
      * and uses BookJsonParser for conversion. S3 caching is handled by BookDataOrchestrator
@@ -266,7 +308,7 @@ public class GoogleBooksService {
     @TimeLimiter(name = "googleBooksService")
     @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "getBookByIdRateLimitFallback")
     public CompletionStage<Book> getBookById(String bookId) {
-        logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheService/GoogleBooksCachingStrategy.", bookId);
+        logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheFacadeService/GoogleBooksCachingStrategy.", bookId);
         return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
             .map(BookJsonParser::convertJsonToBook)
             .filter(Objects::nonNull)
@@ -416,4 +458,75 @@ public class GoogleBooksService {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * Fetches Google Book IDs for a list of ISBNs in batches
+     *
+     * @param isbns List of ISBNs (10 or 13)
+     * @param langCode Optional language code
+     * @return Mono emitting a Map of ISBN to Google Book ID
+     */
+    public Mono<Map<String, String>> fetchGoogleBookIdsForMultipleIsbns(List<String> isbns, String langCode) {
+        if (isbns == null || isbns.isEmpty()) {
+            return Mono.just(Collections.emptyMap());
+        }
+
+        List<List<String>> isbnBatches = new ArrayList<>();
+        for (int i = 0; i < isbns.size(); i += ISBN_BATCH_QUERY_SIZE) {
+            isbnBatches.add(isbns.subList(i, Math.min(i + ISBN_BATCH_QUERY_SIZE, isbns.size())));
+        }
+
+        java.util.function.BinaryOperator<String> mergeFunction = (id1, id2) -> id1; // Define merge function
+
+        return Flux.fromIterable(isbnBatches)
+            .concatMap(batch -> 
+                Mono.defer(() -> { // Defer execution of each batch
+                    String batchQuery = batch.stream()
+                                            .map(isbn -> "isbn:" + isbn.trim())
+                                            .collect(Collectors.joining(" OR "));
+                    logger.info("Fetching Google Book IDs for ISBN batch query: {}", batchQuery);
+                    // Use searchBooksAsyncReactive, which handles pagination within the API call for that query
+                    // We expect few results per ISBN, so desiredTotalResults can be batch.size() * small_multiplier
+                    return searchBooksAsyncReactive(batchQuery, langCode, batch.size() * 2, "relevance")
+                        .onErrorResume(e -> {
+                            logger.error("Error fetching batch of ISBNs (query: {}): {}", batchQuery, e.getMessage());
+                            return Mono.just(Collections.emptyList()); // Continue with other batches
+                        });
+                })
+                .delayElement(java.time.Duration.ofMillis(isbnBatchDelayMs)) // Add delay between batch executions
+            )
+            .flatMap(Flux::fromIterable) // Flatten List<Book> from each batch into a single Flux<Book>
+            .filter(book -> book != null && book.getId() != null && (book.getIsbn10() != null || book.getIsbn13() != null))
+            .collect(Collectors.toMap(
+                (Book book) -> { // Key Mapper: Extract ISBN (prefer ISBN13)
+                    String isbn13 = book.getIsbn13();
+                    return (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : book.getIsbn10();
+                },
+                Book::getId, // Value Mapper: Google Book ID
+                mergeFunction // Merge Function: In case of duplicate ISBNs, take the first ID
+            ))
+            .doOnSuccess(idMap -> logger.info("Successfully fetched {} Google Book IDs for {} initial ISBNs.", idMap.size(), isbns.size()))
+            .onErrorReturn(Collections.emptyMap());
+    }
+
+    /**
+     * Fetches full book details for a list of Google Book IDs
+     * Uses BookDataOrchestrator to leverage its tiered fetching and S3 caching
+     *
+     * @param bookIds List of Google Book IDs
+     * @return Flux emitting Book objects
+     */
+    public Flux<Book> fetchMultipleBooksByIdsTiered(List<String> bookIds) {
+        if (bookIds == null || bookIds.isEmpty()) {
+            return Flux.empty();
+        }
+        logger.info("Fetching full details for {} book IDs using BookDataOrchestrator.", bookIds.size());
+        return Flux.fromIterable(bookIds)
+            .publishOn(reactor.core.scheduler.Schedulers.parallel()) // Allow parallel execution of orchestrator calls
+            .flatMap(bookId -> bookDataOrchestrator.getBookByIdTiered(bookId)
+                                .doOnError(e -> logger.warn("Error fetching book ID {} via orchestrator in batch: {}", bookId, e.getMessage()))
+                                .onErrorResume(e -> Mono.empty()), // Continue if one book fails
+                        Math.min(bookIds.size(), 10) // Concurrency level, adjust as needed
+            )
+            .filter(Objects::nonNull);
+    }
 }

@@ -1,20 +1,11 @@
 /**
- * Multi-level caching strategy for Book objects with tiered fallback mechanism
- *
- * Provides efficient book retrieval through five cache layers:
- * 1. In-memory cache - Fast ConcurrentHashMap for immediate access
- * 2. Spring Cache - Managed by Spring's caching abstraction
- * 3. Local disk cache - Optional development cache persisting across restarts
- * 4. Database cache - Optional persistent storage using database
- * 5. S3 cache - Distributed storage for resilient, large-scale caching
- *
- * Features:
- * - Checks caches in order of speed before API fallback
- * - Populates all cache layers after successful retrieval
- * - Provides both synchronous and reactive interfaces
- * - Supports cache-only queries and existence checks
- * - Optional cache bypass for testing and debugging
- * - Thread-safe implementation for concurrent access
+ * Implements a multi-level caching strategy for Book objects
+ * Provides efficient book retrieval by checking caches in order of speed before an API fallback
+ * Cache layers include: In-memory, Spring Cache, Local Disk (dev), Redis, Database, and S3
+ * Populates all relevant cache layers after a successful retrieval from a lower tier or API
+ * Offers synchronous and reactive interfaces for fetching and managing cached Book data
+ * Supports cache-only queries, existence checks, and cache bypass for debugging
+ * Ensures thread-safe operations for concurrent access
  *
  * @author William Callahan
  */
@@ -29,7 +20,6 @@ import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepos
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Service;
@@ -39,6 +29,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -56,6 +48,7 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     private final CacheManager cacheManager;
     private final CachedBookRepository cachedBookRepository;
     private final ObjectMapper objectMapper;
+    private final RedisCacheService redisCacheService; // New dependency
     
     // In-memory cache as fastest layer
     private final ConcurrentHashMap<String, Book> bookDetailCache = new ConcurrentHashMap<>();
@@ -73,26 +66,29 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     private boolean bypassCachesOverride;
 
     /**
-     * Constructs a GoogleBooksCachingStrategy with required dependencies
+     * Constructs a GoogleBooksCachingStrategy with necessary service dependencies
+     * Initializes cache settings and creates local disk cache directory if enabled
      * 
-     * @param bookDataOrchestrator Orchestrator for coordinating book data access across sources
-     * @param s3RetryService Service for S3 operations with retry capabilities
-     * @param cacheManager Spring cache manager for managing in-memory caches
-     * @param cachedBookRepository Repository for database-backed caching (optional)
-     * @param objectMapper JSON mapper for serializing/deserializing book data
+     * @param bookDataOrchestrator Orchestrator for fetching book data from APIs if all caches miss
+     * @param s3RetryService Service for S3 operations, including retries
+     * @param cacheManager Spring's CacheManager for accessing Spring-managed caches
+     * @param cachedBookRepository Repository for database caching (optional, app can run without it)
+     * @param objectMapper Jackson ObjectMapper for JSON serialization/deserialization
+     * @param redisCacheService Service for interacting with the Redis cache layer
      */
-    @Autowired
     public GoogleBooksCachingStrategy(
             BookDataOrchestrator bookDataOrchestrator,
             S3RetryService s3RetryService,
             CacheManager cacheManager,
-            @Autowired(required = false) CachedBookRepository cachedBookRepository,
-            ObjectMapper objectMapper) {
+            CachedBookRepository cachedBookRepository,
+            ObjectMapper objectMapper,
+            RedisCacheService redisCacheService) {
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.s3RetryService = s3RetryService;
         this.cacheManager = cacheManager;
         this.cachedBookRepository = cachedBookRepository;
         this.objectMapper = objectMapper;
+        this.redisCacheService = redisCacheService;
         
         // Disable cache if repository is not available
         if (this.cachedBookRepository == null) {
@@ -111,10 +107,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Retrieves a book by ID using multi-level cache with API fallback
+     * Retrieves a book by its ID, checking caches in a specific order:
+     * In-memory, Spring Cache, Local Disk, Redis, Database, S3, then API fallback
+     * Populates faster caches if a hit occurs in a slower cache
+     * Uses CompletableFuture for asynchronous operation
      * 
-     * @param bookId The Google Books ID to look up
-     * @return CompletionStage with Optional<Book> result
+     * @param bookId The Google Books ID of the book to retrieve
+     * @return A CompletionStage containing an Optional<Book>, empty if not found after all checks
      */
     @Override
     public CompletionStage<Optional<Book>> get(String bookId) {
@@ -123,109 +122,140 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         }
 
         if (bypassCachesOverride) {
-            logger.warn("BYPASS_CACHES_OVERRIDE ENABLED: Skipping all caches for book ID: {}. Going directly to BookDataOrchestrator.", bookId);
-            // Even with bypass, the orchestrator handles the full API fetch logic now
+            logger.warn("BYPASS_CACHES_OVERRIDE ENABLED: Skipping all caches for book ID: {}. Going directly to BookDataOrchestrator", bookId);
             return bookDataOrchestrator.getBookByIdTiered(bookId)
                 .map(Optional::ofNullable)
                 .defaultIfEmpty(Optional.empty())
                 .toFuture();
         }
+
+        Optional<Book> bookOpt = checkInMemoryCache(bookId);
+        if (bookOpt.isPresent()) return CompletableFuture.completedFuture(bookOpt);
+
+        bookOpt = checkSpringCache(bookId);
+        if (bookOpt.isPresent()) return CompletableFuture.completedFuture(bookOpt);
+
+        bookOpt = checkLocalDiskCache(bookId);
+        if (bookOpt.isPresent()) return CompletableFuture.completedFuture(bookOpt);
         
-        // Step 1: Check in-memory cache (fastest)
+        bookOpt = checkRedisCache(bookId);
+        if (bookOpt.isPresent()) return CompletableFuture.completedFuture(bookOpt);
+
+        bookOpt = checkDatabaseCache(bookId);
+        if (bookOpt.isPresent()) return CompletableFuture.completedFuture(bookOpt);
+
+        return checkS3CacheThenApiFallback(bookId);
+    }
+
+    private Optional<Book> checkInMemoryCache(String bookId) {
         Book cachedBook = bookDetailCache.get(bookId);
         if (cachedBook != null) {
             logger.debug("In-memory cache hit for book ID: {}", bookId);
-            return CompletableFuture.completedFuture(Optional.of(cachedBook));
+            return Optional.of(cachedBook);
         }
-        
-        // Step 2: Check Spring Cache
+        return Optional.empty();
+    }
+
+    private Optional<Book> checkSpringCache(String bookId) {
         org.springframework.cache.Cache springCache = cacheManager.getCache("books");
         if (springCache != null) {
             Book springCachedBook = springCache.get(bookId, Book.class);
             if (springCachedBook != null) {
                 logger.debug("Spring cache hit for book ID: {}", bookId);
-                // Update in-memory cache
-                bookDetailCache.put(bookId, springCachedBook);
-                return CompletableFuture.completedFuture(Optional.of(springCachedBook));
+                bookDetailCache.put(bookId, springCachedBook); // Populate faster in-memory cache
+                return Optional.of(springCachedBook);
             }
         }
-        
-        // Step 3: Check local disk cache if enabled (dev/test environments)
+        return Optional.empty();
+    }
+
+    private Optional<Book> checkLocalDiskCache(String bookId) {
         if (localCacheEnabled) {
-            Book localBook = getBookFromLocalCache(bookId);
+            Book localBook = getBookFromLocalCache(bookId); // Assumes getBookFromLocalCache is synchronous
             if (localBook != null) {
                 logger.debug("Local disk cache hit for book ID: {}", bookId);
-                // Update faster caches
-                updateFasterCaches(bookId, localBook);
-                return CompletableFuture.completedFuture(Optional.of(localBook));
+                updateFasterCaches(bookId, localBook); // Updates in-memory and Spring caches
+                return Optional.of(localBook);
             }
         }
-        
-        // Step 4: Check database cache if enabled
+        return Optional.empty();
+    }
+
+    private Optional<Book> checkRedisCache(String bookId) {
+        if (redisCacheService != null) {
+            Optional<Book> redisBookOpt = redisCacheService.getBookById(bookId);
+            if (redisBookOpt.isPresent()) {
+                logger.debug("Redis cache hit for book ID: {}", bookId);
+                updateFasterCaches(bookId, redisBookOpt.get()); // Update in-memory, Spring, local disk
+                return redisBookOpt;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Book> checkDatabaseCache(String bookId) {
         if (cacheEnabled && cachedBookRepository != null) {
             try {
                 Optional<CachedBook> dbCachedBook = cachedBookRepository.findByGoogleBooksId(bookId);
                 if (dbCachedBook.isPresent()) {
                     Book dbBook = dbCachedBook.get().toBook();
                     logger.debug("Database cache hit for book ID: {}", bookId);
-                    // Update faster caches
-                    updateFasterCaches(bookId, dbBook);
-                    return CompletableFuture.completedFuture(Optional.of(dbBook));
+                    updateFasterCaches(bookId, dbBook); // Update in-memory, Spring, local disk
+                    if (redisCacheService != null) {
+                        redisCacheService.cacheBook(bookId, dbBook); // Also update Redis
+                    }
+                    return Optional.of(dbBook);
                 }
             } catch (Exception e) {
                 logger.warn("Error accessing database cache for book ID {}: {}", bookId, e.getMessage());
             }
         }
-        
-        // Step 5: Check S3 cache with retry logic
+        return Optional.empty();
+    }
+
+    private CompletionStage<Optional<Book>> checkS3CacheThenApiFallback(String bookId) {
         return s3RetryService.fetchJsonWithRetry(bookId)
             .thenComposeAsync(s3Result -> {
                 if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
                     try {
-                        // Parse the JSON from S3
                         JsonNode bookNode = objectMapper.readTree(s3Result.getData().get());
                         Book s3Book = BookJsonParser.convertJsonToBook(bookNode);
-                        
                         if (s3Book != null && s3Book.getId() != null) {
                             logger.debug("S3 cache hit for book ID: {}", bookId);
-                            // Update all caches
-                            putReactive(bookId, s3Book).subscribe();
+                            putReactive(bookId, s3Book).subscribe(); // Populate all higher caches
                             return CompletableFuture.completedFuture(Optional.of(s3Book));
                         }
-                        logger.warn("S3 cache for {} contained JSON, but it parsed to a null/invalid book. Falling back to API.", bookId);
+                        logger.warn("S3 cache for {} contained JSON, but it parsed to a null/invalid book. Falling back to API", bookId);
                     } catch (Exception e) {
-                        logger.warn("Failed to parse book JSON from S3 cache for bookId {}: {}. Falling back to API.", bookId, e.getMessage());
+                        logger.warn("Failed to parse book JSON from S3 cache for bookId {}: {}. Falling back to API", bookId, e.getMessage());
                     }
                 } else if (s3Result.isNotFound()) {
-                    logger.debug("Book {} not found in S3 cache. Fetching from API.", bookId);
+                    logger.debug("Book {} not found in S3 cache. Fetching from API", bookId);
                 } else if (s3Result.isServiceError()) {
-                    logger.warn("S3 service error while fetching book {}: {}. All retries failed, falling back to API.", 
+                    logger.warn("S3 service error while fetching book {}: {}. All retries failed, falling back to API", 
                                 bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
                 } else if (s3Result.isDisabled()) {
-                    logger.debug("S3 is disabled or misconfigured. Fetching book {} directly from API.", bookId);
+                    logger.debug("S3 is disabled or misconfigured. Fetching book {} directly from API", bookId);
                 }
                 
-                // Step 6: Fall back to BookDataOrchestrator for Tiers 3 & 4
-                logger.debug("All local/S3 caches missed for book ID: {}. Calling BookDataOrchestrator.getBookByIdTiered.", bookId);
+                logger.debug("All caches missed for book ID: {}. Calling BookDataOrchestrator.getBookByIdTiered", bookId);
                 return bookDataOrchestrator.getBookByIdTiered(bookId)
                     .flatMap(orchestratedBook ->
-                        // If orchestrator returns a book, it means it was fetched from API (Tier 3 or 4)
-                        // and already saved to S3 by the orchestrator.
-                        // We just need to populate our Tier 1 caches here.
-                        putReactive(bookId, orchestratedBook)
-                            .doOnError(e -> logger.error("Error populating Tier 1 caches from orchestrator result for {}: {}", bookId, e.getMessage()))
+                        putReactive(bookId, orchestratedBook) // Populate all caches
+                            .doOnError(e -> logger.error("Error populating caches from orchestrator result for {}: {}", bookId, e.getMessage()))
                             .then(Mono.just(Optional.of(orchestratedBook)))
                     )
-                    .defaultIfEmpty(Optional.empty()) // If orchestrator also returns empty
-                    .toFuture(); // Convert Mono<Optional<Book>> to CompletionStage<Optional<Book>>
+                    .defaultIfEmpty(Optional.empty())
+                    .toFuture();
             });
     }
 
     /**
-     * Retrieves a book by ID using reactive programming model
+     * Reactively retrieves a book by its ID, using the same multi-level cache strategy as the synchronous get method
+     * Delegates to the synchronous get method and converts its CompletionStage result to a Mono
      * 
-     * @param bookId The Google Books ID to look up
-     * @return Mono<Book> emitting book or empty if not found
+     * @param bookId The Google Books ID of the book to retrieve
+     * @return A Mono emitting the Book if found, or an empty Mono if not found
      */
     @Override
     public Mono<Book> getReactive(String bookId) {
@@ -240,11 +270,31 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Updates all cache layers with a book value
+     * Reactively retrieves a book by its ID, checking only cache layers (no S3 or API fallback)
+     * Cache check order: In-memory, Spring Cache, Local Disk, Redis, Database
+     * Delegates to the synchronous getFromCacheOnly method and converts its Optional result to a Mono
+     *
+     * @param bookId The Google Books ID of the book to retrieve from caches
+     * @return A Mono emitting the Book if found in any cache, or an empty Mono otherwise
+     */
+    public Mono<Book> getReactiveFromCacheOnly(String bookId) {
+        if (bookId == null || bookId.isEmpty()) {
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> getFromCacheOnly(bookId))
+            .subscribeOn(Schedulers.boundedElastic()) // getFromCacheOnly might do I/O for local/DB cache
+            .flatMap(optionalBook -> optionalBook.map(Mono::just).orElseGet(Mono::empty));
+    }
+
+    /**
+     * Synchronously updates all relevant cache layers with the given book data
+     * Layers updated: In-memory, Spring Cache, Local Disk (if enabled), Redis
+     * Also triggers a reactive update for the database cache
+     * Does not update S3 cache directly, assuming S3 is populated by the orchestrator on API fetch
      * 
-     * @param bookId The Google Books ID to use as cache key
-     * @param book The book to cache
-     * @return CompletionStage<Void> completing when caching completes
+     * @param bookId The Google Books ID to use as the cache key
+     * @param book The Book object to cache
+     * @return A CompletionStage that completes when synchronous caches are updated
      */
     @Override
     public CompletionStage<Void> put(String bookId, Book book) {
@@ -265,9 +315,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         if (localCacheEnabled) {
             saveBookToLocalCache(bookId, book);
         }
-        
-        // Step 4: Update database cache if enabled
-        // This is handled asynchronously using reactive programming
+
+        // Step 4: Update Redis Cache & Database Cache (Asynchronously)
+        // The putReactive method handles updating Redis, database, and other relevant caches asynchronously.
+        // This ensures that the synchronous part of put() remains fast, delegating I/O bound cache
+        // updates (like Redis and DB) to a non-blocking reactive flow.
         putReactive(bookId, book).subscribe();
         
         // Step 5: Update S3 cache
@@ -278,11 +330,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Reactively updates all cache layers with a book value
+     * Reactively updates all relevant cache layers with the given book data
+     * Layers updated: In-memory, Spring Cache, Local Disk (if enabled), Redis, and Database (if enabled)
+     * S3 cache is not updated here, as it's handled by the BookDataOrchestrator upon API fetch
      * 
-     * @param bookId The Google Books ID to use as cache key
-     * @param book The book to cache
-     * @return Mono<Void> completing when caching completes
+     * @param bookId The Google Books ID to use as the cache key
+     * @param book The Book object to cache
+     * @return A Mono<Void> that completes when all reactive caching operations are initiated or finished
      */
     @Override
     public Mono<Void> putReactive(String bookId, Book book) {
@@ -303,27 +357,32 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         if (localCacheEnabled) {
             Mono.fromRunnable(() -> saveBookToLocalCache(bookId, book))
                 .subscribeOn(Schedulers.boundedElastic())
-                .subscribe();
+                .subscribe(); // Fire and forget for local disk
+        }
+
+        // Step 4: Update Redis Cache reactively
+        Mono<Void> redisPutMono = Mono.empty();
+        if (redisCacheService != null) {
+            redisPutMono = redisCacheService.cacheBookReactive(bookId, book);
         }
         
-        // Step 4: Update database cache if enabled
+        // Step 5: Update database cache if enabled
+        Mono<Void> dbPutMono = Mono.empty();
         if (cacheEnabled && cachedBookRepository != null) {
-            return Mono.defer(() -> 
+            dbPutMono = Mono.defer(() -> 
                 Mono.fromCallable(() -> cachedBookRepository.findByGoogleBooksId(bookId))
                     .subscribeOn(Schedulers.boundedElastic())
                     .flatMap(existingOpt -> {
                         if (existingOpt.isPresent()) {
                             CachedBook existing = existingOpt.get();
-                            // Update existing entry
                             CachedBook updated = updateCachedBook(existing, book);
                             return Mono.fromCallable(() -> cachedBookRepository.save(updated))
                                 .subscribeOn(Schedulers.boundedElastic())
                                 .then();
                         } else {
-                            // Create new entry
                             try {
                                 JsonNode rawJsonNode = objectMapper.readTree(book.getRawJsonResponse());
-                                CachedBook newCached = CachedBook.fromBook(book, rawJsonNode, null);
+                                CachedBook newCached = CachedBook.fromBook(book, rawJsonNode, null); // Assuming embedding is handled elsewhere or null for now
                                 return Mono.fromCallable(() -> cachedBookRepository.save(newCached))
                                     .subscribeOn(Schedulers.boundedElastic())
                                     .then();
@@ -335,19 +394,21 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                     })
                     .onErrorResume(e -> {
                         logger.error("Error updating database cache for book ID {}: {}", bookId, e.getMessage());
-                        return Mono.empty();
+                        return Mono.empty(); // Continue even if DB cache fails
                     })
             );
         }
         
-        return Mono.empty();
+        return redisPutMono.then(dbPutMono); // Chain Redis and DB operations
     }
 
     /**
-     * Removes a book from all cache layers
+     * Synchronously removes a book from all cache layers except S3
+     * Layers affected: In-memory, Spring Cache, Local Disk (if enabled), Redis, Database (if enabled)
+     * S3 objects are not evicted here to avoid potentially frequent S3 delete operations
      * 
-     * @param bookId The Google Books ID to evict
-     * @return CompletionStage<Void> completing when eviction completes
+     * @param bookId The Google Books ID of the book to evict
+     * @return A CompletionStage that completes when eviction from synchronous caches is done
      */
     @Override
     public CompletionStage<Void> evict(String bookId) {
@@ -374,7 +435,12 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
             }
         }
         
-        // Step 4: Remove from database cache
+        // Step 4: Remove from Redis cache
+        if (redisCacheService != null) {
+            redisCacheService.evictBook(bookId);
+        }
+
+        // Step 5: Remove from database cache
         if (cacheEnabled && cachedBookRepository != null) {
             try {
                 cachedBookRepository.findByGoogleBooksId(bookId)
@@ -391,10 +457,12 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Checks if a book exists in any cache layer
+     * Synchronously checks if a book exists in any of the cache layers (excluding S3)
+     * Cache check order: In-memory, Spring Cache, Local Disk, Redis, Database
+     * Does not check S3 to avoid network calls for a simple existence check
      * 
-     * @param bookId The Google Books ID to check
-     * @return true if book exists in any cache, false otherwise
+     * @param bookId The Google Books ID to check for existence
+     * @return true if the book is found in any of the checked caches, false otherwise
      */
     @Override
     public boolean exists(String bookId) {
@@ -420,6 +488,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                 return true;
             }
         }
+
+        // Step 3.5: Check Redis cache
+        if (redisCacheService != null && redisCacheService.getBookById(bookId).isPresent()) {
+            return true;
+        }
         
         // Step 4: Check database cache
         if (cacheEnabled && cachedBookRepository != null) {
@@ -436,10 +509,11 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Gets a book from local caches only, without S3 or API fallback
+     * Synchronously retrieves a book only from cache layers, without falling back to S3 or API calls
+     * Cache check order: In-memory, Spring Cache, Local Disk, Redis, Database
      * 
-     * @param bookId The Google Books ID to look up
-     * @return Optional<Book> if found in any local cache
+     * @param bookId The Google Books ID of the book to retrieve from caches
+     * @return An Optional<Book> containing the book if found in any cache, otherwise an empty Optional
      */
     @Override
     public Optional<Book> getFromCacheOnly(String bookId) {
@@ -469,6 +543,14 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
                 return Optional.of(localBook);
             }
         }
+
+        // Step 3.5: Check Redis cache
+        if (redisCacheService != null) {
+            Optional<Book> redisBookOpt = redisCacheService.getBookById(bookId);
+            if (redisBookOpt.isPresent()) {
+                return redisBookOpt;
+            }
+        }
         
         // Step 4: Check database cache
         if (cacheEnabled && cachedBookRepository != null) {
@@ -486,9 +568,13 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
     }
 
     /**
-     * Clears all cache layers except S3
+     * Synchronously clears all cache layers except S3
+     * Layers affected: In-memory, Spring Cache, Local Disk (if enabled), Database (if enabled)
+     * Redis cache is not cleared by this method to prevent unintended broad data removal;
+     * specific Redis clearing should be handled by RedisCacheService if needed
+     * S3 cache is not cleared to avoid mass S3 delete operations
      * 
-     * @return CompletionStage<Void> completing when clear operation completes
+     * @return A CompletionStage that completes when clearing operations are done
      */
     @Override
     public CompletionStage<Void> clearAll() {
@@ -619,23 +705,41 @@ public class GoogleBooksCachingStrategy implements CachingStrategy<String, Book>
         cachedBook.setIsbn10(book.getIsbn10());
         cachedBook.setIsbn13(book.getIsbn13());
         cachedBook.setCoverImageUrl(book.getCoverImageUrl());
-        // cachedBook.setOtherEditions(book.getOtherEditions()); // CachedBook does not store otherEditions
         cachedBook.setLanguage(book.getLanguage());
         cachedBook.setCategories(book.getCategories());
-        // Skip updating embeddingVector here, as it's a special field
-        // that should be generated separately
         
+        // Persist complex fields
+        cachedBook.setCachedRecommendationIds(book.getCachedRecommendationIds() != null ? new ArrayList<>(book.getCachedRecommendationIds()) : new ArrayList<>());
+        cachedBook.setQualifiers(book.getQualifiers() != null ? new HashMap<>(book.getQualifiers()) : new HashMap<>());
+        cachedBook.setOtherEditions(book.getOtherEditions() != null ? new ArrayList<>(book.getOtherEditions()) : new ArrayList<>());
+        // Note: Embedding vector is typically set only on creation or explicit update, not usually here.
+
         // Update last modified timestamp
         cachedBook.setLastAccessed(LocalDateTime.now());
-        
+        // Access count could be incremented here if desired, or handled by get() methods.
+        // For simplicity, only lastAccessed is updated on a general update.
+
         try {
-            // Update raw JSON if available
+            // Update raw JSON if available and different from what might be in newBookFromApi.getRawJsonResponse()
+            // This ensures the CachedBook.rawData reflects the Book object's state if it was modified
+            // after being parsed from an original rawJsonResponse.
+            // However, if book.getRawJsonResponse() is the *source* of truth for S3, this might be redundant
+            // or lead to discrepancies if 'book' was modified in memory without updating its rawJsonResponse
+            // For now, assume book.getRawJsonResponse() is the most current raw form if available
             if (book.getRawJsonResponse() != null && !book.getRawJsonResponse().isEmpty()) {
                 JsonNode rawJsonNode = objectMapper.readTree(book.getRawJsonResponse());
                 cachedBook.setRawData(rawJsonNode);
+            } else {
+                // If the book object doesn't have a rawJsonResponse (e.g., constructed manually),
+                // we might want to serialize the book object itself to JSON to store in rawData
+                // For now, if no rawJsonResponse, we don't update rawData to avoid overwriting
+                // potentially more complete S3-derived rawData with a partial in-memory Book object
+                // This depends on the exact flow and source of the 'book' parameter
+                // Given the plan, 'book' here is usually what BookDataOrchestrator decided is authoritative
+                 logger.debug("Book object for ID {} provided to updateCachedBook has no rawJsonResponse. RawData field in CachedBook will not be updated from it.", book.getId());
             }
         } catch (Exception e) {
-            logger.warn("Error updating raw JSON in CachedBook: {}", e.getMessage());
+            logger.warn("Error updating raw JSON in CachedBook for ID {}: {}", book.getId(), e.getMessage());
         }
         
         return cachedBook;

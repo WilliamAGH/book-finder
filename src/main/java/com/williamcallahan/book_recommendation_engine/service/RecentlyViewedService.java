@@ -16,7 +16,6 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +54,6 @@ public class RecentlyViewedService {
      * 
      * @implNote Initializes the in-memory linked list for storing recently viewed books
      */
-    @Autowired
     public RecentlyViewedService(GoogleBooksService googleBooksService, DuplicateBookService duplicateBookService) {
         this.googleBooksService = googleBooksService;
         this.duplicateBookService = duplicateBookService;

@@ -23,7 +23,6 @@ import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
@@ -65,7 +64,6 @@ public class BookCoverManagementService {
      * @param eventPublisher Publisher for application events
      * @param environmentService Service for environment-specific configurations
      */
-    @Autowired
     public BookCoverManagementService(
             CoverCacheManager coverCacheManager,
             CoverSourceFetchingService coverSourceFetchingService,

@@ -13,7 +13,6 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.service.BookSitemapService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -44,7 +43,6 @@ public class SitemapController {
      * 
      * @param bookSitemapService Service for retrieving book IDs for sitemap generation
      */
-    @Autowired
     public SitemapController(BookSitemapService bookSitemapService) {
         this.bookSitemapService = bookSitemapService;
     }

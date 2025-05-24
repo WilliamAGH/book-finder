@@ -26,7 +26,6 @@ import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -88,7 +87,6 @@ public class S3BookCoverService implements ExternalCoverService {
 
     private final Cache<String, Boolean> objectExistsCache;
 
-    @Autowired
     public S3BookCoverService(WebClient.Builder webClientBuilder,
                                ImageProcessingService imageProcessingService,
                                EnvironmentService environmentService,

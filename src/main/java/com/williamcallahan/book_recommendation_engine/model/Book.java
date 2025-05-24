@@ -61,6 +61,9 @@ public class Book {
     // Map to store special qualifiers such as "new york times bestseller" or other search-specific attributes
     private Map<String, Object> qualifiers;
 
+    // List to store IDs of recommended books, to be cached in S3 JSON
+    private List<String> cachedRecommendationIds;
+
     // Transient field to store the raw JSON response from Google Books API for provenance logging
     private transient String rawJsonResponse;
 
@@ -245,6 +248,7 @@ public class Book {
     public Book() {
         this.otherEditions = new ArrayList<>();
         this.qualifiers = new HashMap<>();
+        this.cachedRecommendationIds = new ArrayList<>();
     }
 
     /**
@@ -266,6 +270,7 @@ public class Book {
         this.imageUrl = imageUrl;
         this.otherEditions = new ArrayList<>();
         this.qualifiers = new HashMap<>();
+        this.cachedRecommendationIds = new ArrayList<>();
     }
 
     /**
@@ -932,5 +937,42 @@ public class Book {
 
     public void setAsin(String asin) {
         this.asin = asin;
+    }
+
+    /**
+     * Get the list of cached recommendation IDs
+     * 
+     * @return List of cached recommendation IDs
+     */
+    public List<String> getCachedRecommendationIds() {
+        return cachedRecommendationIds;
+    }
+
+    /**
+     * Set the list of cached recommendation IDs
+     * 
+     * @param cachedRecommendationIds List of cached recommendation IDs
+     */
+    public void setCachedRecommendationIds(List<String> cachedRecommendationIds) {
+        this.cachedRecommendationIds = cachedRecommendationIds != null ? new ArrayList<>(cachedRecommendationIds) : new ArrayList<>();
+    }
+
+    /**
+     * Adds a list of recommendation IDs to the existing cached list, ensuring uniqueness.
+     *
+     * @param newRecommendationIds List of new recommendation IDs to add.
+     */
+    public void addRecommendationIds(List<String> newRecommendationIds) {
+        if (newRecommendationIds == null || newRecommendationIds.isEmpty()) {
+            return;
+        }
+        if (this.cachedRecommendationIds == null) {
+            this.cachedRecommendationIds = new ArrayList<>();
+        }
+        for (String id : newRecommendationIds) {
+            if (id != null && !id.isEmpty() && !this.cachedRecommendationIds.contains(id)) {
+                this.cachedRecommendationIds.add(id);
+            }
+        }
     }
 }

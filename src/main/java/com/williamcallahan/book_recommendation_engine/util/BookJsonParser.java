@@ -414,4 +414,26 @@ public class BookJsonParser {
 
         return qualifiers;
     }
+
+    /**
+     * Validates if the given string is a plausible ISBN-10 or ISBN-13
+     * This is a basic structural check, not a checksum validation
+     *
+     * @param isbn The string to validate
+     * @return true if it structurally resembles an ISBN, false otherwise
+     */
+    public static boolean isValidIsbn(String isbn) {
+        if (isbn == null) {
+            return false;
+        }
+        String sanitizedIsbn = isbn.replace("-", "").replace(" ", "").toUpperCase();
+        if (sanitizedIsbn.length() == 10) {
+            // Basic check for ISBN-10 (9 digits + 1 check digit which can be X)
+            return sanitizedIsbn.matches("^[0-9]{9}[0-9X]$");
+        } else if (sanitizedIsbn.length() == 13) {
+            // Basic check for ISBN-13 (13 digits)
+            return sanitizedIsbn.matches("^[0-9]{13}$");
+        }
+        return false;
+    }
 }

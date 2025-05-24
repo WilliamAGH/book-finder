@@ -17,7 +17,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -59,7 +58,6 @@ public class BookApiProxy {
      * @param objectMapper ObjectMapper for JSON processing
      * @param mockService Optional mock service for testing
      */
-    @Autowired
     public BookApiProxy(GoogleBooksService googleBooksService, 
                        S3StorageService s3StorageService, 
                        ObjectMapper objectMapper,

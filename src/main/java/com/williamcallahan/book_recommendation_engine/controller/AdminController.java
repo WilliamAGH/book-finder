@@ -13,7 +13,10 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
+import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarmingScheduler;
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
+import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,13 +39,21 @@ public class AdminController {
     private final String configuredS3Prefix;
     private final int defaultBatchLimit;
     private final String configuredQuarantinePrefix;
+    private final NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler;
+    private final BookCacheWarmingScheduler bookCacheWarmingScheduler;
+    private final ApiCircuitBreakerService apiCircuitBreakerService;
 
-    @Autowired
-    public AdminController(S3CoverCleanupService s3CoverCleanupService,
+    public AdminController(@Autowired(required = false) S3CoverCleanupService s3CoverCleanupService,
+                           @Autowired(required = false) NewYorkTimesBestsellerScheduler newYorkTimesBestsellerScheduler,
+                           BookCacheWarmingScheduler bookCacheWarmingScheduler,
+                           ApiCircuitBreakerService apiCircuitBreakerService,
                            @Value("${app.s3.cleanup.prefix:images/book-covers/}") String configuredS3Prefix,
                            @Value("${app.s3.cleanup.default-batch-limit:100}") int defaultBatchLimit,
                            @Value("${app.s3.cleanup.quarantine-prefix:images/non-covers-pages/}") String configuredQuarantinePrefix) {
         this.s3CoverCleanupService = s3CoverCleanupService;
+        this.newYorkTimesBestsellerScheduler = newYorkTimesBestsellerScheduler;
+        this.bookCacheWarmingScheduler = bookCacheWarmingScheduler;
+        this.apiCircuitBreakerService = apiCircuitBreakerService;
         this.configuredS3Prefix = configuredS3Prefix;
         this.defaultBatchLimit = defaultBatchLimit;
         this.configuredQuarantinePrefix = configuredQuarantinePrefix;
@@ -63,6 +74,12 @@ public class AdminController {
     public ResponseEntity<String> triggerS3CoverCleanupDryRun(
             @RequestParam(name = "prefix", required = false) String prefixOptional,
             @RequestParam(name = "limit", required = false) Integer limitOptional) {
+        
+        if (s3CoverCleanupService == null) {
+            String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body(errorMessage);
+        }
         
         String prefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
         int requestedLimit     = limitOptional != null ? limitOptional : defaultBatchLimit;
@@ -126,6 +143,12 @@ public class AdminController {
             @RequestParam(name = "limit", required = false) Integer limitOptional,
             @RequestParam(name = "quarantinePrefix", required = false) String quarantinePrefixOptional) {
 
+        if (s3CoverCleanupService == null) {
+            String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}");
+        }
+
         String sourcePrefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
         int batchLimitToUse = limitOptional != null ? limitOptional : defaultBatchLimit;
         String quarantinePrefixToUse = quarantinePrefixOptional != null ? quarantinePrefixOptional : configuredQuarantinePrefix;
@@ -156,6 +179,95 @@ public class AdminController {
             );
             logger.error(errorMessage, e);
             return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
+        }
+    }
+
+    /**
+     * Triggers the New York Times Bestseller processing job.
+     *
+     * @return A ResponseEntity indicating the outcome of the trigger.
+     */
+    @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> triggerNytBestsellerProcessing() {
+        logger.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
+        
+        if (newYorkTimesBestsellerScheduler == null) {
+            String errorMessage = "New York Times Bestseller Scheduler is not available. S3 integration may be disabled.";
+            logger.warn(errorMessage);
+            return ResponseEntity.badRequest().body(errorMessage);
+        }
+        
+        try {
+            // It's good practice to run schedulers asynchronously if they are long-running,
+            // but for a manual trigger, a direct call might be acceptable depending on execution time.
+            // If processNewYorkTimesBestsellers is very long, consider wrapping in an async task.
+            newYorkTimesBestsellerScheduler.processNewYorkTimesBestsellers();
+            String successMessage = "Successfully triggered New York Times Bestseller processing job.";
+            logger.info(successMessage);
+            return ResponseEntity.ok(successMessage);
+        } catch (Exception e) {
+            String errorMessage = "Failed to trigger New York Times Bestseller processing job: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
+        }
+    }
+
+    /**
+     * Triggers the Book Cache Warming job.
+     *
+     * @return A ResponseEntity indicating the outcome of the trigger.
+     */
+    @PostMapping(value = "/trigger-cache-warming", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> triggerCacheWarming() {
+        logger.info("Admin endpoint /admin/trigger-cache-warming invoked.");
+        try {
+            bookCacheWarmingScheduler.warmPopularBookCaches();
+            String successMessage = "Successfully triggered book cache warming job.";
+            logger.info(successMessage);
+            return ResponseEntity.ok(successMessage);
+        } catch (Exception e) {
+            String errorMessage = "Failed to trigger book cache warming job: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
+        }
+    }
+
+    /**
+     * Gets the current status of the API circuit breaker.
+     *
+     * @return A ResponseEntity containing the circuit breaker status
+     */
+    @GetMapping(value = "/circuit-breaker/status", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> getCircuitBreakerStatus() {
+        logger.info("Admin endpoint /admin/circuit-breaker/status invoked.");
+        try {
+            String status = apiCircuitBreakerService.getCircuitStatus();
+            logger.info("Circuit breaker status retrieved: {}", status);
+            return ResponseEntity.ok(status);
+        } catch (Exception e) {
+            String errorMessage = "Failed to get circuit breaker status: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
+        }
+    }
+
+    /**
+     * Manually resets the API circuit breaker to CLOSED state.
+     *
+     * @return A ResponseEntity indicating the outcome of the reset
+     */
+    @PostMapping(value = "/circuit-breaker/reset", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> resetCircuitBreaker() {
+        logger.info("Admin endpoint /admin/circuit-breaker/reset invoked.");
+        try {
+            apiCircuitBreakerService.reset();
+            String successMessage = "Successfully reset API circuit breaker to CLOSED state.";
+            logger.info(successMessage);
+            return ResponseEntity.ok(successMessage);
+        } catch (Exception e) {
+            String errorMessage = "Failed to reset circuit breaker: " + e.getMessage();
+            logger.error(errorMessage, e);
+            return ResponseEntity.internalServerError().body(errorMessage);
         }
     }
 }

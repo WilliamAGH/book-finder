@@ -1,7 +1,3 @@
-package com.williamcallahan.book_recommendation_engine.types;
-
-import java.util.Arrays; // For Arrays.copyOf
-
 /**
  * Record representing a processed image with its metadata
  *
@@ -22,6 +18,11 @@ import java.util.Arrays; // For Arrays.copyOf
  * @param processingSuccessful Whether the image processing was successful
  * @param processingError Error message if processing failed
  */
+
+ package com.williamcallahan.book_recommendation_engine.types;
+
+import java.util.Arrays;
+
 public record ProcessedImage(
         byte[] processedBytes,
         String newFileExtension,
@@ -40,7 +41,7 @@ public record ProcessedImage(
     }
 
     /**
-     * Static factory method for creating a successfully processed image.
+     * Static factory method for creating a successfully processed image
      *
      * @param processedBytes The processed image data
      * @param newFileExtension The file extension for the processed image
@@ -54,7 +55,7 @@ public record ProcessedImage(
     }
 
     /**
-     * Static factory method for creating a failed processing result.
+     * Static factory method for creating a failed processing result
      *
      * @param processingError The error message describing why processing failed
      * @return A new ProcessedImage instance representing a failed operation
@@ -63,7 +64,7 @@ public record ProcessedImage(
         return new ProcessedImage(null, null, null, 0, 0, false, processingError);
     }
 
-    // Getters might be useful for other services, though direct field access is fine for now in a simple DTO.
+    // Getters might be useful for other services, though direct field access is fine for now in a simple DTO
     public byte[] getProcessedBytes() {
         return processedBytes;
     }

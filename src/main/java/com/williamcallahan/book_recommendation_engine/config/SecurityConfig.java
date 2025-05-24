@@ -1,11 +1,9 @@
-package com.williamcallahan.book_recommendation_engine.config;
-
 /**
  * Configuration class for Spring Security settings in the Book Recommendation Engine
  *
  * @author William Callahan
  *
- * Key Features:
+ * Features:
  * - Enables Web Security and Method Security for @PreAuthorize annotations
  * - Configures role-based access control for different URL patterns
  * - Sets up HTTP Basic Authentication and Form Login
@@ -14,8 +12,10 @@ package com.williamcallahan.book_recommendation_engine.config;
  * - Implements Content Security Policy and Referrer-Policy headers
  * - Manages CSRF protection
  */
+package com.williamcallahan.book_recommendation_engine.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -31,6 +31,7 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.StaticHeadersWriter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
@@ -40,6 +41,7 @@ import java.util.stream.Collectors;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SecurityConfig {
 
     private final AuthenticationEntryPoint customBasicAuthenticationEntryPoint;
@@ -62,6 +64,13 @@ public class SecurityConfig {
     @Value("${app.book.covers.additional-domains:}")
     private String bookCoversAdditionalDomains;
 
+    // Inject plain text passwords from environment variables
+    @Value("${app.security.admin.password}")
+    private String adminPasswordPlain;
+
+    @Value("${app.security.user.password}")
+    private String userPasswordPlain;
+
     public SecurityConfig(CustomBasicAuthenticationEntryPoint customBasicAuthenticationEntryPoint) {
         this.customBasicAuthenticationEntryPoint = customBasicAuthenticationEntryPoint;
     }
@@ -81,7 +90,12 @@ public class SecurityConfig {
             .httpBasic(httpBasic -> httpBasic
                 .authenticationEntryPoint(customBasicAuthenticationEntryPoint) // Use custom entry point for admin paths
             )
-            .csrf(withDefaults()); // Enable CSRF protection with defaults
+            .csrf(csrf -> csrf
+                .ignoringRequestMatchers(
+                    new AntPathRequestMatcher("/admin/s3-cleanup/dry-run", "GET"),
+                    new AntPathRequestMatcher("/admin/api-metrics/**", "GET")
+                )
+            );
 
         // Configure headers if CSP is enabled
         if (cspEnabled) {
@@ -108,6 +122,9 @@ public class SecurityConfig {
                     scriptSrcDirective.append(" https://static.getclicky.com https://clicky.com");
                     connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
                 }
+
+                // Add Google Books domain for cover images
+                imgSrcDirective.append("https://books.google.com ");
 
                 // Add book covers CDN domain
                 if (bookCoversCdnDomain != null && !bookCoversCdnDomain.isEmpty()) {
@@ -149,12 +166,12 @@ public class SecurityConfig {
     public UserDetailsService userDetailsService(PasswordEncoder passwordEncoder) {
         UserDetails admin = User.builder()
             .username("admin")
-            .password(passwordEncoder.encode("${app.security.admin.password}"))
+            .password(passwordEncoder.encode(adminPasswordPlain)) // Use injected plain text password
             .roles("ADMIN", "USER")
             .build();
         UserDetails regularUser = User.builder()
             .username("user")
-            .password(passwordEncoder.encode("${app.security.user.password}"))
+            .password(passwordEncoder.encode(userPasswordPlain)) // Use injected plain text password
             .roles("USER")
             .build();
         return new InMemoryUserDetailsManager(admin, regularUser);

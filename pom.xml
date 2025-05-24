@@ -5,7 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.5</version>
+        <version>3.4.6</version>
         <relativePath/>
     </parent>
     <groupId>com.williamcallahan</groupId>
@@ -34,7 +34,56 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <mockito.version>5.11.0</mockito.version>
+        <commons-io.version>2.15.1</commons-io.version>
+        <error-prone.version>2.36.0</error-prone.version>
+        <antlr4-runtime.version>4.13.1</antlr4-runtime.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>commons-io</groupId>
+                <artifactId>commons-io</artifactId>
+                <version>${commons-io.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.errorprone</groupId>
+                <artifactId>error_prone_annotations</artifactId>
+                <version>${error-prone.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-runtime</artifactId>
+                <version>${antlr4-runtime.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>2024.0.1</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>1.26.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>1.19.7</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
     <dependencies>
         <dependency>
             <groupId>ro.isdc.wro4j</groupId>
@@ -67,26 +116,12 @@
             <artifactId>spring-session-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa</artifactId>
-        </dependency>
-        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.vladmihalcea</groupId>
-            <artifactId>hibernate-types-60</artifactId>
-            <version>2.21.1</version>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -109,15 +144,26 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>me.paulschwarz</groupId>
-            <artifactId>spring-dotenv</artifactId>
-            <version>4.0.0</version>
+            <groupId>com.google.errorprone</groupId>
+            <artifactId>error_prone_annotations</artifactId>
+            <version>${error-prone.version}</version>
         </dependency>
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-resolver-dns-native-macos</artifactId>
             <classifier>osx-aarch_64</classifier>
             <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>${commons-io.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>me.paulschwarz</groupId>
+            <artifactId>spring-dotenv</artifactId>
+            <version>4.0.0</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -141,20 +187,16 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
             <version>${spring-ai.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.antlr</groupId>
+                    <artifactId>antlr4-runtime</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -167,37 +209,29 @@
             <scope>runtime</scope>
             <optional>true</optional>
         </dependency>
+        <!-- https://mvnrepository.com/artifact/redis.clients/jedis -->
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>6.0.0</version>
+        </dependency>
+        <!-- RediSearch Java client for full-text search -->
+        <dependency>
+            <groupId>com.redislabs</groupId>
+            <artifactId>jredisearch</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+        <!-- AspectJ dependency for AOP support -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aspects</artifactId>
+        </dependency>
     </dependencies>
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-dependencies</artifactId>
-                <version>2024.0.1</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.commons</groupId>
-                <artifactId>commons-compress</artifactId>
-                <version>1.26.1</version>
-            </dependency>
-            <dependency>
-                <groupId>org.testcontainers</groupId>
-                <artifactId>testcontainers-bom</artifactId>
-                <version>1.19.7</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+
 
     <profiles>
         <profile>
@@ -206,32 +240,6 @@
                 <spring.profiles.active>dev</spring.profiles.active>
                 <spring-boot.run.jvmArguments>-Dspring.devtools.restart.enabled=true</spring-boot.run.jvmArguments>
             </properties>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <version>3.1.1</version>
-                        <executions>
-                            <execution>
-                                <id>clean-install-before-run</id>
-                                <phase>validate</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>mvn</executable>
-                                    <arguments>
-                                        <argument>clean</argument>
-                                        <argument>compile</argument>
-                                        <argument>-DskipTests</argument>
-                                    </arguments>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
         </profile>
         <profile>
             <id>snapshot-dependencies</id>
@@ -312,12 +320,27 @@
                                         </execute>
                                     </action>
                                 </pluginExecution>
-                            </pluginExecutions>
-                        </lifecycleMappingMetadata>
-                    </configuration>
-                </plugin>
-            </plugins>
-        </pluginManagement>
+                               <pluginExecution>
+                                   <pluginExecutionFilter>
+                                       <groupId>org.apache.maven.plugins</groupId>
+                                       <artifactId>maven-antrun-plugin</artifactId>
+                                       <versionRange>[3.0.0,)</versionRange>
+                                       <goals>
+                                           <goal>run</goal>
+                                       </goals>
+                                   </pluginExecutionFilter>
+                                   <action>
+                                       <execute>
+                                           <runOnConfiguration>true</runOnConfiguration>
+                                       </execute>
+                                   </action>
+                               </pluginExecution>
+                           </pluginExecutions>
+                       </lifecycleMappingMetadata>
+                   </configuration>
+               </plugin>
+           </plugins>
+       </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -447,29 +470,23 @@
                 </executions>
             </plugin>
             <plugin>
-                <artifactId>maven-clean-plugin</artifactId>
-                <version>3.3.2</version>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.0.0</version> <!-- Using a common version, can be updated if needed -->
                 <executions>
                     <execution>
-                        <id>clean-images-before-build</id>
+                        <id>clean-images-before-build-antrun</id>
                         <phase>initialize</phase>
                         <goals>
-                            <goal>clean</goal>
+                            <goal>run</goal>
                         </goals>
                         <configuration>
-                            <filesets>
-                                <fileset>
-                                    <directory>${project.build.directory}/classes/static/covers</directory>
-                                    <includes>
-                                        <include>**/*.jpg</include>
-                                        <include>**/*.jpeg</include>
-                                        <include>**/*.png</include>
-                                        <include>**/*.gif</include>
-                                    </includes>
-                                    <followSymlinks>false</followSymlinks>
-                                </fileset>
-                            </filesets>
-                            <failOnError>true</failOnError> <!-- Ensure failure if cleaning doesn't work -->
+                            <target>
+                                <echo message="Cleaning image files from ${project.build.directory}/classes/static/covers"/>
+                                <delete verbose="true" failonerror="false" quiet="true">
+                                    <fileset dir="${project.build.directory}/classes/static/covers" includes="**/*.jpg, **/*.jpeg, **/*.png, **/*.gif"/>
+                                </delete>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

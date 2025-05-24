@@ -17,14 +17,12 @@ import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Repository;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 @Repository
-@Primary
 @ConditionalOnExpression("'${spring.datasource.url:}'.length() == 0")
 public class NoOpCachedBookRepository implements CachedBookRepository {
     
