@@ -90,7 +90,8 @@ public class BookCoverManagementServiceTest {
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
         when(localDiskCoverCacheService.getCacheDirName()).thenReturn("book-covers");
-        when(localDiskCoverCacheService.getCacheDirString()).thenReturn("book-covers"); // Added this line
+        // Align with default behavior of LocalDiskCoverCacheService or use a dedicated test temp directory
+        when(localDiskCoverCacheService.getCacheDirString()).thenReturn("/tmp/test-book-covers-bcmst"); 
         
         // Configure behavior for placeholder creation
         ImageDetails placeholderDetails = new ImageDetails(

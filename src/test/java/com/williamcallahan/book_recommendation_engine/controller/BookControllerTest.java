@@ -143,7 +143,8 @@ class BookControllerTest {
     when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class), any(ImageResolutionPreference.class)))
         .thenAnswer(invocation -> {
             Book book = invocation.getArgument(0);
-            return CompletableFuture.completedFuture(book.getCoverImageUrl());
+            // Return the book object itself, assuming the service updates and returns the book
+            return CompletableFuture.completedFuture(book);
         });
   }
 
