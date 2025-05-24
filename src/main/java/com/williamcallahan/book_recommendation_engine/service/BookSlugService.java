@@ -27,8 +27,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
-// Consider using Reactor's Schedulers if Spring Data Repositories support reactive types directly
-// import reactor.core.scheduler.Schedulers; 
+ 
 
 @Service
 public class BookSlugService {
@@ -94,9 +93,10 @@ public class BookSlugService {
                 }
                 // If not unique, and this was the first attempt (initialProposedSlug without year/suffix)
                 // try with year before adding numerical suffixes.
-                if (suffix == 1 && currentSlugToTest.equals(baseSlugForSuffixing.substring(0, baseSlugForSuffixing.lastIndexOf(bookTitleForLog.substring(bookTitleForLog.length()-1)) +1))) { // A bit heuristic to check if it was the initial slug without year
+                // Check if this is the first attempt and we haven't tried the year-based slug yet
+                if (suffix == 1 && !currentSlugToTest.equals(baseSlugForSuffixing)) {
                      // Check if baseSlugForSuffixing (which includes year) is different and worth trying
-                    if (!currentSlugToTest.equals(baseSlugForSuffixing)) {
+                    if (!currentSlugToTest.equals(baseSlugForSuffixing)) { // This inner check might be redundant now depending on how baseSlugForSuffixing is constructed relative to currentSlugToTest initially
                         return checkAndGenerateSlugRecursive(baseSlugForSuffixing, baseSlugForSuffixing, 2, bookId, bookTitleForLog); // Start suffixing from 2 for year-based slug
                     }
                 }

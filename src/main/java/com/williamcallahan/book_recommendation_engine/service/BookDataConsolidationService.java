@@ -15,18 +15,17 @@
 
 package com.williamcallahan.book_recommendation_engine.service;
 
-import com.williamcallahan.book_recommendation_engine.model.Book; // for RedisJSON parsing
+import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
-import com.williamcallahan.book_recommendation_engine.util.UuidUtil; // for v7 UUIDs
-import com.fasterxml.jackson.databind.JsonNode; // for RedisJSON parsing
+import com.williamcallahan.book_recommendation_engine.util.UuidUtil;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.resps.ScanResult;
 import redis.clients.jedis.params.ScanParams;
-import org.springframework.scheduling.annotation.Async;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.stereotype.Service;
 
@@ -91,14 +90,15 @@ public class BookDataConsolidationService {
      * Consolidates book data from multiple Redis keys into UUID-based storage
      *
      * @param dryRun If true, performs analysis without making changes
-     * @return Summary of consolidation operations performed (Note: with @Async, direct return is not to HTTP client)
+     * @return Summary of consolidation operations performed
      */
-    @Async
-    public CompletableFuture<ConsolidationSummary> consolidateBookDataAsync(boolean dryRun) { // Async consolidation
-        ConsolidationSummary summary = new ConsolidationSummary();
-        logger.info("Starting ASYNCHRONOUS book data consolidation. Dry run: {}", dryRun);
+    // @Async // Removed: We will use CompletableFuture.supplyAsync for explicit control
+    public CompletableFuture<ConsolidationSummary> consolidateBookDataAsync(boolean dryRun) {
+        return CompletableFuture.supplyAsync(() -> { // Added supplyAsync
+            ConsolidationSummary summary = new ConsolidationSummary();
+            logger.info("Starting ASYNCHRONOUS book data consolidation. Dry run: {}", dryRun);
 
-        Set<String> allKeys = new HashSet<>();
+            Set<String> allKeys = new HashSet<>();
         allKeys.addAll(scanKeys(OLD_PREFIX + "*"));
         allKeys.addAll(scanKeys(TARGET_PREFIX + "*")); // Includes correct and old S3 import variants
 
@@ -132,7 +132,27 @@ public class BookDataConsolidationService {
                     if (e.getMessage() != null && e.getMessage().contains("JedisConnectionFactory was destroyed")) {
                         logger.error("Redis connection factory was destroyed during consolidation. Stopping process. Processed {} keys so far.", processedKeyCount);
                         summary.errors.add("Redis connection factory destroyed. Process terminated early after " + processedKeyCount + " keys.");
-                        return CompletableFuture.completedFuture(summary); // Exit early with summary
+                        // For the supplyAsync, we can't directly return a CompletableFuture.
+                        // Instead, we'll throw a specific exception that the outer layer can catch, or complete the future exceptionally.
+                        // However, since this is inside supplyAsync, we should just return the summary.
+                        // The `consolidateBookDataAsync` method itself returns a CompletableFuture.
+                        // The error is that this return statement is for the lambda inside supplyAsync.
+                        // The lambda should return ConsolidationSummary, not CompletableFuture<ConsolidationSummary>.
+                        // This specific return path was for an early exit *before* the supplyAsync was introduced.
+                        // Now, if this happens, the supplyAsync lambda should just return the 'summary' object as is.
+                        // The original error was likely because the `return CompletableFuture.completedFuture(summary);` was inside the lambda.
+                        // The fix is to ensure the lambda returns `summary`.
+                        // The previous change to wrap the whole method in supplyAsync should handle this.
+                        // The error message points to line 98, which is the `return CompletableFuture.supplyAsync(() -> { ... });`
+                        // This implies the lambda itself is not correctly returning just `ConsolidationSummary` in all paths.
+                        // The path I'm looking at is within the loop:
+                        // `return CompletableFuture.completedFuture(summary);` was correct when the method was `@Async`
+                        // Now, inside `supplyAsync`, it should just be `return summary;`
+                        // Let me re-verify the structure.
+                        // The `return CompletableFuture.completedFuture(summary);` is inside the loop, for an early exit.
+                        // This needs to be `return summary;` to match the lambda's expected return type.
+                        // The error is likely that this specific return was missed in the previous refactor.
+                        return summary; // Corrected: Lambda returns summary
                     } else {
                         throw e; // Re-throw if it's a different IllegalStateException
                     }
@@ -300,8 +320,8 @@ public class BookDataConsolidationService {
         }
 
         logger.info("ASYNCHRONOUS book data consolidation finished. Dry run: {}. Summary: {}", dryRun, summary.toString());
-        // Return summary for CompletableFuture
-        return CompletableFuture.completedFuture(summary);
+        return summary; // Return summary for supplyAsync
+        }); // Added supplyAsync
     }
 
     /**
@@ -326,7 +346,10 @@ public class BookDataConsolidationService {
         // Let's assume the version from `book:ISBN` (if it exists and is one of the versions) is preferred.
         
         CachedBook baseBook = versions.stream()
-            .filter(b -> b.getId() != null && (b.getId().equals(definitiveId) || (TARGET_PREFIX + b.getId()).equals(TARGET_PREFIX + definitiveId) )) // crude check if it's from a 'book:DEFINITIVE_ID' key
+            // Prefer books that have the definitive ID as one of their identifiers
+            .filter(b -> definitiveId.equals(b.getIsbn13()) || 
+                        definitiveId.equals(b.getIsbn10()) || 
+                        definitiveId.equals(b.getGoogleBooksId()))
             .findFirst()
             .orElse(versions.get(0)); // Fallback to the first one
 
@@ -460,9 +483,12 @@ public class BookDataConsolidationService {
      * @return ISBN-13 if applicable
      */
     private String extractIsbn13(String definitiveId) {
-        // Basic implementation, assumes definitiveId could be an ISBN13
-        // More sophisticated parsing might be needed if definitiveId format varies
-        return definitiveId;
+        // ISBN-13 is 13 digits
+        if (definitiveId != null && definitiveId.matches("^\\d{13}$")) {
+            return definitiveId;
+        }
+        logger.trace("extractIsbn13: definitiveId '{}' is not a valid ISBN-13 format.", definitiveId);
+        return null;
     }
 
     /**
@@ -472,8 +498,12 @@ public class BookDataConsolidationService {
      * @return ISBN-10 if applicable
      */
     private String extractIsbn10(String definitiveId) {
-        // Basic implementation, assumes definitiveId could be an ISBN10
-        return definitiveId;
+        // ISBN-10 is 10 characters (9 digits + check digit/X)
+        if (definitiveId != null && definitiveId.matches("^\\d{9}[\\dX]$")) {
+            return definitiveId;
+        }
+        logger.trace("extractIsbn10: definitiveId '{}' is not a valid ISBN-10 format.", definitiveId);
+        return null;
     }
 
     /**
@@ -483,7 +513,14 @@ public class BookDataConsolidationService {
      * @return Google Books ID if applicable
      */
     private String extractGoogleId(String definitiveId) {
-        // Basic implementation, assumes definitiveId could be a GoogleBooksID
-        return definitiveId;
+        // Google Books IDs are typically alphanumeric and not purely numeric like ISBNs.
+        // This check ensures it's not an ISBN-like pattern.
+        if (definitiveId != null && !definitiveId.isEmpty() && 
+            !definitiveId.matches("^\\d{13}$") && 
+            !definitiveId.matches("^\\d{9}[\\dX]$")) {
+            return definitiveId;
+        }
+        logger.trace("extractGoogleId: definitiveId '{}' does not appear to be a Google Books ID (or it resembles an ISBN).", definitiveId);
+        return null;
     }
 }

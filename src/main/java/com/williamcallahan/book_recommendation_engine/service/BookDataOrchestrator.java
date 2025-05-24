@@ -15,7 +15,6 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import org.slf4j.Logger;
@@ -110,17 +109,19 @@ public class BookDataOrchestrator {
                 logger.info("BookDataOrchestrator: No data found from any API source for identifier: {}", bookId);
                 return Mono.<Book>empty();
             }
-            ObjectNode aggregatedJson = bookDataAggregatorService.aggregateBookDataSourcesAsync(bookId, "id", jsonList.toArray(new JsonNode[0])).join();
-            Book finalBook = BookJsonParser.convertJsonToBook(aggregatedJson);
+            return Mono.fromCompletionStage(bookDataAggregatorService.aggregateBookDataSourcesAsync(bookId, "id", jsonList.toArray(new JsonNode[0])))
+                .flatMap(aggregatedJson -> {
+                    Book finalBook = BookJsonParser.convertJsonToBook(aggregatedJson);
 
-            if (finalBook == null || finalBook.getId() == null) {
-                logger.error("BookDataOrchestrator: Aggregation resulted in null or invalid book for identifier: {}", bookId);
-                return Mono.<Book>empty(); 
-            }
-            // Use the canonical ID from the aggregated book for S3 storage
-            String s3StorageKey = finalBook.getId();
-            logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
-            return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", s3StorageKey);
+                    if (finalBook == null || finalBook.getId() == null) {
+                        logger.error("BookDataOrchestrator: Aggregation resulted in null or invalid book for identifier: {}", bookId);
+                        return Mono.<Book>empty(); 
+                    }
+                    // Use the canonical ID from the aggregated book for S3 storage
+                    String s3StorageKey = finalBook.getId();
+                    logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
+                    return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", s3StorageKey);
+                });
         });
     }
 
