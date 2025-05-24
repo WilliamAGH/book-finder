@@ -56,7 +56,7 @@ public class BookCacheWarmingScheduler {
     
     // Configurable properties
     @Value("${app.cache.warming.enabled:true}")
-    private boolean cacheWarmingEnabled = true;
+    private boolean cacheWarmingEnabled;
     
     @Value("${app.cache.warming.rate-limit-per-minute:3}")
     private int rateLimit;

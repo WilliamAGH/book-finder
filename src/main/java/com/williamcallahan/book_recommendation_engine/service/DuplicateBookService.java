@@ -16,6 +16,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.CachedBook;
 import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+import com.williamcallahan.book_recommendation_engine.repository.RedisBookSearchService.BookSearchResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -35,20 +36,37 @@ import java.time.LocalDateTime;
 @Service
 public class DuplicateBookService {
 
+    /**
+     * Logger for tracking duplicate book service operations
+     */
     private static final Logger logger = LoggerFactory.getLogger(DuplicateBookService.class);
 
+    /**
+     * Repository for accessing cached book data
+     */
     private final CachedBookRepository cachedBookRepository;
+    
+    /**
+     * Executor for running asynchronous operations
+     */
     private final Executor taskExecutor;
+    
+    /**
+     * Service for book deduplication logic
+     */
+    private final BookDeduplicationService bookDeduplicationService;
 
     /**
      * Constructs a new DuplicateBookService
      *
      * @param cachedBookRepository Repository for querying cached book information
      * @param taskExecutor The executor for async operations
+     * @param bookDeduplicationService Service for deduplication
      */
-    public DuplicateBookService(CachedBookRepository cachedBookRepository, @Qualifier("taskExecutor") Executor taskExecutor) {
+    public DuplicateBookService(CachedBookRepository cachedBookRepository, @Qualifier("taskExecutor") Executor taskExecutor, BookDeduplicationService bookDeduplicationService) {
         this.cachedBookRepository = cachedBookRepository;
         this.taskExecutor = taskExecutor;
+        this.bookDeduplicationService = bookDeduplicationService;
     }
 
     /**
@@ -223,8 +241,10 @@ public class DuplicateBookService {
     }
 
     /**
-     * Finds a "primary" or "canonical" existing CachedBook for a new book based on title and authors
-     *
+     * Finds a "primary" or "canonical" existing CachedBook for a new book based on identifiers or title/authors
+     * <p>
+     * First attempts identifier-based lookup (ISBN-13, ISBN-10, Google Books ID) via {@link BookDeduplicationService}
+     * Falls back to title-and-authors matching if no identifier match is found
      * @param newBook The new book (typically from an API) to find a canonical version for
      * @return A CompletableFuture resolving to an Optional containing the primary/canonical CachedBook if one exists, otherwise empty
      */
@@ -232,15 +252,37 @@ public class DuplicateBookService {
         if (newBook == null || newBook.getTitle() == null || newBook.getAuthors() == null || newBook.getAuthors().isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        return findPotentialDuplicatesAsync(newBook, "__NON_EXISTENT_ID__" + System.currentTimeMillis())
-            .thenApplyAsync(potentialPrimaries -> {
-                if (potentialPrimaries.isEmpty()) {
-                    return Optional.empty();
+        // Try identifier-based deduplication first
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                Optional<BookSearchResult> idResult = bookDeduplicationService.findExistingBook(
+                    newBook.getIsbn13(), newBook.getIsbn10(), null);
+                if (idResult.isPresent()) {
+                    BookSearchResult result = idResult.get();
+                    logger.debug("Identifier-based match found for ISBN-13: {} or ISBN-10: {}. Using UUID: {}",
+                        newBook.getIsbn13(), newBook.getIsbn10(), result.getUuid());
+                    return Optional.of(result.getBook());
                 }
-                logger.debug("Found {} potential primary books for new book title '{}'. Selecting first one: {}", 
-                    potentialPrimaries.size(), newBook.getTitle(), potentialPrimaries.get(0).getId());
-                return Optional.of(potentialPrimaries.get(0));
-            }, this.taskExecutor);
+            } catch (Exception e) {
+                logger.warn("Identifier-based deduplication failed: {}", e.getMessage());
+            }
+            return Optional.<CachedBook>empty();
+        }, taskExecutor)
+        .thenCompose(existingOpt -> {
+            if (existingOpt.isPresent()) {
+                return CompletableFuture.completedFuture(existingOpt);
+            }
+            // Fallback to title/author matching
+            return findPotentialDuplicatesAsync(newBook, "__NON_EXISTENT_ID__" + System.currentTimeMillis())
+                .thenApplyAsync(potentialPrimaries -> {
+                    if (potentialPrimaries.isEmpty()) {
+                        return Optional.empty();
+                    }
+                    CachedBook primary = potentialPrimaries.get(0);
+                    logger.debug("Title/author fallback found {} potentials. Selecting {}.", potentialPrimaries.size(), primary.getId());
+                    return Optional.of(primary);
+                }, taskExecutor);
+        });
     }
 
     /**

@@ -27,6 +27,8 @@ import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.resps.ScanResult;
 import redis.clients.jedis.params.ScanParams;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.function.Function;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -94,8 +96,10 @@ public class BookDataConsolidationService {
      */
     // @Async // Removed: We will use CompletableFuture.supplyAsync for explicit control
     public CompletableFuture<ConsolidationSummary> consolidateBookDataAsync(boolean dryRun) {
-        return CompletableFuture.supplyAsync(() -> { // Added supplyAsync
-            ConsolidationSummary summary = new ConsolidationSummary();
+        // The main supplyAsync lambda should now return a CompletableFuture<ConsolidationSummary>
+        // which is the result of the allOperations chain.
+        return CompletableFuture.supplyAsync(() -> {
+            final ConsolidationSummary summary = new ConsolidationSummary();
             logger.info("Starting ASYNCHRONOUS book data consolidation. Dry run: {}", dryRun);
 
             Set<String> allKeys = new HashSet<>();
@@ -152,7 +156,9 @@ public class BookDataConsolidationService {
                         // The `return CompletableFuture.completedFuture(summary);` is inside the loop, for an early exit.
                         // This needs to be `return summary;` to match the lambda's expected return type.
                         // The error is likely that this specific return was missed in the previous refactor.
-                        return summary; // Corrected: Lambda returns summary
+                        // This path must return CompletableFuture<ConsolidationSummary>
+                        // Throwing CompletionException is one way to signal failure to the composed future.
+                        throw new CompletionException("Redis connection factory destroyed. Process terminated early after " + processedKeyCount + " keys. Summary: " + summary.toString(), e);
                     } else {
                         throw e; // Re-throw if it's a different IllegalStateException
                     }
@@ -317,59 +323,67 @@ public class BookDataConsolidationService {
         CompletableFuture<Void> allOperations = CompletableFuture.allOf(
             allAsyncOperations.toArray(new CompletableFuture[0])
         );
-        
-        try {
-            allOperations.join(); // Wait for all async operations
+
+        // Handle this asynchronously or restructure the method to chain properly
+        return allOperations.thenApply(v -> {
             logger.info("All async operations completed. Proceeding with synchronous cleanup.");
-        } catch (Exception e) {
-            logger.error("Error waiting for async operations to complete: {}", e.getMessage(), e);
-            summary.errors.add("Error in async operations: " + e.getMessage());
-        }
-        
-        // Second pass: perform synchronous operations after all async work is done
-        for (Map.Entry<String, List<CachedBook>> entry : booksToConsolidate.entrySet()) {
-            String definitiveIdForGroup = entry.getKey();
-            List<CachedBook> bookVersions = entry.getValue();
-            Set<String> originalRedisKeysForGroup = originalKeysMap.get(definitiveIdForGroup);
-            CachedBook finalBook = booksByDefinitiveId.get(definitiveIdForGroup);
-            String bookUuid = bookUuidsByDefinitiveId.get(definitiveIdForGroup);
-            
-            if (finalBook == null || bookUuid == null) {
-                continue; // Skip if there was an error in first pass
-            }
+            // Continue with cleanup logic here
+            // Second pass: perform synchronous operations after all async work is done
+            for (Map.Entry<String, List<CachedBook>> entry : booksToConsolidate.entrySet()) {
+                String definitiveIdForGroup = entry.getKey();
+                List<CachedBook> bookVersions = entry.getValue();
+                Set<String> originalRedisKeysForGroup = originalKeysMap.get(definitiveIdForGroup);
+                CachedBook finalBook = booksByDefinitiveId.get(definitiveIdForGroup);
+                String bookUuid = bookUuidsByDefinitiveId.get(definitiveIdForGroup);
 
-            try {
-                if (!dryRun) {
-                    // Update secondary indexes to point to the new UUID
-                    updateSecondaryIndexes(finalBook);
-
-                    // Delete all old/variant keys for this conceptual book
-                    for (String oldKey : originalRedisKeysForGroup) {
-                        if (!oldKey.equals(TARGET_PREFIX + bookUuid)) { // Don't delete the key we just wrote to
-                            jedisPooled.del(oldKey);
-                            summary.oldKeysDeleted++;
-                            logger.debug("Deleted old key: {}", oldKey);
-                        }
-                    }
-                    if (bookVersions.size() > 1) summary.recordsMerged++; else summary.recordsMigrated++;
-
-                } else {
-                    logger.info("[DRY RUN] Would consolidate data for definitive ID {} into UUID {}", definitiveIdForGroup, bookUuid);
-                    logger.info("[DRY RUN] Final book data: {}", objectMapper.writeValueAsString(finalBook));
-                    logger.info("[DRY RUN] Would delete original keys: {}", originalRedisKeysForGroup);
-                    if (bookVersions.size() > 1) summary.recordsMerged++; else summary.recordsMigrated++;
+                if (finalBook == null || bookUuid == null) {
+                    continue; // Skip if there was an error in first pass
                 }
 
-            } catch (Exception e) {
-                logger.error("Error in cleanup phase for definitive ID {}: {}", definitiveIdForGroup, e.getMessage(), e);
-                summary.errors.add("Error in cleanup for " + definitiveIdForGroup + ": " + e.getMessage());
-            }
-        }
+                try {
+                    if (!dryRun) {
+                        // Update secondary indexes to point to the new UUID
+                        updateSecondaryIndexes(finalBook);
 
-        logger.info("ASYNCHRONOUS book data consolidation finished. Dry run: {}. Summary: {}", dryRun, summary.toString());
-        return summary; // Return summary for supplyAsync
-        }); // Added supplyAsync
+                        // Delete all old/variant keys for this conceptual book
+                        for (String oldKey : originalRedisKeysForGroup) {
+                            if (!oldKey.equals(TARGET_PREFIX + bookUuid)) { // Don't delete the key we just wrote to
+                                jedisPooled.del(oldKey);
+                                summary.oldKeysDeleted++;
+                                logger.debug("Deleted old key: {}", oldKey);
+                            }
+                        }
+                        if (bookVersions.size() > 1) summary.recordsMerged++; else summary.recordsMigrated++;
+
+                    } else {
+                        logger.info("[DRY RUN] Would consolidate data for definitive ID {} into UUID {}", definitiveIdForGroup, bookUuid);
+                        try {
+                            logger.info("[DRY RUN] Final book data: {}", objectMapper.writeValueAsString(finalBook));
+                        } catch (IOException e) {
+                            logger.warn("[DRY RUN] Could not serialize finalBook for logging: {}", e.getMessage());
+                        }
+                        logger.info("[DRY RUN] Would delete original keys: {}", originalRedisKeysForGroup);
+                        if (bookVersions.size() > 1) summary.recordsMerged++; else summary.recordsMigrated++;
+                    }
+
+                } catch (Exception e) {
+                    logger.error("Error in cleanup phase for definitive ID {}: {}", definitiveIdForGroup, e.getMessage(), e);
+                    summary.errors.add("Error in cleanup for " + definitiveIdForGroup + ": " + e.getMessage());
+                }
+            }
+            logger.info("ASYNCHRONOUS book data consolidation finished. Dry run: {}. Summary: {}", dryRun, summary.toString());
+            return summary;
+        }).exceptionally(e -> {
+            logger.error("Error waiting for async operations to complete: {}", e.getMessage(), e);
+            summary.errors.add("Error in async operations: " + e.getMessage());
+            // Log current state of summary before returning
+            logger.info("ASYNCHRONOUS book data consolidation finished WITH ERRORS. Dry run: {}. Summary: {}", dryRun, summary.toString());
+            return summary; // exceptionally's lambda returns ConsolidationSummary, so the chain results in CF<CS>
+        }); // This is the end of the allOperations.thenApply().exceptionally() chain
+           // This chain itself is a CompletableFuture<ConsolidationSummary> and is the return of the supplyAsync lambda.
+        }).thenCompose(Function.identity()); // Flatten the CompletableFuture<CompletableFuture<ConsolidationSummary>> from supplyAsync.
     }
+
 
     /**
      * Merges multiple versions of the same book into a single consolidated record
@@ -517,12 +531,9 @@ public class BookDataConsolidationService {
         return keys;
     }
 
-    /**
-     * Extracts ISBN-13 from definitive identifier
-     *
-     * @param definitiveId Identifier to extract from
-     * @return ISBN-13 if applicable
-     */
+    // The first occurrence (lines 434-439 in the previous state) is kept.
+    // The duplicated Javadoc (lines 441-447) and method (lines 448-453) are removed by this diff not including them.
+
     /**
      * Extracts ISBN-13 from definitive identifier
      *
@@ -562,8 +573,8 @@ public class BookDataConsolidationService {
     private String extractGoogleId(String definitiveId) {
         // Google Books IDs are typically alphanumeric and not purely numeric like ISBNs.
         // This check ensures it's not an ISBN-like pattern.
-        if (definitiveId != null && !definitiveId.isEmpty() && 
-            !definitiveId.matches("^\\d{13}$") && 
+        if (definitiveId != null && !definitiveId.isEmpty() &&
+            !definitiveId.matches("^\\d{13}$") &&
             !definitiveId.matches("^\\d{9}[\\dX]$")) {
             return definitiveId;
         }
