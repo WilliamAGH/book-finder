@@ -104,6 +104,11 @@ public class MetricsService {
         lastRedisError.set(System.currentTimeMillis());
     }
     
+    public void recordRedisAvailable() {
+        // Reset error tracking when Redis becomes available
+        lastRedisError.set(0);
+    }
+    
     public void incrementS3Timeout() {
         s3Timeouts.increment();
     }

@@ -7,6 +7,8 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.jsontoredis.JsonS3ToRedisService;
+import com.williamcallahan.book_recommendation_engine.jsontoredis.MigrationProgress;
+import com.williamcallahan.book_recommendation_engine.jsontoredis.MigrationErrorAggregator;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,7 +36,7 @@ public class MigrationMonitorController {
      */
     @GetMapping("/progress")
     public ResponseEntity<Map<String, Object>> getMigrationProgress() {
-        JsonS3ToRedisService.MigrationProgress progress = 
+        MigrationProgress progress = 
             jsonS3ToRedisService.getMigrationProgress();
         
         if (progress == null) {
@@ -58,7 +60,7 @@ public class MigrationMonitorController {
      */
     @GetMapping("/errors")
     public ResponseEntity<Map<String, Object>> getMigrationErrors() {
-        JsonS3ToRedisService.ErrorAggregator errorAggregator = 
+        MigrationErrorAggregator errorAggregator = 
             jsonS3ToRedisService.getErrorAggregator();
 
         if (errorAggregator == null) {
@@ -101,7 +103,7 @@ public class MigrationMonitorController {
         Map<String, Object> response = new HashMap<>();
         
         // Add progress info
-        JsonS3ToRedisService.MigrationProgress progress = 
+        MigrationProgress progress = 
             jsonS3ToRedisService.getMigrationProgress();
         
         if (progress == null) {
@@ -116,7 +118,7 @@ public class MigrationMonitorController {
         }
         
         // Add error summary
-        JsonS3ToRedisService.ErrorAggregator errorAggregator = 
+        MigrationErrorAggregator errorAggregator = 
             jsonS3ToRedisService.getErrorAggregator();
 
         if (errorAggregator == null) {
@@ -141,7 +143,7 @@ public class MigrationMonitorController {
     /**
      * Estimate remaining time based on current progress
      */
-    private String estimateTimeRemaining(JsonS3ToRedisService.MigrationProgress progress) {
+    private String estimateTimeRemaining(MigrationProgress progress) {
         int completed = progress.getProcessed() + progress.getFailed() + progress.getSkipped();
         int remaining = progress.getTotal() - completed;
         

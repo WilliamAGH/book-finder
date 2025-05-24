@@ -338,31 +338,8 @@ public class HomeController {
                         .findRandomRecentBooksWithGoodCovers(count, excludeIds, fromYear);
                     
                     if (recentCachedBooks.isEmpty()) {
-                        logger.info("No recent books with good covers found in cache, trying fallback query");
-                        // Fallback: use EXPLORE_QUERIES to get some books via API
-                        String fallbackQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
-                        logger.info("Using fallback query for homepage: '{}'", fallbackQuery);
-                        
-                        // Use reactive approach for fallback
-                        return Mono.fromFuture(bookCacheFacadeService.searchBooks(fallbackQuery, 1, count))
-                            .timeout(Duration.ofSeconds(10))
-                            .map(fallbackBooksList -> {
-                                if (fallbackBooksList != null && !fallbackBooksList.isEmpty()) {
-                                    logger.info("Fallback query returned {} books for homepage", fallbackBooksList.size());
-                                    return fallbackBooksList.stream()
-                                        .filter(book -> !excludeIds.contains(book.getId()))
-                                        .limit(count)
-                                        .collect(Collectors.toList());
-                                }
-                                return Collections.<Book>emptyList();
-                            })
-                            .onErrorResume(e -> {
-                                logger.warn("Fallback query failed or timed out: {}", e.getMessage());
-                                return Mono.just(Collections.<Book>emptyList());
-                            })
-                            .block(); // Block here as the outer method expects a List<Book>, not Mono<List<Book>>
-                                     // This is acceptable as it's within a flatMap of a Mono.fromCallable
-                                     // and scheduled on boundedElastic.
+                        logger.info("No recent books with good covers found in cache. No fallback API call will be made for the homepage.");
+                        return Collections.<Book>emptyList(); // Return empty list, no external API call
                     }
                     
                     // Convert CachedBooks to Books
