@@ -25,6 +25,8 @@ import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.search.Query;
 import redis.clients.jedis.search.SearchResult;
 import redis.clients.jedis.search.Document;
+import com.williamcallahan.book_recommendation_engine.repository.RedisBookIndexManager;
+import com.williamcallahan.book_recommendation_engine.util.RedisHelper;
 
 import java.time.LocalDate;
 import java.util.Arrays;
@@ -40,6 +42,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.springframework.scheduling.annotation.Async;
 
+@SuppressWarnings("unused")
 @Service
 public class RedisBookSearchService {
 
@@ -59,6 +62,7 @@ public class RedisBookSearchService {
     private final JedisPooled jedisPooled;
     private final RedisBookAccessor redisBookAccessor;
     private final ObjectMapper objectMapper;
+    private final RedisBookIndexManager indexManager;
 
     /**
      * Constructs search service with required dependencies
@@ -66,13 +70,16 @@ public class RedisBookSearchService {
      * @param jedisPooled Redis connection pool for search operations
      * @param redisBookAccessor service for book data retrieval
      * @param objectMapper Jackson ObjectMapper for JSON processing
+     * @param indexManager RedisBookIndexManager for secondary index lookup
      */
     public RedisBookSearchService(JedisPooled jedisPooled,
                                   RedisBookAccessor redisBookAccessor,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  RedisBookIndexManager indexManager) {
         this.jedisPooled = jedisPooled;
         this.redisBookAccessor = redisBookAccessor;
         this.objectMapper = objectMapper;
+        this.indexManager = indexManager;
         logger.info("RedisBookSearchService initialized");
     }
 
@@ -180,7 +187,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 100);
             
-            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch("idx:books", query);
             List<CachedBook> results = new ArrayList<>();
             
             for (Document doc : searchResult.getDocuments()) {
@@ -222,7 +229,7 @@ public class RedisBookSearchService {
      */
     private String escapeRedisSearchString(String input) {
         return input.replace("\\", "\\\\")
-                   .replace("\":", "\\:")
+                   .replace("\"", "\\\"")
                    .replace("{", "\\{")
                    .replace("}", "\\}")
                    .replace("(", "\\(")
@@ -280,7 +287,7 @@ public class RedisBookSearchService {
 
         try {
             logger.debug("Executing RediSearch query on idx:books for slug query: @slug:{{}}", escapedSlug);
-            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch("idx:books", query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -345,7 +352,7 @@ public class RedisBookSearchService {
             
             List<CachedBook> results = new ArrayList<>();
             try {
-                SearchResult searchResult = jedisPooled.ftSearch("idx:books", searchQuery);
+                SearchResult searchResult = safeFtSearch("idx:books", searchQuery);
                 results.addAll(processSearchResultsForRecentGoodCovers(searchResult, count, excludeIds, "book:"));
                 if (results.size() >= count) {
                     return results.stream().limit(count).collect(Collectors.toList());
@@ -356,7 +363,7 @@ public class RedisBookSearchService {
             
             if (results.size() < count) {
                 try {
-                    SearchResult searchResultVector = jedisPooled.ftSearch("idx:cached_books_vector", searchQuery);
+                    SearchResult searchResultVector = safeFtSearch("idx:cached_books_vector", searchQuery);
                     results.addAll(processSearchResultsForRecentGoodCovers(searchResultVector, count - results.size(), excludeIds, "book:"));
                     if (results.size() >= count) {
                         return results.stream().limit(count).collect(Collectors.toList());
@@ -583,7 +590,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 1);
             
-            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch("idx:books", query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -618,7 +625,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 1);
             
-            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch("idx:books", query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -653,7 +660,7 @@ public class RedisBookSearchService {
                     .returnFields("$")
                     .limit(0, 1);
             
-            SearchResult searchResult = jedisPooled.ftSearch("idx:books", query);
+            SearchResult searchResult = safeFtSearch("idx:books", query);
             if (searchResult.getTotalResults() > 0) {
                 Document doc = searchResult.getDocuments().get(0);
                 String json = doc.getString("$");
@@ -787,6 +794,63 @@ public class RedisBookSearchService {
      * @return Optional containing the book search result with key and cleaned data
      */
     public Optional<BookSearchResult> findExistingBook(String isbn13, String isbn10, String googleBooksId) {
+        long startTime = System.currentTimeMillis();
+        logger.debug("REDIS_DEBUG: Starting findExistingBook search for ISBN-13: {}, ISBN-10: {}, Google ID: {}", isbn13, isbn10, googleBooksId);
+        
+        // TEMPORARILY SKIP SECONDARY INDEX LOOKUPS FOR DEBUGGING
+        // Try secondary index lookup first
+        /*
+        if (isbn13 != null && !isbn13.isEmpty()) {
+            long step1Start = System.currentTimeMillis();
+            Optional<String> bookIdOpt = indexManager.getBookIdByIsbn13(isbn13);
+            long step1End = System.currentTimeMillis();
+            logger.debug("REDIS_DEBUG: ISBN-13 index lookup took {}ms", (step1End - step1Start));
+            if (bookIdOpt.isPresent()) {
+                String bookId = bookIdOpt.get();
+                Optional<CachedBook> bookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
+                    .flatMap(redisBookAccessor::deserializeBook);
+                if (bookOpt.isPresent()) {
+                    CachedBook book = bookOpt.get();
+                    String redisKey = "book:" + book.getId();
+                    logger.debug("Found book by ISBN-13 secondary index: {} with key: {}", isbn13, redisKey);
+                    return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
+                }
+            }
+        }
+        
+        // Try ISBN-10 secondary index lookup
+        if (isbn10 != null && !isbn10.isEmpty()) {
+            Optional<String> bookIdOpt2 = indexManager.getBookIdByIsbn10(isbn10);
+            if (bookIdOpt2.isPresent()) {
+                String bookId = bookIdOpt2.get();
+                Optional<CachedBook> bookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
+                    .flatMap(redisBookAccessor::deserializeBook);
+                if (bookOpt.isPresent()) {
+                    CachedBook book = bookOpt.get();
+                    String redisKey = "book:" + book.getId();
+                    logger.debug("Found book by ISBN-10 secondary index: {} with key: {}", isbn10, redisKey);
+                    return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
+                }
+            }
+        }
+
+        // Try Google Books ID secondary index lookup
+        if (googleBooksId != null && !googleBooksId.isEmpty()) {
+            Optional<String> bookIdOpt3 = indexManager.getBookIdByGoogleBooksId(googleBooksId);
+            if (bookIdOpt3.isPresent()) {
+                String bookId = bookIdOpt3.get();
+                Optional<CachedBook> bookOpt = redisBookAccessor.findJsonByIdWithRedisJsonFallback(bookId)
+                    .flatMap(redisBookAccessor::deserializeBook);
+                if (bookOpt.isPresent()) {
+                    CachedBook book = bookOpt.get();
+                    String redisKey = "book:" + book.getId();
+                    logger.debug("Found book by Google Books ID secondary index: {} with key: {}", googleBooksId, redisKey);
+                    return Optional.of(new BookSearchResult(redisKey, book.getId(), book));
+                }
+            }
+        }
+        */
+        
         // Try ISBN-13 first (most reliable)
         if (isbn13 != null && !isbn13.isEmpty()) {
             Optional<CachedBook> bookOpt = findByIsbn13(isbn13);
@@ -820,6 +884,24 @@ public class RedisBookSearchService {
             }
         }
         
+        long endTime = System.currentTimeMillis();
+        logger.debug("REDIS_DEBUG: findExistingBook completed in {}ms (no match found)", (endTime - startTime));
         return Optional.empty();
+    }
+
+    /**
+     * Wraps ftSearch with JedisConnectionException handling to prevent log spam and fallback to empty result.
+     */
+    private SearchResult safeFtSearch(String index, Query query) {
+        // Prepare a fallback empty result
+        SearchResult fallback = new SearchResult.SearchResultBuilder(false, false, false)
+                .build(Collections.singletonList(0L));
+        String operationName = "ftSearch(" + index + "," + query.toString() + ")";
+        return RedisHelper.executeWithTiming(
+            logger,
+            () -> jedisPooled.ftSearch(index, query),
+            operationName,
+            fallback
+        );
     }
 }
