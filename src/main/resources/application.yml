@@ -8,7 +8,7 @@ spring:
     allow-bean-definition-overriding: true
   sql:
     init:
-      mode: always # auto-run schema.sql when a DataSource is configured
+      mode: never # schema initialization handled per-profile to prevent production data loss
   profiles:
     default: prod # Default to prod if no other profile is active
   

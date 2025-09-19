@@ -1,0 +1,9 @@
+# Development profile configuration
+spring:
+  sql:
+    init:
+      mode: always # Run schema.sql in development environment
+  jpa:
+    hibernate:
+      ddl-auto: validate # Validate schema against entities
+    show-sql: true # Show SQL queries in console for debugging
