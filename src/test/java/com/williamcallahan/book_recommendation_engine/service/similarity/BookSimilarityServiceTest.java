@@ -36,6 +36,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BookSimilarityServiceTest {
 
+    private static final String TEST_EMBEDDING_SERVICE_URL = "http://localhost:8095/api/embedding";
+
     @Mock
     private GoogleBooksService googleBooksService;
 
@@ -138,7 +140,7 @@ class BookSimilarityServiceTest {
         bookSimilarityService = new BookSimilarityService(
             googleBooksService,
             bookDataOrchestrator,
-            "http://localhost:8095/api/embedding",
+            TEST_EMBEDDING_SERVICE_URL,
             webClientBuilder,
             true // embeddingServiceEnabled
         );
@@ -167,7 +169,7 @@ class BookSimilarityServiceTest {
         bookSimilarityService = new BookSimilarityService(
             googleBooksService,
             bookDataOrchestrator,
-            "http://localhost:8095/api/embedding",
+            TEST_EMBEDDING_SERVICE_URL,
             webClientBuilder,
             true // embeddingServiceEnabled
         );
