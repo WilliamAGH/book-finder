@@ -15,19 +15,31 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -50,7 +62,8 @@ import reactor.core.scheduler.Schedulers;
 public class BookController {
     private static final Logger logger = LoggerFactory.getLogger(BookController.class);
     
-    private final BookCacheFacadeService bookCacheFacadeService;
+    private final BookDataOrchestrator bookDataOrchestrator;
+    private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
     private final BookImageOrchestrationService bookImageOrchestrationService;
@@ -61,18 +74,21 @@ public class BookController {
     /**
      * Constructs the BookController with all required services
      *
-     * @param bookCacheFacadeService Service for caching and retrieving book data
+     * @param bookDataOrchestrator Service for orchestrating book data retrieval
+     * @param googleBooksService Service for accessing Google Books API
      * @param recentlyViewedService Service for tracking recently viewed books
      * @param recommendationService Service for generating book recommendations
      * @param bookImageOrchestrationService Service for book cover image processing
      * @param s3RetryService Service for S3 operations with retries
      */
-    public BookController(BookCacheFacadeService bookCacheFacadeService,
+    public BookController(BookDataOrchestrator bookDataOrchestrator,
+                          GoogleBooksService googleBooksService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
                           BookImageOrchestrationService bookImageOrchestrationService,
                           S3RetryService s3RetryService) {
-        this.bookCacheFacadeService = bookCacheFacadeService;
+        this.bookDataOrchestrator = bookDataOrchestrator;
+        this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookImageOrchestrationService = bookImageOrchestrationService;
@@ -151,7 +167,7 @@ public class BookController {
         final String actualQueryForApi = finalQueryForProcessing;
         final Integer actualPublishedYearForApi = finalEffectivePublishedYear;
 
-        return bookCacheFacadeService.searchBooksReactive(actualQueryForApi, startIndex, maxResults, actualPublishedYearForApi, null, null)
+        return googleBooksService.searchBooksAsyncReactive(actualQueryForApi, null, maxResults, null)
             .flatMap(paginatedBooks -> {
                 List<Book> currentPaginatedBooks = (paginatedBooks == null) ? Collections.emptyList() : paginatedBooks;
 
@@ -187,11 +203,11 @@ public class BookController {
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
-                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
-                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                    String currentCoverUrl = book.getS3ImagePath() != null ? book.getS3ImagePath() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new CoverImages(currentCoverUrl, currentCoverUrl));
                                 }
-                                if (book.getCoverImageUrl() == null) {
-                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                if (book.getS3ImagePath() == null) {
+                                    book.setS3ImagePath("/images/placeholder-book-cover.svg");
                                 }
                                 return Mono.just(book);
                             });
@@ -325,8 +341,8 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheFacadeService for searching books by title
-        return bookCacheFacadeService.searchBooksReactive("intitle:" + title, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
+        // Use GoogleBooksService for searching books by title
+        return googleBooksService.searchBooksByTitle(title, null)
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -345,11 +361,11 @@ public class BookController {
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
-                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
-                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                    String currentCoverUrl = book.getS3ImagePath() != null ? book.getS3ImagePath() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new CoverImages(currentCoverUrl, currentCoverUrl));
                                 }
-                                if (book.getCoverImageUrl() == null) {
-                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                if (book.getS3ImagePath() == null) {
+                                    book.setS3ImagePath("/images/placeholder-book-cover.svg");
                                 }
                                 return Mono.just(book);
                             });
@@ -393,8 +409,8 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheFacadeService for searching books by author
-        return bookCacheFacadeService.searchBooksReactive("inauthor:" + author, 0, 40, null, null, null) // Pass null for publishedYear, langCode, orderBy
+        // Use GoogleBooksService for searching books by author
+        return googleBooksService.searchBooksByAuthor(author, null)
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -413,11 +429,11 @@ public class BookController {
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
-                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
-                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                    String currentCoverUrl = book.getS3ImagePath() != null ? book.getS3ImagePath() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new CoverImages(currentCoverUrl, currentCoverUrl));
                                 }
-                                if (book.getCoverImageUrl() == null) {
-                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                if (book.getS3ImagePath() == null) {
+                                    book.setS3ImagePath("/images/placeholder-book-cover.svg");
                                 }
                                 return Mono.just(book);
                             });
@@ -461,8 +477,8 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheFacadeService for searching books by ISBN
-        return bookCacheFacadeService.getBooksByIsbnReactive(isbn)
+        // Use GoogleBooksService for searching books by ISBN
+        return googleBooksService.searchBooksByISBN(isbn)
             .flatMap(books -> {
                 List<Book> currentBooks = (books == null) ? Collections.emptyList() : books;
                 if (currentBooks.isEmpty()) {
@@ -481,11 +497,11 @@ public class BookController {
                             .onErrorResume(e -> {
                                 logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                 if (book.getCoverImages() == null) {
-                                    String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
-                                    book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                    String currentCoverUrl = book.getS3ImagePath() != null ? book.getS3ImagePath() : "/images/placeholder-book-cover.svg";
+                                    book.setCoverImages(new CoverImages(currentCoverUrl, currentCoverUrl));
                                 }
-                                if (book.getCoverImageUrl() == null) {
-                                    book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                if (book.getS3ImagePath() == null) {
+                                    book.setS3ImagePath("/images/placeholder-book-cover.svg");
                                 }
                                 return Mono.just(book);
                             });
@@ -529,11 +545,11 @@ public class BookController {
         final CoverImageSource effectivelyFinalPreferredSource = getCoverImageSourceFromString(coverSource);
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
-        // Use BookCacheFacadeService to get book by ID
-        return bookCacheFacadeService.getBookByIdReactive(id)
+        // Use BookDataOrchestrator to get book by ID
+        return bookDataOrchestrator.getBookByIdTiered(id)
             // If not found by volume ID, fallback to ISBN-based search
             .switchIfEmpty(
-                bookCacheFacadeService.getBooksByIsbnReactive(id)
+                googleBooksService.searchBooksByISBN(id)
                     .filter(list -> list != null && !list.isEmpty())
                     .map(list -> list.get(0))
                     .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID or ISBN: " + id, null)))
@@ -544,11 +560,11 @@ public class BookController {
                     .onErrorResume(e -> { // Handle errors during cover enrichment
                         logger.warn("Error in async cover processing for book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                         if (book.getCoverImages() == null) {
-                            String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
-                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                            String currentCoverUrl = book.getS3ImagePath() != null ? book.getS3ImagePath() : "/images/placeholder-book-cover.svg";
+                            book.setCoverImages(new CoverImages(currentCoverUrl, currentCoverUrl));
                         }
-                        if (book.getCoverImageUrl() == null) {
-                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        if (book.getS3ImagePath() == null) {
+                            book.setS3ImagePath("/images/placeholder-book-cover.svg");
                         }
                         return Mono.just(book); // Return the book with default/existing cover info
                     })
@@ -633,11 +649,11 @@ public class BookController {
                                     .onErrorResume(e -> {
                                         logger.warn("Error in async cover processing for similar book ID {}: {}. Book may have defaults.", book.getId(), e.getMessage());
                                         if (book.getCoverImages() == null) {
-                                            String currentCoverUrl = book.getCoverImageUrl() != null ? book.getCoverImageUrl() : "/images/placeholder-book-cover.svg";
-                                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(currentCoverUrl, currentCoverUrl));
+                                            String currentCoverUrl = book.getS3ImagePath() != null ? book.getS3ImagePath() : "/images/placeholder-book-cover.svg";
+                                            book.setCoverImages(new CoverImages(currentCoverUrl, currentCoverUrl));
                                         }
-                                        if (book.getCoverImageUrl() == null) {
-                                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                        if (book.getS3ImagePath() == null) {
+                                            book.setS3ImagePath("/images/placeholder-book-cover.svg");
                                         }
                                         return Mono.just(book);
                                     });
@@ -713,19 +729,16 @@ public class BookController {
     public Mono<ResponseEntity<Book>> createBook(@RequestBody Book book) {
         logger.info("Attempting to create book: {}", book.getTitle());
         return Mono.defer(() -> {
-            bookCacheFacadeService.cacheBook(book); // This call can throw IllegalArgumentException
-            // Assuming book.getId() is populated by cacheBook or by the service call.
-            // If not, the URI creation will be problematic.
+            // Note: Book caching functionality has been removed. This endpoint now only validates and returns the book.
             if (book.getId() == null) {
-                logger.error("Book ID is null after caching for book title '{}'. Cannot create resource without a stable ID.", book.getTitle());
-                // Throw an exception to be caught by onErrorResume
-                return Mono.error(new IllegalStateException("Book ID was not assigned during persistence. Cannot create resource."));
+                logger.error("Book ID is null for book title '{}'. Cannot create resource without a stable ID.", book.getTitle());
+                return Mono.error(new IllegalArgumentException("Book ID is required for creation."));
             }
             // If ID is present, proceed to build the URI:
             URI location = ServletUriComponentsBuilder
                     .fromCurrentRequest()
                     .path("/{id}")
-                    .buildAndExpand(book.getId()) // book.getId() is guaranteed non-null here
+                    .buildAndExpand(book.getId())
                     .toUri();
             return Mono.just(ResponseEntity.created(location).body(book));
         })
@@ -754,8 +767,8 @@ public class BookController {
     @DeleteMapping("/{id}")
     public Mono<ResponseEntity<Void>> deleteBook(@PathVariable String id) {
         logger.info("Attempting to delete book with ID: {}", id);
-        // Always attempt deletion and return 200 OK, even if book was not found
-        return Mono.fromRunnable(() -> bookCacheFacadeService.removeBook(id))
+        // Note: Book deletion functionality has been removed. This endpoint now only logs the attempt.
+        return Mono.fromRunnable(() -> logger.info("Delete request for book ID: {} (cache functionality removed)", id))
             .then(Mono.just(ResponseEntity.ok().<Void>build()))
             .onErrorResume(IllegalArgumentException.class, e -> {
                 logger.error("Validation error deleting book with ID {}: {}", id, e.getMessage());
@@ -786,16 +799,13 @@ public class BookController {
         // Set the ID from the path
         bookUpdate.setId(id);
         
-        return bookCacheFacadeService.getBookByIdReactive(id)
+        return bookDataOrchestrator.getBookByIdTiered(id)
             // If book does not exist, still proceed to update (upsert behavior)
             .defaultIfEmpty(bookUpdate)
             .flatMap(existingBook -> {
-                // Update the book in the cache/database
-                return Mono.fromCallable(() -> {
-                    bookCacheFacadeService.updateBook(bookUpdate);
-                    return bookUpdate;
-                })
-                .map(updatedBook -> ResponseEntity.ok().body(updatedBook));
+                // Note: Book update functionality has been removed. This endpoint now only returns the provided book.
+                logger.info("Update request for book ID: {} (cache functionality removed)", id);
+                return Mono.just(ResponseEntity.ok().body(bookUpdate));
             })
             .onErrorResume(IllegalArgumentException.class, e -> {
                 logger.error("Validation error updating book with ID {}: {}", id, e.getMessage());

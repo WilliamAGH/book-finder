@@ -44,20 +44,17 @@ public class RecommendationService {
             "which", "its", "into", "then", "also"
     ));
 
-    private final GoogleBooksService googleBooksService; // Retain for other searches if needed, or remove if all book fetching goes via BookCacheFacadeService
-    private final BookCacheFacadeService bookCacheFacadeService;
+    private final GoogleBooksService googleBooksService;
 
     /**
      * Constructs the RecommendationService with required dependencies
-     * 
+     *
      * @param googleBooksService Service for searching books in Google Books API
-     * @param bookCacheFacadeService Service for retrieving cached book information
-     * 
-     * @implNote Uses both GoogleBooksService for searches and BookCacheFacadeService for book details
+     *
+     * @implNote Uses GoogleBooksService for searches and book details
      */
-    public RecommendationService(GoogleBooksService googleBooksService, BookCacheFacadeService bookCacheFacadeService) {
+    public RecommendationService(GoogleBooksService googleBooksService) {
         this.googleBooksService = googleBooksService;
-        this.bookCacheFacadeService = bookCacheFacadeService;
     }
 
     /**
@@ -74,7 +71,7 @@ public class RecommendationService {
     public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
         final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
 
-        return bookCacheFacadeService.getBookByIdReactive(bookId)
+        return Mono.fromFuture(googleBooksService.getBookById(bookId).toCompletableFuture())
             .flatMap(sourceBook -> {
                 if (sourceBook == null) {
                     logger.warn("Cannot get recommendations - source book with ID {} not found.", bookId);
@@ -94,7 +91,7 @@ public class RecommendationService {
                     }
 
                     return Flux.fromIterable(idsToFetch)
-                        .flatMap(recId -> bookCacheFacadeService.getBookByIdReactiveFromCacheOnly(recId) // Use cache-only method
+                        .flatMap(recId -> Mono.fromFuture(googleBooksService.getBookById(recId).toCompletableFuture())
                             .filter(Objects::nonNull) // Ensure book exists in cache
                             .filter(recBook -> !recBook.getId().equals(sourceBook.getId())) // Exclude source book
                             .filter(recBook -> { // Language filter
@@ -181,13 +178,14 @@ public class RecommendationService {
                         .flatMap(recommendedBook -> {
                             // Ensure rawJsonResponse is set if it's available and BookCacheFacadeService uses it
                             // This might already be handled by BookJsonParser
-                            return bookCacheFacadeService.cacheBookReactive(recommendedBook);
+                            // Skip caching - Redis removed
+                            return Mono.just(recommendedBook);
                         })
                         .then();
                     
                     // Save the updated sourceBook with new recommendation IDs, after caching individual books
                     return cacheIndividualRecommendedBooksMono
-                        .then(bookCacheFacadeService.cacheBookReactive(sourceBook))
+                        // Skip caching - Redis removed
                         .then(Mono.fromRunnable(() -> logger.info("Updated cachedRecommendationIds for book {} with {} new IDs and cached {} individual recommended books.", sourceBook.getId(), newRecommendationIds.size(), recommendations.size())))
                         .thenReturn(recommendations.stream().limit(effectiveCount).collect(Collectors.toList())) // Return limited list after saving
                         .doOnSuccess(finalList -> logger.info("Fetched {} total potential recommendations for book ID {} from API, updated cache. Returning {} recommendations.", recommendations.size(), sourceBook.getId(), finalList.size()))

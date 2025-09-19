@@ -1,8 +1,8 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -82,13 +82,13 @@ public class BookCoverController {
                     .map(updatedBook -> {
                         Map<String, Object> response = new HashMap<>();
                         response.put("bookId", id);
-                        response.put("coverUrl", updatedBook.getCoverImageUrl());
+                        response.put("coverUrl", updatedBook.getS3ImagePath());
                         if (updatedBook.getCoverImages() != null) {
                             response.put("preferredUrl", updatedBook.getCoverImages().getPreferredUrl());
                             response.put("fallbackUrl", updatedBook.getCoverImages().getFallbackUrl());
                         } else {
-                            response.put("preferredUrl", updatedBook.getCoverImageUrl());
-                            response.put("fallbackUrl", updatedBook.getCoverImageUrl());
+                            response.put("preferredUrl", updatedBook.getS3ImagePath());
+                            response.put("fallbackUrl", updatedBook.getS3ImagePath());
                         }
                         response.put("requestedSourcePreference", preferredSource.name());
                         return ResponseEntity.ok(response);

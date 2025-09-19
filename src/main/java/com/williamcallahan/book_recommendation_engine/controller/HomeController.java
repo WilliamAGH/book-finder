@@ -15,16 +15,18 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
+import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
+import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
+import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
-import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
-import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
-import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
-import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -56,14 +58,14 @@ import java.util.HashMap;
 public class HomeController {
 
     private static final Logger logger = LoggerFactory.getLogger(HomeController.class);
-    private final BookCacheFacadeService bookCacheFacadeService;
+    private final BookDataOrchestrator bookDataOrchestrator;
+    private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
     private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
-    private final AffiliateLinkService affiliateLinkService;
     private final NewYorkTimesService newYorkTimesService;
     private final boolean isYearFilteringEnabled;
 
@@ -116,31 +118,32 @@ public class HomeController {
     /**
      * Constructs the HomeController with required services
      * 
-     * @param bookCacheFacadeService Service for retrieving and caching book information
+     * @param bookDataOrchestrator Service for orchestrating book data retrieval
+     * @param googleBooksService Service for accessing Google Books API
      * @param recentlyViewedService Service for tracking user book view history
      * @param recommendationService Service for generating book recommendations
      * @param bookCoverManagementService Service for retrieving and caching book cover images
      * @param environmentService Service providing environment configuration information
      * @param duplicateBookService Service for handling duplicate book editions
      */
-    public HomeController(BookCacheFacadeService bookCacheFacadeService,
+    public HomeController(BookDataOrchestrator bookDataOrchestrator,
+                          GoogleBooksService googleBooksService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
                           BookCoverManagementService bookCoverManagementService,
                           EnvironmentService environmentService,
                           DuplicateBookService duplicateBookService,
                           LocalDiskCoverCacheService localDiskCoverCacheService,
-                          AffiliateLinkService affiliateLinkService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled,
                           NewYorkTimesService newYorkTimesService) {
-        this.bookCacheFacadeService = bookCacheFacadeService;
+        this.bookDataOrchestrator = bookDataOrchestrator;
+        this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
         this.localDiskCoverCacheService = localDiskCoverCacheService;
-        this.affiliateLinkService = affiliateLinkService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
         this.newYorkTimesService = newYorkTimesService;
     }
@@ -196,7 +199,7 @@ public class HomeController {
             String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
             logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
             
-            recentBooksMono = bookCacheFacadeService.searchBooksReactive(randomQuery, 0, needed, null, null, null)
+            recentBooksMono = googleBooksService.searchBooksAsyncReactive(randomQuery, null, needed, null)
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
@@ -241,7 +244,7 @@ public class HomeController {
 
     // Helper predicate for filtering out known placeholder images
     private boolean isActualCover(Book book) {
-        String coverUrl = book.getCoverImageUrl();
+        String coverUrl = book.getS3ImagePath();
         if (coverUrl == null || coverUrl.isEmpty()) {
             return false; // No URL, not an actual cover
         }
@@ -291,9 +294,9 @@ public class HomeController {
                     .map(coverImagesResult -> {
                         book.setCoverImages(coverImagesResult);
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
-                            book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
-                        } else if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                            book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                            book.setS3ImagePath(coverImagesResult.getPreferredUrl());
+                        } else if (book.getS3ImagePath() == null || book.getS3ImagePath().isEmpty()) {
+                            book.setS3ImagePath("/images/placeholder-book-cover.svg");
                         }
                         // Clear these as they might not be relevant or consistently set by all sources
                         book.setCoverImageWidth(null);
@@ -305,13 +308,13 @@ public class HomeController {
                         String identifierForLog = (book.getIsbn13() != null) ? book.getIsbn13() :
                                                  ((book.getIsbn10() != null) ? book.getIsbn10() : book.getId());
                         logger.warn("Error getting initial cover URL for book with identifier '{}' in home: {}", identifierForLog, e.getMessage());
-                        if (book.getCoverImageUrl() == null || book.getCoverImageUrl().isEmpty()) {
-                           book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        if (book.getS3ImagePath() == null || book.getS3ImagePath().isEmpty()) {
+                           book.setS3ImagePath("/images/placeholder-book-cover.svg");
                         }
                         // Ensure CoverImages is at least initialized to avoid NPEs in template
                         if (book.getCoverImages() == null) {
-                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
-                                book.getCoverImageUrl(), book.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                            book.setCoverImages(new CoverImages(
+                                book.getS3ImagePath(), book.getS3ImagePath(), CoverImageSource.LOCAL_CACHE
                             ));
                         }
                         return Mono.just(book); // Return the book even if cover fetching failed
@@ -431,17 +434,17 @@ public class HomeController {
         model.addAttribute("ogImage", "https://findmybook.net/images/og-logo.png"); // Default OG image
         model.addAttribute("keywords", "book, literature, reading, book details"); // Default keywords
 
-        // Use BookCacheFacadeService to get the main book
-        Mono<Book> bookMonoWithCover = bookCacheFacadeService.getBookByIdReactive(id)
+        // Use BookDataOrchestrator to get the main book
+        Mono<Book> bookMonoWithCover = bookDataOrchestrator.getBookByIdTiered(id)
             // If not found by volume ID, fallback to ISBN-based search
             .switchIfEmpty(
-                bookCacheFacadeService.getBooksByIsbnReactive(id)
+                googleBooksService.searchBooksByISBN(id)
                     .filter(list -> list != null && !list.isEmpty())
                     .map(list -> list.get(0))
             )
             .flatMap(book -> {
                 if (book == null) {
-                    logger.info("No book found with ID: {} via BookCacheFacadeService", id);
+                    logger.info("No book found with ID: {} via BookDataOrchestrator", id);
                     model.addAttribute("book", null);
                     return Mono.empty(); // No book found, propagate empty to handle later
                 }
@@ -451,10 +454,10 @@ public class HomeController {
                         book.setCoverImages(coverImagesResult);
                         String effectiveCoverImageUrl = "/images/placeholder-book-cover.svg";
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
-                            book.setCoverImageUrl(coverImagesResult.getPreferredUrl());
+                            book.setS3ImagePath(coverImagesResult.getPreferredUrl());
                             effectiveCoverImageUrl = coverImagesResult.getPreferredUrl();
-                        } else if (book.getCoverImageUrl() != null && !book.getCoverImageUrl().isEmpty()) {
-                            effectiveCoverImageUrl = book.getCoverImageUrl();
+                        } else if (book.getS3ImagePath() != null && !book.getS3ImagePath().isEmpty()) {
+                            effectiveCoverImageUrl = book.getS3ImagePath();
                         }
                         
                         model.addAttribute("book", book);
@@ -480,15 +483,22 @@ public class HomeController {
                         String title = book.getTitle(); // Get the book title
 
                         if (isbn13 != null) {
-                            affiliateLinks.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
-                            affiliateLinks.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13, bookshopAffiliateId));
+                            if (barnesNobleCjPublisherId != null && barnesNobleCjWebsiteId != null) {
+                                affiliateLinks.put("barnesAndNoble", "https://click.linksynergy.com/deeplink?id=" + barnesNobleCjPublisherId + "&mid=" + barnesNobleCjWebsiteId + "&murl=https://www.barnesandnoble.com/s/" + isbn13);
+                            }
+                            if (bookshopAffiliateId != null) {
+                                affiliateLinks.put("bookshop", "https://bookshop.org/a/" + bookshopAffiliateId + "/" + isbn13);
+                            }
                         }
-                        // Pass ASIN, title, and associate tag to the updated Audible link generator
-                        affiliateLinks.put("audible", affiliateLinkService.generateAudibleLink(asin, title, amazonAssociateTag));
+                        // Generate Audible affiliate link
+                        if (amazonAssociateTag != null) {
+                            String audibleUrl = "https://www.amazon.com/s?k=" + (asin != null ? asin : (title != null ? title.replace(" ", "+") : "")) + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
+                            affiliateLinks.put("audible", audibleUrl);
+                        }
                         // Generate Amazon affiliate link using ISBN or title
                         String isbnForAmazon = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
-                        if (isbnForAmazon != null) {
-                            affiliateLinks.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazon, title, amazonAssociateTag));
+                        if (isbnForAmazon != null && amazonAssociateTag != null) {
+                            affiliateLinks.put("amazon", "https://www.amazon.com/s?k=" + isbnForAmazon + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=isbn");
                         }
                         
                         model.addAttribute("affiliateLinks", affiliateLinks);
@@ -502,10 +512,10 @@ public class HomeController {
                     })
                     .onErrorResume(e -> { // Handle errors from getInitialCoverUrlAndTriggerBackgroundUpdate
                         logger.warn("Error getting cover for book ID {}: {}. Using placeholder.", book.getId(), e.getMessage());
-                        book.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                        book.setS3ImagePath("/images/placeholder-book-cover.svg");
                          if (book.getCoverImages() == null) {
-                            book.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
-                                book.getCoverImageUrl(), book.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                            book.setCoverImages(new CoverImages(
+                                book.getS3ImagePath(), book.getS3ImagePath(), CoverImageSource.LOCAL_CACHE
                             ));
                         }
                         model.addAttribute("book", book); // Add book with placeholder cover
@@ -514,8 +524,8 @@ public class HomeController {
                         model.addAttribute("description", SeoUtils.truncateDescription(book.getDescription(), 170));
                         
                         // Fallback ogImage logic on error
-                        String errorOgImage = (book.getCoverImageUrl() != null && !book.getCoverImageUrl().contains("/images/placeholder-book-cover.svg"))
-                                            ? book.getCoverImageUrl()
+                        String errorOgImage = (book.getS3ImagePath() != null && !book.getS3ImagePath().contains("/images/placeholder-book-cover.svg"))
+                                            ? book.getS3ImagePath()
                                             : "https://findmybook.net/images/og-logo.png";
                         model.addAttribute("ogImage", errorOgImage);
 
@@ -531,14 +541,21 @@ public class HomeController {
                         String asinOnError = book.getAsin();
 
                         if (isbn13OnError != null) {
-                            affiliateLinksOnError.put("barnesAndNoble", affiliateLinkService.generateBarnesAndNobleLink(isbn13OnError, barnesNobleCjPublisherId, barnesNobleCjWebsiteId));
-                            affiliateLinksOnError.put("bookshop", affiliateLinkService.generateBookshopLink(isbn13OnError, bookshopAffiliateId));
+                            if (barnesNobleCjPublisherId != null && barnesNobleCjWebsiteId != null) {
+                                affiliateLinksOnError.put("barnesAndNoble", "https://click.linksynergy.com/deeplink?id=" + barnesNobleCjPublisherId + "&mid=" + barnesNobleCjWebsiteId + "&murl=https://www.barnesandnoble.com/s/" + isbn13OnError);
+                            }
+                            if (bookshopAffiliateId != null) {
+                                affiliateLinksOnError.put("bookshop", "https://bookshop.org/a/" + bookshopAffiliateId + "/" + isbn13OnError);
+                            }
                         }
-                        affiliateLinksOnError.put("audible", affiliateLinkService.generateAudibleLink(asinOnError, book.getTitle(), amazonAssociateTag));
+                        if (amazonAssociateTag != null) {
+                            String audibleUrlOnError = "https://www.amazon.com/s?k=" + (asinOnError != null ? asinOnError : (book.getTitle() != null ? book.getTitle().replace(" ", "+") : "")) + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
+                            affiliateLinksOnError.put("audible", audibleUrlOnError);
+                        }
                         // Generate Amazon affiliate link on error fallback
                         String isbnForAmazonOnError = (isbn13OnError != null && !isbn13OnError.isEmpty()) ? isbn13OnError : (book.getIsbn10() != null && !book.getIsbn10().isEmpty() ? book.getIsbn10() : null);
-                        if (isbnForAmazonOnError != null) {
-                            affiliateLinksOnError.put("amazon", affiliateLinkService.generateAmazonLink(isbnForAmazonOnError, book.getTitle(), amazonAssociateTag));
+                        if (isbnForAmazonOnError != null && amazonAssociateTag != null) {
+                            affiliateLinksOnError.put("amazon", "https://www.amazon.com/s?k=" + isbnForAmazonOnError + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=isbn");
                         }
                         
                         model.addAttribute("affiliateLinks", affiliateLinksOnError);
@@ -546,8 +563,8 @@ public class HomeController {
                         return Mono.just(book);
                     });
             })
-            .doOnError(e -> { // Errors from getBookByIdReactive
-                 logger.error("Error getting book with ID: {} via BookCacheFacadeService", id, e);
+            .doOnError(e -> { // Errors from getBookByIdTiered
+                 logger.error("Error getting book with ID: {} via BookDataOrchestrator", id, e);
                  model.addAttribute("error", "An error occurred while retrieving this book. Please try again later.");
                  model.addAttribute("book", null);
             })
@@ -564,18 +581,18 @@ public class HomeController {
                                 .map(coverResult -> {
                                     similarBook.setCoverImages(coverResult);
                                     if (coverResult != null && coverResult.getPreferredUrl() != null) {
-                                        similarBook.setCoverImageUrl(coverResult.getPreferredUrl());
-                                    } else if (similarBook.getCoverImageUrl() == null || similarBook.getCoverImageUrl().isEmpty()) {
-                                        similarBook.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                        similarBook.setS3ImagePath(coverResult.getPreferredUrl());
+                                    } else if (similarBook.getS3ImagePath() == null || similarBook.getS3ImagePath().isEmpty()) {
+                                        similarBook.setS3ImagePath("/images/placeholder-book-cover.svg");
                                     }
                                     return similarBook;
                                 })
                                 .onErrorResume(e -> {
                                     logger.warn("Error getting cover for similar book ID {}: {}", similarBook.getId(), e.getMessage());
-                                    similarBook.setCoverImageUrl("/images/placeholder-book-cover.svg");
+                                    similarBook.setS3ImagePath("/images/placeholder-book-cover.svg");
                                     if (similarBook.getCoverImages() == null) {
-                                       similarBook.setCoverImages(new com.williamcallahan.book_recommendation_engine.types.CoverImages(
-                                            similarBook.getCoverImageUrl(), similarBook.getCoverImageUrl(), com.williamcallahan.book_recommendation_engine.types.CoverImageSource.LOCAL_CACHE
+                                       similarBook.setCoverImages(new CoverImages(
+                                            similarBook.getS3ImagePath(), similarBook.getS3ImagePath(), CoverImageSource.LOCAL_CACHE
                                         ));
                                     }
                                     return Mono.just(similarBook);
@@ -667,7 +684,7 @@ public class HomeController {
             return Mono.just(new RedirectView("/?error=invalidIsbn&originalIsbn=" + isbn));
         }
         
-        return bookCacheFacadeService.getBooksByIsbnReactive(sanitizedIsbn)
+        return googleBooksService.searchBooksByISBN(sanitizedIsbn)
             .map(books -> {
                 if (!books.isEmpty()) {
                     Book firstBook = books.get(0); // Take the first match

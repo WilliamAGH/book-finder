@@ -11,7 +11,6 @@ package com.williamcallahan.book_recommendation_engine.scheduler;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import org.slf4j.Logger;
@@ -33,11 +32,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
- * Scheduler for warming book caches to minimize Google Books API calls
- * - Proactively caches popular books during low-traffic periods
- * - Prioritizes recently viewed and trending books
+ * Scheduler for book data pre-fetching (cache warming functionality disabled)
+ * - Previously cached popular books during low-traffic periods
+ * - Still prioritizes recently viewed and trending books for fetching
  * - Uses rate-limited execution to avoid overloading the API
- * - Provides configurable cache warming behavior via properties
+ * - Provides configurable behavior via properties
+ * Note: Cache warming has been disabled as cache services have been removed
  */
 @Configuration
 @EnableScheduling
@@ -45,7 +45,6 @@ public class BookCacheWarmingScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(BookCacheWarmingScheduler.class);
     
-    private final BookCacheFacadeService bookCacheFacadeService;
     private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
     private final ApplicationContext applicationContext;
@@ -66,11 +65,9 @@ public class BookCacheWarmingScheduler {
     @Value("${app.cache.warming.recently-viewed-days:7}")
     private int recentlyViewedDays;
 
-    public BookCacheWarmingScheduler(BookCacheFacadeService bookCacheFacadeService,
-                                     GoogleBooksService googleBooksService,
+    public BookCacheWarmingScheduler(GoogleBooksService googleBooksService,
                                      RecentlyViewedService recentlyViewedService,
                                      ApplicationContext applicationContext) {
-        this.bookCacheFacadeService = bookCacheFacadeService;
         this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.applicationContext = applicationContext;
@@ -139,31 +136,25 @@ public class BookCacheWarmingScheduler {
                 // Schedule each book to be warmed with a delay
                 executor.schedule(() -> {
                     try {
-                        // Check if book is already in cache first
-                        boolean inCache = bookCacheFacadeService.isBookInCache(bookId);
-                        
-                        if (inCache) {
-                            existingCount.incrementAndGet();
-                            logger.debug("Book {} already in cache, skipping warming", bookId);
-                        } else {
-                            // Not in cache, warm it
-                            logger.info("Warming cache for book ID: {}", bookId);
-                            googleBooksService.getBookById(bookId)
-                                .thenAccept(book -> {
-                                    if (book != null) {
-                                        warmedCount.incrementAndGet();
-                                        logger.info("Successfully warmed cache for book: {}", 
-                                                book.getTitle() != null ? book.getTitle() : bookId);
-                                    }
-                                })
-                                .exceptionally(ex -> {
-                                    logger.error("Error warming cache for book {}: {}", bookId, ex.getMessage());
-                                    return null;
-                                });
-                            
-                            // Track that we've warmed this book
-                            recentlyWarmedBooks.add(bookId);
-                        }
+                        // Note: Cache warming functionality has been disabled as the cache service has been removed
+                        logger.info("Attempting to warm book ID: {} (cache functionality disabled)", bookId);
+                        googleBooksService.getBookById(bookId)
+                            .thenAccept(book -> {
+                                if (book != null) {
+                                    warmedCount.incrementAndGet();
+                                    logger.info("Successfully fetched book for warming: {}",
+                                            book.getTitle() != null ? book.getTitle() : bookId);
+                                } else {
+                                    logger.debug("No book found for ID: {}", bookId);
+                                }
+                            })
+                            .exceptionally(ex -> {
+                                logger.error("Error fetching book {}: {}", bookId, ex.getMessage());
+                                return null;
+                            });
+
+                        // Track that we've processed this book
+                        recentlyWarmedBooks.add(bookId);
                     } catch (Exception e) {
                         logger.error("Error in cache warming task for book {}: {}", bookId, e.getMessage());
                     }

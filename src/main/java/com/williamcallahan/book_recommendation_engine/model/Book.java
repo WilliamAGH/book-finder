@@ -11,7 +11,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.model;
 
-import com.williamcallahan.book_recommendation_engine.types.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 
 import java.util.Date;
 import java.util.List;
@@ -25,8 +25,9 @@ public class Book {
     private String title;
     private List<String> authors;
     private String description;
-    private String coverImageUrl;
-    private String imageUrl;
+    private String s3ImagePath;
+    private String externalImageUrl;
+    // Replaced by s3ImagePath (internal) and externalImageUrl (original)
     private String isbn10;
     private String isbn13;
     private Date publishedDate;
@@ -258,20 +259,22 @@ public class Book {
      * @param title Book title
      * @param authors List of book authors
      * @param description Book description or summary
-     * @param coverImageUrl URL to book cover image
-     * @param imageUrl URL to alternative book image
+     * @param s3ImagePath Our S3 path or local cached path to the cover image
+     * @param externalImageUrl External original image source full URL
      */
-    public Book(String id, String title, List<String> authors, String description, String coverImageUrl, String imageUrl) {
+    public Book(String id, String title, List<String> authors, String description, String s3ImagePath, String externalImageUrl) {
         this.id = id;
         this.title = title;
         this.authors = authors;
         this.description = description;
-        this.coverImageUrl = coverImageUrl;
-        this.imageUrl = imageUrl;
+        this.s3ImagePath = s3ImagePath;
+        this.externalImageUrl = externalImageUrl;
         this.otherEditions = new ArrayList<>();
         this.qualifiers = new HashMap<>();
         this.cachedRecommendationIds = new ArrayList<>();
     }
+
+    
 
     /**
      * Get the book's unique identifier
@@ -357,39 +360,62 @@ public class Book {
     }
 
     /**
-     * Get the URL to the book cover image
+     * Get the S3 path (or local cached path) to the book cover image
      * 
-     * @return URL to book cover image
+     * @return S3 path or local cached path
      */
+    public String getS3ImagePath() {
+        return s3ImagePath;
+    }
+
+    /**
+     * Set the S3 path (or local cached path) to the book cover image
+     * 
+     * @param s3ImagePath S3 path or local cached path
+     */
+    public void setS3ImagePath(String s3ImagePath) {
+        this.s3ImagePath = s3ImagePath;
+    }
+
+    // Backward-compatible alias for existing call sites: prefer s3 path if available, otherwise external
     public String getCoverImageUrl() {
-        return coverImageUrl;
+        return (s3ImagePath != null && !s3ImagePath.isEmpty()) ? s3ImagePath : externalImageUrl;
     }
 
-    /**
-     * Set the URL to the book cover image
-     * 
-     * @param coverImageUrl URL to book cover image
-     */
     public void setCoverImageUrl(String coverImageUrl) {
-        this.coverImageUrl = coverImageUrl;
+        // Accept either external or s3 style URLs; keep external as source of truth if looks like http(s)
+        if (coverImageUrl != null && (coverImageUrl.startsWith("http://") || coverImageUrl.startsWith("https://"))) {
+            this.externalImageUrl = coverImageUrl;
+        } else {
+            this.s3ImagePath = coverImageUrl;
+        }
     }
 
     /**
-     * Get alternative image URL for the book
+     * Get external original image source full URL
      * 
-     * @return Alternative image URL
+     * @return External image URL
      */
+    public String getExternalImageUrl() {
+        return externalImageUrl;
+    }
+
+    /**
+     * Set external original image source full URL
+     * 
+     * @param externalImageUrl External image URL
+     */
+    public void setExternalImageUrl(String externalImageUrl) {
+        this.externalImageUrl = externalImageUrl;
+    }
+
+    // Backward-compatible alias methods for existing call sites
     public String getImageUrl() {
-        return imageUrl;
+        return externalImageUrl;
     }
 
-    /**
-     * Set the alternative image URL for the book
-     * 
-     * @param imageUrl Alternative image URL
-     */
     public void setImageUrl(String imageUrl) {
-        this.imageUrl = imageUrl;
+        this.externalImageUrl = imageUrl;
     }
 
     /**

@@ -1,12 +1,13 @@
 /**
  * Service for managing book IDs in S3 for sitemap generation
- * 
+ *
  * @author William Callahan
- * 
+ *
  * Key responsibilities:
  * - Fetch accumulated book IDs from S3
- * - Update S3 with new book IDs from cache
+ * - Manage existing accumulated book IDs in S3
  * - Handle errors gracefully for sitemap generation
+ * Note: Cache functionality has been removed
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
@@ -38,7 +39,6 @@ public class BookSitemapService {
     private static final Logger logger = LoggerFactory.getLogger(BookSitemapService.class);
 
     private final S3Client s3Client;
-    private final BookCacheFacadeService bookCacheFacadeService;
     private final ObjectMapper objectMapper;
     private final String s3BucketName;
     private final String accumulatedIdsS3Key;
@@ -46,23 +46,20 @@ public class BookSitemapService {
     /**
      * Constructs BookSitemapService with required dependencies
      * - Initializes S3 client for storage operations
-     * - Sets up cache service for book ID retrieval
      * - Configures JSON processing capabilities
      * - Sets S3 bucket and key parameters from configuration
-     * 
+     * Note: Cache service functionality has been removed
+     *
      * @param s3Client AWS S3 client for bucket operations
-     * @param bookCacheFacadeService Service for accessing cached book data
      * @param objectMapper JSON object mapper for serialization
      * @param s3BucketName Name of S3 bucket from configuration
      * @param accumulatedIdsS3Key S3 key for accumulated IDs file
      */
     public BookSitemapService(S3Client s3Client,
-                              BookCacheFacadeService bookCacheFacadeService,
                               ObjectMapper objectMapper,
                               @Value("${s3.bucket-name}") String s3BucketName,
                               @Value("${sitemap.s3.accumulated-ids-key}") String accumulatedIdsS3Key) {
         this.s3Client = s3Client;
-        this.bookCacheFacadeService = bookCacheFacadeService;
         this.objectMapper = objectMapper;
         this.s3BucketName = s3BucketName;
         this.accumulatedIdsS3Key = accumulatedIdsS3Key;
@@ -147,31 +144,14 @@ public class BookSitemapService {
         int initialSize = accumulatedIds.size();
         logger.info("Fetched {} existing book IDs from S3.", initialSize);
 
-        // Step 2: Get current IDs from cache
-        Set<String> currentCachedIds;
-        try {
-            currentCachedIds = this.bookCacheFacadeService.getAllCachedBookIds();
-            
-            if (currentCachedIds == null) {
-                currentCachedIds = Collections.emptySet();
-                logger.warn("bookCacheFacadeService.getAllCachedBookIds() returned null. Using empty set for current update cycle.");
-            }
-        } catch (UnsupportedOperationException e) {
-            logger.error("BookCacheFacadeService does not support getAllCachedBookIds(). S3 sitemap accumulation cannot proceed.", e);
-            return;
-        } catch (Exception e) {
-            logger.error("Error fetching IDs from BookCacheFacadeService.", e);
-            return; 
-        }
-        
-        logger.info("Fetched {} book IDs from current cache.", currentCachedIds.size());
+        // Step 2: Note - Cache functionality has been removed
+        // No new IDs to fetch from cache, so we just work with existing accumulated IDs
+        logger.info("Cache functionality has been removed. Working with existing {} accumulated IDs.", initialSize);
 
-        // Step 3: Merge and detect changes
-        boolean newIdsAdded = accumulatedIds.addAll(currentCachedIds);
-
-        // Step 4: Upload if changes detected
-        if (newIdsAdded || accumulatedIds.size() != initialSize) {
-            logger.info("New book IDs found or size changed. Total accumulated IDs: {}. Sorting and uploading to S3.", accumulatedIds.size());
+        // Step 3: Since no new IDs are being added, check if we should still upload
+        // (for example, if the format needs to be updated or file doesn't exist)
+        if (initialSize > 0) {
+            logger.info("Updating S3 file format. Total accumulated IDs: {}. Sorting and uploading to S3.", accumulatedIds.size());
             try {
                 // Convert Set to List and sort alphabetically for consistent storage
                 List<String> sortedIds = new ArrayList<>(accumulatedIds);
@@ -191,7 +171,7 @@ public class BookSitemapService {
                 logger.error("Unexpected error writing accumulated book IDs to S3 (key: {}): {}", accumulatedIdsS3Key, e.getMessage());
             }
         } else {
-            logger.info("No new book IDs to add from cache, and size unchanged. S3 file (key: {}) remains unchanged with {} IDs.", accumulatedIdsS3Key, accumulatedIds.size());
+            logger.info("No accumulated IDs to process. S3 file (key: {}) remains unchanged.", accumulatedIdsS3Key);
         }
     }
 }

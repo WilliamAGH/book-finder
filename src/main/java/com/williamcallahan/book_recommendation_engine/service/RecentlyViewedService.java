@@ -81,18 +81,16 @@ public class RecentlyViewedService {
 
         String canonicalId = originalBookId; // Default to original
 
-        // Attempt to find a canonical representation
-        Optional<com.williamcallahan.book_recommendation_engine.model.CachedBook> canonicalCachedBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
-        if (canonicalCachedBookOpt.isPresent()) {
-            com.williamcallahan.book_recommendation_engine.model.CachedBook cachedCanonical = canonicalCachedBookOpt.get();
-            if (cachedCanonical.getGoogleBooksId() != null && !cachedCanonical.getGoogleBooksId().isEmpty()) {
-                canonicalId = cachedCanonical.getGoogleBooksId();
-            } else if (cachedCanonical.getId() != null && !cachedCanonical.getId().isEmpty()) { // Fallback to CachedBook's own ID if Google ID is missing
-                canonicalId = cachedCanonical.getId();
+        // Attempt to find a canonical representation (disabled after Redis removal)
+        Optional<Book> canonicalBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
+        if (canonicalBookOpt.isPresent()) {
+            Book canonicalBook = canonicalBookOpt.get();
+            if (canonicalBook.getId() != null && !canonicalBook.getId().isEmpty()) {
+                canonicalId = canonicalBook.getId();
             }
             logger.info("RECENT_VIEWS_DEBUG: Resolved original ID '{}' to canonical ID '{}' for book title '{}'", originalBookId, canonicalId, book.getTitle());
         } else {
-            logger.info("RECENT_VIEWS_DEBUG: No canonical CachedBook found for book ID '{}', Title '{}'. Using original ID as canonical.", originalBookId, book.getTitle());
+            logger.info("RECENT_VIEWS_DEBUG: No canonical book found for book ID '{}', Title '{}'. Using original ID as canonical.", originalBookId, book.getTitle());
         }
         
         if (canonicalId == null || canonicalId.isEmpty()) {
@@ -113,7 +111,7 @@ public class RecentlyViewedService {
             bookToAdd.setId(finalCanonicalId);
             bookToAdd.setTitle(book.getTitle());
             bookToAdd.setAuthors(book.getAuthors());
-            bookToAdd.setCoverImageUrl(book.getCoverImageUrl());
+            bookToAdd.setS3ImagePath(book.getS3ImagePath());
             bookToAdd.setPublishedDate(book.getPublishedDate());
             // Add other fields if they are displayed in the "Recent Views" section
         }
@@ -160,7 +158,7 @@ public class RecentlyViewedService {
         logger.debug("Fetching default books reactively.");
         return googleBooksService.searchBooksAsyncReactive("java programming")
             .map(books -> books.stream()
-                .filter(book -> isValidCoverImage(book.getCoverImageUrl()))
+                .filter(book -> isValidCoverImage(book.getS3ImagePath()))
                 .sorted((b1, b2) -> {
                     if (b1.getPublishedDate() == null && b2.getPublishedDate() == null) return 0;
                     if (b1.getPublishedDate() == null) return 1; // nulls last

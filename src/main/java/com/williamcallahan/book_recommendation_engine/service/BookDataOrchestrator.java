@@ -19,15 +19,27 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.GZIPInputStream;
+import software.amazon.awssdk.services.s3.model.S3Object;
+import java.util.UUID;
 
 @Service
 public class BookDataOrchestrator {
@@ -40,6 +52,10 @@ public class BookDataOrchestrator {
     private final OpenLibraryBookDataService openLibraryBookDataService;
     // private final LongitoodBookDataService longitoodBookDataService; // Removed
     private final BookDataAggregatorService bookDataAggregatorService;
+    @Autowired(required = false)
+    private JdbcTemplate jdbcTemplate; // Optional DB layer
+    @Autowired(required = false)
+    private S3StorageService s3StorageService; // Optional S3 layer
 
     public BookDataOrchestrator(S3RetryService s3RetryService,
                                 GoogleApiFetcher googleApiFetcher,
@@ -77,21 +93,7 @@ public class BookDataOrchestrator {
                     }
                 })
                 .onErrorResume(e -> { logger.warn("Tier 5 OpenLibrary API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
-
-            // Mono<JsonNode> longitoodMono = longitoodBookDataService.fetchBookByIsbn(bookId) // Removed
-            //     .flatMap(book -> {
-            //         try {
-            //             logger.info("BookDataOrchestrator: Tier 6 Longitood HIT for {}. Title: {}", bookId, book.getTitle());
-            //             return Mono.just(objectMapper.valueToTree(book));
-            //         } catch (IllegalArgumentException e) {
-            //             logger.error("Error converting Longitood Book to JsonNode for {}: {}", bookId, e.getMessage());
-            //             return Mono.<JsonNode>empty();
-            //         }
-            //     })
-            //     .onErrorResume(e -> { logger.warn("Tier 6 Longitood API error for {}: {}", bookId, e.getMessage()); return Mono.<JsonNode>empty(); });
             
-            // Using Mono.zip to fetch in parallel while preserving order for aggregation.
-            // Providing a non-null default (empty ObjectNode) for sources that might be empty or error out.
             return Mono.zip(
                     tier4Mono.defaultIfEmpty(objectMapper.createObjectNode()),
                     tier3Mono.defaultIfEmpty(objectMapper.createObjectNode()),
@@ -99,7 +101,7 @@ public class BookDataOrchestrator {
                 )
                 .map(tuple -> 
                     java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3())
-                        .filter(jsonNode -> jsonNode != null && jsonNode.size() > 0) // Filter out empty/placeholder nodes
+                        .filter(jsonNode -> jsonNode != null && jsonNode.size() > 0)
                         .collect(java.util.stream.Collectors.toList())
                 );
         });
@@ -119,13 +121,36 @@ public class BookDataOrchestrator {
             // Use the canonical ID from the aggregated book for S3 storage
             String s3StorageKey = finalBook.getId();
             logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
+            // Persist to DB first (and external ids) before S3
+            saveToDatabase(finalBook, aggregatedJson);
             return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", s3StorageKey);
         });
     }
 
     public Mono<Book> getBookByIdTiered(String bookId) {
-        logger.debug("BookDataOrchestrator: Starting tiered fetch for book ID: {}", bookId);
+        logger.debug("BookDataOrchestrator: Starting tiered fetch (DB → S3 → APIs) for book ID: {}", bookId);
 
+        // Tier 1: Database (if configured)
+        Mono<Book> dbFetchBookMono = Mono.fromCallable(() -> {
+            if (jdbcTemplate == null) return null;
+            try {
+                // Try by canonical ID first
+                Book byId = findInDatabaseById(bookId).orElse(null);
+                if (byId != null) return byId;
+                // Try by ISBNs
+                Book byIsbn13 = findInDatabaseByIsbn13(bookId).orElse(null);
+                if (byIsbn13 != null) return byIsbn13;
+                Book byIsbn10 = findInDatabaseByIsbn10(bookId).orElse(null);
+                if (byIsbn10 != null) return byIsbn10;
+                // Try by any external id mapping
+                return findInDatabaseByAnyExternalId(bookId).orElse(null);
+            } catch (Exception e) {
+                logger.warn("DB lookup failed for {}: {}", bookId, e.getMessage());
+                return null;
+            }
+        }).flatMap(b -> b != null ? Mono.just(b) : Mono.empty());
+
+        // Tier 2: S3
         Mono<Book> s3FetchBookMono = Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(bookId))
             .flatMap(s3Result -> {
                 if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
@@ -134,6 +159,8 @@ public class BookDataOrchestrator {
                         Book bookFromS3 = BookJsonParser.convertJsonToBook(s3JsonNode);
                         if (bookFromS3 != null && bookFromS3.getId() != null) {
                             logger.info("BookDataOrchestrator: Tier 2 S3 HIT for book ID: {}. Title: {}", bookId, bookFromS3.getTitle());
+                            // Warm DB for future direct hits
+                            saveToDatabase(bookFromS3, s3JsonNode);
                             return Mono.just(bookFromS3);
                         }
                         logger.warn("BookDataOrchestrator: S3 data for {} parsed to null/invalid book.", bookId);
@@ -150,7 +177,8 @@ public class BookDataOrchestrator {
                 return Mono.empty(); 
             });
 
-        return s3FetchBookMono
+        return dbFetchBookMono
+            .switchIfEmpty(s3FetchBookMono)
             .switchIfEmpty(Mono.<Book>defer(() -> fetchFromApisAndAggregate(bookId)))
             .doOnSuccess(book -> {
                 if (book != null) {
@@ -358,5 +386,497 @@ public class BookDataOrchestrator {
                  logger.error("BookDataOrchestrator: Error during {} paged search for query '{}': {}. Returning empty list.", authType, query, e.getMessage(), e);
                  return Mono.just(Collections.emptyList());
             });
+    }
+
+    // --- Bulk migration from S3 helpers ---
+    /**
+     * Bulk migrates previously cached book JSON files from S3 into the database.
+     * Enriches existing rows by matching on id/ISBNs/external ids; never creates duplicates.
+     *
+     * Triggered manually via CLI flags. This method is idempotent and safe to re-run.
+     *
+     * @param prefix S3 prefix to scan (e.g., "books/v1/")
+     * @param maxRecords Maximum number of records to process (<= 0 means no limit)
+     * @param skipRecords Number of objects to skip from the beginning (for manual batching)
+     */
+    public void migrateBooksFromS3(String prefix, int maxRecords, int skipRecords) {
+        if (jdbcTemplate == null) {
+            logger.warn("S3→DB migration skipped: Database is not configured (JdbcTemplate is null).");
+            return;
+        }
+        if (s3StorageService == null) {
+            logger.warn("S3→DB migration skipped: S3 is not configured (S3StorageService is null).");
+            return;
+        }
+
+        final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "books/v1/";
+        logger.info("Starting S3→DB migration: prefix='{}', max={}, skip={}", effectivePrefix, maxRecords, skipRecords);
+
+        List<S3Object> objects = s3StorageService.listObjects(effectivePrefix);
+        if (objects == null || objects.isEmpty()) {
+            logger.info("S3→DB migration: No objects found under prefix '{}'. Nothing to do.", effectivePrefix);
+            return;
+        }
+
+        // Filter for JSON objects and apply skip
+        List<S3Object> jsonObjects = new ArrayList<>();
+        for (S3Object obj : objects) {
+            if (obj == null || obj.key() == null) continue;
+            String key = obj.key();
+            if (key.endsWith(".json")) {
+                jsonObjects.add(obj);
+            }
+        }
+
+        if (skipRecords > 0 && skipRecords < jsonObjects.size()) {
+            jsonObjects = jsonObjects.subList(skipRecords, jsonObjects.size());
+        } else if (skipRecords >= jsonObjects.size()) {
+            logger.info("S3→DB migration: skip={} >= total JSON objects ({}). Nothing to do.", skipRecords, jsonObjects.size());
+            return;
+        }
+
+        int totalToProcess = (maxRecords > 0) ? Math.min(maxRecords, jsonObjects.size()) : jsonObjects.size();
+        logger.info("S3→DB migration: {} JSON object(s) to process after filtering.", totalToProcess);
+
+        AtomicInteger processed = new AtomicInteger(0);
+        for (int i = 0; i < totalToProcess; i++) {
+            S3Object obj = jsonObjects.get(i);
+            String key = obj.key();
+            try {
+                byte[] raw = s3StorageService.downloadFileAsBytes(key);
+                if (raw == null || raw.length == 0) {
+                    logger.debug("S3→DB migration: Empty or missing content for key {}. Skipping.", key);
+                    continue;
+                }
+
+                String json = tryDecompressAsGzipOrUtf8(raw);
+                if (json == null || json.isEmpty()) {
+                    logger.debug("S3→DB migration: Failed to read JSON for key {}. Skipping.", key);
+                    continue;
+                }
+
+                JsonNode jsonNode = objectMapper.readTree(json);
+                Book book = BookJsonParser.convertJsonToBook(jsonNode);
+                if (book == null || book.getId() == null) {
+                    logger.debug("S3→DB migration: Parsed null/invalid book for key {}. Skipping.", key);
+                    continue;
+                }
+
+                // Enrich on matches, then upsert by canonical id
+                saveToDatabaseEnrichOnMatch(book, jsonNode);
+                int count = processed.incrementAndGet();
+                if (count % 50 == 0 || count == totalToProcess) {
+                    logger.info("S3→DB migration progress: {}/{} processed.", count, totalToProcess);
+                }
+            } catch (Exception e) {
+                logger.warn("S3→DB migration: Error processing key {}: {}", key, e.getMessage());
+            }
+        }
+
+        logger.info("S3→DB migration completed. Processed {} record(s).", processed.get());
+    }
+
+    private String tryDecompressAsGzipOrUtf8(byte[] raw) {
+        // Attempt GZIP first, fall back to UTF-8 plain text
+        try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(raw));
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[1024];
+            int len;
+            while ((len = gis.read(buffer)) > 0) {
+                baos.write(buffer, 0, len);
+            }
+            return baos.toString(StandardCharsets.UTF_8.name());
+        } catch (IOException ignored) {
+            // Not GZIP or failed to decompress; attempt plain UTF-8 string
+            try {
+                return new String(raw, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+    }
+
+    private void saveToDatabaseEnrichOnMatch(Book incoming, JsonNode sourceJson) {
+        if (jdbcTemplate == null || incoming == null) return;
+
+        try {
+            String incomingId = incoming.getId();
+            String isbn13 = incoming.getIsbn13();
+            String isbn10 = incoming.getIsbn10();
+            String externalGoogleId = (sourceJson != null) ? sourceJson.path("id").asText(null) : null;
+
+            String canonicalId = null;
+            // Prefer exact id match
+            if (incomingId != null) {
+                canonicalId = findInDatabaseById(incomingId).map(Book::getId).orElse(null);
+            }
+            // Then ISBN-13
+            if (canonicalId == null && isbn13 != null) {
+                canonicalId = findInDatabaseByIsbn13(isbn13).map(Book::getId).orElse(null);
+            }
+            // Then ISBN-10
+            if (canonicalId == null && isbn10 != null) {
+                canonicalId = findInDatabaseByIsbn10(isbn10).map(Book::getId).orElse(null);
+            }
+            // Finally any external id mapping (e.g., GOOGLE_BOOKS, NYT)
+            if (canonicalId == null && externalGoogleId != null) {
+                canonicalId = findInDatabaseByAnyExternalId(externalGoogleId).map(Book::getId).orElse(null);
+            }
+
+            if (canonicalId == null) {
+                // No existing record found; use incoming id if present, otherwise generate
+                canonicalId = (incomingId != null && !incomingId.isEmpty()) ? incomingId : UUID.randomUUID().toString();
+            }
+
+            incoming.setId(canonicalId);
+            // Delegate to existing upsert logic (ON CONFLICT (id) DO UPDATE)
+            saveToDatabase(incoming, sourceJson);
+        } catch (Exception e) {
+            logger.warn("DB enrich-upsert failed for incoming book {}: {}", incoming.getId(), e.getMessage());
+        }
+    }
+
+    // --- DB helpers ---
+
+    // --- Lists upsert helpers ---
+    /**
+     * Upserts a provider-agnostic list into book_lists and returns the list_id.
+     */
+    public String upsertList(String source,
+                             String providerListCode,
+                             java.time.LocalDate publishedDate,
+                             String displayName,
+                             java.time.LocalDate bestsellersDate,
+                             String updatedFrequency,
+                             String providerListId,
+                             JsonNode rawListJson) {
+        if (jdbcTemplate == null) return null;
+        if (source == null || providerListCode == null || publishedDate == null) return null;
+
+        String deterministicKey = source + ":" + providerListCode + ":" + publishedDate.toString();
+        String listId = UUID.nameUUIDFromBytes(deterministicKey.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+
+        try {
+            jdbcTemplate.update(
+                "INSERT INTO book_lists (list_id, source, provider_list_id, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
+                "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, bestsellers_date = EXCLUDED.bestsellers_date, updated_frequency = EXCLUDED.updated_frequency, raw_list_json = EXCLUDED.raw_list_json, updated_at = now()",
+                listId,
+                source,
+                providerListId,
+                providerListCode,
+                displayName,
+                bestsellersDate,
+                publishedDate,
+                updatedFrequency,
+                rawListJson != null ? rawListJson.toString() : null
+            );
+            return listId;
+        } catch (Exception e) {
+            logger.warn("List upsert failed for {}:{}:{} - {}", source, providerListCode, publishedDate, e.getMessage());
+            return listId;
+        }
+    }
+
+    /**
+     * Upserts a join row linking a list and a canonical book in book_lists_join.
+     */
+    public void upsertListJoin(String listId,
+                               String canonicalBookId,
+                               Integer position,
+                               Integer weeksOnList,
+                               String providerIsbn13,
+                               String providerIsbn10,
+                               String providerBookRef,
+                               JsonNode rawItemJson) {
+        if (jdbcTemplate == null || listId == null || canonicalBookId == null) return;
+        try {
+            jdbcTemplate.update(
+                "INSERT INTO book_lists_join (list_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
+                "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, provider_book_ref = EXCLUDED.provider_book_ref, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
+                listId,
+                canonicalBookId,
+                position,
+                weeksOnList,
+                providerIsbn13,
+                providerIsbn10,
+                providerBookRef,
+                rawItemJson != null ? rawItemJson.toString() : null
+            );
+        } catch (Exception e) {
+            logger.warn("List join upsert failed for list={} book={}: {}", listId, canonicalBookId, e.getMessage());
+        }
+    }
+
+    /**
+     * Bulk migrates S3-stored list JSONs into the neutral book_lists and book_lists_join tables.
+     * Example provider: "NYT", prefix: "lists/nyt/".
+     */
+    public void migrateListsFromS3(String provider, String prefix, int maxRecords, int skipRecords) {
+        if (jdbcTemplate == null) {
+            logger.warn("S3→DB list migration skipped: Database is not configured (JdbcTemplate is null).");
+            return;
+        }
+        if (s3StorageService == null) {
+            logger.warn("S3→DB list migration skipped: S3 is not configured (S3StorageService is null).");
+            return;
+        }
+        final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "lists/" + (provider != null ? provider.toLowerCase() : "") + "/";
+        logger.info("Starting S3→DB list migration: provider='{}', prefix='{}', max={}, skip={}", provider, effectivePrefix, maxRecords, skipRecords);
+
+        List<S3Object> objects = s3StorageService.listObjects(effectivePrefix);
+        if (objects == null || objects.isEmpty()) {
+            logger.info("S3→DB list migration: No objects found under prefix '{}'.", effectivePrefix);
+            return;
+        }
+
+        // Filter for list JSON files
+        List<S3Object> jsonObjects = new ArrayList<>();
+        for (S3Object obj : objects) {
+            if (obj == null || obj.key() == null) continue;
+            String key = obj.key();
+            if (key.endsWith(".json")) {
+                jsonObjects.add(obj);
+            }
+        }
+
+        if (skipRecords > 0 && skipRecords < jsonObjects.size()) {
+            jsonObjects = jsonObjects.subList(skipRecords, jsonObjects.size());
+        } else if (skipRecords >= jsonObjects.size()) {
+            logger.info("S3→DB list migration: skip={} >= total JSON objects ({}). Nothing to do.", skipRecords, jsonObjects.size());
+            return;
+        }
+
+        int totalToProcess = (maxRecords > 0) ? Math.min(maxRecords, jsonObjects.size()) : jsonObjects.size();
+        logger.info("S3→DB list migration: {} JSON object(s) to process.", totalToProcess);
+
+        AtomicInteger processed = new AtomicInteger(0);
+        for (int i = 0; i < totalToProcess; i++) {
+            S3Object obj = jsonObjects.get(i);
+            String key = obj.key();
+            try {
+                byte[] raw = s3StorageService.downloadFileAsBytes(key);
+                if (raw == null || raw.length == 0) continue;
+                String json = tryDecompressAsGzipOrUtf8(raw);
+                if (json == null || json.isEmpty()) continue;
+
+                JsonNode root = objectMapper.readTree(json);
+                if (!(root instanceof com.fasterxml.jackson.databind.node.ObjectNode)) continue;
+                com.fasterxml.jackson.databind.node.ObjectNode listJson = (com.fasterxml.jackson.databind.node.ObjectNode) root;
+
+                String displayName = listJson.path("display_name").asText(null);
+                String listNameEncoded = listJson.path("list_name_encoded").asText(null);
+                String updatedFrequency = listJson.path("updated_frequency").asText(null);
+                java.time.LocalDate bestsellersDate = null;
+                java.time.LocalDate publishedDate = null;
+                try { String s = listJson.path("bestsellers_date").asText(null); if (s != null) bestsellersDate = java.time.LocalDate.parse(s); } catch (Exception ignored) {}
+                try { String s = listJson.path("published_date").asText(null); if (s != null) publishedDate = java.time.LocalDate.parse(s); } catch (Exception ignored) {}
+                if (publishedDate == null || listNameEncoded == null || provider == null) {
+                    logger.warn("Skipping list key {}: missing required fields provider/list_name_encoded/published_date.", key);
+                    continue;
+                }
+
+                String listId = upsertList(provider, listNameEncoded, publishedDate, displayName, bestsellersDate, updatedFrequency, null, listJson);
+                if (listId == null) continue;
+
+                JsonNode booksArray = listJson.path("books");
+                if (booksArray != null && booksArray.isArray()) {
+                    for (JsonNode item : booksArray) {
+                        Integer rank = item.path("rank").isNumber() ? item.path("rank").asInt() : null;
+                        Integer weeksOnList = item.path("weeks_on_list").isNumber() ? item.path("weeks_on_list").asInt() : null;
+                        String isbn13 = item.path("primary_isbn13").asText(null);
+                        String isbn10 = item.path("primary_isbn10").asText(null);
+                        String providerRef = item.path("amazon_product_url").asText(null);
+
+                        // Resolve canonical book id (reuse DB finders)
+                        String canonicalId = null;
+                        if (isbn13 != null) canonicalId = findInDatabaseByIsbn13(isbn13).map(Book::getId).orElse(null);
+                        if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByIsbn10(isbn10).map(Book::getId).orElse(null);
+                        // Also try any mapping
+                        if (canonicalId == null && isbn13 != null) canonicalId = findInDatabaseByAnyExternalId(isbn13).map(Book::getId).orElse(null);
+                        if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByAnyExternalId(isbn10).map(Book::getId).orElse(null);
+
+                        // If still not found, try to upsert a minimal record from item if we have enough data
+                        if (canonicalId == null) {
+                            Book minimal = new Book();
+                            minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : UUID.randomUUID().toString()));
+                            minimal.setIsbn13(isbn13);
+                            minimal.setIsbn10(isbn10);
+                            minimal.setTitle(item.path("title").asText(null));
+                            minimal.setPublisher(item.path("publisher").asText(null));
+                            minimal.setExternalImageUrl(item.path("book_image").asText(null));
+                            saveToDatabase(minimal, null);
+                            canonicalId = minimal.getId();
+                        }
+
+                        upsertListJoin(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
+                    }
+                }
+
+                int count = processed.incrementAndGet();
+                if (count % 20 == 0 || count == totalToProcess) {
+                    logger.info("S3→DB list migration progress: {}/{} processed.", count, totalToProcess);
+                }
+            } catch (Exception e) {
+                logger.warn("S3→DB list migration: Error processing key {}: {}", key, e.getMessage());
+            }
+        }
+
+        logger.info("S3→DB list migration completed. Processed {} list file(s).", processed.get());
+    }
+    private Optional<Book> findInDatabaseById(String id) {
+        if (jdbcTemplate == null || id == null) return Optional.empty();
+        try {
+            return jdbcTemplate.query(
+                "SELECT id, title, description, \"s3-image-path\" as s3_image_path, external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count FROM books WHERE id = ?",
+                ps -> ps.setString(1, id),
+                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
+            );
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Book> findInDatabaseByIsbn13(String isbn13) {
+        if (jdbcTemplate == null || isbn13 == null) return Optional.empty();
+        try {
+            return jdbcTemplate.query(
+                "SELECT id, title, description, \"s3-image-path\" as s3_image_path, external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count FROM books WHERE isbn13 = ?",
+                ps -> ps.setString(1, isbn13),
+                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
+            );
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Book> findInDatabaseByIsbn10(String isbn10) {
+        if (jdbcTemplate == null || isbn10 == null) return Optional.empty();
+        try {
+            return jdbcTemplate.query(
+                "SELECT id, title, description, \"s3-image-path\" as s3_image_path, external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count FROM books WHERE isbn10 = ?",
+                ps -> ps.setString(1, isbn10),
+                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
+            );
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Book> findInDatabaseByAnyExternalId(String externalId) {
+        if (jdbcTemplate == null || externalId == null) return Optional.empty();
+        try {
+            return jdbcTemplate.query(
+                "SELECT b.id, b.title, b.description, b.\"s3-image-path\" as s3_image_path, b.external_image_url, b.isbn10, b.isbn13, b.published_date, b.language, b.publisher, b.info_link, b.preview_link, b.purchase_link, b.list_price, b.currency_code, b.average_rating, b.ratings_count, b.page_count " +
+                "FROM book_external_ids e JOIN books b ON b.id = e.book_id WHERE e.external_id = ? LIMIT 1",
+                ps -> ps.setString(1, externalId),
+                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
+            );
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private Book mapRowToBook(ResultSet rs) throws java.sql.SQLException {
+        Book b = new Book();
+        b.setId(rs.getString("id"));
+        b.setTitle(rs.getString("title"));
+        b.setDescription(rs.getString("description"));
+        b.setS3ImagePath(rs.getString("s3_image_path"));
+        b.setExternalImageUrl(rs.getString("external_image_url"));
+        b.setIsbn10(rs.getString("isbn10"));
+        b.setIsbn13(rs.getString("isbn13"));
+        java.sql.Date d = rs.getDate("published_date");
+        b.setPublishedDate(d); // Book expects java.util.Date; java.sql.Date is a subclass
+        b.setLanguage(rs.getString("language"));
+        b.setPublisher(rs.getString("publisher"));
+        b.setInfoLink(rs.getString("info_link"));
+        b.setPreviewLink(rs.getString("preview_link"));
+        b.setPurchaseLink(rs.getString("purchase_link"));
+        java.math.BigDecimal listPrice = (java.math.BigDecimal) rs.getObject("list_price");
+        b.setListPrice(listPrice != null ? listPrice.doubleValue() : null);
+        b.setCurrencyCode(rs.getString("currency_code"));
+        java.math.BigDecimal avgRating = (java.math.BigDecimal) rs.getObject("average_rating");
+        b.setAverageRating(avgRating != null ? avgRating.doubleValue() : null);
+        Integer ratingsCount = (Integer) rs.getObject("ratings_count");
+        b.setRatingsCount(ratingsCount);
+        Integer pageCount = (Integer) rs.getObject("page_count");
+        b.setPageCount(pageCount);
+        return b;
+    }
+
+    private void saveToDatabase(Book book, JsonNode sourceJson) {
+        if (jdbcTemplate == null || book == null) return;
+        try {
+            String canonicalId = book.getId();
+            if (canonicalId == null || canonicalId.isEmpty()) {
+                canonicalId = UUID.randomUUID().toString();
+                book.setId(canonicalId);
+            }
+
+            jdbcTemplate.update(
+                "INSERT INTO books (id, title, description, \"s3-image-path\", external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, \"s3-image-path\" = EXCLUDED.\"s3-image-path\", external_image_url = EXCLUDED.external_image_url, isbn10 = EXCLUDED.isbn10, isbn13 = EXCLUDED.isbn13, published_date = EXCLUDED.published_date, language = EXCLUDED.language, publisher = EXCLUDED.publisher, info_link = EXCLUDED.info_link, preview_link = EXCLUDED.preview_link, purchase_link = EXCLUDED.purchase_link, list_price = EXCLUDED.list_price, currency_code = EXCLUDED.currency_code, average_rating = EXCLUDED.average_rating, ratings_count = EXCLUDED.ratings_count, page_count = EXCLUDED.page_count",
+                canonicalId,
+                book.getTitle(),
+                book.getDescription(),
+                book.getS3ImagePath(),
+                book.getExternalImageUrl(),
+                book.getIsbn10(),
+                book.getIsbn13(),
+                book.getPublishedDate(),
+                book.getLanguage(),
+                book.getPublisher(),
+                book.getInfoLink(),
+                book.getPreviewLink(),
+                book.getPurchaseLink(),
+                book.getListPrice(),
+                book.getCurrencyCode(),
+                book.getAverageRating(),
+                book.getRatingsCount(),
+                book.getPageCount()
+            );
+
+            upsertExternalId(canonicalId, "ISBN13", book.getIsbn13());
+            upsertExternalId(canonicalId, "ISBN10", book.getIsbn10());
+            if (sourceJson != null) {
+                String googleId = sourceJson.path("id").asText(null);
+                if (googleId != null && !googleId.isEmpty() && !looksLikeUuid(googleId)) {
+                    upsertExternalId(canonicalId, "GOOGLE_BOOKS", googleId);
+                }
+                String nytBookUri = sourceJson.path("nytMetadata").path("bookUri").asText(null);
+                if (nytBookUri == null || nytBookUri.isEmpty()) {
+                    nytBookUri = sourceJson.path("nyt_data_only").path("book_uri").asText(null);
+                }
+                if (nytBookUri != null && !nytBookUri.isEmpty()) {
+                    upsertExternalId(canonicalId, "NYT", nytBookUri);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("DB upsert failed for {}: {}", book.getId(), e.getMessage());
+        }
+    }
+
+    private void upsertExternalId(String canonicalId, String source, String externalId) {
+        if (jdbcTemplate == null || canonicalId == null || externalId == null || externalId.isEmpty()) return;
+        try {
+            jdbcTemplate.update(
+                "INSERT INTO book_external_ids (book_id, source, external_id) VALUES (?, ?, ?) ON CONFLICT (source, external_id) DO UPDATE SET book_id = EXCLUDED.book_id",
+                canonicalId, source, externalId
+            );
+        } catch (Exception e) {
+            logger.debug("External ID upsert skipped for source={}, id={}: {}", source, externalId, e.getMessage());
+        }
+    }
+
+    private boolean looksLikeUuid(String s) {
+        try {
+            UUID.fromString(s);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 }

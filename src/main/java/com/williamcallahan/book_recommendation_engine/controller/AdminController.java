@@ -13,10 +13,12 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
-import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
 import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarmingScheduler;
-import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
+import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
 import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerService;
+import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
+import com.williamcallahan.book_recommendation_engine.service.s3.DryRunSummary;
+import com.williamcallahan.book_recommendation_engine.service.s3.MoveActionSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -97,7 +99,7 @@ public class AdminController {
         // Note: This is a synchronous call. For very long operations,
         // consider making performDryRun @Async or wrapping this call
         try {
-            com.williamcallahan.book_recommendation_engine.types.DryRunSummary summary = s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse);
+            DryRunSummary summary = s3CoverCleanupService.performDryRun(prefixToUse, batchLimitToUse);
             
             StringBuilder responseBuilder = new StringBuilder();
             responseBuilder.append(String.format(
@@ -167,7 +169,7 @@ public class AdminController {
                 sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse);
 
         try {
-            com.williamcallahan.book_recommendation_engine.types.MoveActionSummary summary = 
+            MoveActionSummary summary = 
                 s3CoverCleanupService.performMoveAction(sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse);
             
             logger.info("S3 Cover Cleanup Move Action completed. Summary: {}", summary.toString());

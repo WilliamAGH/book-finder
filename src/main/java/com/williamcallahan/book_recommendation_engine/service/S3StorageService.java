@@ -38,7 +38,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
+import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Object;

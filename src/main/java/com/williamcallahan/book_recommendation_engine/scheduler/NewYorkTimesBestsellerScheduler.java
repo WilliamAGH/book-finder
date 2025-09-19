@@ -18,19 +18,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataAggregatorService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.service.OpenLibraryBookDataService;
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
-import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
+import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
+// import org.springframework.jdbc.core.JdbcTemplate; // removed if not used directly
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -45,7 +45,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Component
-@Conditional(S3EnvironmentCondition.class)
 public class NewYorkTimesBestsellerScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesBestsellerScheduler.class);
@@ -57,6 +56,7 @@ public class NewYorkTimesBestsellerScheduler {
     private final ObjectMapper objectMapper;
     private final BookDataAggregatorService bookDataAggregatorService;
     private final OpenLibraryBookDataService openLibraryBookDataService;
+    // private final JdbcTemplate jdbcTemplate;
 
     @Value("${app.nyt.scheduler.cron:0 0 4 * * SUN}") // Default: Sunday at 4 AM
     private String cronExpression;
@@ -342,8 +342,12 @@ public class NewYorkTimesBestsellerScheduler {
                         try {
                             s3StorageService.uploadGenericJsonAsync(s3ListKeyToSave, objectMapper.writeValueAsString(listJsonToSave), false).join();
                             logger.info("Successfully uploaded updated NYT list to S3: {}", s3ListKeyToSave);
+                            // Persist to Postgres as source of truth
+                            persistListToDb(s3ListKeyToSave, listJsonToSave);
                         } catch (IOException e) {
                             logger.error("Error uploading updated NYT list {} to S3: {}", s3ListKeyToSave, e.getMessage(), e);
+                            // Attempt DB persist even if S3 upload failed
+                            try { persistListToDb(s3ListKeyToSave, listJsonToSave); } catch (Exception ignored) {}
                         }
                     }
                 });
@@ -441,5 +445,72 @@ public class NewYorkTimesBestsellerScheduler {
         public String getS3ListKey() { return s3ListKey; }
         public boolean isListModified() { return listModified; }
         public void setListModifiedFlag() { this.listModified = true; }
+    }
+
+    private void persistListToDb(String s3ListKey, ObjectNode listJson) {
+        if (jdbcTemplate == null || listJson == null) return;
+        try {
+            String listNameEncoded = listJson.path("list_name_encoded").asText(null);
+            String displayName = listJson.path("display_name").asText(null);
+            String updatedFrequency = listJson.path("updated_frequency").asText(null);
+            String bestsellersDate = listJson.path("bestsellers_date").asText(null);
+            String publishedDate = listJson.path("published_date").asText(null);
+            String listId = java.util.UUID.randomUUID().toString();
+
+            int updated = jdbcTemplate.update(
+                "UPDATE book_lists SET display_name = ?, bestsellers_date = ?, updated_frequency = ?, raw_list_json = to_jsonb(?::json), updated_at = now() " +
+                "WHERE source = 'NYT' AND provider_list_code = ? AND published_date = ?",
+                displayName,
+                (bestsellersDate != null && !bestsellersDate.isEmpty()) ? java.sql.Date.valueOf(bestsellersDate) : null,
+                updatedFrequency,
+                listJson.toString(),
+                listNameEncoded,
+                java.sql.Date.valueOf(publishedDate)
+            );
+            if (updated == 0) {
+                jdbcTemplate.update(
+                    "INSERT INTO book_lists (list_id, source, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
+                    "VALUES (?, 'NYT', ?, ?, ?, ?, ?, to_jsonb(?::json))",
+                    listId,
+                    listNameEncoded,
+                    displayName,
+                    (bestsellersDate != null && !bestsellersDate.isEmpty()) ? java.sql.Date.valueOf(bestsellersDate) : null,
+                    java.sql.Date.valueOf(publishedDate),
+                    updatedFrequency,
+                    listJson.toString()
+                );
+            }
+
+            if (listJson.has("books") && listJson.get("books").isArray()) {
+                ArrayNode books = (ArrayNode) listJson.get("books");
+                for (JsonNode item : books) {
+                    Integer rank = item.path("rank").isInt() ? item.get("rank").asInt() : null;
+                    Integer weeksOnList = item.path("weeks_on_list").isInt() ? item.get("weeks_on_list").asInt() : null;
+                    String isbn13 = item.path("primary_isbn13").asText(null);
+                    String isbn10 = item.path("primary_isbn10").asText(null);
+                    String bookId = item.path("google_book_id").asText(null);
+                    if (bookId == null || bookId.isEmpty()) {
+                        bookId = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : isbn10;
+                    }
+                    if (bookId == null || bookId.isEmpty()) continue;
+
+                    jdbcTemplate.update(
+                        "INSERT INTO book_lists_join (list_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, raw_item_json) " +
+                        "VALUES ((SELECT list_id FROM book_lists WHERE source='NYT' AND provider_list_code=? AND published_date=?), ?, ?, ?, ?, ?, to_jsonb(?::json)) " +
+                        "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
+                        listNameEncoded,
+                        java.sql.Date.valueOf(publishedDate),
+                        bookId,
+                        rank,
+                        weeksOnList,
+                        isbn13,
+                        isbn10,
+                        item.toString()
+                    );
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to persist list {} to DB: {}", s3ListKey, e.getMessage());
+        }
     }
 }
