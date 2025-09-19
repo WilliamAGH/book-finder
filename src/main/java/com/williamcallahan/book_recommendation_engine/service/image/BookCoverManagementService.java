@@ -15,10 +15,10 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.CoverImages;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
-import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 
 import org.slf4j.Logger;
@@ -130,7 +130,7 @@ public class BookCoverManagementService {
                         CoverImages s3Result = new CoverImages();
                         s3Result.setPreferredUrl(imageDetailsFromS3.getUrlOrPath());
                         s3Result.setSource(CoverImageSource.S3_CACHE);
-                        s3Result.setFallbackUrl((book.getCoverImageUrl() != null && !book.getCoverImageUrl().equals(localPlaceholderPath)) ? book.getCoverImageUrl() : localPlaceholderPath);
+                        s3Result.setFallbackUrl((book.getS3ImagePath() != null && !book.getS3ImagePath().equals(localPlaceholderPath)) ? book.getS3ImagePath() : localPlaceholderPath);
                         coverCacheManager.putFinalImageDetails(identifierKey, imageDetailsFromS3); // Cache S3 ImageDetails
                         return Mono.just(s3Result);
                     }
@@ -180,8 +180,8 @@ public class BookCoverManagementService {
             urlToUseAsPreferred = provisionalUrl;
             inferredProvisionalSource = inferSourceFromUrl(provisionalUrl, localPlaceholderPath);
         } else {
-            if (book.getCoverImageUrl() != null && !book.getCoverImageUrl().isEmpty() && !book.getCoverImageUrl().equals(localPlaceholderPath)) {
-                urlToUseAsPreferred = book.getCoverImageUrl();
+            if (book.getS3ImagePath() != null && !book.getS3ImagePath().isEmpty() && !book.getS3ImagePath().equals(localPlaceholderPath)) {
+                urlToUseAsPreferred = book.getS3ImagePath();
                 inferredProvisionalSource = inferSourceFromUrl(urlToUseAsPreferred, localPlaceholderPath);
             } else {
                 urlToUseAsPreferred = localPlaceholderPath;
@@ -224,7 +224,7 @@ public class BookCoverManagementService {
      * @return The fallback URL string
      */
     private String determineFallbackUrl(Book book, String preferredUrl, String localPlaceholderPath) {
-        String bookOriginalCover = book.getCoverImageUrl();
+        String bookOriginalCover = book.getExternalImageUrl();
         if (preferredUrl.equals(localPlaceholderPath)) {
             // If preferred is placeholder, use original book cover if it's valid and not placeholder
             if (bookOriginalCover != null && !bookOriginalCover.isEmpty() && !bookOriginalCover.equals(localPlaceholderPath)) {

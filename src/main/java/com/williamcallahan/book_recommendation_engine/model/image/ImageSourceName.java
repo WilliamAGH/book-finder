@@ -1,4 +1,4 @@
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.model.image;
 
 /**
  * Enum representing the various sources of book cover images

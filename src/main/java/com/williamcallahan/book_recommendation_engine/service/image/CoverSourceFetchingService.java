@@ -10,12 +10,11 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageAttemptStatus;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
-import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
-import com.williamcallahan.book_recommendation_engine.types.ImageSourceName;
-import com.williamcallahan.book_recommendation_engine.types.LongitoodService;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 
 import org.slf4j.Logger;
@@ -565,7 +564,7 @@ public class CoverSourceFetchingService {
                     if (gBook != null && gBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                         provenanceData.setGoogleBooksApiResponse(gBook.getRawJsonResponse());
                     }
-                    String googleUrl = gBook != null ? gBook.getCoverImageUrl() : null;
+                    String googleUrl = gBook != null ? gBook.getExternalImageUrl() : null;
                     logger.info("Book ID {}: Google API (ISBN) returned book. Raw coverImageUrl: '{}'", bookIdForLog, googleUrl);
                     if (gBook != null && gBook.getRawJsonResponse() != null) {
                         logger.debug("Book ID {}: Google API (ISBN) raw JSON response for book: {}", bookIdForLog, gBook.getRawJsonResponse());
@@ -625,7 +624,7 @@ public class CoverSourceFetchingService {
                 if (gBook != null && gBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                     provenanceData.setGoogleBooksApiResponse(gBook.getRawJsonResponse());
                 }
-                String googleUrl = gBook != null ? gBook.getCoverImageUrl() : null;
+                String googleUrl = gBook != null ? gBook.getExternalImageUrl() : null;
                 logger.info("Book ID {}: Google API (VolumeID) returned book. Raw coverImageUrl: '{}'", bookIdForLog, googleUrl);
                 if (gBook != null && gBook.getRawJsonResponse() != null) {
                     logger.debug("Book ID {}: Google API (VolumeID) raw JSON response for book: {}", bookIdForLog, gBook.getRawJsonResponse());

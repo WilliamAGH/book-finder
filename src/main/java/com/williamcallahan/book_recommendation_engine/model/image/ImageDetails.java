@@ -1,4 +1,4 @@
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.model.image;
 
 /**
  * Book cover image details including source and dimension information

@@ -19,7 +19,7 @@
  * @param processingError Error message if processing failed
  */
 
- package com.williamcallahan.book_recommendation_engine.types;
+ package com.williamcallahan.book_recommendation_engine.model.image;
 
 import java.util.Arrays;
 

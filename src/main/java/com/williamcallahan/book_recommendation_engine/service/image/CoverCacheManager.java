@@ -2,7 +2,7 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.TimeUnit;

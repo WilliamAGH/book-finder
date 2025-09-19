@@ -1,4 +1,4 @@
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.service.s3;
 
 import java.util.List;
 import java.util.ArrayList;

@@ -1,9 +1,10 @@
+package com.williamcallahan.book_recommendation_engine.model.image;
+
 /**
  * Container for book cover image URLs with source tracking
  * 
  * @author William Callahan
  */
-package com.williamcallahan.book_recommendation_engine.types;
 
 /**
  * Immutable container for book cover image URLs

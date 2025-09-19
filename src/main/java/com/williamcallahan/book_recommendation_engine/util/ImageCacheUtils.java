@@ -16,8 +16,8 @@
 package com.williamcallahan.book_recommendation_engine.util;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

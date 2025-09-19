@@ -10,7 +10,7 @@
  * - Includes timestamps for auditing image selection history
  * - Supports detailed failure tracking for each source
  */
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.model.image;
 
 import java.time.Instant;
 import java.util.List;

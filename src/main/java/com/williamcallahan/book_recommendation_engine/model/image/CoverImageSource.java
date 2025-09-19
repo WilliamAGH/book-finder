@@ -3,7 +3,7 @@
  * 
  * @author William Callahan
  */
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.model.image;
 
 /**
  * Enum representing available external cover image sources

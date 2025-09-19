@@ -9,7 +9,7 @@
  *
  * @author William Callahan
  */
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.model.image;
 public enum ImageAttemptStatus {
     /**
      * Image successfully retrieved and processed

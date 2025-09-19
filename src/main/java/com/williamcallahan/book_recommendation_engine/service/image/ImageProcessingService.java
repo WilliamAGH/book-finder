@@ -1,6 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
-import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
+import com.williamcallahan.book_recommendation_engine.model.image.ProcessedImage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;

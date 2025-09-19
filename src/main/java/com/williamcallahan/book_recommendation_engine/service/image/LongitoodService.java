@@ -1,4 +1,4 @@
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.service.image;
 
 /**
  * Interface for the Longitood book cover service

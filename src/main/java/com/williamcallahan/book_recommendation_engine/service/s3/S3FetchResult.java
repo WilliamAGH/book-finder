@@ -7,7 +7,7 @@
  * @param <T> The type of data contained in a successful result
  * @author William Callahan
  */
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.service.s3;
 
 import java.util.Optional;
 

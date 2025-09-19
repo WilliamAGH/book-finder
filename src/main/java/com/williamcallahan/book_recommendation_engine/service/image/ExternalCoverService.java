@@ -1,6 +1,7 @@
-package com.williamcallahan.book_recommendation_engine.types;
+package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
