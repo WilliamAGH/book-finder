@@ -22,12 +22,20 @@ import java.util.Map;
 public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
     private static final String DS_URL = "spring.datasource.url";
+    private static final String ENV_DS_URL = "SPRING_DATASOURCE_URL";
+    private static final String DS_JDBC_URL = "spring.datasource.jdbc-url";
+    private static final String HIKARI_JDBC_URL = "spring.datasource.hikari.jdbc-url";
     private static final String DS_USERNAME = "spring.datasource.username";
     private static final String DS_PASSWORD = "spring.datasource.password";
+    private static final String DS_DRIVER = "spring.datasource.driver-class-name";
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         String url = environment.getProperty(DS_URL);
+        if (url == null || url.isBlank()) {
+            // Fallback to raw env var if application.yml hasn't mapped it yet
+            url = environment.getProperty(ENV_DS_URL);
+        }
         if (url == null || url.isBlank()) {
             return;
         }
@@ -57,7 +65,12 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
             }
 
             Map<String, Object> overrides = new HashMap<>();
-            overrides.put(DS_URL, jdbc.toString());
+            String jdbcUrl = jdbc.toString();
+            overrides.put(DS_URL, jdbcUrl);
+            // Also set commonly used aliases so Hikari picks up the normalized URL reliably
+            overrides.put(DS_JDBC_URL, jdbcUrl);
+            overrides.put(HIKARI_JDBC_URL, jdbcUrl);
+            overrides.put(DS_DRIVER, "org.postgresql.Driver");
 
             String existingUser = environment.getProperty(DS_USERNAME);
             String existingPass = environment.getProperty(DS_PASSWORD);
