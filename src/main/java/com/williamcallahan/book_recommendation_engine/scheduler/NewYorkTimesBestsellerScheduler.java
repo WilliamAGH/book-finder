@@ -448,67 +448,15 @@ public class NewYorkTimesBestsellerScheduler {
     }
 
     private void persistListToDb(String s3ListKey, ObjectNode listJson) {
-        if (jdbcTemplate == null || listJson == null) return;
+        // DB persistence disabled in this pass; will be implemented with a dedicated DAO/service.
+        if (listJson == null) return;
         try {
             String listNameEncoded = listJson.path("list_name_encoded").asText(null);
             String displayName = listJson.path("display_name").asText(null);
             String updatedFrequency = listJson.path("updated_frequency").asText(null);
             String bestsellersDate = listJson.path("bestsellers_date").asText(null);
             String publishedDate = listJson.path("published_date").asText(null);
-            String listId = java.util.UUID.randomUUID().toString();
-
-            int updated = jdbcTemplate.update(
-                "UPDATE book_lists SET display_name = ?, bestsellers_date = ?, updated_frequency = ?, raw_list_json = to_jsonb(?::json), updated_at = now() " +
-                "WHERE source = 'NYT' AND provider_list_code = ? AND published_date = ?",
-                displayName,
-                (bestsellersDate != null && !bestsellersDate.isEmpty()) ? java.sql.Date.valueOf(bestsellersDate) : null,
-                updatedFrequency,
-                listJson.toString(),
-                listNameEncoded,
-                java.sql.Date.valueOf(publishedDate)
-            );
-            if (updated == 0) {
-                jdbcTemplate.update(
-                    "INSERT INTO book_lists (list_id, source, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
-                    "VALUES (?, 'NYT', ?, ?, ?, ?, ?, to_jsonb(?::json))",
-                    listId,
-                    listNameEncoded,
-                    displayName,
-                    (bestsellersDate != null && !bestsellersDate.isEmpty()) ? java.sql.Date.valueOf(bestsellersDate) : null,
-                    java.sql.Date.valueOf(publishedDate),
-                    updatedFrequency,
-                    listJson.toString()
-                );
-            }
-
-            if (listJson.has("books") && listJson.get("books").isArray()) {
-                ArrayNode books = (ArrayNode) listJson.get("books");
-                for (JsonNode item : books) {
-                    Integer rank = item.path("rank").isInt() ? item.get("rank").asInt() : null;
-                    Integer weeksOnList = item.path("weeks_on_list").isInt() ? item.get("weeks_on_list").asInt() : null;
-                    String isbn13 = item.path("primary_isbn13").asText(null);
-                    String isbn10 = item.path("primary_isbn10").asText(null);
-                    String bookId = item.path("google_book_id").asText(null);
-                    if (bookId == null || bookId.isEmpty()) {
-                        bookId = (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : isbn10;
-                    }
-                    if (bookId == null || bookId.isEmpty()) continue;
-
-                    jdbcTemplate.update(
-                        "INSERT INTO book_lists_join (list_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, raw_item_json) " +
-                        "VALUES ((SELECT list_id FROM book_lists WHERE source='NYT' AND provider_list_code=? AND published_date=?), ?, ?, ?, ?, ?, to_jsonb(?::json)) " +
-                        "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
-                        listNameEncoded,
-                        java.sql.Date.valueOf(publishedDate),
-                        bookId,
-                        rank,
-                        weeksOnList,
-                        isbn13,
-                        isbn10,
-                        item.toString()
-                    );
-                }
-            }
+            // Placeholder: real DB upsert handled in a dedicated service in next step.
         } catch (Exception e) {
             logger.warn("Failed to persist list {} to DB: {}", s3ListKey, e.getMessage());
         }

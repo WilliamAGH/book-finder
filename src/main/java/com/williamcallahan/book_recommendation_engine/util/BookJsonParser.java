@@ -85,7 +85,7 @@ public class BookJsonParser {
 
         book.setPublishedDate(parsePublishedDate(volumeInfo));
         book.setDescription(volumeInfo.has("description") ? volumeInfo.get("description").asText() : null);
-        book.setCoverImageUrl(getGoogleCoverImageFromVolumeInfo(volumeInfo));
+        book.setExternalImageUrl(getGoogleCoverImageFromVolumeInfo(volumeInfo));
         book.setLanguage(volumeInfo.has("language") ? volumeInfo.get("language").asText() : null);
 
         if (volumeInfo.has("industryIdentifiers")) {

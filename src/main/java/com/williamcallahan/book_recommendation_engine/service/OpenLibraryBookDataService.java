@@ -255,8 +255,12 @@ public class OpenLibraryBookDataService {
             thumbnailUrl = coverNode.path("medium").asText(null); // Typically used as primary cover
             smallThumbnailUrl = coverNode.path("small").asText(null);
         }
-        book.setCoverImageUrl(thumbnailUrl);
-        book.setImageUrl(smallThumbnailUrl); // Or some other logic for alternative image
+        book.setExternalImageUrl(thumbnailUrl); // original external source
+        // s3ImagePath remains null here; S3 upload may occur later in orchestration
+        // Keep small thumbnail as fallback external URL if main is null
+        if (book.getExternalImageUrl() == null) {
+            book.setExternalImageUrl(smallThumbnailUrl);
+        }
 
         book.setInfoLink(bookDataNode.path("url").asText(null));
         book.setRawJsonResponse(bookDataNode.toString());
