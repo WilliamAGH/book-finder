@@ -118,7 +118,7 @@ public class BookSimilarityService {
                 return Mono.just(new float[384]); // Placeholder dimension
             }
 
-            if (this.embeddingServiceEnabled && this.embeddingServiceUrl != null) {
+            if (this.embeddingServiceEnabled) {
                 return embeddingClient.post()
                     .bodyValue(Collections.singletonMap("text", text))
                     .retrieve()
