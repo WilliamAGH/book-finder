@@ -26,7 +26,6 @@ import com.williamcallahan.book_recommendation_engine.service.OpenLibraryBookDat
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 // import org.springframework.jdbc.core.JdbcTemplate; // removed if not used directly
-import org.springframework.jdbc.core.JdbcTemplate;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -451,11 +450,6 @@ public class NewYorkTimesBestsellerScheduler {
         // DB persistence disabled in this pass; will be implemented with a dedicated DAO/service.
         if (listJson == null) return;
         try {
-            String listNameEncoded = listJson.path("list_name_encoded").asText(null);
-            String displayName = listJson.path("display_name").asText(null);
-            String updatedFrequency = listJson.path("updated_frequency").asText(null);
-            String bestsellersDate = listJson.path("bestsellers_date").asText(null);
-            String publishedDate = listJson.path("published_date").asText(null);
             // Placeholder: real DB upsert handled in a dedicated service in next step.
         } catch (Exception e) {
             logger.warn("Failed to persist list {} to DB: {}", s3ListKey, e.getMessage());

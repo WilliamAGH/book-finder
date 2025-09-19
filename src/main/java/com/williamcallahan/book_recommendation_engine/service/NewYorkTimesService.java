@@ -94,7 +94,7 @@ public class NewYorkTimesService {
             "LIMIT ?";
 
         return Mono.fromCallable(() ->
-            jdbcTemplate.query(sql, new Object[]{listNameEncoded, listNameEncoded, limit}, (rs, rowNum) -> {
+            jdbcTemplate.query(sql, (rs, rowNum) -> {
                 com.williamcallahan.book_recommendation_engine.model.Book b = new com.williamcallahan.book_recommendation_engine.model.Book();
                 b.setId(rs.getString("id"));
                 b.setTitle(rs.getString("title"));
@@ -115,7 +115,7 @@ public class NewYorkTimesService {
                 try { Integer rc = (Integer) rs.getObject("ratings_count"); b.setRatingsCount(rc); } catch (Exception ignored) {}
                 try { Integer pc = (Integer) rs.getObject("page_count"); b.setPageCount(pc); } catch (Exception ignored) {}
                 return b;
-            })
+            }, listNameEncoded, listNameEncoded, limit)
         ).onErrorResume(e -> {
             logger.error("DB error fetching current bestsellers for list '{}': {}", listNameEncoded, e.getMessage(), e);
             return Mono.just(Collections.emptyList());
@@ -164,17 +164,7 @@ public class NewYorkTimesService {
      * Represents the structure of an individual bestseller list details,
      * as it would be stored in S3 by the scheduler
      */
-    private static record NytApiListDetails(
-        @JsonProperty("list_id") int listId,
-        @JsonProperty("list_name") String listName,
-        @JsonProperty("list_name_encoded") String listNameEncoded,
-        @JsonProperty("display_name") String displayName,
-        @JsonProperty("updated") String updated, // e.g., "WEEKLY", "MONTHLY"
-        @JsonProperty("bestsellers_date") String bestsellersDate, // Date FOR this list data
-        @JsonProperty("published_date") String publishedDate, // Date this list was published by NYT
-        @JsonProperty("books") List<NytBookPayload> books
-        // Other fields from the list overview like 'normal_list_ends_at', 'corrections' can be added if needed
-    ) {}
+    // Removed unused record NytApiListDetails
 
     /**
      * Represents an individual book as returned by the NYT API within a list
