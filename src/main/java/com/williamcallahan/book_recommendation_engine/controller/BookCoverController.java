@@ -82,13 +82,27 @@ public class BookCoverController {
                     .map(updatedBook -> {
                         Map<String, Object> response = new HashMap<>();
                         response.put("bookId", id);
-                        response.put("coverUrl", updatedBook.getS3ImagePath());
+
+                        // Improved fallback logic with proper coalescing
+                        String s3Path = updatedBook.getS3ImagePath();
+                        String preferredFromImages = updatedBook.getCoverImages() != null ?
+                            updatedBook.getCoverImages().getPreferredUrl() : null;
+                        String fallbackFromImages = updatedBook.getCoverImages() != null ?
+                            updatedBook.getCoverImages().getFallbackUrl() : null;
+                        String externalUrl = updatedBook.getExternalImageUrl();
+                        String placeholder = "/images/placeholder-book-cover.svg";
+
+                        // Priority: S3 > preferred > external > placeholder
+                        String coverUrl = firstNonBlank(s3Path, preferredFromImages, externalUrl, placeholder);
+                        response.put("coverUrl", coverUrl);
+
                         if (updatedBook.getCoverImages() != null) {
-                            response.put("preferredUrl", updatedBook.getCoverImages().getPreferredUrl());
-                            response.put("fallbackUrl", updatedBook.getCoverImages().getFallbackUrl());
+                            response.put("preferredUrl", firstNonBlank(preferredFromImages, coverUrl));
+                            response.put("fallbackUrl", firstNonBlank(fallbackFromImages, coverUrl));
                         } else {
-                            response.put("preferredUrl", updatedBook.getS3ImagePath());
-                            response.put("fallbackUrl", updatedBook.getS3ImagePath());
+                            String fallback = firstNonBlank(s3Path, externalUrl, placeholder);
+                            response.put("preferredUrl", fallback);
+                            response.put("fallbackUrl", fallback);
                         }
                         response.put("requestedSourcePreference", preferredSource.name());
                         return ResponseEntity.ok(response);
@@ -170,7 +184,20 @@ public class BookCoverController {
         error.put("error", message);
         return error;
     }
-    
+
+    /**
+     * Helper method to find the first non-blank string from a list of values
+     * @param values Variable number of string values to check
+     * @return The first non-blank string, or null if all are blank
+     */
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String v : values) {
+            if (v != null && !v.isBlank()) return v;
+        }
+        return null;
+    }
+
     /**
      * Handle validation errors for request parameters
      * - Converts IllegalArgumentException to HTTP 400 Bad Request

@@ -1228,5 +1228,45 @@
     }
 </style>
 
+<!-- Clicky virtual pageview logging for filter-driven URL changes on search page -->
+<script>
+    (function() {
+        function logVirtualPageview(url) {
+            try {
+                if (window.clicky && typeof window.clicky.log === 'function') {
+                    window.clicky.log(url, document.title);
+                }
+            } catch (e) { /* no-op */ }
+        }
+
+        var originalPushState = history.pushState;
+        history.pushState = function(state, title, url) {
+            var result = originalPushState.apply(this, arguments);
+            if (url) {
+                var u = (typeof url === 'string') ? url : url.toString();
+                logVirtualPageview(u);
+            }
+            return result;
+        };
+
+        var originalReplaceState = history.replaceState;
+        history.replaceState = function(state, title, url) {
+            var result = originalReplaceState.apply(this, arguments);
+            if (url) {
+                var u = (typeof url === 'string') ? url : url.toString();
+                logVirtualPageview(u);
+            }
+            return result;
+        };
+
+        window.addEventListener('popstate', function() {
+            try {
+                var current = window.location.pathname + window.location.search + window.location.hash;
+                logVirtualPageview(current);
+            } catch (e) { /* no-op */ }
+        });
+    })();
+</script>
+
 </body>
 </html>
