@@ -22,8 +22,8 @@ package "com.williamcallahan.book_recommendation_engine" {
         - title: String
         - authors: List~String~
         - description: String
-        - coverImageUrl: String
-        - imageUrl: String
+        - s3ImagePath: String
+        - externalImageUrl: String
         - isbn10: String
         - isbn13: String
         - publishedDate: Date
@@ -46,7 +46,7 @@ package "com.williamcallahan.book_recommendation_engine" {
         - isCoverHighResolution: Boolean
         - otherEditions: List~Book.EditionInfo~
         + Book()
-        + Book(id: String, title: String, authors: List~String~, description: String, coverImageUrl: String, imageUrl: String)
+        + Book(id: String, title: String, authors: List~String~, description: String, s3ImagePath: String, externalImageUrl: String)
         + getters/setters
         + equals(o: Object): boolean
         + hashCode(): int
