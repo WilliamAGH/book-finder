@@ -81,6 +81,52 @@ See [UML README](src/main/resources/uml/README.md).
 curl -X POST http://localhost:8095/admin/trigger-sitemap-update
 ```
 
+### S3 → Postgres Backfill (Manual CLI)
+
+The app includes CLI flags to backfill S3 JSON into Postgres. Run with your DB and S3 configured (via `.env` or env vars).
+
+- Backfill individual book JSONs (S3 prefix defaults to `books/v1/`):
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.arguments="--migrate.s3.books --migrate.prefix=books/v1/ --migrate.max=0 --migrate.skip=0"
+```
+
+- Backfill list JSONs (e.g., NYT lists under `lists/nyt/`):
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.arguments="--migrate.s3.lists --migrate.lists.provider=NYT --migrate.lists.prefix=lists/nyt/ --migrate.lists.max=0 --migrate.lists.skip=0"
+```
+
+Notes:
+
+- `--migrate.max` (`--migrate.lists.max`) ≤ 0 means no limit. Use a positive number to cap items processed.
+- `--migrate.skip` (`--migrate.lists.skip`) skips the first N JSON files (useful for batching).
+- Enrichment is idempotent: matching records are updated; non-existing ones are created.
+
+#### JDBC URL format (important)
+
+If you use a Postgres URI like `postgres://user:pass@host:port/db?sslmode=prefer`, convert it to JDBC format:
+
+```properties
+spring.datasource.url=jdbc:postgresql://host:port/db?sslmode=prefer
+spring.datasource.username=user
+spring.datasource.password=pass
+```
+
+Or pass via env vars or `.env`:
+
+```bash
+export SPRING_DATASOURCE_URL="jdbc:postgresql://<host>:<port>/<db>?sslmode=prefer"
+export SPRING_DATASOURCE_USERNAME="<user>"
+export SPRING_DATASOURCE_PASSWORD="<pass>"
+```
+
+Then run, for example, to process 1 book JSON from S3:
+
+```bash
+mvn spring-boot:run -P dev -Dspring-boot.run.arguments="--migrate.s3.books --migrate.prefix=books/v1/ --migrate.max=1 --migrate.skip=0"
+```
+
 ### Debugging Overrides
 
 To bypass caches for book lookups:
@@ -103,7 +149,7 @@ resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.timeoutDuration
 - **SpotBugs:** `mvn spotbugs:spotbugs && open target/site/spotbugs/index.html`
 - **Dependency Analysis:** `mvn dependency:analyze`
 
-### Admin API Authentication
+## Admin API Authentication
 
 Admin endpoints require HTTP Basic Authentication:
 
@@ -118,7 +164,7 @@ dotenv run sh -c 'curl -u admin:$APP_ADMIN_PASSWORD -X POST "http://localhost:${
 
 This uses a `dotenv` wrapper to load `$APP_ADMIN_PASSWORD` and `$SERVER_PORT` from `.env`. For `dotenv-cli`, use `dotenv curl ...`. Alternatively, export variables: `export APP_ADMIN_PASSWORD='your_password'`.
 
-### References
+## References
 
 - [Java Docs](https://docs.oracle.com/en/java/index.html)
 - [Spring Boot Docs](https://docs.spring.io/spring-boot/docs/current/reference/html/)
