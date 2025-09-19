@@ -24,6 +24,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -122,8 +123,9 @@ public class BookDataOrchestrator {
             String s3StorageKey = finalBook.getId();
             logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
             // Persist to DB first (and external ids) before S3
-            saveToDatabase(finalBook, aggregatedJson);
-            return intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", s3StorageKey);
+            return Mono.fromRunnable(() -> saveToDatabase(finalBook, aggregatedJson))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then(intelligentlyUpdateS3CacheAndReturnBook(finalBook, aggregatedJson, "Aggregated", s3StorageKey));
         });
     }
 
@@ -148,7 +150,9 @@ public class BookDataOrchestrator {
                 logger.warn("DB lookup failed for {}: {}", bookId, e.getMessage());
                 return null;
             }
-        }).flatMap(b -> b != null ? Mono.just(b) : Mono.empty());
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap(b -> b != null ? Mono.just(b) : Mono.empty());
 
         // Tier 2: S3
         Mono<Book> s3FetchBookMono = Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(bookId))
