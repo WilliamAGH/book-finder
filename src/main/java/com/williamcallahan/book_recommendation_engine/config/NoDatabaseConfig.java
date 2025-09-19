@@ -22,10 +22,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
 import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
-import com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookRepository;
 
 /**
  * Configuration to disable database components in absence of a database URL
@@ -52,19 +49,4 @@ import com.williamcallahan.book_recommendation_engine.repository.NoOpCachedBookR
 })
 public class NoDatabaseConfig {
 
-    /**
-     * Provides a non-persistent implementation of the CachedBookRepository
-     * 
-     * @return A NoOpCachedBookRepository instance that implements the repository interface
-     *        without actual database operations
-     * 
-     * @implNote This bean is only created when no database URL is configured
-     * The implementation simply returns empty results for all methods
-     * Allows the application to function without database access
-     * Used by services that require a CachedBookRepository dependency
-     */
-    @Bean
-    public CachedBookRepository cachedBookRepository() {
-        return new NoOpCachedBookRepository();
-    }
 }

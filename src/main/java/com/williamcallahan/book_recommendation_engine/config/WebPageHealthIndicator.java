@@ -43,7 +43,7 @@ public class WebPageHealthIndicator {
      * Constructs a WebPageHealthIndicator with all required parameters
      * 
      * @param webClientBuilder The Spring WebClient builder for making HTTP requests
-     * @param baseUrl The base URL for the web application (e.g., http://localhost:8081)
+     * @param baseUrl The base URL for the web application (e.g., http://localhost:8095)
      * @param path The path to check (e.g., "/" for homepage or "/books/123" for a book detail page)
      * @param healthCheckName A descriptive name for this health check (used in health status reporting)
      * @param reportErrorsAsDown If true, HTTP errors (4xx, 5xx) will be reported as DOWN; if false as UP with details
@@ -132,13 +132,13 @@ class HomepageHealthIndicator implements ReactiveHealthIndicator {
      * Constructs a HomepageHealthIndicator with required dependencies
      * 
      * @param webClientBuilder The Spring WebClient builder for making HTTP requests
-     * @param serverPort The port on which the server is running (defaults to 8081)
+     * @param serverPort The port on which the server is running (defaults to 8095)
      * @param reportErrorsAsDown If true, HTTP errors will be reported as DOWN status
      * 
      * @implNote Creates a WebPageHealthIndicator delegate to check the homepage (root path)
      */
     public HomepageHealthIndicator(WebClient.Builder webClientBuilder,
-                                   @Value("${server.port:8081}") int serverPort,
+                                   @Value("${server.port:8095}") int serverPort,
                                    @Value("${healthcheck.report-errors-as-down:true}") boolean reportErrorsAsDown) {
         String baseUrl = "http://localhost:" + serverPort;
         this.delegate = new WebPageHealthIndicator(webClientBuilder, baseUrl, "/", "homepage", reportErrorsAsDown, true);
@@ -171,7 +171,7 @@ class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
      * Constructs a BookDetailPageHealthIndicator with required dependencies
      * 
      * @param webClientBuilder The Spring WebClient builder for making HTTP requests
-     * @param serverPort The port on which the server is running (defaults to 8081)
+     * @param serverPort The port on which the server is running (defaults to 8095)
      * @param testBookId The ID of a test book to check for existence (configured via properties)
      * @param reportErrorsAsDown If true, HTTP errors will be reported as DOWN status
      * 
@@ -180,7 +180,7 @@ class BookDetailPageHealthIndicator implements ReactiveHealthIndicator {
      */
     public BookDetailPageHealthIndicator(
             WebClient.Builder webClientBuilder,
-            @Value("${server.port:8081}") int serverPort,
+            @Value("${server.port:8095}") int serverPort,
             @Value("${healthcheck.test-book-id:}") String testBookId,
             @Value("${healthcheck.report-errors-as-down:true}") boolean reportErrorsAsDown) {
         this.testBookId = testBookId;
