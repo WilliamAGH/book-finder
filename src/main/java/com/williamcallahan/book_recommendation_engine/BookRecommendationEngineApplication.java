@@ -52,7 +52,63 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
      * @param args Command line arguments passed to the application
      */
     public static void main(String[] args) {
+        normalizeDatasourceUrlFromEnv();
         SpringApplication.run(BookRecommendationEngineApplication.class, args);
+    }
+
+    private static void normalizeDatasourceUrlFromEnv() {
+        try {
+            String url = System.getenv("SPRING_DATASOURCE_URL");
+            if (url == null || url.isBlank()) return;
+            String lower = url.toLowerCase();
+            if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) return;
+
+            java.net.URI uri = new java.net.URI(url);
+            String host = (uri.getHost() != null) ? uri.getHost() : "localhost";
+            int port = (uri.getPort() == -1) ? 5432 : uri.getPort();
+            String path = (uri.getPath() != null) ? uri.getPath() : "/";
+            String database = path.startsWith("/") ? path.substring(1) : path;
+            String query = uri.getQuery();
+
+            StringBuilder jdbc = new StringBuilder()
+                    .append("jdbc:postgresql://")
+                    .append(host)
+                    .append(":")
+                    .append(port)
+                    .append("/")
+                    .append(database);
+            if (query != null && !query.isBlank()) {
+                jdbc.append("?").append(query);
+            }
+
+            String jdbcUrl = jdbc.toString();
+            // Set Spring + Hikari properties before the context initializes
+            System.setProperty("spring.datasource.url", jdbcUrl);
+            System.setProperty("spring.datasource.jdbc-url", jdbcUrl);
+            System.setProperty("spring.datasource.hikari.jdbc-url", jdbcUrl);
+            System.setProperty("spring.datasource.driver-class-name", "org.postgresql.Driver");
+
+            // If username/password not already provided, derive from URI user-info
+            String existingUser = System.getProperty("spring.datasource.username",
+                    System.getenv("SPRING_DATASOURCE_USERNAME") != null ? System.getenv("SPRING_DATASOURCE_USERNAME") : "");
+            String existingPass = System.getProperty("spring.datasource.password",
+                    System.getenv("SPRING_DATASOURCE_PASSWORD") != null ? System.getenv("SPRING_DATASOURCE_PASSWORD") : "");
+            String userInfo = uri.getUserInfo();
+            if ((existingUser == null || existingUser.isBlank()) && userInfo != null && !userInfo.isEmpty()) {
+                int idx = userInfo.indexOf(':');
+                String user = (idx >= 0) ? userInfo.substring(0, idx) : userInfo;
+                if (user != null && !user.isBlank()) System.setProperty("spring.datasource.username", user);
+                if ((existingPass == null || existingPass.isBlank()) && idx >= 0 && idx + 1 < userInfo.length()) {
+                    String pass = userInfo.substring(idx + 1);
+                    if (pass != null && !pass.isBlank()) System.setProperty("spring.datasource.password", pass);
+                }
+            }
+
+            // Echo minimal confirmation to stdout (password omitted)
+            System.out.println("[DB] Normalized SPRING_DATASOURCE_URL to JDBC for Hikari: " + jdbcUrl.replaceAll("password=[^&]+", "password=***"));
+        } catch (Exception ignored) {
+            // If parsing fails, leave as-is; Spring will surface the connection error
+        }
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
