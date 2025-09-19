@@ -21,6 +21,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 // import java.util.ArrayList; // Unused
 import java.util.Collections;
@@ -74,8 +75,11 @@ public class NewYorkTimesService {
     /**
      * Fetch the latest published list's books for the given provider list code from Postgres.
      */
-    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + #limit")
+    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(java.lang.Math).min(T(java.lang.Math).max(#limit,1),100)")
     public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
+        // Validate and clamp limit to reasonable range
+        final int effectiveLimit = Math.max(1, Math.min(limit, 100));
+
         if (jdbcTemplate == null) {
             logger.warn("JdbcTemplate not available; returning empty bestsellers list.");
             return Mono.just(Collections.emptyList());
@@ -115,8 +119,10 @@ public class NewYorkTimesService {
                 try { Integer rc = (Integer) rs.getObject("ratings_count"); b.setRatingsCount(rc); } catch (Exception ignored) {}
                 try { Integer pc = (Integer) rs.getObject("page_count"); b.setPageCount(pc); } catch (Exception ignored) {}
                 return b;
-            }, listNameEncoded, listNameEncoded, limit)
-        ).onErrorResume(e -> {
+            }, listNameEncoded, listNameEncoded, effectiveLimit)
+        )
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorResume(e -> {
             logger.error("DB error fetching current bestsellers for list '{}': {}", listNameEncoded, e.getMessage(), e);
             return Mono.just(Collections.emptyList());
         });
