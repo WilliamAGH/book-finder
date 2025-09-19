@@ -17,13 +17,14 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
@@ -51,8 +52,13 @@ class BookControllerTest {
     static class BookControllerTestConfiguration {
 
         @Bean
-        public BookCacheFacadeService bookCacheFacadeService() {
-            return Mockito.mock(BookCacheFacadeService.class);
+        public BookDataOrchestrator bookDataOrchestrator() {
+            return Mockito.mock(BookDataOrchestrator.class);
+        }
+
+        @Bean
+        public GoogleBooksService googleBooksService() {
+            return Mockito.mock(GoogleBooksService.class);
         }
 
         @Bean
@@ -97,7 +103,10 @@ class BookControllerTest {
   private ObjectMapper objectMapper;
 
   @Autowired
-  private BookCacheFacadeService bookCacheFacadeService;
+  private BookDataOrchestrator bookDataOrchestrator;
+
+  @Autowired
+  private GoogleBooksService googleBooksService;
 
   @Autowired
   private RecommendationService recommendationService;
@@ -107,7 +116,7 @@ class BookControllerTest {
 
   @AfterEach
   void tearDown() {
-    reset(bookCacheFacadeService, recommendationService, bookImageOrchestrationService); 
+    reset(bookDataOrchestrator, googleBooksService, recommendationService, bookImageOrchestrationService); 
   }
 
   @BeforeEach
@@ -141,7 +150,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/search - empty list returns 200 and [] in results")
   void searchBooks_emptyList_returnsEmptyArrayInResults() throws Exception {
-    when(bookCacheFacadeService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
+    when(googleBooksService.searchBooksAsyncReactive(eq("*"), eq(null), anyInt(), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -157,7 +166,7 @@ class BookControllerTest {
   @DisplayName("GET /api/books/search - non-empty list returns 200 and array of books in results")
   void searchBooks_nonEmptyList_returnsArrayInResults() throws Exception {
     Book book = createTestBook("1", "Effective Java", "Joshua Bloch");
-    when(bookCacheFacadeService.searchBooksReactive(eq("*"), eq(0), anyInt(), eq(null), eq(null), eq(null))).thenReturn(Mono.just(List.of(book)));
+    when(googleBooksService.searchBooksAsyncReactive(eq("*"), eq(null), anyInt(), eq(null))).thenReturn(Mono.just(List.of(book)));
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/search").param("query", ""))
       .andExpect(request().asyncStarted())
@@ -176,7 +185,7 @@ class BookControllerTest {
   @DisplayName("GET /api/books/{id} - existing id returns 200 and book JSON")
   void getBookById_found_returnsBook() throws Exception {
     Book book = createTestBook("1", "Domain-Driven Design", "Eric Evans");
-    when(bookCacheFacadeService.getBookByIdReactive("1")).thenReturn(Mono.just(book));
+    when(bookDataOrchestrator.getBookByIdTiered("1")).thenReturn(Mono.just(book));
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/1"))
       .andExpect(request().asyncStarted())
@@ -193,7 +202,7 @@ class BookControllerTest {
   @Test
   @DisplayName("GET /api/books/{id} - non-existent id returns 404")
   void getBookById_notFound_returns404() throws Exception {
-    when(bookCacheFacadeService.getBookByIdReactive("99")).thenReturn(Mono.empty());
+    when(bookDataOrchestrator.getBookByIdTiered("99")).thenReturn(Mono.empty());
     
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(get("/api/books/99"))
       .andExpect(request().asyncStarted())
@@ -212,7 +221,7 @@ class BookControllerTest {
         Book bookArg = invocation.getArgument(0);
         bookArg.setId("1"); 
         return null; 
-    }).when(bookCacheFacadeService).cacheBook(any(Book.class));
+    }); // Cache functionality removed
 
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
             .contentType(MediaType.APPLICATION_JSON)
@@ -233,7 +242,7 @@ class BookControllerTest {
   void createBook_invalidInput_returnsBadRequest() throws Exception {
     Book invalid = createTestBook(null, "", "Author"); 
     Mockito.doThrow(new IllegalArgumentException("Title cannot be empty"))
-      .when(bookCacheFacadeService).cacheBook(any(Book.class));
+      ; // Cache functionality removed
       
     org.springframework.test.web.servlet.MvcResult mvcResult = mockMvc.perform(post("/api/books")
             .contentType(MediaType.APPLICATION_JSON)

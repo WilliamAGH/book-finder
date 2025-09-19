@@ -13,7 +13,7 @@ package com.williamcallahan.book_recommendation_engine.test.config;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
+// CachedBookRepository removed with Redis; no longer needed
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
@@ -23,13 +23,14 @@ import com.williamcallahan.book_recommendation_engine.service.image.ImageProcess
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.service.image.OpenLibraryServiceImpl;
 import com.williamcallahan.book_recommendation_engine.service.image.S3BookCoverService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageAttemptStatus;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
-import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.types.LongitoodService;
-import com.williamcallahan.book_recommendation_engine.types.ProcessedImage;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.service.image.LongitoodService;
+import com.williamcallahan.book_recommendation_engine.model.image.ProcessedImage;
 
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
@@ -175,7 +176,7 @@ public class TestBookCoverConfig {
                 if (provenanceData != null) {
                     ImageProvenanceData.AttemptedSourceInfo attemptInfo = 
                         new ImageProvenanceData.AttemptedSourceInfo(
-                            com.williamcallahan.book_recommendation_engine.types.ImageSourceName.valueOf(
+                            ImageSourceName.valueOf(
                                 sourceNameString.toUpperCase().replace('-', '_')),
                             imageUrl, 
                             ImageAttemptStatus.SUCCESS
@@ -534,18 +535,7 @@ public class TestBookCoverConfig {
         return mockService;
     }
     
-    /**
-     * Provides a mock CachedBookRepository for testing
-     * 
-     * @return Mock CachedBookRepository for testing
-     */
-    @Bean
-    @Primary
-    public CachedBookRepository testCachedBookRepository() {
-        CachedBookRepository mockRepository = Mockito.mock(CachedBookRepository.class);
-        logger.info("Mock CachedBookRepository configured for testing");
-        return mockRepository;
-    }
+    // CachedBookRepository removed; no bean required
 
     /**
      * Utility method to create an ArgumentCaptor for BookCoverUpdatedEvent

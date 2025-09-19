@@ -12,14 +12,13 @@ package com.williamcallahan.book_recommendation_engine.test.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
-import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
-
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.types.LongitoodService;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
+import com.williamcallahan.book_recommendation_engine.service.image.LongitoodService;
+import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import org.mockito.Mockito;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -51,7 +50,7 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
 // LocalDiskCoverCacheService and related imports
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
-import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 
 /**
  * Test-specific configuration that prevents real API calls

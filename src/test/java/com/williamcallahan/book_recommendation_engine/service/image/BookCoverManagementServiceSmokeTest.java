@@ -20,8 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import static org.mockito.Mockito.*;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -165,7 +165,7 @@ public class BookCoverManagementServiceSmokeTest {
         logger.info("Testing cover for: {} - ISBN13: {}, GoogleID: {}", bookLabel, book.getIsbn13(), book.getId());
 
         // Initial call
-        com.williamcallahan.book_recommendation_engine.types.CoverImages initialCoverImages = 
+        CoverImages initialCoverImages = 
             bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
                 .block(Duration.ofSeconds(5));
                 
@@ -179,7 +179,7 @@ public class BookCoverManagementServiceSmokeTest {
         Thread.sleep(100); // Reduced sleep time for mocked test
 
         // Call again to see if the URL has been updated by background processing
-        com.williamcallahan.book_recommendation_engine.types.CoverImages finalCoverImages = 
+        CoverImages finalCoverImages = 
             bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
                 .block(Duration.ofSeconds(5));
                 

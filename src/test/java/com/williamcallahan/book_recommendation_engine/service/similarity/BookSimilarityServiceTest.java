@@ -14,9 +14,8 @@
 package com.williamcallahan.book_recommendation_engine.service.similarity;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.cache.BookReactiveCacheService;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,13 +37,10 @@ import static org.mockito.Mockito.when;
 class BookSimilarityServiceTest {
 
     @Mock
-    private CachedBookRepository cachedBookRepository;
-
-    @Mock
     private GoogleBooksService googleBooksService;
 
     @Mock
-    private BookReactiveCacheService bookReactiveCacheService;
+    private BookDataOrchestrator bookDataOrchestrator;
 
     @Mock
     private WebClient.Builder webClientBuilder;
@@ -70,9 +66,8 @@ class BookSimilarityServiceTest {
         
         // Test with embedding service disabled by default
         bookSimilarityService = new BookSimilarityService(
-            cachedBookRepository,
             googleBooksService,
-            bookReactiveCacheService,
+            bookDataOrchestrator,
             null, // embeddingServiceUrl
             webClientBuilder,
             false // embeddingServiceEnabled
@@ -141,10 +136,9 @@ class BookSimilarityServiceTest {
 
         // Create service with embedding enabled
         bookSimilarityService = new BookSimilarityService(
-            cachedBookRepository,
             googleBooksService,
-            bookReactiveCacheService,
-            "http://localhost:8080/api/embedding",
+            bookDataOrchestrator,
+            "http://localhost:8095/api/embedding",
             webClientBuilder,
             true // embeddingServiceEnabled
         );
@@ -171,10 +165,9 @@ class BookSimilarityServiceTest {
 
         // Create service with embedding enabled
         bookSimilarityService = new BookSimilarityService(
-            cachedBookRepository,
             googleBooksService,
-            bookReactiveCacheService,
-            "http://localhost:8080/api/embedding",
+            bookDataOrchestrator,
+            "http://localhost:8095/api/embedding",
             webClientBuilder,
             true // embeddingServiceEnabled
         );

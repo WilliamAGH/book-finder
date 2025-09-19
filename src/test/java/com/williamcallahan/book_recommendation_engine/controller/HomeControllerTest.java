@@ -6,20 +6,24 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookCacheFacadeService;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
-import com.williamcallahan.book_recommendation_engine.types.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.mockito.Mockito;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.http.MediaType;
 import java.util.List;
@@ -33,7 +37,6 @@ import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
 import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
 import reactor.core.publisher.Mono; // For mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
-import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 @WebFluxTest(value = HomeController.class,
     excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
@@ -45,43 +48,63 @@ class HomeControllerTest {
     /**
      * Mock for RecommendationService dependency
      */
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
+    @SuppressWarnings("unused")
     private RecommendationService recommendationService;
     
-    @MockitoBean
-    private BookCacheFacadeService bookCacheFacadeService;
+    @org.springframework.beans.factory.annotation.Autowired
+    @SuppressWarnings("unused")
+    private BookDataOrchestrator bookDataOrchestrator;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private GoogleBooksService googleBooksService;
     
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
     private RecentlyViewedService recentlyViewedService;
     
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
+    @SuppressWarnings("unused")
     private BookImageOrchestrationService bookImageOrchestrationService;
     
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
     private BookCoverManagementService bookCoverManagementService;
 
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
     private LocalDiskCoverCacheService localDiskCoverCacheService;
     
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
+    @SuppressWarnings("unused")
     private com.williamcallahan.book_recommendation_engine.service.EnvironmentService environmentService;
     
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
+    @SuppressWarnings("unused")
     private com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService;
 
-    @MockitoBean
+    @org.springframework.beans.factory.annotation.Autowired
     private NewYorkTimesService newYorkTimesService;
+
+    @TestConfiguration
+    static class MocksConfig {
+        @Bean RecommendationService recommendationService() { return Mockito.mock(RecommendationService.class); }
+        @Bean BookDataOrchestrator bookDataOrchestrator() { return Mockito.mock(BookDataOrchestrator.class); }
+        @Bean GoogleBooksService googleBooksService() { return Mockito.mock(GoogleBooksService.class); }
+        @Bean RecentlyViewedService recentlyViewedService() { return Mockito.mock(RecentlyViewedService.class); }
+        @Bean BookImageOrchestrationService bookImageOrchestrationService() { return Mockito.mock(BookImageOrchestrationService.class); }
+        @Bean BookCoverManagementService bookCoverManagementService() { return Mockito.mock(BookCoverManagementService.class); }
+        @Bean LocalDiskCoverCacheService localDiskCoverCacheService() { return Mockito.mock(LocalDiskCoverCacheService.class); }
+        @Bean com.williamcallahan.book_recommendation_engine.service.EnvironmentService environmentService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.EnvironmentService.class); }
+        @Bean com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.DuplicateBookService.class); }
+        @Bean NewYorkTimesService newYorkTimesService() { return Mockito.mock(NewYorkTimesService.class); }
+    }
     
-    @MockitoBean
-    private AffiliateLinkService affiliateLinkService;
     /**
      * Sets up common test fixtures
      * Configures mock services with default behaviors
      */
     @BeforeEach
     void setUp() {
-        // Configure BookCacheFacadeService to return empty results by default
-        when(bookCacheFacadeService.searchBooksReactive(anyString(), anyInt(), anyInt(), isNull(), isNull(), isNull()))
+        // Configure GoogleBooksService to return empty results by default
+        when(googleBooksService.searchBooksAsyncReactive(anyString(), isNull(), anyInt(), isNull()))
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
         // Configure NewYorkTimesService to return empty list by default
@@ -96,7 +119,7 @@ class HomeControllerTest {
                 CoverImages coverImages = new CoverImages(
                     mockCoverUrl,
                     mockCoverUrl,
-                    com.williamcallahan.book_recommendation_engine.types.CoverImageSource.S3_CACHE
+                    CoverImageSource.S3_CACHE
                 );
                 book.setCoverImages(coverImages);
                 book.setCoverImageUrl(mockCoverUrl);
@@ -129,7 +152,7 @@ class HomeControllerTest {
         CoverImages coverImages = new CoverImages(
             coverUrl,
             coverUrl,
-            com.williamcallahan.book_recommendation_engine.types.CoverImageSource.S3_CACHE 
+            CoverImageSource.S3_CACHE 
         );
         book.setCoverImages(coverImages);
         return book;
@@ -152,12 +175,10 @@ class HomeControllerTest {
         // Make this mock more specific to avoid clashing with the bestsellers mock.
         // It should match any string EXCEPT "hardcover-fiction" for the query,
         // as "hardcover-fiction" is now used for the NYT service call.
-        when(bookCacheFacadeService.searchBooksReactive(
-                argThat((String query) -> query != null && !query.equals("hardcover-fiction")), 
-                eq(0), 
-                eq(8), 
-                isNull(Integer.class), 
-                isNull(String.class), 
+        when(googleBooksService.searchBooksAsyncReactive(
+                argThat((String query) -> query != null && !query.equals("hardcover-fiction")),
+                isNull(String.class),
+                eq(8),
                 isNull(String.class)))
             .thenReturn(Mono.just(additionalRecentBooks));
         // Act & Assert
