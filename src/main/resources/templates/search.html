@@ -678,7 +678,7 @@
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForCard = card.querySelector('.book-cover');
-            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
+            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.s3ImagePath || null);
             const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
 
             imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
@@ -785,7 +785,7 @@
             const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
-            const preferredUrlListItem = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
+            const preferredUrlListItem = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.s3ImagePath || null);
             const fallbackUrlListItem = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
 
             imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src

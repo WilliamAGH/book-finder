@@ -171,7 +171,7 @@
                             <div class="position-relative book-cover-container book-cover-wrapper">
                                 <img th:src="@{/images/placeholder-book-cover.svg}"
                                      th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : null)}, 
+                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : null)}, 
                                               data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
                                               data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                      class="img-fluid rounded-start book-cover"
@@ -495,7 +495,7 @@
                                 <a th:href="@{'/book/' + ${rec.id}}" class="d-block h-100">
                                     <img th:src="@{/images/placeholder-book-cover.svg}"
                                          th:attr="data-book-id=${rec.id}, 
-                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.coverImageUrl != null ? rec.coverImageUrl : null)}, 
+                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.s3ImagePath != null ? rec.s3ImagePath : null)}, 
                                                   data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
                                                   data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                          class="card-img-top book-cover"
