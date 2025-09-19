@@ -25,7 +25,6 @@ import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesServic
 import com.williamcallahan.book_recommendation_engine.service.OpenLibraryBookDataService;
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
-// import org.springframework.jdbc.core.JdbcTemplate; // removed if not used directly
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +54,6 @@ public class NewYorkTimesBestsellerScheduler {
     private final ObjectMapper objectMapper;
     private final BookDataAggregatorService bookDataAggregatorService;
     private final OpenLibraryBookDataService openLibraryBookDataService;
-    // private final JdbcTemplate jdbcTemplate;
 
     @Value("${app.nyt.scheduler.cron:0 0 4 * * SUN}") // Default: Sunday at 4 AM
     private String cronExpression;
