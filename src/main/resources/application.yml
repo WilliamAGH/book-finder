@@ -1,6 +1,14 @@
 spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:}
+    username: ${SPRING_DATASOURCE_USERNAME:}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
   main:
     allow-bean-definition-overriding: true
+  sql:
+    init:
+      mode: always # auto-run schema.sql when a DataSource is configured
   profiles:
     default: prod # Default to prod if no other profile is active
   
@@ -11,21 +19,6 @@ spring:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Default spec for all caches
   
-  # Redis configuration - optional, only used if cache type is redis
-  data:
-    redis:
-      url: ${REDIS_SERVER:}
-      host: ${SPRING_REDIS_HOST:localhost}
-      port: ${SPRING_REDIS_PORT:6379}
-      # Skip Redis if not available
-      connect-timeout: 2000
-      lettuce:
-        shutdown-timeout: 0
-        pool:
-          max-active: 8 # Default for GenericObjectPoolConfig, consider tuning for production
-          max-idle: 8   # Default
-          min-idle: 0   # Default
-          max-wait: -1ms # Block indefinitely if pool exhausted, consider a specific timeout
 
   web:
     resources:
@@ -85,7 +78,7 @@ s3:
       
 # Server configuration (common, can be overridden by application.properties or profiles)
 server:
-  port: ${SERVER_PORT:8080} # Default from YML, application.properties will override if SERVER_PORT is set
+  port: ${SERVER_PORT:8095} # Default from YML, application.properties will override if SERVER_PORT is set
   compression:
     enabled: true
   
@@ -182,20 +175,3 @@ s3:
 app:
   cache:
     enabled: true
-
----
-spring:
-  config:
-    activate:
-      on-profile: jsontoredis
-  main:
-    web-application-type: none
-  data:
-    redis:
-      timeout: 20000
-  devtools:
-    restart:
-      enabled: false
-logging:
-  level:
-    '[com.williamcallahan.book_recommendation_engine.jsontoredis]': INFO
