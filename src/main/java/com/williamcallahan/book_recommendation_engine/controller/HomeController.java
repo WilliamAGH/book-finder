@@ -53,6 +53,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Locale;
 
 @Controller
 public class HomeController {
@@ -652,16 +653,16 @@ public class HomeController {
         }
         List<String> keywords = new ArrayList<>();
         if (book.getTitle() != null && !book.getTitle().isEmpty()) {
-            keywords.addAll(Arrays.asList(book.getTitle().toLowerCase().split("\\s+")));
+            keywords.addAll(Arrays.asList(book.getTitle().toLowerCase(Locale.ROOT).split("\\s+")));
         }
         if (book.getAuthors() != null && !book.getAuthors().isEmpty()) {
             for (String author : book.getAuthors()) {
-                keywords.addAll(Arrays.asList(author.toLowerCase().split("\\s+")));
+                keywords.addAll(Arrays.asList(author.toLowerCase(Locale.ROOT).split("\\s+")));
             }
         }
         if (book.getCategories() != null && !book.getCategories().isEmpty()) {
             for (String category : book.getCategories()) {
-                keywords.addAll(Arrays.asList(category.toLowerCase().split("\\s+")));
+                keywords.addAll(Arrays.asList(category.toLowerCase(Locale.ROOT).split("\\s+")));
             }
         }
         // Add some generic terms
@@ -725,7 +726,7 @@ public class HomeController {
         if (isbn == null) {
             return "";
         }
-        return isbn.replaceAll("[\\s-]", "").toUpperCase();
+        return isbn.replaceAll("[\\s-]", "").toUpperCase(Locale.ROOT);
     }
     
     /**

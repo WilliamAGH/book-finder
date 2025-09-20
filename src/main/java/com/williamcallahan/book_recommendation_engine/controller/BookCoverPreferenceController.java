@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import java.util.Locale;
 
 /**
  * Controller advice for managing book cover image source preferences
@@ -34,7 +35,7 @@ public class BookCoverPreferenceController {
         // Parse the source parameter
         CoverImageSource preferredSource;
         try {
-            preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
+            preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             preferredSource = CoverImageSource.ANY;
         }

@@ -103,21 +103,21 @@ public class AdminController {
             
             StringBuilder responseBuilder = new StringBuilder();
             responseBuilder.append(String.format(
-                "S3 Cover Cleanup Dry Run completed for prefix: '%s', limit: %d.\n",
+                "S3 Cover Cleanup Dry Run completed for prefix: '%s', limit: %d.%n",
                 prefixToUse, batchLimitToUse
             ));
             responseBuilder.append(String.format(
-                "Total Objects Scanned: %d, Total Objects Flagged: %d\n",
+                "Total Objects Scanned: %d, Total Objects Flagged: %d%n",
                 summary.getTotalScanned(), summary.getTotalFlagged()
             ));
 
             if (summary.getTotalFlagged() > 0) {
-                responseBuilder.append("\nFlagged File Keys:\n");
+                responseBuilder.append(String.format("%nFlagged File Keys:%n"));
                 for (String key : summary.getFlaggedFileKeys()) {
-                    responseBuilder.append(key).append("\n");
+                    responseBuilder.append(String.format("%s%n", key));
                 }
             } else {
-                responseBuilder.append("\nNo files were flagged.\n");
+                responseBuilder.append(String.format("%nNo files were flagged.%n"));
             }
             
             String responseBody = responseBuilder.toString();

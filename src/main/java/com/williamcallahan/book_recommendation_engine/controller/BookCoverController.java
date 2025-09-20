@@ -17,6 +17,7 @@ import java.util.concurrent.CompletionException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import reactor.core.publisher.Mono;
 import reactor.core.Disposable;
+import java.util.Locale;
 
 /**
  * Controller for book cover image operations and retrieval
@@ -248,7 +249,7 @@ public class BookCoverController {
      */
     private CoverImageSource parsePreferredSource(String sourceParam) {
         try {
-            return CoverImageSource.valueOf(sourceParam.toUpperCase());
+            return CoverImageSource.valueOf(sourceParam.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             logger.warn("Invalid source parameter: {}. Defaulting to ANY.", sourceParam);
             return CoverImageSource.ANY;

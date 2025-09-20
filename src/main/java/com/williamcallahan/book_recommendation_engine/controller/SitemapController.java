@@ -7,8 +7,6 @@ import com.williamcallahan.book_recommendation_engine.service.SitemapService.Aut
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.PagedResult;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.SitemapOverview;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +20,7 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Controller responsible for generating the server-rendered sitemap page and XML sitemap feeds.
@@ -29,7 +28,6 @@ import java.util.List;
 @Controller
 public class SitemapController {
 
-    private static final Logger logger = LoggerFactory.getLogger(SitemapController.class);
     private static final DateTimeFormatter LAST_MODIFIED_FORMATTER = DateTimeFormatter.ISO_INSTANT;
 
     private final SitemapService sitemapService;
@@ -169,7 +167,7 @@ public class SitemapController {
         if (view == null || view.isBlank()) {
             return "authors";
         }
-        String candidate = view.trim().toLowerCase();
+        String candidate = view.trim().toLowerCase(Locale.ROOT);
         return "books".equals(candidate) ? "books" : "authors";
     }
 
