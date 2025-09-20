@@ -173,13 +173,13 @@ public class BookApiProxy {
                                 logger.debug("Retrieved book {} from S3 cache", bookId);
                                 return CompletableFuture.completedFuture(book);
                             } catch (Exception e) {
-                                logger.warn("Error parsing book from S3 cache: {}", e.getMessage());
+                                logger.warn("BookApiProxy: Error parsing book {} from S3 cache. Proceeding to API. Message: {}", bookId, e.getMessage());
                             }
                         } else {
-                            logger.debug("S3 cache MISS (data not present) for bookId: {}", bookId);
+                            logger.info("BookApiProxy: S3 cache miss (data absent) for bookId {}. Falling back to API.", bookId);
                         }
                     } else {
-                        logger.debug("S3 cache MISS (fetch not successful) for bookId: {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
+                        logger.warn("BookApiProxy: S3 cache unavailable for bookId {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
                     }
                     // If S3 fails or data is not present, fallback to the actual API
                     if (logApiCalls) {

@@ -10,6 +10,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
@@ -77,6 +78,17 @@ public class S3StorageService {
         this.bucketName = bucketName;
         this.publicCdnUrl = publicCdnUrl;
         this.serverUrl = serverUrl;
+    }
+
+    @PostConstruct
+    void validateConfiguration() {
+        if (s3Client == null) {
+            logger.warn("S3StorageService initialized without an S3 client. All S3 operations will be disabled.");
+            return;
+        }
+        if (bucketName == null || bucketName.isBlank()) {
+            throw new IllegalStateException("S3 bucket name must be configured when S3StorageService is active.");
+        }
     }
 
     /**

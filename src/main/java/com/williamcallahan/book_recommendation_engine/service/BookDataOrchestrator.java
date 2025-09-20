@@ -216,7 +216,16 @@ public class BookDataOrchestrator {
             .onErrorResume(e -> {
                 logger.error("BookDataOrchestrator: Critical error during tiered fetch for identifier {}: {}", bookId, e.getMessage(), e);
                 return Mono.<Book>empty();
-            });
+        });
+    }
+
+    public Mono<Book> getBookBySlugTiered(String slug) {
+        if (slug == null || slug.isBlank()) {
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> findInDatabaseBySlug(slug).map(Book::getId).orElse(null))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(canonicalId -> canonicalId == null ? Mono.empty() : getBookByIdTiered(canonicalId));
     }
 
     private Mono<Book> intelligentlyUpdateS3CacheAndReturnBook(Book bookToCache, JsonNode jsonToCache, String apiTypeContext, String s3Key) {
@@ -690,6 +699,21 @@ public class BookDataOrchestrator {
                 "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE id = ?",
                 ps -> ps.setString(1, id),
                 rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
+            );
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Book> findInDatabaseBySlug(String slug) {
+        if (jdbcTemplate == null || slug == null) {
+            return Optional.empty();
+        }
+        try {
+            return jdbcTemplate.query(
+                    "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE slug = ?",
+                    ps -> ps.setString(1, slug),
+                    rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
             );
         } catch (Exception e) {
             return Optional.empty();
