@@ -8,7 +8,6 @@ const { Client } = require('pg');
 const { S3Client, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
-const path = require('node:path');
 
 // ============================================================================
 // CONFIGURATION
@@ -84,16 +83,50 @@ class JsonParser {
       throw new Error('Empty file');
     }
 
-    // Only check for null bytes which indicate true binary data
-    // Don't check for \ufffd as it might be legitimate Unicode
-    if (bodyString.includes('\x00')) {
-      throw new Error('File contains binary/corrupted data');
+    // Strip null bytes (0x00) and other control characters except newlines, tabs, and carriage returns
+    let containsNull = false;
+    const cleaned = [...bodyString].map(ch => {
+      const code = ch.charCodeAt(0);
+      if (code === 0) {
+        containsNull = true;
+        return '';
+      }
+      // Remove control chars: 0x01-0x08, 0x0B, 0x0C, 0x0E-0x1F, 0x7F
+      if ((code >= 1 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31) || code === 127) {
+        return '';
+      }
+      return ch;
+    }).join('');
+    if (containsNull) {
+      console.warn(`[WARNING] File ${filename} contains null bytes, stripping them`);
+    }
+    if (cleaned !== bodyString) {
+      console.warn(`[WARNING] File ${filename} contains control characters, stripping them`);
+      bodyString = cleaned;
     }
 
-    // Check if it looks like JSON at all
-    const trimmed = bodyString.trim();
-    if (trimmed.length > 0 && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    // Trim and re-assign to work with clean content
+    bodyString = bodyString.trim();
+
+    // Some files might have garbage before the JSON, try to find the first { or [
+    const jsonStart = Math.min(
+      bodyString.indexOf('{') === -1 ? Infinity : bodyString.indexOf('{'),
+      bodyString.indexOf('[') === -1 ? Infinity : bodyString.indexOf('[')
+    );
+
+    if (jsonStart === Infinity || jsonStart > 100) {
+      // If no JSON start found or it's too far into the file, it's probably not JSON
       throw new Error('File does not appear to be JSON (does not start with { or [)');
+    }
+
+    if (jsonStart > 0) {
+      console.warn(`[WARNING] File ${filename} has ${jsonStart} bytes of garbage before JSON, stripping`);
+      bodyString = bodyString.substring(jsonStart);
+    }
+
+    // Final check
+    if (!bodyString.startsWith('{') && !bodyString.startsWith('[')) {
+      throw new Error('File does not appear to be JSON after cleanup');
     }
 
     // Step 2: Split concatenated objects if needed
