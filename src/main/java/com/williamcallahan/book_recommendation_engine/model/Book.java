@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.stream.Collectors;
 public class Book {
     private String id;
+    private String slug;
     private String title;
     private List<String> authors;
     private String description;
@@ -53,6 +54,11 @@ public class Book {
     private Integer coverImageWidth;
     private Integer coverImageHeight;
     private Boolean isCoverHighResolution;
+
+    private Double heightCm;
+    private Double widthCm;
+    private Double thicknessCm;
+    private Double weightGrams;
 
     private CoverImages coverImages;
 
@@ -295,6 +301,14 @@ public class Book {
      */
     public void setId(String id) {
         this.id = id;
+    }
+
+    public String getSlug() {
+        return slug;
+    }
+
+    public void setSlug(String slug) {
+        this.slug = slug;
     }
 
     /**
@@ -833,6 +847,38 @@ public class Book {
      */
     public void setIsCoverHighResolution(Boolean isCoverHighResolution) {
         this.isCoverHighResolution = isCoverHighResolution;
+    }
+
+    public Double getHeightCm() {
+        return heightCm;
+    }
+
+    public void setHeightCm(Double heightCm) {
+        this.heightCm = heightCm;
+    }
+
+    public Double getWidthCm() {
+        return widthCm;
+    }
+
+    public void setWidthCm(Double widthCm) {
+        this.widthCm = widthCm;
+    }
+
+    public Double getThicknessCm() {
+        return thicknessCm;
+    }
+
+    public void setThicknessCm(Double thicknessCm) {
+        this.thicknessCm = thicknessCm;
+    }
+
+    public Double getWeightGrams() {
+        return weightGrams;
+    }
+
+    public void setWeightGrams(Double weightGrams) {
+        this.weightGrams = weightGrams;
     }
 
     /**

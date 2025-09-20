@@ -2,8 +2,8 @@ package com.williamcallahan.book_recommendation_engine.controller.dto;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -42,8 +42,11 @@ public final class BookDtoMapper {
                 ? List.of()
                 : List.copyOf(book.getCachedRecommendationIds());
 
+        String slug = resolveSlug(book);
+
         return new BookDto(
                 book.getId(),
+                slug,
                 book.getTitle(),
                 book.getDescription(),
                 publication,
@@ -56,6 +59,13 @@ public final class BookDtoMapper {
                 recommendationIds,
                 book.getQualifiers() == null ? Map.of() : Map.copyOf(book.getQualifiers())
         );
+    }
+
+    private static String resolveSlug(Book book) {
+        if (book.getSlug() != null && !book.getSlug().isBlank()) {
+            return book.getSlug();
+        }
+        return SlugGenerator.generateBookSlug(book.getTitle(), book.getAuthors());
     }
 
     private static CoverDto buildCover(Book book) {
