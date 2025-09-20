@@ -33,9 +33,10 @@ public class SitemapRepository {
             "ELSE '0-9' END";
 
     private static final RowMapper<BookRow> BOOK_ROW_MAPPER = (rs, rowNum) -> new BookRow(
+            rs.getString("id"),
             rs.getString("slug"),
             rs.getString("title"),
-            rs.getTimestamp("updated_at").toInstant()
+            rs.getTimestamp("updated_at") != null ? rs.getTimestamp("updated_at").toInstant() : Instant.EPOCH
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -90,7 +91,7 @@ public class SitemapRepository {
             return Collections.emptyList();
         }
         String expr = LETTER_BUCKET_EXPRESSION.formatted("title", "title");
-        String sql = "SELECT slug, title, updated_at FROM books " +
+        String sql = "SELECT id, slug, title, updated_at FROM books " +
                      "WHERE slug IS NOT NULL AND " + expr + " = ? " +
                      "ORDER BY lower(title), slug LIMIT ? OFFSET ?";
         try {
@@ -104,7 +105,7 @@ public class SitemapRepository {
         if (jdbcUnavailable()) {
             return Collections.emptyList();
         }
-        String sql = "SELECT slug, title, updated_at FROM books WHERE slug IS NOT NULL " +
+        String sql = "SELECT id, slug, title, updated_at FROM books WHERE slug IS NOT NULL " +
                      "ORDER BY updated_at DESC, lower(title) ASC LIMIT ? OFFSET ?";
         try {
             return jdbcTemplate.query(sql, BOOK_ROW_MAPPER, limit, offset);
@@ -163,7 +164,7 @@ public class SitemapRepository {
         if (jdbcUnavailable() || authorIds == null || authorIds.isEmpty()) {
             return Collections.emptyMap();
         }
-        String sql = "SELECT baj.author_id, b.slug, b.title, b.updated_at " +
+        String sql = "SELECT baj.author_id, b.id, b.slug, b.title, b.updated_at " +
                      "FROM book_authors_join baj " +
                      "JOIN books b ON b.id = baj.book_id " +
                      "WHERE baj.author_id IN (%s) AND b.slug IS NOT NULL " +
@@ -177,9 +178,10 @@ public class SitemapRepository {
                 while (rs.next()) {
                     String authorId = rs.getString("author_id");
                     BookRow row = new BookRow(
+                            rs.getString("id"),
                             rs.getString("slug"),
                             rs.getString("title"),
-                            rs.getTimestamp("updated_at").toInstant()
+                            rs.getTimestamp("updated_at") != null ? rs.getTimestamp("updated_at").toInstant() : Instant.EPOCH
                     );
                     results.computeIfAbsent(authorId, k -> new ArrayList<>()).add(row);
                 }
@@ -190,7 +192,7 @@ public class SitemapRepository {
         }
     }
 
-    public record BookRow(String slug, String title, Instant updatedAt) {}
+    public record BookRow(String bookId, String slug, String title, Instant updatedAt) {}
 
     public record AuthorRow(String id, String name, Instant updatedAt) {}
 }

@@ -63,7 +63,7 @@ public class SitemapService {
         int offset = (safePage - 1) * pageSize;
         List<BookSitemapItem> items = sitemapRepository.fetchBooksForBucket(bucket, pageSize, offset)
                 .stream()
-                .map(row -> new BookSitemapItem(row.slug(), row.title(), row.updatedAt()))
+                .map(row -> new BookSitemapItem(row.bookId(), row.slug(), row.title(), row.updatedAt()))
                 .toList();
         return new PagedResult<>(items, safePage, totalPages, totalItems);
     }
@@ -94,7 +94,7 @@ public class SitemapService {
                         row.updatedAt(),
                         booksByAuthor.getOrDefault(row.id(), Collections.emptyList())
                                 .stream()
-                                .map(bookRow -> new BookSitemapItem(bookRow.slug(), bookRow.title(), bookRow.updatedAt()))
+                                .map(bookRow -> new BookSitemapItem(bookRow.bookId(), bookRow.slug(), bookRow.title(), bookRow.updatedAt()))
                                 .toList()
                 ))
                 .toList();
@@ -113,7 +113,7 @@ public class SitemapService {
         int offset = (safePage - 1) * pageSize;
         return sitemapRepository.fetchBooksForXml(pageSize, offset)
                 .stream()
-                .map(row -> new BookSitemapItem(row.slug(), row.title(), row.updatedAt()))
+                .map(row -> new BookSitemapItem(row.bookId(), row.slug(), row.title(), row.updatedAt()))
                 .toList();
     }
 
@@ -217,7 +217,7 @@ public class SitemapService {
 
     public record PagedResult<T>(List<T> items, int page, int totalPages, int totalItems) {}
 
-    public record BookSitemapItem(String slug, String title, Instant updatedAt) {}
+    public record BookSitemapItem(String bookId, String slug, String title, Instant updatedAt) {}
 
     public record AuthorSection(String authorId, String authorName, Instant updatedAt, List<BookSitemapItem> books) {}
 

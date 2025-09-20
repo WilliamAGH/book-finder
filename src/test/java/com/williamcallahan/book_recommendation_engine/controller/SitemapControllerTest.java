@@ -59,7 +59,7 @@ class SitemapControllerTest {
     @Test
     @DisplayName("GET /sitemap renders the Thymeleaf sitemap view")
     void sitemapLandingRendersView() throws Exception {
-        List<BookSitemapItem> books = List.of(new BookSitemapItem("book-slug", "Demo Book", Instant.parse("2024-01-01T00:00:00Z")));
+        List<BookSitemapItem> books = List.of(new BookSitemapItem("book-id", "book-slug", "Demo Book", Instant.parse("2024-01-01T00:00:00Z")));
         when(sitemapService.getBooksByLetter(anyString(), anyInt())).thenReturn(new PagedResult<>(books, 1, 1, 1));
 
         mockMvc.perform(get("/sitemap").param("view", "books"))
@@ -85,7 +85,7 @@ class SitemapControllerTest {
     void booksSitemapReturnsXml() throws Exception {
         when(sitemapService.getBooksXmlPageCount()).thenReturn(1);
         when(sitemapService.getBooksForXmlPage(1)).thenReturn(List.of(
-                new BookSitemapItem("book-slug", "Demo Book", Instant.parse("2024-01-01T00:00:00Z"))
+                new BookSitemapItem("book-id", "book-slug", "Demo Book", Instant.parse("2024-01-01T00:00:00Z"))
         ));
 
         mockMvc.perform(get("/sitemap-xml/books/1.xml"))
