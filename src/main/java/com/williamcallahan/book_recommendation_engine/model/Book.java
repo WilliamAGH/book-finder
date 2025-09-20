@@ -33,6 +33,7 @@ public class Book {
     private String isbn13;
     private Date publishedDate;
     private List<String> categories;
+    private List<CollectionAssignment> collections = new ArrayList<>();
     private Double averageRating;
     private Integer ratingsCount;
     private String rawRatingsData;
@@ -76,6 +77,69 @@ public class Book {
 
     // Transient field to store the raw JSON response from Google Books API for provenance logging
     private transient String rawJsonResponse;
+
+    /**
+     * Represents membership of a book within a normalized collection or list.
+     * Collections cover categories, bestseller lists, or curated shelves backed by Postgres tables.
+     */
+    public static class CollectionAssignment {
+        private String collectionId;
+        private String name;
+        private String collectionType;
+        private Integer rank;
+        private String source;
+
+        public CollectionAssignment() {
+        }
+
+        public CollectionAssignment(String collectionId, String name, String collectionType, Integer rank, String source) {
+            this.collectionId = collectionId;
+            this.name = name;
+            this.collectionType = collectionType;
+            this.rank = rank;
+            this.source = source;
+        }
+
+        public String getCollectionId() {
+            return collectionId;
+        }
+
+        public void setCollectionId(String collectionId) {
+            this.collectionId = collectionId;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public String getCollectionType() {
+            return collectionType;
+        }
+
+        public void setCollectionType(String collectionType) {
+            this.collectionType = collectionType;
+        }
+
+        public Integer getRank() {
+            return rank;
+        }
+
+        public void setRank(Integer rank) {
+            this.rank = rank;
+        }
+
+        public String getSource() {
+            return source;
+        }
+
+        public void setSource(String source) {
+            this.source = source;
+        }
+    }
 
     /**
      * Nested class representing alternate editions of a book
@@ -505,6 +569,46 @@ public class Book {
      */
     public void setCategories(List<String> categories) {
         this.categories = categories;
+    }
+
+    /**
+     * Collections (categories, curated lists, bestsellers) the book participates in.
+     *
+     * @return Immutable copy of collection assignments
+     */
+    public List<CollectionAssignment> getCollections() {
+        if (collections == null || collections.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(collections);
+    }
+
+    /**
+     * Replace the collection assignments for this book.
+     *
+     * @param collections New collection assignments backing the book
+     */
+    public void setCollections(List<CollectionAssignment> collections) {
+        if (collections == null || collections.isEmpty()) {
+            this.collections = new ArrayList<>();
+            return;
+        }
+        this.collections = new ArrayList<>(collections);
+    }
+
+    /**
+     * Append a single collection assignment to the book, ignoring null inputs.
+     *
+     * @param assignment Collection to attach
+     */
+    public void addCollection(CollectionAssignment assignment) {
+        if (assignment == null) {
+            return;
+        }
+        if (this.collections == null) {
+            this.collections = new ArrayList<>();
+        }
+        this.collections.add(assignment);
     }
 
     /**
