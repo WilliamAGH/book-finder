@@ -3,7 +3,7 @@
       th:with="
         sitemapTitle=${pageTitle ?: 'Sitemap'},
         sitemapDescription=${pageDescription ?: 'Explore all indexed book and author pages.'},
-        canonicalUrl=${#httpServletRequest != null ? #httpServletRequest.requestURL.toString() : ''}
+        canonicalUrl=${canonicalUrl != null && !#strings.isEmpty(canonicalUrl) ? canonicalUrl : (#httpServletRequest != null ? #httpServletRequest.requestURL.toString() : '')}
       ">
 <head th:replace="~{fragments/layout :: head(title=${sitemapTitle}, description=${sitemapDescription}, canonicalUrl=${canonicalUrl}, ogImage=@{/images/og-logo.png}, keywords='book sitemap, author sitemap, find my book')}">
     <meta charset="UTF-8">
@@ -19,11 +19,11 @@
                 <p class="text-muted mb-0">Server-rendered directory of books and authors for search engines and readers.</p>
             </div>
             <div class="btn-group" role="group" aria-label="Sitemap view selector">
-                <a th:href="@{/sitemap(view='authors', letter=${activeLetter}, page=1)}"
+                <a th:href="@{|/sitemap/authors/${activeLetter}/1|}"
                    th:class="${viewType == 'authors'} ? 'btn btn-primary' : 'btn btn-outline-primary'">
                     Authors &amp; Books
                 </a>
-                <a th:href="@{/sitemap(view='books', letter=${activeLetter}, page=1)}"
+                <a th:href="@{|/sitemap/books/${activeLetter}/1|}"
                    th:class="${viewType == 'books'} ? 'btn btn-primary' : 'btn btn-outline-primary'">
                     Books Only
                 </a>
@@ -35,7 +35,7 @@
                 <div class="d-flex flex-wrap gap-2 align-items-center">
                     <span class="text-uppercase fw-semibold small text-muted">Jump to letter:</span>
                     <a th:each="letter : ${letters}"
-                       th:href="@{/sitemap(view=${viewType}, letter=${letter}, page=1)}"
+                       th:href="@{|/sitemap/${viewType}/${letter}/1|}"
                        th:text="${letter}"
                        th:class="${letter == activeLetter} ? 'badge bg-primary text-decoration-none' : 'badge bg-light text-dark text-decoration-none'"></a>
                 </div>
