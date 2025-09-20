@@ -7,8 +7,6 @@ import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -46,13 +44,79 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
         }
 
         try {
-            URI uri = new URI(url);
-            String host = (uri.getHost() != null) ? uri.getHost() : "localhost";
-            int port = (uri.getPort() == -1) ? 5432 : uri.getPort();
-            String path = (uri.getPath() != null) ? uri.getPath() : "/";
-            String database = path.startsWith("/") ? path.substring(1) : path;
-            String query = uri.getQuery();
+            // Manual parsing to handle postgres:// format properly
+            // Format: postgres://username:password@host:port/database?params
+            String withoutScheme = url.substring(url.indexOf("://") + 3);
 
+            String username = null;
+            String password = null;
+            String hostPart;
+
+            // Check if credentials are present
+            if (withoutScheme.contains("@")) {
+                String[] parts = withoutScheme.split("@", 2);
+                String userInfo = parts[0];
+                hostPart = parts[1];
+
+                // Extract username and password
+                if (userInfo.contains(":")) {
+                    int colonIndex = userInfo.indexOf(":");
+                    username = userInfo.substring(0, colonIndex);
+                    password = userInfo.substring(colonIndex + 1);
+                } else {
+                    username = userInfo;
+                }
+            } else {
+                hostPart = withoutScheme;
+            }
+
+            // Parse host, port, database, and query params
+            String host;
+            int port = 5432;
+            String database = "postgres";
+            String query = null;
+
+            // Split by ? to separate query params
+            if (hostPart.contains("?")) {
+                String[] queryParts = hostPart.split("\\?", 2);
+                hostPart = queryParts[0];
+                query = queryParts[1];
+            }
+
+            // Split by / to separate database
+            if (hostPart.contains("/")) {
+                String[] dbParts = hostPart.split("/", 2);
+                String hostPortPart = dbParts[0];
+                database = dbParts[1];
+
+                // Extract host and port
+                if (hostPortPart.contains(":")) {
+                    String[] hostPortSplit = hostPortPart.split(":", 2);
+                    host = hostPortSplit[0];
+                    try {
+                        port = Integer.parseInt(hostPortSplit[1]);
+                    } catch (NumberFormatException e) {
+                        port = 5432;
+                    }
+                } else {
+                    host = hostPortPart;
+                }
+            } else {
+                // No database specified in URL
+                if (hostPart.contains(":")) {
+                    String[] hostPortSplit = hostPart.split(":", 2);
+                    host = hostPortSplit[0];
+                    try {
+                        port = Integer.parseInt(hostPortSplit[1]);
+                    } catch (NumberFormatException e) {
+                        port = 5432;
+                    }
+                } else {
+                    host = hostPart;
+                }
+            }
+
+            // Build JDBC URL
             StringBuilder jdbc = new StringBuilder()
                     .append("jdbc:postgresql://")
                     .append(host)
@@ -72,25 +136,20 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
             overrides.put(HIKARI_JDBC_URL, jdbcUrl);
             overrides.put(DS_DRIVER, "org.postgresql.Driver");
 
+            // Set username and password if extracted and not already provided
             String existingUser = environment.getProperty(DS_USERNAME);
             String existingPass = environment.getProperty(DS_PASSWORD);
-            String userInfo = uri.getUserInfo();
-            if (userInfo != null && !userInfo.isEmpty()) {
-                int idx = userInfo.indexOf(':');
-                String user = (idx >= 0) ? userInfo.substring(0, idx) : userInfo;
-                String pass = (idx >= 0 && idx + 1 < userInfo.length()) ? userInfo.substring(idx + 1) : null;
-                if ((existingUser == null || existingUser.isBlank()) && user != null && !user.isBlank()) {
-                    overrides.put(DS_USERNAME, user);
-                }
-                if ((existingPass == null || existingPass.isBlank()) && pass != null && !pass.isBlank()) {
-                    overrides.put(DS_PASSWORD, pass);
-                }
+            if ((existingUser == null || existingUser.isBlank()) && username != null && !username.isBlank()) {
+                overrides.put(DS_USERNAME, username);
+            }
+            if ((existingPass == null || existingPass.isBlank()) && password != null && !password.isBlank()) {
+                overrides.put(DS_PASSWORD, password);
             }
 
             MutablePropertySources sources = environment.getPropertySources();
             // Highest precedence so these values win over application.yml
             sources.addFirst(new MapPropertySource("databaseUrlProcessor", overrides));
-        } catch (URISyntaxException e) {
+        } catch (Exception e) {
             // Leave the value as-is; Spring will surface connection errors if invalid
         }
     }

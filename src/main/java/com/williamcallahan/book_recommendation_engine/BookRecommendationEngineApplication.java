@@ -52,24 +52,117 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
      * @param args Command line arguments passed to the application
      */
     public static void main(String[] args) {
+        // Load .env file first
+        loadDotEnvFile();
         normalizeDatasourceUrlFromEnv();
         SpringApplication.run(BookRecommendationEngineApplication.class, args);
     }
 
+    private static void loadDotEnvFile() {
+        try {
+            // Check if .env file exists and load it
+            java.nio.file.Path envFile = java.nio.file.Paths.get(".env");
+            if (java.nio.file.Files.exists(envFile)) {
+                java.util.Properties props = new java.util.Properties();
+                try (java.io.InputStream is = java.nio.file.Files.newInputStream(envFile)) {
+                    props.load(is);
+                }
+                // Set as system properties only if not already set as environment variables
+                for (String key : props.stringPropertyNames()) {
+                    if (System.getenv(key) == null) {
+                        System.setProperty(key, props.getProperty(key));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Silently continue if .env loading fails
+        }
+    }
+
     private static void normalizeDatasourceUrlFromEnv() {
         try {
+            // Check environment variable first, then system property (from .env)
             String url = System.getenv("SPRING_DATASOURCE_URL");
+            if (url == null || url.isBlank()) {
+                url = System.getProperty("SPRING_DATASOURCE_URL");
+            }
             if (url == null || url.isBlank()) return;
             String lower = url.toLowerCase();
             if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) return;
 
-            java.net.URI uri = new java.net.URI(url);
-            String host = (uri.getHost() != null) ? uri.getHost() : "localhost";
-            int port = (uri.getPort() == -1) ? 5432 : uri.getPort();
-            String path = (uri.getPath() != null) ? uri.getPath() : "/";
-            String database = path.startsWith("/") ? path.substring(1) : path;
-            String query = uri.getQuery();
+            // Manual parsing to handle postgres:// format properly
+            // Format: postgres://username:password@host:port/database?params
+            String withoutScheme = url.substring(url.indexOf("://") + 3);
 
+            String username = null;
+            String password = null;
+            String hostPart;
+
+            // Check if credentials are present
+            if (withoutScheme.contains("@")) {
+                String[] parts = withoutScheme.split("@", 2);
+                String userInfo = parts[0];
+                hostPart = parts[1];
+
+                // Extract username and password
+                if (userInfo.contains(":")) {
+                    int colonIndex = userInfo.indexOf(":");
+                    username = userInfo.substring(0, colonIndex);
+                    password = userInfo.substring(colonIndex + 1);
+                } else {
+                    username = userInfo;
+                }
+            } else {
+                hostPart = withoutScheme;
+            }
+
+            // Parse host, port, database, and query params
+            String host;
+            int port = 5432;
+            String database = "postgres";
+            String query = null;
+
+            // Split by ? to separate query params
+            if (hostPart.contains("?")) {
+                String[] parts = hostPart.split("\\?", 2);
+                hostPart = parts[0];
+                query = parts[1];
+            }
+
+            // Split by / to separate database
+            if (hostPart.contains("/")) {
+                String[] parts = hostPart.split("/", 2);
+                String hostPortPart = parts[0];
+                database = parts[1];
+
+                // Extract host and port
+                if (hostPortPart.contains(":")) {
+                    String[] hostPortSplit = hostPortPart.split(":", 2);
+                    host = hostPortSplit[0];
+                    try {
+                        port = Integer.parseInt(hostPortSplit[1]);
+                    } catch (NumberFormatException e) {
+                        port = 5432;
+                    }
+                } else {
+                    host = hostPortPart;
+                }
+            } else {
+                // No database specified in URL
+                if (hostPart.contains(":")) {
+                    String[] hostPortSplit = hostPart.split(":", 2);
+                    host = hostPortSplit[0];
+                    try {
+                        port = Integer.parseInt(hostPortSplit[1]);
+                    } catch (NumberFormatException e) {
+                        port = 5432;
+                    }
+                } else {
+                    host = hostPart;
+                }
+            }
+
+            // Build JDBC URL
             StringBuilder jdbc = new StringBuilder()
                     .append("jdbc:postgresql://")
                     .append(host)
@@ -88,26 +181,36 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
             System.setProperty("spring.datasource.hikari.jdbc-url", jdbcUrl);
             System.setProperty("spring.datasource.driver-class-name", "org.postgresql.Driver");
 
-            // If username/password not already provided, derive from URI user-info
-            String existingUser = System.getProperty("spring.datasource.username",
-                    System.getenv("SPRING_DATASOURCE_USERNAME") != null ? System.getenv("SPRING_DATASOURCE_USERNAME") : "");
-            String existingPass = System.getProperty("spring.datasource.password",
-                    System.getenv("SPRING_DATASOURCE_PASSWORD") != null ? System.getenv("SPRING_DATASOURCE_PASSWORD") : "");
-            String userInfo = uri.getUserInfo();
-            if ((existingUser == null || existingUser.isBlank()) && userInfo != null && !userInfo.isEmpty()) {
-                int idx = userInfo.indexOf(':');
-                String user = (idx >= 0) ? userInfo.substring(0, idx) : userInfo;
-                if (user != null && !user.isBlank()) System.setProperty("spring.datasource.username", user);
-                if ((existingPass == null || existingPass.isBlank()) && idx >= 0 && idx + 1 < userInfo.length()) {
-                    String pass = userInfo.substring(idx + 1);
-                    if (pass != null && !pass.isBlank()) System.setProperty("spring.datasource.password", pass);
-                }
+            // Set username and password if extracted and not already provided
+            String existingUser = System.getenv("SPRING_DATASOURCE_USERNAME");
+            if (existingUser == null || existingUser.isBlank()) {
+                existingUser = System.getProperty("SPRING_DATASOURCE_USERNAME");
+            }
+            if (existingUser == null || existingUser.isBlank()) {
+                existingUser = System.getProperty("spring.datasource.username");
+            }
+
+            String existingPass = System.getenv("SPRING_DATASOURCE_PASSWORD");
+            if (existingPass == null || existingPass.isBlank()) {
+                existingPass = System.getProperty("SPRING_DATASOURCE_PASSWORD");
+            }
+            if (existingPass == null || existingPass.isBlank()) {
+                existingPass = System.getProperty("spring.datasource.password");
+            }
+
+            if ((existingUser == null || existingUser.isBlank()) && username != null && !username.isBlank()) {
+                System.setProperty("spring.datasource.username", username);
+            }
+            if ((existingPass == null || existingPass.isBlank()) && password != null && !password.isBlank()) {
+                System.setProperty("spring.datasource.password", password);
             }
 
             // Echo minimal confirmation to stdout (password omitted)
-            System.out.println("[DB] Normalized SPRING_DATASOURCE_URL to JDBC for Hikari: " + jdbcUrl.replaceAll("password=[^&]+", "password=***"));
-        } catch (Exception ignored) {
+            String safeUrl = jdbcUrl.replaceAll("://[^@]+@", "://***:***@");
+            System.out.println("[DB] Normalized SPRING_DATASOURCE_URL to JDBC: " + safeUrl);
+        } catch (Exception e) {
             // If parsing fails, leave as-is; Spring will surface the connection error
+            System.err.println("[DB] Failed to normalize SPRING_DATASOURCE_URL: " + e.getMessage());
         }
     }
 

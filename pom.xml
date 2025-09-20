@@ -30,6 +30,7 @@
         <java.version>21</java.version>
         <spring-ai.version>1.0.0-RC1</spring-ai.version>
         <wro4j.version>2.1.1</wro4j.version>
+        <wro4j.skip>false</wro4j.skip>
         <maven.resources.useDefaultDelimiters>false</maven.resources.useDefaultDelimiters>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -269,6 +270,18 @@
                 </pluginRepository>
             </pluginRepositories>
         </profile>
+        <profile>
+            <id>ci-skip-wro</id>
+            <activation>
+                <property>
+                    <name>ci.skip.wro</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <properties>
+                <wro4j.skip>true</wro4j.skip>
+            </properties>
+        </profile>
     </profiles>
 
     <build>
@@ -411,6 +424,7 @@
                     <jsDestinationFolder>${project.build.directory}/classes/static/js/</jsDestinationFolder>
                     <ignoreMissingResources>false</ignoreMissingResources>
                     <targetGroups>app</targetGroups>
+                    <skip>${wro4j.skip}</skip>
                 </configuration>
             </plugin>
             <plugin>

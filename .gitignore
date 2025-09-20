@@ -55,3 +55,7 @@ build/
 .env.development
 .env.test
 .env.production
+
+### Temporary Files and Logs ###
+tmp/
+migration-logs/
