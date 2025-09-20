@@ -84,8 +84,16 @@ class JsonParser {
       throw new Error('Empty file');
     }
 
-    if (bodyString.includes('\ufffd') || bodyString.includes('\x00')) {
+    // Only check for null bytes which indicate true binary data
+    // Don't check for \ufffd as it might be legitimate Unicode
+    if (bodyString.includes('\x00')) {
       throw new Error('File contains binary/corrupted data');
+    }
+
+    // Check if it looks like JSON at all
+    const trimmed = bodyString.trim();
+    if (trimmed.length > 0 && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      throw new Error('File does not appear to be JSON (does not start with { or [)');
     }
 
     // Step 2: Split concatenated objects if needed
@@ -488,6 +496,38 @@ class BookMigrator {
    * Insert external ID record
    */
   async insertExternalId(bookId, googleBooksId, fields) {
+    // Check if another external ID already has these ISBNs
+    // If so, we'll store NULL for the ISBNs to avoid duplicate constraint violations
+    // The ISBNs are already linked to the book via the books table
+    let providerIsbn10 = fields.isbn10;
+    let providerIsbn13 = fields.isbn13;
+
+    if (fields.isbn13) {
+      const existingIsbn13 = await this.client.query(
+        `SELECT external_id FROM book_external_ids
+         WHERE source = 'GOOGLE_BOOKS' AND provider_isbn13 = $1
+         LIMIT 1`,
+        [fields.isbn13]
+      );
+      if (existingIsbn13.rows.length > 0 && existingIsbn13.rows[0].external_id !== googleBooksId) {
+        console.log(`[INFO] ISBN13 ${fields.isbn13} already linked via external ID ${existingIsbn13.rows[0].external_id}`);
+        providerIsbn13 = null; // Don't duplicate the ISBN in external_ids table
+      }
+    }
+
+    if (fields.isbn10) {
+      const existingIsbn10 = await this.client.query(
+        `SELECT external_id FROM book_external_ids
+         WHERE source = 'GOOGLE_BOOKS' AND provider_isbn10 = $1
+         LIMIT 1`,
+        [fields.isbn10]
+      );
+      if (existingIsbn10.rows.length > 0 && existingIsbn10.rows[0].external_id !== googleBooksId) {
+        console.log(`[INFO] ISBN10 ${fields.isbn10} already linked via external ID ${existingIsbn10.rows[0].external_id}`);
+        providerIsbn10 = null; // Don't duplicate the ISBN in external_ids table
+      }
+    }
+
     await this.client.query(
       `INSERT INTO book_external_ids (
         id, book_id, source, external_id, provider_isbn10, provider_isbn13,
@@ -503,11 +543,13 @@ class BookMigrator {
         $29, NOW()
       )
       ON CONFLICT (source, external_id) DO UPDATE SET
-        average_rating = EXCLUDED.average_rating,
-        ratings_count = EXCLUDED.ratings_count`,
+        average_rating = COALESCE(EXCLUDED.average_rating, book_external_ids.average_rating),
+        ratings_count = COALESCE(EXCLUDED.ratings_count, book_external_ids.ratings_count),
+        list_price = COALESCE(EXCLUDED.list_price, book_external_ids.list_price),
+        retail_price = COALESCE(EXCLUDED.retail_price, book_external_ids.retail_price)`,
       [
         generateNanoId(10), bookId, 'GOOGLE_BOOKS', googleBooksId,
-        fields.isbn10, fields.isbn13, fields.infoLink, fields.previewLink,
+        providerIsbn10, providerIsbn13, fields.infoLink, fields.previewLink,
         fields.webReaderLink, fields.canonicalVolumeLink, fields.averageRating,
         fields.ratingsCount, fields.isEbook, fields.pdfAvailable,
         fields.epubAvailable, fields.embeddable, fields.publicDomain,

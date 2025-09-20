@@ -951,7 +951,7 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
     }
 
     // 6. Handle image links from volumeInfo.imageLinks and map to S3 if exists
-    if (imageLinks && Object.keys(imageLinks).length > 0) {
+    if (Object.keys(imageLinks ?? {}).length > 0) {
       // Generate the expected S3 path using the same pattern as S3BookCoverService
       // Pattern: images/book-covers/{bookId}-lg-google-books-api.jpg
       const s3Key = `images/book-covers/${googleBooksId}-lg-google-books-api.jpg`;

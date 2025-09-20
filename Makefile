@@ -36,12 +36,12 @@ test:
 	$(MVN) test
 
 
-# Fast S3 -> Postgres books migration (standalone Node.js script)
+# Fast S3 -> Postgres books migration (standalone Node.js script - v2 refactored)
 # Requires: npm install pg @aws-sdk/client-s3
 # Uses SPRING_DATASOURCE_URL, S3_* env vars from .env
 migrate-books:
-	@echo "Running standalone S3 -> Postgres migration..."
-	@node migrate-s3-to-db.js --max=$(MIGRATE_MAX) --skip=$(MIGRATE_SKIP) --prefix=$(MIGRATE_PREFIX) --debug=$(MIGRATE_DEBUG)
+	@echo "Running standalone S3 -> Postgres migration (v2 - Refactored)..."
+	@node migrate-s3-to-db-v2.js --max=$(MIGRATE_MAX) --skip=$(MIGRATE_SKIP) --prefix=$(MIGRATE_PREFIX) --debug=$(MIGRATE_DEBUG)
 
 # Build JAR and run S3 -> Postgres books backfill via Spring Boot (slower, may hang)
 migrate-books-spring:
