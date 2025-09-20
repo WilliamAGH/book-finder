@@ -1009,6 +1009,7 @@ declare
   clusters_count integer := 0;
   books_count integer := 0;
   book_uuid uuid;
+  existing_cluster uuid;
 begin
   for rec in
     select
@@ -1021,16 +1022,30 @@ begin
     group by extract_isbn_work_prefix(isbn13)
     having count(*) > 1 and extract_isbn_work_prefix(isbn13) is not null
   loop
-    insert into work_clusters (isbn_prefix, canonical_title, confidence_score, cluster_method, member_count)
-    values (rec.prefix, rec.canonical_title, 0.9, 'ISBN_PREFIX', rec.book_count)
-    on conflict (isbn_prefix)
-    do update set
-      canonical_title = excluded.canonical_title,
-      member_count = excluded.member_count,
-      updated_at = now()
-    returning id into cluster_uuid;
+    -- Check if cluster exists
+    select id into existing_cluster
+    from work_clusters
+    where isbn_prefix = rec.prefix;
 
-    clusters_count := clusters_count + 1;
+    if existing_cluster is null then
+      -- Create new cluster
+      insert into work_clusters (isbn_prefix, canonical_title, confidence_score, cluster_method, member_count)
+      values (rec.prefix, rec.canonical_title, 0.9, 'ISBN_PREFIX', rec.book_count)
+      returning id into cluster_uuid;
+
+      clusters_count := clusters_count + 1;
+    else
+      -- Update existing cluster
+      update work_clusters
+      set canonical_title = rec.canonical_title,
+          member_count = rec.book_count,
+          updated_at = now()
+      where id = existing_cluster
+      returning id into cluster_uuid;
+    end if;
+
+    -- Clear existing members for this cluster
+    delete from work_cluster_members where cluster_id = cluster_uuid;
 
     -- Add members (first one is primary)
     for i in 1..array_length(rec.book_ids, 1) loop
@@ -1038,7 +1053,10 @@ begin
 
       insert into work_cluster_members (cluster_id, book_id, is_primary, confidence, join_reason)
       values (cluster_uuid, book_uuid, (i = 1), 0.9, 'ISBN_PREFIX')
-      on conflict (cluster_id, book_id) do nothing;
+      on conflict (cluster_id, book_id) do update set
+        is_primary = excluded.is_primary,
+        confidence = excluded.confidence,
+        join_reason = excluded.join_reason;
 
       books_count := books_count + 1;
     end loop;
