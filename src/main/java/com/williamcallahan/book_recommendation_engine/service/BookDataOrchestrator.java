@@ -20,7 +20,10 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
+import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
+import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,10 +38,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -47,13 +46,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.zip.GZIPInputStream;
+import java.util.concurrent.atomic.AtomicLong;
 import org.postgresql.util.PGobject;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import java.sql.Date;
 import java.util.UUID;
 import java.util.Locale;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.util.Set;
+import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 
 @Service
 public class BookDataOrchestrator {
@@ -68,11 +72,26 @@ public class BookDataOrchestrator {
     private final BookDataAggregatorService bookDataAggregatorService;
     private final BookSupplementalPersistenceService supplementalPersistenceService;
     private final BookCollectionPersistenceService collectionPersistenceService;
+    private final BookSearchService bookSearchService;
     private JdbcTemplate jdbcTemplate; // Optional DB layer
     private PostgresBookReader postgresBookReader;
     @Autowired(required = false)
     private S3StorageService s3StorageService; // Optional S3 layer
     private TransactionTemplate transactionTemplate;
+    private static final long SEARCH_VIEW_REFRESH_INTERVAL_MS = 60_000L;
+    private final AtomicLong lastSearchViewRefresh = new AtomicLong(0L);
+    private static final Pattern CONTROL_CHAR_PATTERN = Pattern.compile("[\\x01-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]");
+    private static final Pattern CONCATENATED_OBJECT_PATTERN = Pattern.compile("\\}\\s*\\{");
+    private static final int MAX_JSON_START_SCAN = 1000;
+    private static final List<String> JSON_START_HINTS = List.of(
+        "{\"id\":",
+        "{\"kind\":",
+        "{\"title\":",
+        "{\"volumeInfo\":",
+        "{ \"id\":",
+        "{ \"kind\":",
+        "[{\""
+    );
 
     public BookDataOrchestrator(S3RetryService s3RetryService,
                                 GoogleApiFetcher googleApiFetcher,
@@ -81,7 +100,8 @@ public class BookDataOrchestrator {
                                 // LongitoodBookDataService longitoodBookDataService, // Removed
                                 BookDataAggregatorService bookDataAggregatorService,
                                 BookSupplementalPersistenceService supplementalPersistenceService,
-                                BookCollectionPersistenceService collectionPersistenceService) {
+                                BookCollectionPersistenceService collectionPersistenceService,
+                                BookSearchService bookSearchService) {
         this.s3RetryService = s3RetryService;
         this.googleApiFetcher = googleApiFetcher;
         this.objectMapper = objectMapper;
@@ -90,6 +110,7 @@ public class BookDataOrchestrator {
         this.bookDataAggregatorService = bookDataAggregatorService;
         this.supplementalPersistenceService = supplementalPersistenceService;
         this.collectionPersistenceService = collectionPersistenceService;
+        this.bookSearchService = bookSearchService;
     }
 
     @Autowired(required = false)
@@ -103,6 +124,14 @@ public class BookDataOrchestrator {
         if (transactionManager != null) {
             this.transactionTemplate = new TransactionTemplate(transactionManager);
         }
+    }
+
+    public void refreshSearchView() {
+        triggerSearchViewRefresh(false);
+    }
+
+    public void refreshSearchViewImmediately() {
+        triggerSearchViewRefresh(true);
     }
 
     private Mono<Book> fetchFromApisAndAggregate(String bookId) {
@@ -330,6 +359,12 @@ public class BookDataOrchestrator {
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy) {
         logger.debug("BookDataOrchestrator: Starting tiered search for query: '{}', lang: {}, total: {}, order: {}", query, langCode, desiredTotalResults, orderBy);
         
+        List<Book> postgresHits = searchPostgresFirst(query, desiredTotalResults);
+        if (!postgresHits.isEmpty()) {
+            logger.info("BookDataOrchestrator: Postgres search satisfied query '{}' with {} results.", query, postgresHits.size());
+            return Mono.just(postgresHits);
+        }
+
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
         boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable(); 
 
@@ -383,9 +418,45 @@ public class BookDataOrchestrator {
             });
     }
 
+    public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
+        if (bookSearchService == null) {
+            return Mono.just(List.of());
+        }
+        int safeLimit = desiredTotalResults <= 0 ? 20 : PagingUtils.clamp(desiredTotalResults, 1, 100);
+        return Mono.fromCallable(() -> bookSearchService.searchAuthors(query, safeLimit))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorResume(ex -> {
+                    logger.error("BookDataOrchestrator: Author search failed for '{}': {}", query, ex.getMessage(), ex);
+                    return Mono.just(List.of());
+                });
+    }
+
+    private List<Book> searchPostgresFirst(String query, int desiredTotalResults) {
+        if (bookSearchService == null || jdbcTemplate == null) {
+            return List.of();
+        }
+        int safeTotal = desiredTotalResults <= 0 ? 20 : PagingUtils.atLeast(desiredTotalResults, 1);
+        List<BookSearchService.SearchResult> hits = bookSearchService.searchBooks(query, safeTotal);
+        if (hits == null || hits.isEmpty()) {
+            return List.of();
+        }
+        List<Book> resolved = new ArrayList<>(hits.size());
+        for (BookSearchService.SearchResult hit : hits) {
+            Optional<Book> book = findInDatabaseById(hit.bookId().toString());
+            book.ifPresent(resolvedBook -> {
+                resolvedBook.addQualifier("search.matchType", hit.matchTypeNormalised());
+                resolvedBook.addQualifier("search.relevanceScore", hit.relevanceScore());
+                resolved.add(resolvedBook);
+            });
+        }
+        return resolved;
+    }
+
     private Mono<List<Book>> executePagedSearch(String query, String langCode, int desiredTotalResults, String orderBy, boolean authenticated, Map<String, Object> queryQualifiers) {
         final int maxResultsPerPage = 40;
-        final int maxTotalResultsToFetch = (desiredTotalResults > 0 && desiredTotalResults <= 200) ? desiredTotalResults : (desiredTotalResults <=0 ? 40 : 200) ; 
+        final int maxTotalResultsToFetch = desiredTotalResults <= 0
+            ? 40
+            : PagingUtils.clamp(desiredTotalResults, 1, 200);
         final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "relevance";
         String authType = authenticated ? "Authenticated" : "Unauthenticated";
 
@@ -458,88 +529,331 @@ public class BookDataOrchestrator {
         final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "books/v1/";
         logger.info("Starting S3→DB migration: prefix='{}', max={}, skip={}", effectivePrefix, maxRecords, skipRecords);
 
-        List<S3Object> objects = s3StorageService.listObjects(effectivePrefix);
-        if (objects == null || objects.isEmpty()) {
-            logger.info("S3→DB migration: No objects found under prefix '{}'. Nothing to do.", effectivePrefix);
+        List<String> keysToProcess = prepareJsonKeysForMigration(
+            effectivePrefix,
+            maxRecords,
+            skipRecords,
+            "S3→DB migration",
+            " Nothing to do.",
+            " after filtering."
+        );
+
+        if (keysToProcess.isEmpty()) {
             return;
         }
-
-        // Filter for JSON objects and apply skip
-        List<S3Object> jsonObjects = new ArrayList<>();
-        for (S3Object obj : objects) {
-            if (obj == null || obj.key() == null) continue;
-            String key = obj.key();
-            if (key.endsWith(".json")) {
-                jsonObjects.add(obj);
-            }
-        }
-
-        if (skipRecords > 0 && skipRecords < jsonObjects.size()) {
-            jsonObjects = jsonObjects.subList(skipRecords, jsonObjects.size());
-        } else if (skipRecords >= jsonObjects.size()) {
-            logger.info("S3→DB migration: skip={} >= total JSON objects ({}). Nothing to do.", skipRecords, jsonObjects.size());
-            return;
-        }
-
-        int totalToProcess = (maxRecords > 0) ? Math.min(maxRecords, jsonObjects.size()) : jsonObjects.size();
-        logger.info("S3→DB migration: {} JSON object(s) to process after filtering.", totalToProcess);
 
         AtomicInteger processed = new AtomicInteger(0);
-        for (int i = 0; i < totalToProcess; i++) {
-            S3Object obj = jsonObjects.get(i);
-            String key = obj.key();
+        for (String key : keysToProcess) {
             try {
-                byte[] raw = s3StorageService.downloadFileAsBytes(key);
-                if (raw == null || raw.length == 0) {
-                    logger.debug("S3→DB migration: Empty or missing content for key {}. Skipping.", key);
+                Optional<String> jsonOptional = fetchJsonFromS3Key(key);
+                if (jsonOptional.isEmpty()) {
                     continue;
                 }
 
-                String json = tryDecompressAsGzipOrUtf8(raw);
-                if (json == null || json.isEmpty()) {
-                    logger.debug("S3→DB migration: Failed to read JSON for key {}. Skipping.", key);
+                List<JsonNode> candidates = parseBookJsonPayload(jsonOptional.get(), key);
+                if (candidates.isEmpty()) {
+                    logger.debug("S3→DB migration: No usable JSON objects extracted for key {}.", key);
                     continue;
                 }
 
-                JsonNode jsonNode = objectMapper.readTree(json);
-                Book book = BookJsonParser.convertJsonToBook(jsonNode);
-                if (book == null || book.getId() == null) {
-                    logger.debug("S3→DB migration: Parsed null/invalid book for key {}. Skipping.", key);
-                    continue;
-                }
+                for (JsonNode jsonNode : candidates) {
+                    Book book = BookJsonParser.convertJsonToBook(jsonNode);
+                    if (book == null || book.getId() == null) {
+                        logger.debug("S3→DB migration: Parsed null/invalid book for key {}. Skipping fragment.", key);
+                        continue;
+                    }
 
-                // Enrich on matches, then upsert by canonical id
-                saveToDatabaseEnrichOnMatch(book, jsonNode);
-                int count = processed.incrementAndGet();
-                if (count % 50 == 0 || count == totalToProcess) {
-                    logger.info("S3→DB migration progress: {}/{} processed.", count, totalToProcess);
+                    saveToDatabaseEnrichOnMatch(book, jsonNode);
+                    int count = processed.incrementAndGet();
+                    if (count % 50 == 0) {
+                        logger.info("S3→DB migration progress: {} processed so far (current key: {}).", count, key);
+                    }
                 }
             } catch (Exception e) {
                 logger.warn("S3→DB migration: Error processing key {}: {}", key, e.getMessage());
             }
         }
 
-        logger.info("S3→DB migration completed. Processed {} record(s).", processed.get());
+        logger.info("S3→DB migration completed. Processed {} book fragment(s).", processed.get());
     }
+    private List<String> prepareJsonKeysForMigration(String effectivePrefix,
+                                                    int maxRecords,
+                                                    int skipRecords,
+                                                    String contextLabel,
+                                                    String noObjectsSuffix,
+                                                    String totalSuffix) {
+        List<S3Object> objects = s3StorageService.listObjects(effectivePrefix);
+        if (objects == null || objects.isEmpty()) {
+            logger.info("{}: No objects found under prefix '{}'{}", contextLabel, effectivePrefix, noObjectsSuffix);
+            return Collections.emptyList();
+        }
 
-    private String tryDecompressAsGzipOrUtf8(byte[] raw) {
-        // Attempt GZIP first, fall back to UTF-8 plain text
-        try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(raw));
-             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[1024];
-            int len;
-            while ((len = gis.read(buffer)) > 0) {
-                baos.write(buffer, 0, len);
+        List<String> jsonKeys = new ArrayList<>();
+        for (S3Object object : objects) {
+            if (object == null) {
+                continue;
             }
-            return baos.toString(StandardCharsets.UTF_8.name());
-        } catch (IOException ignored) {
-            // Not GZIP or failed to decompress; attempt plain UTF-8 string
-            try {
-                return new String(raw, StandardCharsets.UTF_8);
-            } catch (Exception e) {
-                return null;
+            String key = object.key();
+            if (key != null && key.endsWith(".json")) {
+                jsonKeys.add(key);
             }
         }
+
+        if (skipRecords > 0 && skipRecords < jsonKeys.size()) {
+            jsonKeys = new ArrayList<>(jsonKeys.subList(skipRecords, jsonKeys.size()));
+        } else if (skipRecords >= jsonKeys.size()) {
+            logger.info("{}: skip={} >= total JSON objects ({}). Nothing to do.", contextLabel, skipRecords, jsonKeys.size());
+            return Collections.emptyList();
+        }
+
+        int totalToProcess = (maxRecords > 0) ? Math.min(maxRecords, jsonKeys.size()) : jsonKeys.size();
+        logger.info("{}: {} JSON object(s) to process{}", contextLabel, totalToProcess, totalSuffix);
+        return new ArrayList<>(jsonKeys.subList(0, totalToProcess));
+    }
+
+    private List<JsonNode> parseBookJsonPayload(String rawPayload, String key) {
+        if (rawPayload == null || rawPayload.isBlank()) {
+            logger.warn("S3→DB migration: Empty JSON payload for key {}.", key);
+            return Collections.emptyList();
+        }
+
+        String sanitized = rawPayload.replace("\u0000", "");
+        sanitized = CONTROL_CHAR_PATTERN.matcher(sanitized).replaceAll("");
+        sanitized = sanitized.trim();
+
+        if (sanitized.isEmpty()) {
+            logger.warn("S3→DB migration: Payload for key {} became empty after sanitization.", key);
+            return Collections.emptyList();
+        }
+
+        if (!sanitized.startsWith("{") && !sanitized.startsWith("[")) {
+            int startIndex = findJsonStartIndex(sanitized);
+            if (startIndex < 0) {
+                logger.warn("S3→DB migration: Unable to locate JSON start for key {}. Skipping payload.", key);
+                return Collections.emptyList();
+            }
+            if (startIndex > 0) {
+                logger.warn("S3→DB migration: Stripping {} leading non-JSON bytes for key {}.", startIndex, key);
+                sanitized = sanitized.substring(startIndex);
+            }
+        }
+
+        List<String> fragments = splitConcatenatedJson(sanitized);
+        List<JsonNode> parsedNodes = new ArrayList<>();
+
+        for (String fragment : fragments) {
+            if (fragment == null || fragment.isBlank()) {
+                continue;
+            }
+            try {
+                JsonNode node = objectMapper.readTree(fragment);
+                if (node == null) {
+                    continue;
+                }
+                if (node.isArray()) {
+                    node.forEach(parsedNodes::add);
+                } else {
+                    parsedNodes.add(node);
+                }
+            } catch (Exception ex) {
+                logger.warn("S3→DB migration: Failed to parse JSON fragment for key {}: {}", key, ex.getMessage());
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Fragment preview: {}", fragment.length() > 200 ? fragment.substring(0, 200) : fragment);
+                }
+            }
+        }
+
+        if (parsedNodes.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<JsonNode> extracted = new ArrayList<>(parsedNodes.size());
+        for (JsonNode candidate : parsedNodes) {
+            JsonNode normalized = extractFromPreProcessed(candidate, key);
+            if (normalized != null) {
+                extracted.add(normalized);
+            }
+        }
+
+        return deduplicateBookNodes(extracted, key);
+    }
+
+    private int findJsonStartIndex(String payload) {
+        if (payload == null) {
+            return -1;
+        }
+
+        int firstBrace = payload.indexOf('{');
+        int firstBracket = payload.indexOf('[');
+        int candidate = -1;
+
+        if (firstBrace >= 0 && (firstBracket == -1 || firstBrace < firstBracket)) {
+            candidate = firstBrace;
+        } else if (firstBracket >= 0) {
+            candidate = firstBracket;
+        }
+
+        if (candidate >= 0 && candidate <= MAX_JSON_START_SCAN) {
+            return candidate;
+        }
+
+        int bestMatch = -1;
+        for (String hint : JSON_START_HINTS) {
+            int idx = payload.indexOf(hint);
+            if (idx >= 0 && (bestMatch == -1 || idx < bestMatch)) {
+                bestMatch = idx;
+            }
+        }
+
+        return bestMatch;
+    }
+
+    private List<String> splitConcatenatedJson(String payload) {
+        Matcher matcher = CONCATENATED_OBJECT_PATTERN.matcher(payload);
+        if (!matcher.find()) {
+            return List.of(payload);
+        }
+
+        List<String> fragments = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+
+        for (int i = 0; i < payload.length(); i++) {
+            char ch = payload.charAt(i);
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    fragments.add(payload.substring(start, i + 1));
+                    start = i + 1;
+                    while (start < payload.length() && Character.isWhitespace(payload.charAt(start))) {
+                        start++;
+                    }
+                }
+            }
+        }
+
+        if (start < payload.length()) {
+            String remainder = payload.substring(start).trim();
+            if (!remainder.isEmpty()) {
+                fragments.add(remainder);
+            }
+        }
+
+        return fragments.isEmpty() ? List.of(payload) : fragments;
+    }
+
+    private JsonNode extractFromPreProcessed(JsonNode node, String key) {
+        if (node == null) {
+            return null;
+        }
+
+        JsonNode rawNode = node.get("rawJsonResponse");
+        boolean hasVolumeInfo = node.has("volumeInfo");
+        String id = node.path("id").asText(null);
+        String title = node.path("title").asText(null);
+
+        boolean isPreProcessed = rawNode != null && !hasVolumeInfo && id != null && id.equals(title);
+        if (!isPreProcessed) {
+            return node;
+        }
+
+        try {
+            String raw = rawNode.isTextual() ? rawNode.asText() : rawNode.toString();
+            if (raw.startsWith("\"") && raw.endsWith("\"")) {
+                raw = objectMapper.readValue(raw, String.class);
+            }
+            JsonNode inner = objectMapper.readTree(raw);
+            if (inner != null && (inner.has("volumeInfo") || "books#volume".equals(inner.path("kind").asText(null)))) {
+                return inner;
+            }
+        } catch (Exception ex) {
+            logger.warn("S3→DB migration: Failed to unwrap rawJsonResponse for key {}: {}", key, ex.getMessage());
+        }
+
+        return node;
+    }
+
+    private List<JsonNode> deduplicateBookNodes(List<JsonNode> candidates, String key) {
+        if (candidates == null || candidates.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<String, JsonNode> unique = new LinkedHashMap<>();
+        for (JsonNode candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            String dedupKey = computeDedupKey(candidate);
+            if (!unique.containsKey(dedupKey)) {
+                unique.put(dedupKey, candidate);
+            } else if (logger.isDebugEnabled()) {
+                logger.debug("S3→DB migration: Deduplicated book fragment for key {} using key {}.", key, dedupKey);
+            }
+        }
+
+        return new ArrayList<>(unique.values());
+    }
+
+    private String computeDedupKey(JsonNode node) {
+        if (node == null) {
+            return "";
+        }
+
+        String nodeId = node.path("id").asText(null);
+
+        JsonNode volume = node.has("volumeInfo") ? node.get("volumeInfo") : node;
+        JsonNode identifiers = volume.get("industryIdentifiers");
+        if (identifiers != null && identifiers.isArray()) {
+            for (JsonNode identifierNode : identifiers) {
+                String type = identifierNode.path("type").asText("");
+                String value = identifierNode.path("identifier").asText("");
+                if (!value.isEmpty() && ("ISBN_13".equalsIgnoreCase(type) || "ISBN_10".equalsIgnoreCase(type))) {
+                    return (type + ":" + value).toLowerCase(Locale.ROOT);
+                }
+            }
+        }
+
+        if (nodeId != null && !nodeId.isBlank()) {
+            return ("id:" + nodeId).toLowerCase(Locale.ROOT);
+        }
+
+        String title = volume.path("title").asText("");
+        String author = "";
+        JsonNode authors = volume.get("authors");
+        if (authors != null && authors.isArray() && authors.size() > 0) {
+            author = authors.get(0).asText("");
+        }
+
+        return (title + ":" + author).toLowerCase(Locale.ROOT);
+    }
+
+    private Optional<String> fetchJsonFromS3Key(String key) {
+        if (s3StorageService == null) {
+            return Optional.empty();
+        }
+
+        try {
+            S3FetchResult<String> result = s3StorageService.fetchGenericJsonAsync(key).join();
+            if (result.isSuccess()) {
+                return result.getData();
+            }
+
+            if (result.isNotFound()) {
+                logger.debug("S3→DB migration: JSON not found for key {}. Skipping.", key);
+            } else if (result.isDisabled()) {
+                logger.warn("S3→DB migration: S3 disabled while fetching key {}. Skipping.", key);
+            } else {
+                String errorMessage = result.getErrorMessage().orElse("Unknown error");
+                logger.warn("S3→DB migration: Failed to fetch key {} (status {}): {}", key, result.getStatus(), errorMessage);
+            }
+        } catch (CompletionException ex) {
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            logger.warn("S3→DB migration: Exception fetching key {}: {}", key, cause.getMessage());
+        }
+
+        return Optional.empty();
     }
 
     private void saveToDatabaseEnrichOnMatch(Book incoming, JsonNode sourceJson) {
@@ -601,43 +915,30 @@ public class BookDataOrchestrator {
         final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "lists/" + (provider != null ? provider.toLowerCase(Locale.ROOT) : "") + "/";
         logger.info("Starting S3→DB list migration: provider='{}', prefix='{}', max={}, skip={}", provider, effectivePrefix, maxRecords, skipRecords);
 
-        List<S3Object> objects = s3StorageService.listObjects(effectivePrefix);
-        if (objects == null || objects.isEmpty()) {
-            logger.info("S3→DB list migration: No objects found under prefix '{}'.", effectivePrefix);
+        List<String> keysToProcess = prepareJsonKeysForMigration(
+            effectivePrefix,
+            maxRecords,
+            skipRecords,
+            "S3→DB list migration",
+            "",
+            "."
+        );
+
+        if (keysToProcess.isEmpty()) {
             return;
         }
 
-        // Filter for list JSON files
-        List<S3Object> jsonObjects = new ArrayList<>();
-        for (S3Object obj : objects) {
-            if (obj == null || obj.key() == null) continue;
-            String key = obj.key();
-            if (key.endsWith(".json")) {
-                jsonObjects.add(obj);
-            }
-        }
-
-        if (skipRecords > 0 && skipRecords < jsonObjects.size()) {
-            jsonObjects = jsonObjects.subList(skipRecords, jsonObjects.size());
-        } else if (skipRecords >= jsonObjects.size()) {
-            logger.info("S3→DB list migration: skip={} >= total JSON objects ({}). Nothing to do.", skipRecords, jsonObjects.size());
-            return;
-        }
-
-        int totalToProcess = (maxRecords > 0) ? Math.min(maxRecords, jsonObjects.size()) : jsonObjects.size();
-        logger.info("S3→DB list migration: {} JSON object(s) to process.", totalToProcess);
+        int totalToProcess = keysToProcess.size();
 
         AtomicInteger processed = new AtomicInteger(0);
-        for (int i = 0; i < totalToProcess; i++) {
-            S3Object obj = jsonObjects.get(i);
-            String key = obj.key();
+        for (String key : keysToProcess) {
             try {
-                byte[] raw = s3StorageService.downloadFileAsBytes(key);
-                if (raw == null || raw.length == 0) continue;
-                String json = tryDecompressAsGzipOrUtf8(raw);
-                if (json == null || json.isEmpty()) continue;
+                Optional<String> jsonOptional = fetchJsonFromS3Key(key);
+                if (jsonOptional.isEmpty()) {
+                    continue;
+                }
 
-                JsonNode root = objectMapper.readTree(json);
+                JsonNode root = objectMapper.readTree(jsonOptional.get());
                 if (!(root instanceof com.fasterxml.jackson.databind.node.ObjectNode)) continue;
                 com.fasterxml.jackson.databind.node.ObjectNode listJson = (com.fasterxml.jackson.databind.node.ObjectNode) root;
 
@@ -721,7 +1022,7 @@ public class BookDataOrchestrator {
         if (postgresBookReader == null) {
             return Optional.empty();
         }
-        String sanitized = sanitizeIsbn(isbn13);
+        String sanitized = IsbnUtils.sanitize(isbn13);
         if (sanitized == null) {
             return Optional.empty();
         }
@@ -732,7 +1033,7 @@ public class BookDataOrchestrator {
         if (postgresBookReader == null) {
             return Optional.empty();
         }
-        String sanitized = sanitizeIsbn(isbn10);
+        String sanitized = IsbnUtils.sanitize(isbn10);
         if (sanitized == null) {
             return Optional.empty();
         }
@@ -762,8 +1063,8 @@ public class BookDataOrchestrator {
 
     private void persistCanonicalBook(Book book, JsonNode sourceJson) {
         String googleId = extractGoogleId(sourceJson, book);
-        String isbn13 = sanitizeIsbn(book.getIsbn13());
-        String isbn10 = sanitizeIsbn(book.getIsbn10());
+        String isbn13 = IsbnUtils.sanitize(book.getIsbn13());
+        String isbn10 = IsbnUtils.sanitize(book.getIsbn10());
 
         if (isbn13 != null) {
             book.setIsbn13(isbn13);
@@ -784,6 +1085,7 @@ public class BookDataOrchestrator {
 
         String slug = resolveSlug(canonicalId, book, isNew);
         upsertBookRecord(book, slug);
+        persistDimensions(canonicalId, book);
 
         if (googleId != null) {
             upsertExternalMetadata(canonicalId, "GOOGLE_BOOKS", googleId, book, sourceJson);
@@ -805,6 +1107,7 @@ public class BookDataOrchestrator {
         persistImageLinks(canonicalId, book);
         supplementalPersistenceService.assignQualifierTags(canonicalId, book.getQualifiers());
         synchronizeEditionRelationships(canonicalId, book);
+        triggerSearchViewRefresh(false);
     }
 
     private String extractGoogleId(JsonNode sourceJson, Book book) {
@@ -852,13 +1155,12 @@ public class BookDataOrchestrator {
     }
 
     private String queryForId(String sql, Object... params) {
-        try {
-            List<String> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString(1), params);
-            return ids.isEmpty() ? null : ids.get(0);
-        } catch (DataAccessException ex) {
-            logger.debug("Query failed: {}", ex.getMessage());
-            return null;
-        }
+        return JdbcUtils.optionalString(
+                jdbcTemplate,
+                sql,
+                ex -> logger.debug("Query failed: {}", ex.getMessage()),
+                params
+        ).orElse(null);
     }
 
     private String resolveSlug(String bookId, Book book, boolean isNew) {
@@ -1026,6 +1328,80 @@ public class BookDataOrchestrator {
             );
         } catch (Exception e) {
             logger.warn("Failed to persist raw JSON for book {}: {}", bookId, e.getMessage());
+        }
+    }
+
+    private void persistDimensions(String bookId, Book book) {
+        if (jdbcTemplate == null || bookId == null || !looksLikeUuid(bookId)) {
+            return;
+        }
+
+        Double height = book.getHeightCm();
+        Double width = book.getWidthCm();
+        Double thickness = book.getThicknessCm();
+        Double weight = book.getWeightGrams();
+
+        java.util.UUID canonicalUuid;
+        try {
+            canonicalUuid = java.util.UUID.fromString(bookId);
+        } catch (IllegalArgumentException ex) {
+            logger.debug("Skipping dimension persistence for non-UUID id {}", bookId);
+            return;
+        }
+
+        if (height == null && width == null && thickness == null && weight == null) {
+            try {
+                jdbcTemplate.update("DELETE FROM book_dimensions WHERE book_id = ?", canonicalUuid);
+            } catch (DataAccessException ex) {
+                logger.debug("Failed to delete empty dimensions for {}: {}", bookId, ex.getMessage());
+            }
+            return;
+        }
+
+        try {
+            jdbcTemplate.update(
+                "INSERT INTO book_dimensions (id, book_id, height_cm, width_cm, thickness_cm, weight_grams, created_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, NOW()) " +
+                "ON CONFLICT (book_id) DO UPDATE SET " +
+                "height_cm = COALESCE(EXCLUDED.height_cm, book_dimensions.height_cm), " +
+                "width_cm = COALESCE(EXCLUDED.width_cm, book_dimensions.width_cm), " +
+                "thickness_cm = COALESCE(EXCLUDED.thickness_cm, book_dimensions.thickness_cm), " +
+                "weight_grams = COALESCE(EXCLUDED.weight_grams, book_dimensions.weight_grams)",
+                IdGenerator.generateShort(),
+                canonicalUuid,
+                height,
+                width,
+                thickness,
+                weight
+            );
+        } catch (DataAccessException ex) {
+            logger.debug("Failed to persist dimensions for {}: {}", bookId, ex.getMessage());
+        }
+    }
+
+    private void triggerSearchViewRefresh(boolean force) {
+        if (bookSearchService == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long previous;
+        if (force) {
+            previous = lastSearchViewRefresh.getAndSet(now);
+        } else {
+            previous = lastSearchViewRefresh.get();
+            if (now - previous < SEARCH_VIEW_REFRESH_INTERVAL_MS) {
+                return;
+            }
+            if (!lastSearchViewRefresh.compareAndSet(previous, now)) {
+                return;
+            }
+        }
+        long lastValid = previous;
+        try {
+            bookSearchService.refreshMaterializedView();
+        } catch (RuntimeException ex) {
+            logger.debug("Failed to refresh book search view: {}", ex.getMessage());
+            lastSearchViewRefresh.set(lastValid);
         }
     }
 
@@ -1256,6 +1632,7 @@ public class BookDataOrchestrator {
 
                     hydrateAuthors(book, canonicalId);
                     hydrateCategories(book, canonicalId);
+                    hydrateCollections(book, canonicalId);
                     hydrateDimensions(book, canonicalId);
                     hydrateRawPayload(book, canonicalId);
                     hydrateTags(book, canonicalId);
@@ -1304,6 +1681,42 @@ public class BookDataOrchestrator {
             } catch (DataAccessException ex) {
                 LOG.debug("Failed to hydrate categories for {}: {}", canonicalId, ex.getMessage());
                 book.setCategories(List.of());
+            }
+        }
+
+        private void hydrateCollections(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT bc.id,
+                           bc.display_name,
+                           bc.collection_type,
+                           bc.source,
+                           bcj.position
+                    FROM book_collections_join bcj
+                    JOIN book_collections bc ON bc.id = bcj.collection_id
+                    WHERE bcj.book_id = ?
+                    ORDER BY CASE WHEN bc.collection_type = 'CATEGORY' THEN 0 ELSE 1 END,
+                             COALESCE(bcj.position, 2147483647),
+                             lower(bc.display_name)
+                    """;
+            try {
+                List<Book.CollectionAssignment> assignments = jdbcTemplate.query(
+                        sql,
+                        ps -> ps.setObject(1, canonicalId),
+                        (rs, rowNum) -> {
+                            Book.CollectionAssignment assignment = new Book.CollectionAssignment();
+                            assignment.setCollectionId(rs.getString("id"));
+                            assignment.setName(rs.getString("display_name"));
+                            assignment.setCollectionType(rs.getString("collection_type"));
+                            Integer rank = (Integer) rs.getObject("position");
+                            assignment.setRank(rank);
+                            assignment.setSource(rs.getString("source"));
+                            return assignment;
+                        }
+                );
+                book.setCollections(assignments);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate collections for {}: {}", canonicalId, ex.getMessage());
+                book.setCollections(List.of());
             }
         }
 
@@ -1629,11 +2042,4 @@ public class BookDataOrchestrator {
         }
     }
 
-    private String sanitizeIsbn(String raw) {
-        if (raw == null) {
-            return null;
-        }
-        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase(java.util.Locale.ROOT);
-        return cleaned.isBlank() ? null : cleaned;
-    }
 }

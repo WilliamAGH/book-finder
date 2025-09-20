@@ -46,6 +46,7 @@ public class RecommendationService {
     ));
 
     private final GoogleBooksService googleBooksService;
+    private final BookDataOrchestrator bookDataOrchestrator;
 
     /**
      * Constructs the RecommendationService with required dependencies
@@ -54,8 +55,10 @@ public class RecommendationService {
      *
      * @implNote Uses GoogleBooksService for searches and book details
      */
-    public RecommendationService(GoogleBooksService googleBooksService) {
+    public RecommendationService(GoogleBooksService googleBooksService,
+                                 BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
+        this.bookDataOrchestrator = bookDataOrchestrator;
     }
 
     /**
@@ -72,52 +75,21 @@ public class RecommendationService {
     public Mono<List<Book>> getSimilarBooks(String bookId, int finalCount) {
         final int effectiveCount = (finalCount <= 0) ? DEFAULT_RECOMMENDATION_COUNT : finalCount;
 
-        return Mono.fromFuture(googleBooksService.getBookById(bookId).toCompletableFuture())
-            .flatMap(sourceBook -> {
-                if (sourceBook == null) {
-                    logger.warn("Cannot get recommendations - source book with ID {} not found.", bookId);
-                    return Mono.just(Collections.<Book>emptyList());
-                }
-
-                // Tier 1: Try to use cached recommendation IDs from the sourceBook object
-                List<String> cachedIds = sourceBook.getCachedRecommendationIds();
-                if (cachedIds != null && !cachedIds.isEmpty()) {
-                    logger.info("Found {} cached recommendation IDs for book {}.", cachedIds.size(), bookId);
-                    // Fetch full Book objects for these IDs
-                    // Shuffle to provide variety if we have more cached IDs than needed
-                    List<String> idsToFetch = new ArrayList<>(cachedIds);
-                    Collections.shuffle(idsToFetch);
-                    if (idsToFetch.size() > effectiveCount * 2) { // Fetch a bit more to allow for filtering
-                        idsToFetch = idsToFetch.subList(0, effectiveCount * 2);
-                    }
-
-                    return Flux.fromIterable(idsToFetch)
-                        .flatMap(recId -> Mono.fromFuture(googleBooksService.getBookById(recId).toCompletableFuture())
-                            .filter(Objects::nonNull) // Ensure book exists in cache
-                            .filter(recBook -> !recBook.getId().equals(sourceBook.getId())) // Exclude source book
-                            .filter(recBook -> { // Language filter
-                                String sourceLang = sourceBook.getLanguage();
-                                boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
-                                if (!filterByLanguage) return true;
-                                return Objects.equals(sourceLang, recBook.getLanguage());
-                            })
-                        )
-                        .collectList()
-                        .flatMap(cachedBooks -> {
-                            if (cachedBooks.size() >= effectiveCount) {
-                                logger.info("Serving {} recommendations for book {} from S3/cached IDs.", Math.min(cachedBooks.size(), effectiveCount), bookId);
-                                return Mono.just(cachedBooks.stream().limit(effectiveCount).collect(Collectors.toList()));
-                            } else {
-                                logger.info("Cached recommendations for book {} are insufficient ({} found, {} needed). Fetching from API.", bookId, cachedBooks.size(), effectiveCount);
-                                return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
+        return fetchCanonicalBook(bookId)
+                .flatMap(sourceBook -> fetchCachedRecommendations(sourceBook, effectiveCount)
+                        .flatMap(cached -> {
+                            if (!cached.isEmpty()) {
+                                logger.info("Serving {} cached Postgres recommendations for book {}.", cached.size(), bookId);
+                                return Mono.just(cached);
                             }
-                        });
-                } else {
-                    logger.info("No cached recommendation IDs for book {}. Fetching from API.", bookId);
-                    return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
-                }
-            })
-            .switchIfEmpty(Mono.just(Collections.emptyList())); // If the whole chain above is empty, provide an empty list.
+                            logger.info("No cached Postgres recommendations for book {}. Falling back to API pipeline.", bookId);
+                            return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
+                        }))
+                .switchIfEmpty(fetchLegacyRecommendations(bookId, effectiveCount))
+                .onErrorResume(ex -> {
+                    logger.error("Failed to assemble recommendations for {}: {}", bookId, ex.getMessage(), ex);
+                    return Mono.just(Collections.<Book>emptyList());
+                });
     }
 
     /**
@@ -134,8 +106,63 @@ public class RecommendationService {
      * 3. Retrieves books with matching keywords (via findBooksByTextReactive)
      * 4. Merges results, with duplicates having their scores combined
      * 5. Filters by language and excludes the source book itself
-     * 6. Updates the source book's cached recommendation IDs for future use
+    * 6. Updates the source book's cached recommendation IDs for future use
      */
+    private Mono<List<Book>> fetchLegacyRecommendations(String bookId, int effectiveCount) {
+        return Mono.fromFuture(googleBooksService.getBookById(bookId).toCompletableFuture())
+                .flatMap(sourceBook -> {
+                    if (sourceBook == null) {
+                        logger.warn("Cannot get recommendations - source book with ID {} not found.", bookId);
+                        return Mono.just(Collections.<Book>emptyList());
+                    }
+                    return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
+                })
+                .switchIfEmpty(Mono.just(Collections.<Book>emptyList()));
+    }
+
+    private Mono<Book> fetchCanonicalBook(String identifier) {
+        if (identifier == null || identifier.isBlank() || bookDataOrchestrator == null) {
+            return Mono.empty();
+        }
+        Mono<Book> byId = Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.getBookByIdTiered(identifier);
+            return lookup == null ? Mono.empty() : lookup;
+        });
+        Mono<Book> bySlug = Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
+            return lookup == null ? Mono.empty() : lookup;
+        });
+        return byId.switchIfEmpty(bySlug);
+    }
+
+    private Mono<Book> fetchCanonicalBookSafe(String identifier) {
+        return fetchCanonicalBook(identifier)
+                .doOnError(ex -> logger.debug("Postgres lookup failed for recommendation {}: {}", identifier, ex.getMessage()))
+                .onErrorResume(ex -> Mono.empty());
+    }
+
+    private Mono<List<Book>> fetchCachedRecommendations(Book sourceBook, int limit) {
+        if (sourceBook == null) {
+            return Mono.just(Collections.<Book>emptyList());
+        }
+        List<String> cachedIds = sourceBook.getCachedRecommendationIds();
+        if (cachedIds == null || cachedIds.isEmpty()) {
+            return Mono.just(Collections.<Book>emptyList());
+        }
+
+        List<String> idsToFetch = new ArrayList<>(cachedIds);
+        Collections.shuffle(idsToFetch);
+
+        return Flux.fromIterable(idsToFetch)
+                .flatMapSequential(this::fetchCanonicalBookSafe, 4, 8)
+                .filter(Objects::nonNull)
+                .filter(recommended -> sourceBook.getId() == null || !sourceBook.getId().equals(recommended.getId()))
+                .distinct(Book::getId)
+                .take(limit)
+                .collectList()
+                .doOnNext(results -> logger.debug("Hydrated {} cached recommendations for {}", results.size(), sourceBook.getId()));
+    }
+
     private Mono<List<Book>> fetchRecommendationsFromApiAndUpdateCache(Book sourceBook, int effectiveCount) {
         Flux<ScoredBook> authorsFlux = findBooksByAuthorsReactive(sourceBook);
         Flux<ScoredBook> categoriesFlux = findBooksByCategoriesReactive(sourceBook);
@@ -197,7 +224,7 @@ public class RecommendationService {
                         });
                 } else {
                      logger.info("No recommendations generated from API for book ID: {}", sourceBook.getId());
-                    return Mono.just(Collections.emptyList());
+                    return Mono.just(Collections.<Book>emptyList());
                 }
             });
     }

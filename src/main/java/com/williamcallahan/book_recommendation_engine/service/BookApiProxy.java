@@ -15,6 +15,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,7 +32,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.Locale;
 
 @Service
 public class BookApiProxy {
@@ -240,23 +240,28 @@ public class BookApiProxy {
      * @param langCode Language code for search results
      * @return Mono emitting list of books matching the search
      */
-    @Cacheable(value = "searchRequests", key = "#query + '-' + #langCode", condition = "#root.target.cacheEnabled")
+    @Cacheable(
+        value = "searchRequests",
+        key = "T(com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils).cacheKey(#query, #langCode)",
+        condition = "#root.target.cacheEnabled"
+    )
     public Mono<List<Book>> searchBooks(String query, String langCode) {
-        String cacheKey = query + "-" + langCode;
-        
+        String normalizedQuery = SearchQueryUtils.normalize(query);
+        String cacheKey = SearchQueryUtils.cacheKey(query, langCode);
+
         // Use computeIfAbsent for atomic get-or-create to prevent race conditions
         CompletableFuture<List<Book>> future = searchRequestCache.computeIfAbsent(cacheKey, key -> {
             CompletableFuture<List<Book>> newFuture = new CompletableFuture<>();
-            
+
             // Remove from cache when complete to prevent memory leaks
-            newFuture.whenComplete((result, ex) -> searchRequestCache.remove(cacheKey));
-            
+            newFuture.whenComplete((result, ex) -> searchRequestCache.remove(key));
+
             // Start processing pipeline
-            processSearchRequest(query, langCode, newFuture);
-            
+            processSearchRequest(normalizedQuery, query, langCode, newFuture);
+
             return newFuture;
         });
-        
+
         return Mono.fromCompletionStage(future);
     }
     
@@ -267,50 +272,53 @@ public class BookApiProxy {
      * @param langCode Language code
      * @param future Future to complete with result
      */
-    private void processSearchRequest(String query, String langCode, CompletableFuture<List<Book>> future) {
+    private void processSearchRequest(String normalizedQuery,
+                                      String originalQuery,
+                                      String langCode,
+                                      CompletableFuture<List<Book>> future) {
         // First try the local file cache (in dev/test mode)
         if (localCacheEnabled) {
-            List<Book> localResults = getSearchFromLocalCache(query, langCode);
+            List<Book> localResults = getSearchFromLocalCache(originalQuery, langCode);
             if (localResults != null && !localResults.isEmpty()) {
-                logger.debug("Retrieved search '{}' from local cache, {} results", query, localResults.size());
+                logger.debug("Retrieved search '{}' from local cache, {} results", normalizedQuery, localResults.size());
                 future.complete(localResults);
                 return;
             }
         }
-        
+
         // Next, check mock data if available (in dev/test mode)
-        if (mockService.isPresent() && mockService.get().hasMockDataForSearch(query)) {
-            List<Book> mockResults = mockService.get().searchBooks(query);
+        if (mockService.isPresent() && mockService.get().hasMockDataForSearch(originalQuery)) {
+            List<Book> mockResults = mockService.get().searchBooks(originalQuery);
             if (mockResults != null && !mockResults.isEmpty()) {
-                logger.debug("Retrieved search '{}' from mock data, {} results", query, mockResults.size());
+                logger.debug("Retrieved search '{}' from mock data, {} results", normalizedQuery, mockResults.size());
                 future.complete(mockResults);
-                
+
                 // Still persist to local cache for faster future access
                 if (localCacheEnabled) {
-                    saveSearchToLocalCache(query, langCode, mockResults);
+                    saveSearchToLocalCache(originalQuery, langCode, mockResults);
                 }
-                
+
                 return;
             }
         }
         
         // Fall back to the actual service (which has its own caching)
         if (logApiCalls) {
-            logger.info("Making REAL API call to Google Books for search: '{}'", query);
+            logger.info("Making REAL API call to Google Books for search: '{}'", normalizedQuery);
         }
-        
+
         // This is already a Mono<List<Book>>, no need for collectList()
-        googleBooksService.searchBooksAsyncReactive(query, langCode)
+        googleBooksService.searchBooksAsyncReactive(normalizedQuery, langCode)
             .subscribe(
                 results -> {
                     // Cache the results
                     if (results != null && !results.isEmpty() && localCacheEnabled) {
-                        saveSearchToLocalCache(query, langCode, results);
+                        saveSearchToLocalCache(originalQuery, langCode, results);
                     }
                     future.complete(results);
                 },
                 error -> {
-                    logger.error("Error searching for '{}': {}", query, error.getMessage());
+                    logger.error("Error searching for '{}': {}", normalizedQuery, error.getMessage());
                     future.completeExceptionally(error);
                 }
             );
@@ -372,10 +380,8 @@ public class BookApiProxy {
     private List<Book> getSearchFromLocalCache(String query, String langCode) {
         if (!localCacheEnabled) return null;
         
-        String normalizedQuery = query.toLowerCase(Locale.ROOT).trim();
-        String langString = langCode != null ? langCode : "any";
-        String filename = normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + "-" + langString + ".json";
-        
+        String filename = SearchQueryUtils.cacheKey(query, langCode);
+
         Path searchFile = Paths.get(localCacheDirectory, "searches", filename);
         
         if (Files.exists(searchFile)) {
@@ -400,10 +406,8 @@ public class BookApiProxy {
     private void saveSearchToLocalCache(String query, String langCode, List<Book> results) {
         if (!localCacheEnabled || results == null) return;
         
-        String normalizedQuery = query.toLowerCase(Locale.ROOT).trim();
-        String langString = langCode != null ? langCode : "any";
-        String filename = normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + "-" + langString + ".json";
-        
+        String filename = SearchQueryUtils.cacheKey(query, langCode);
+
         Path searchFile = Paths.get(localCacheDirectory, "searches", filename);
         
         try {

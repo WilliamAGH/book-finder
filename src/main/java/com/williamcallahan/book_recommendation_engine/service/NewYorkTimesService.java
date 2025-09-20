@@ -27,6 +27,8 @@ import java.util.Collections;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+
 @Service
 public class NewYorkTimesService {
     private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesService.class);
@@ -74,10 +76,10 @@ public class NewYorkTimesService {
     /**
      * Fetch the latest published list's books for the given provider list code from Postgres.
      */
-    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(java.lang.Math).min(T(java.lang.Math).max(#limit,1),100)")
+    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100)")
     public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
         // Validate and clamp limit to reasonable range
-        final int effectiveLimit = Math.max(1, Math.min(limit, 100));
+        final int effectiveLimit = PagingUtils.clamp(limit, 1, 100);
 
         if (jdbcTemplate == null) {
             logger.warn("JdbcTemplate not available; returning empty bestsellers list.");

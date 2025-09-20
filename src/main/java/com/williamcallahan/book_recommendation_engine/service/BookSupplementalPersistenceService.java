@@ -2,6 +2,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
+import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -70,15 +71,19 @@ public class BookSupplementalPersistenceService {
             if (key == null) {
                 return;
             }
-            String canonicalKey = key.trim().toLowerCase();
-            if (canonicalKey.isEmpty()) {
+            if (key.trim().isEmpty()) {
                 return;
             }
-
-            String tagId = upsertTag(canonicalKey, key, "QUALIFIER");
-            String metadata = serializeQualifierMetadata(value);
             Double confidence = (value instanceof Boolean && (Boolean) value) ? 1.0 : null;
-            assignTagInternal(bookId, tagId, "QUALIFIER", confidence, metadata);
+            assignTagWithSerializedMetadata(
+                bookId,
+                key,
+                key,
+                "QUALIFIER",
+                "QUALIFIER",
+                confidence,
+                serializeQualifierMetadata(value)
+            );
         });
     }
 
@@ -91,13 +96,15 @@ public class BookSupplementalPersistenceService {
         if (bookId == null || key == null) {
             return;
         }
-        String canonicalKey = key.trim().toLowerCase();
-        if (canonicalKey.isEmpty()) {
+        if (key.trim().isEmpty()) {
             return;
         }
-        String tagId = upsertTag(canonicalKey, displayName != null ? displayName : key, "QUALIFIER");
-        String metadataJson = serializeMetadata(metadata != null && !metadata.isEmpty() ? metadata : Map.of("value", displayName != null ? displayName : key));
-        assignTagInternal(bookId, tagId, source != null ? source : canonicalKey, confidence, metadataJson);
+        String resolvedDisplayName = displayName != null ? displayName : key;
+        Map<String, Object> metadataMap = metadata != null && !metadata.isEmpty()
+            ? metadata
+            : Map.of("value", resolvedDisplayName);
+        String metadataJson = serializeMetadata(metadataMap);
+        assignTagWithSerializedMetadata(bookId, key, resolvedDisplayName, "QUALIFIER", source, confidence, metadataJson);
     }
 
     private void assignTagInternal(String bookId,
@@ -130,7 +137,7 @@ public class BookSupplementalPersistenceService {
                 IdGenerator.generate(), name, normalized
             );
         } catch (DataAccessException ex) {
-            return queryForId("SELECT id FROM authors WHERE name = ?", name);
+            return JdbcUtils.optionalString(jdbcTemplate, "SELECT id FROM authors WHERE name = ?", name).orElse(null);
         }
     }
 
@@ -143,7 +150,7 @@ public class BookSupplementalPersistenceService {
                 IdGenerator.generate(), key, displayName, tagType
             );
         } catch (DataAccessException ex) {
-            return queryForId("SELECT id FROM book_tags WHERE key = ?", key);
+            return JdbcUtils.optionalString(jdbcTemplate, "SELECT id FROM book_tags WHERE key = ?", key).orElse(null);
         }
     }
 
@@ -163,14 +170,25 @@ public class BookSupplementalPersistenceService {
         }
     }
 
-    private String queryForId(String sql, Object... args) {
-        if (jdbcTemplate == null) {
-            return null;
+    private void assignTagWithSerializedMetadata(String bookId,
+                                                 String key,
+                                                 String displayName,
+                                                 String tagType,
+                                                 String source,
+                                                 Double confidence,
+                                                 String metadataJson) {
+        if (bookId == null || key == null) {
+            return;
         }
-        try {
-            return jdbcTemplate.queryForObject(sql, String.class, args);
-        } catch (DataAccessException ex) {
-            return null;
+
+        String canonicalKey = key.trim().toLowerCase();
+        if (canonicalKey.isEmpty()) {
+            return;
         }
+
+        String tagId = upsertTag(canonicalKey, displayName != null ? displayName : key, tagType);
+        String resolvedSource = source != null ? source : canonicalKey;
+        assignTagInternal(bookId, tagId, resolvedSource, confidence, metadataJson);
     }
+
 }

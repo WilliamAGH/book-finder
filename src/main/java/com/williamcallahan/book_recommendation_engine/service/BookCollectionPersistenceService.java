@@ -2,6 +2,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
+import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -37,10 +38,11 @@ public class BookCollectionPersistenceService {
             );
             return Optional.ofNullable(id);
         } catch (DataAccessException ex) {
-            String existing = queryForId(
+            String existing = JdbcUtils.optionalString(
+                jdbcTemplate,
                 "SELECT id FROM book_collections WHERE collection_type = 'CATEGORY' AND source = 'GOOGLE_BOOKS' AND normalized_name = ?",
                 normalized
-            );
+            ).orElse(null);
             return Optional.ofNullable(existing);
         }
     }
@@ -189,16 +191,4 @@ public class BookCollectionPersistenceService {
             rawItemJson != null ? rawItemJson.toString() : null
         );
     }
-
-    private String queryForId(String sql, Object... args) {
-        if (jdbcTemplate == null) {
-            return null;
-        }
-        try {
-            return jdbcTemplate.queryForObject(sql, String.class, args);
-        } catch (DataAccessException ex) {
-            return null;
-        }
-    }
 }
-

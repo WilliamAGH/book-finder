@@ -23,9 +23,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -44,93 +42,6 @@ public class BookDataAggregatorService {
      */
     public BookDataAggregatorService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-    }
-
-    /**
-     * Merges data from Google Books API and New York Times API for a single book
-     * 
-     * @param googleBooksJsonNode The JsonNode representing the full book data from Google Books API
-     * @param nytBookJsonNode The JsonNode representing the book data from the NYT bestseller list
-     * @param googleBookId The Google Books ID of the book
-     * @return An ObjectNode containing the merged book data
-     * 
-     * @implNote Uses Google Books data as the base, with NYT data supplementing or overriding
-     * Preserves source-specific identifiers and handles special NYT fields differently
-     * Books with the same ID may have different data from each source
-     */
-    public ObjectNode prepareEnrichedBookJson(JsonNode googleBooksJsonNode, JsonNode nytBookJsonNode, String googleBookId) {
-        ObjectNode mergedBookJson;
-
-        // Start with Google Books data as the base
-        if (googleBooksJsonNode != null && googleBooksJsonNode.isObject()) {
-            mergedBookJson = (ObjectNode) googleBooksJsonNode.deepCopy();
-        } else {
-            logger.warn("Google Books data is null or not an object for ID: {}. Starting with an empty JSON object.", googleBookId);
-            mergedBookJson = objectMapper.createObjectNode();
-        }
-
-        // Ensure google_book_id is present (it might be missing if googleBooksJsonNode was null)
-        if (!mergedBookJson.has("id") || mergedBookJson.get("id").asText().isEmpty()) {
-             mergedBookJson.put("id", googleBookId); // Google Books API usually has 'id' field
-        }
-         // We'll use a field named "google_book_id" for consistency with what scheduler expects for S3 key.
-        mergedBookJson.put("google_book_id", googleBookId);
-
-
-        if (nytBookJsonNode != null && nytBookJsonNode.isObject()) {
-            logger.debug("Merging NYT data for Google Book ID: {}", googleBookId);
-            // Iterate over NYT fields and merge them
-            Iterator<Map.Entry<String, JsonNode>> nytFields = nytBookJsonNode.fields();
-            while (nytFields.hasNext()) {
-                Map.Entry<String, JsonNode> entry = nytFields.next();
-                String fieldName = entry.getKey();
-                JsonNode nytValue = entry.getValue();
-
-                // Simple merge: NYT data overrides if field exists, or adds if new.
-                // More sophisticated logic can be added here (e.g., prefer non-null, combine lists, etc.)
-                // For now, let's be careful not to overwrite essential Google Books ID if NYT has a conflicting 'id' field (unlikely for 'id').
-                if (fieldName.equals("id") && mergedBookJson.has("id") && !mergedBookJson.get("id").asText("").equals(nytValue.asText(""))) {
-                    logger.warn("NYT data has an 'id' field ({}) different from Google's primary ID ({}). Prioritizing Google's 'id'. NYT 'id' ignored for this key.", 
-                                nytValue.asText(""), mergedBookJson.get("id").asText(""));
-                    continue; // Skip overwriting the primary 'id' field from Google.
-                }
-                
-                // Specific fields from NYT to prioritize or handle specially:
-                // Example: 'amazon_product_url', 'rank', 'weeks_on_list', 'buy_links'
-                // For 'buy_links', NYT provides an array. Google might have 'saleInfo.buyLink'.
-                // We might want to store NYT buy_links under a specific key like 'nyt_buy_links'.
-
-                // For now, a general merge, NYT data takes precedence for shared field names (except 'id').
-                if (!"buy_links".equals(fieldName)) {
-                    mergedBookJson.set(fieldName, nytValue);
-                }
-            }
-            // Add NYT specific fields if they are not directly named in a conflicting way
-            if (nytBookJsonNode.has("rank")) {
-                 mergedBookJson.put("nyt_rank", nytBookJsonNode.get("rank").asInt());
-            }
-            if (nytBookJsonNode.has("weeks_on_list")) {
-                mergedBookJson.put("nyt_weeks_on_list", nytBookJsonNode.get("weeks_on_list").asInt());
-            }
-            if (nytBookJsonNode.has("buy_links")) {
-                mergedBookJson.set("nyt_buy_links", nytBookJsonNode.get("buy_links"));
-            }
-             if (nytBookJsonNode.has("amazon_product_url") && !nytBookJsonNode.get("amazon_product_url").asText("").isEmpty()) {
-                mergedBookJson.put("amazon_product_url", nytBookJsonNode.get("amazon_product_url").asText());
-            }
-
-
-        } else {
-            logger.debug("NYT data is null or not an object for Google Book ID: {}. No NYT-specific data to merge.", googleBookId);
-        }
-        
-        // Ensure the primary 'id' field is the Google Book ID if it was overwritten or missing
-        if (!mergedBookJson.path("id").asText("").equals(googleBookId)) {
-            mergedBookJson.put("id", googleBookId);
-        }
-
-
-        return mergedBookJson;
     }
 
     /**

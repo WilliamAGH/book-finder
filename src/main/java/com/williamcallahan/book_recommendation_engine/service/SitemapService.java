@@ -4,6 +4,7 @@ import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.repository.SitemapRepository;
 import com.williamcallahan.book_recommendation_engine.repository.SitemapRepository.AuthorRow;
 import com.williamcallahan.book_recommendation_engine.repository.SitemapRepository.BookRow;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -50,7 +51,7 @@ public class SitemapService {
 
     public PagedResult<BookSitemapItem> getBooksByLetter(String letter, int page) {
         String bucket = normalizeBucket(letter);
-        int safePage = Math.max(page, 1);
+        int safePage = PagingUtils.atLeast(page, 1);
         int pageSize = properties.getHtmlPageSize();
         int totalItems = countBooksByBucket().getOrDefault(bucket, 0);
         if (totalItems == 0) {
@@ -70,7 +71,7 @@ public class SitemapService {
 
     public PagedResult<AuthorSection> getAuthorsByLetter(String letter, int page) {
         String bucket = normalizeBucket(letter);
-        int safePage = Math.max(page, 1);
+        int safePage = PagingUtils.atLeast(page, 1);
         int pageSize = properties.getHtmlPageSize();
         int totalItems = countAuthorsByBucket().getOrDefault(bucket, 0);
         if (totalItems == 0) {
@@ -108,7 +109,7 @@ public class SitemapService {
     }
 
     public List<BookSitemapItem> getBooksForXmlPage(int page) {
-        int safePage = Math.max(page, 1);
+        int safePage = PagingUtils.atLeast(page, 1);
         int pageSize = properties.getXmlPageSize();
         int offset = (safePage - 1) * pageSize;
         return sitemapRepository.fetchBooksForXml(pageSize, offset)
@@ -151,7 +152,7 @@ public class SitemapService {
         if (descriptors.isEmpty()) {
             return Collections.emptyList();
         }
-        int safePage = Math.max(page, 1);
+        int safePage = PagingUtils.atLeast(page, 1);
         int xmlPageSize = properties.getXmlPageSize();
         int startIndex = (safePage - 1) * xmlPageSize;
         if (startIndex >= descriptors.size()) {
