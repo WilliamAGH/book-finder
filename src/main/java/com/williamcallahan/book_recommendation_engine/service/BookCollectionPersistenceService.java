@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.util.Optional;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -24,7 +25,7 @@ public class BookCollectionPersistenceService {
             return Optional.empty();
         }
 
-        String normalized = displayName.toLowerCase().replaceAll("[^a-z0-9]+", "-");
+        String normalized = displayName.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
 
         try {
             String id = jdbcTemplate.queryForObject(
@@ -71,7 +72,7 @@ public class BookCollectionPersistenceService {
 
         String normalized = normalizedName != null && !normalizedName.isBlank()
             ? normalizedName
-            : listCode.toLowerCase().replaceAll("[^a-z0-9]+", "-");
+            : listCode.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
 
         String rawJson = rawListJson != null ? rawListJson.toString() : null;
 

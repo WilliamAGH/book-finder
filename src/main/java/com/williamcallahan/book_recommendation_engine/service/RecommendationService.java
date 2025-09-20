@@ -33,6 +33,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.util.Locale;
 @Service
 public class RecommendationService {
     private static final Logger logger = LoggerFactory.getLogger(RecommendationService.class);
@@ -312,7 +313,7 @@ public class RecommendationService {
         for (String category : categories) {
             // Split compound categories and add each part
             for (String part : category.split("\\s*/\\s*")) {
-                normalized.add(part.toLowerCase().trim());
+                normalized.add(part.toLowerCase(Locale.ROOT).trim());
             }
         }
         return normalized;
@@ -334,7 +335,7 @@ public class RecommendationService {
             return Flux.empty();
         }
 
-        String combinedText = (sourceBook.getTitle() + " " + sourceBook.getDescription()).toLowerCase();
+        String combinedText = (sourceBook.getTitle() + " " + sourceBook.getDescription()).toLowerCase(Locale.ROOT);
         String[] tokens = combinedText.split("[^a-z0-9]+");
         Set<String> keywords = new LinkedHashSet<>();
         for (String token : tokens) {
@@ -356,7 +357,7 @@ public class RecommendationService {
             .take(MAX_SEARCH_RESULTS)
             .flatMap(book -> {
                 String candidateText = ((book.getTitle() != null ? book.getTitle() : "") + " " +
-                                      (book.getDescription() != null ? book.getDescription() : "")).toLowerCase();
+                                      (book.getDescription() != null ? book.getDescription() : "")).toLowerCase(Locale.ROOT);
                 int matchCount = 0;
                 for (String kw : keywords) {
                     if (candidateText.contains(kw)) {

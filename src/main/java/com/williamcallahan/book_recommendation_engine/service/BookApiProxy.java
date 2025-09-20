@@ -31,6 +31,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Locale;
 
 @Service
 public class BookApiProxy {
@@ -371,7 +372,7 @@ public class BookApiProxy {
     private List<Book> getSearchFromLocalCache(String query, String langCode) {
         if (!localCacheEnabled) return null;
         
-        String normalizedQuery = query.toLowerCase().trim();
+        String normalizedQuery = query.toLowerCase(Locale.ROOT).trim();
         String langString = langCode != null ? langCode : "any";
         String filename = normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + "-" + langString + ".json";
         
@@ -399,7 +400,7 @@ public class BookApiProxy {
     private void saveSearchToLocalCache(String query, String langCode, List<Book> results) {
         if (!localCacheEnabled || results == null) return;
         
-        String normalizedQuery = query.toLowerCase().trim();
+        String normalizedQuery = query.toLowerCase(Locale.ROOT).trim();
         String langString = langCode != null ? langCode : "any";
         String filename = normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + "-" + langString + ".json";
         

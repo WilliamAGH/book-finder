@@ -7,8 +7,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
-import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
-import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,7 +36,6 @@ public class BookSitemapService {
     private final BookDataOrchestrator bookDataOrchestrator;
     private final S3StorageService s3StorageService;
 
-    @Autowired
     public BookSitemapService(SitemapService sitemapService,
                               SitemapProperties sitemapProperties,
                               ObjectMapper objectMapper,
