@@ -1,6 +1,5 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
@@ -36,6 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+@SuppressWarnings({"removal"})
 @WebMvcTest(BookController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class BookControllerTest {
@@ -43,8 +43,6 @@ class BookControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private ObjectMapper objectMapper;
 
     @MockBean
     private BookDataOrchestrator bookDataOrchestrator;

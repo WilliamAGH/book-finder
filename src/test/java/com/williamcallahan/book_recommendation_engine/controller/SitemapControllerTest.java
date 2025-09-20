@@ -31,6 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
+@SuppressWarnings({"removal"})
 @WebMvcTest(SitemapController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class SitemapControllerTest {
