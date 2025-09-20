@@ -38,10 +38,12 @@ This document tracks all code changes required to retrofit the application for t
 - [x] Extract shared persistence helpers for authors, categories, qualifier tags, and collections so orchestrator/scheduler reuse a single implementation.
 - [x] Replace legacy `book_lists` / `book_lists_join` SQL with `book_collections` tables across insert/update/select flows.
 - [ ] Update DB read methods to reconstruct domain `Book` by joining authors, collections, external IDs, dimensions, images, and raw data.
+  - [x] Hydrate authors, categories, tags, cover images, provider metadata, and recommendation IDs straight from Postgres via `PostgresBookReader` (2025-09-20).
+  - [x] Fold in dimensions + raw payload joins so physical metadata/debug provenance flow through the reader (`PostgresBookReader` now hydrates `book_dimensions` + latest `book_raw_data`).
 - [x] Hydrate edition chains by joining `book_editions`/`book_editions_chain` so services can return sibling formats in a single query.
 - [x] Ensure dependent table inserts use NanoIDs from `IdGenerator` and run inside transactions/batched operations for referential integrity.
 - [ ] Trigger `refresh_book_search_view()` after bulk writes and expose throttled refresh hook for orchestrated jobs.
-- [ ] Flip tiered fetch pipeline to Postgres-first (DB → S3 → APIs) and treat S3 JSON as optional fallback cache only.
+- [x] Flip tiered fetch pipeline to Postgres-first (DB → S3 → APIs) and treat S3 JSON as optional fallback cache only — `PostgresBookReader` now fronts all identifier lookups and returns canonical slugs (2025-09-20).
 
 ### [ ] `/src/main/java/com/williamcallahan/book_recommendation_engine/model/Book.java`
 

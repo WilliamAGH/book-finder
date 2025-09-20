@@ -3,6 +3,20 @@
  * S3 to PostgreSQL migration script for new normalized schema
  * Generates proper IDs (UUIDv7 for books, NanoID for others)
  * Populates all normalized tables correctly
+ *
+ * HANDLED DATA CORRUPTION PATTERNS:
+ * 1. Empty files - Skip with error logging
+ * 2. Binary/corrupted data (� characters) - Detect and skip
+ * 3. Truncated JSON - Warn and attempt parse
+ * 4. Concatenated JSON objects (}{) - Split using bracket depth tracking
+ * 5. Pre-processed data - Extract from rawJsonResponse field
+ * 6. Double-stringified JSON - Unwrap before parsing
+ * 7. IDs starting with -- - Convert to __ to avoid SQL comment issues
+ * 8. Missing authors array - Default to empty array
+ * 9. Duplicate books in same file - Deduplicate by ISBN/title
+ * 10. Author order mismatches - Log and use inner data
+ * 11. Title set to ID - Use title from rawJsonResponse
+ * 12. Partial data fallback - Use outer object if rawJsonResponse fails
  */
 
 const { Client } = require('pg');
@@ -18,8 +32,8 @@ const getArg = (name, defaultValue) => {
   return arg ? arg.split('=')[1] : defaultValue;
 };
 
-const MAX_RECORDS = parseInt(getArg('max', '0'));
-const SKIP_RECORDS = parseInt(getArg('skip', '0'));
+const MAX_RECORDS = parseInt(getArg('max', '0'), 10);
+const SKIP_RECORDS = parseInt(getArg('skip', '0'), 10);
 const PREFIX = getArg('prefix', 'books/v1/');
 const DEBUG_MODE = getArg('debug', 'false') === 'true';
 
@@ -121,92 +135,6 @@ function generateSlug(title, firstAuthor) {
   return slug || 'book';
 }
 
-const DIACRITICS_REGEX = /[\u0300-\u036f]/g;
-const EDITION_PATTERN = /(\d+)(?:st|nd|rd|th)?\s*(?:edition|ed\b)/i;
-
-function normalizeForKey(value) {
-  if (!value) return '';
-  return value
-    .normalize('NFKD')
-    .replace(DIACRITICS_REGEX, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
-function buildEditionGroupKey(title, authors = []) {
-  const normalizedTitle = normalizeForKey(title);
-  if (!normalizedTitle) {
-    return null;
-  }
-  const primaryAuthor = Array.isArray(authors) && authors.length > 0 ? normalizeForKey(authors[0]) : '';
-  return primaryAuthor ? `${normalizedTitle}__${primaryAuthor}` : normalizedTitle;
-}
-
-function parseEditionCandidate(candidate) {
-  if (candidate === null || candidate === undefined) return null;
-  if (typeof candidate === 'number' && Number.isFinite(candidate)) {
-    const value = Math.floor(candidate);
-    return value > 0 ? value : null;
-  }
-  if (typeof candidate === 'string') {
-    const trimmed = candidate.trim();
-    if (!trimmed) return null;
-
-    const directNumber = trimmed.match(/^(\d{1,3})$/);
-    if (directNumber) {
-      const value = parseInt(directNumber[1], 10);
-      return value > 0 ? value : null;
-    }
-
-    const editionMatch = trimmed.match(EDITION_PATTERN);
-    if (editionMatch) {
-      const value = parseInt(editionMatch[1], 10);
-      return value > 0 ? value : null;
-    }
-
-    const trailingDigits = trimmed.match(/(\d+)(?:\.\d+)*$/);
-    if (trailingDigits) {
-      const value = parseInt(trailingDigits[1], 10);
-      return value > 0 ? value : null;
-    }
-  }
-  return null;
-}
-
-function extractEditionNumber(volumeInfo = {}, metadata = {}, sourceData = {}) {
-  const candidates = [];
-
-  const pushCandidate = (value) => {
-    const parsed = parseEditionCandidate(value);
-    if (parsed !== null && parsed !== undefined) {
-      candidates.push(parsed);
-    }
-  };
-
-  pushCandidate(volumeInfo.edition);
-  pushCandidate(volumeInfo.editionInformation);
-  pushCandidate(volumeInfo.editionInfo);
-  pushCandidate(volumeInfo.contentVersion);
-  pushCandidate(metadata?.editionNumber ?? metadata?.edition_number);
-  pushCandidate(metadata?.edition);
-  pushCandidate(metadata?.['edition-number']);
-  pushCandidate(sourceData?.editionNumber ?? sourceData?.edition);
-
-  if (typeof volumeInfo.subtitle === 'string') {
-    pushCandidate(volumeInfo.subtitle);
-  }
-  if (typeof volumeInfo.title === 'string') {
-    pushCandidate(volumeInfo.title);
-  }
-  if (typeof sourceData?.title === 'string') {
-    pushCandidate(sourceData.title);
-  }
-
-  return candidates.length > 0 ? candidates[0] : null;
-}
-
 // ============================================================================
 // ERROR LOGGING
 // ============================================================================
@@ -281,15 +209,12 @@ function loadEnvFile() {
         }
       });
     }
-  } catch (e) {
-    console.log('[ENV] Could not load .env file:', e.message);
+  } catch {
+    // Fail silently if .env is not present or unreadable
   }
 }
 
 // Edition sync function removed - using work_clusters system
-function syncEditionLinks_REMOVED() {
-  return;
-}
 
 // Original function commented out for reference
 /*
@@ -408,7 +333,7 @@ async function streamToString(stream) {
 // ============================================================================
 
 function normalizeAuthorName(name) {
-  if (!name || !name.trim()) return null;
+  if (!name?.trim()) return null;
 
   let normalized = name.toLowerCase();
 
@@ -471,7 +396,7 @@ function extractBookKey(volumeInfo) {
   const isbn13 = volumeInfo.industryIdentifiers?.find(id => id.type === 'ISBN_13')?.identifier;
   const isbn10 = volumeInfo.industryIdentifiers?.find(id => id.type === 'ISBN_10')?.identifier;
   const title = volumeInfo.title || '';
-  const firstAuthor = (volumeInfo.authors && volumeInfo.authors[0]) || '';
+  const firstAuthor = volumeInfo.authors?.[0] || '';
 
   // Primary key is ISBN if available, otherwise title+author
   if (isbn13) return `isbn13:${isbn13}`;
@@ -486,6 +411,10 @@ function mergeBookRecords(existing, newRecord) {
   const volumeInfo = existing.volumeInfo || existing;
   const newVolumeInfo = newRecord.volumeInfo || newRecord;
 
+  // Ensure safe spreads for possibly missing imageLinks
+  const baseImageLinks = volumeInfo.imageLinks || {};
+  const nextImageLinks = newVolumeInfo.imageLinks || {};
+
   return {
     ...existing,
     volumeInfo: {
@@ -495,13 +424,13 @@ function mergeBookRecords(existing, newRecord) {
         ? newVolumeInfo.description
         : volumeInfo.description,
       // Merge authors (unique)
-      authors: [...new Set([...(volumeInfo.authors || []), ...(newVolumeInfo.authors || [])])],
+      authors: [...new Set([...(volumeInfo.authors ?? []), ...(newVolumeInfo.authors ?? [])])],
       // Merge categories (unique)
-      categories: [...new Set([...(volumeInfo.categories || []), ...(newVolumeInfo.categories || [])])],
+      categories: [...new Set([...(volumeInfo.categories ?? []), ...(newVolumeInfo.categories ?? [])])],
       // Take the best image links (prefer larger)
       imageLinks: {
-        ...volumeInfo.imageLinks,
-        ...newVolumeInfo.imageLinks,
+        ...baseImageLinks,
+        ...nextImageLinks,
         // Prefer extraLarge > large > medium > thumbnail > small
         ...(newVolumeInfo.imageLinks?.extraLarge ? { extraLarge: newVolumeInfo.imageLinks.extraLarge } : {}),
         ...(newVolumeInfo.imageLinks?.large ? { large: newVolumeInfo.imageLinks.large } : {})
@@ -590,27 +519,11 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
   // 3. If found by ISBN, determine if it's the same book or a different edition
   // 4. Only create new book record if truly new
 
-  // CRITICAL FIX: Handle pre-processed S3 data where actual content is in rawJsonResponse
-  let actualBookData = bookData;
-
-  // Check if this is pre-processed data with the real content in rawJsonResponse
-  if (bookData.rawJsonResponse && !bookData.volumeInfo) {
-    try {
-      const rawData = JSON.parse(bookData.rawJsonResponse);
-      if (rawData.volumeInfo) {
-        console.log(`[FIX] Using rawJsonResponse for actual data (title was "${bookData.title}", real title: "${rawData.volumeInfo.title}")`);
-        actualBookData = rawData;
-      }
-    } catch (e) {
-      console.error(`[ERROR] Failed to parse rawJsonResponse: ${e.message}`);
-    }
-  }
-
-  // Now extract from the correct data source
-  const volumeInfo = actualBookData.volumeInfo || actualBookData;
-  const saleInfo = actualBookData.saleInfo || {};
-  const accessInfo = actualBookData.accessInfo || {};
-  const metadata = actualBookData._metadata || bookData._metadata || {};
+  // Data should already be processed by the main loop
+  // (pre-processed data extraction happens before calling this function)
+  const volumeInfo = bookData.volumeInfo || bookData;
+  const saleInfo = bookData.saleInfo || {};
+  const accessInfo = bookData.accessInfo || {};
 
   // Extract basic fields from volumeInfo
   const title = volumeInfo.title || '';
@@ -1049,10 +962,10 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
       for (const [imageType, url] of Object.entries(imageLinks)) {
         if (url) {
           let s3ImagePath = null;
-          let s3UploadedAt = null;
+          const s3UploadedAt = null;
 
           // Map S3 path to the best quality image (prefer extraLarge > large > medium)
-          if (!hasS3Image && (imageType === 'extraLarge' || imageType === 'large' || imageType === 'medium')) {
+          if (!hasS3Image && ['extraLarge', 'large', 'medium'].includes(imageType)) {
             // This would be where the S3BookCoverService stores the image
             s3ImagePath = s3Key;
             // In production, we'd check S3 to see if it actually exists
@@ -1294,7 +1207,7 @@ async function migrateBooksFromS3() {
   let errors = 0;
   let booksInserted = 0;
   let booksUpdated = 0;
-  let booksMerged = 0;
+  const booksMerged = 0;
   let continuationToken = null;
 
   // Track error types for quality control
@@ -1357,6 +1270,16 @@ async function migrateBooksFromS3() {
 
         console.log(`[PROCESSING] ${key}`);
 
+        // Data corruption patterns we handle:
+        // 1. Empty files
+        // 2. Binary/corrupted data with � characters
+        // 3. Truncated JSON (doesn't end with } or ])
+        // 4. Concatenated JSON objects (}{)
+        // 5. Pre-processed data with rawJsonResponse
+        // 6. IDs starting with -- (SQL comment issue)
+        // 7. Missing authors array
+        // 8. Duplicate books within same file
+
         // Check for common corruption patterns before parsing
         if (!bodyString || bodyString.length === 0) {
           throw new Error('Empty file');
@@ -1373,7 +1296,43 @@ async function migrateBooksFromS3() {
           console.warn(`[WARNING] File ${key} may be truncated (doesn't end with } or ])`);
         }
 
-        let parsedData = JSON.parse(bodyString);
+        // Handle concatenated JSON objects (data corruption case)
+        let parsedData;
+        // More robust detection - check for }{ pattern anywhere, even without whitespace
+        if (bodyString.match(/\}\s*\{/) || (bodyString.match(/\}\{/) && bodyString.split('}{').length > 1)) {
+          console.warn(`[WARNING] File ${key} contains concatenated JSON objects - attempting to split`);
+
+          // Try to parse as array of objects by splitting on }{ boundaries
+          const jsonObjects = [];
+          let bracketDepth = 0;
+          let currentObject = '';
+
+          for (let i = 0; i < bodyString.length; i++) {
+            const char = bodyString[i];
+            currentObject += char;
+
+            if (char === '{') bracketDepth++;
+            else if (char === '}') {
+              bracketDepth--;
+              if (bracketDepth === 0) {
+                try {
+                  jsonObjects.push(JSON.parse(currentObject));
+                  currentObject = '';
+                  // Skip whitespace between objects
+                  while (i + 1 < bodyString.length && /\s/.test(bodyString[i + 1])) {
+                    i++;
+                  }
+                } catch (e) {
+                  console.error(`[ERROR] Failed to parse split JSON object: ${e.message}`);
+                }
+              }
+            }
+          }
+
+          parsedData = jsonObjects.length > 0 ? jsonObjects : JSON.parse(bodyString);
+        } else {
+          parsedData = JSON.parse(bodyString);
+        }
 
         // Handle different JSON structures:
         // 1. Single book object
@@ -1395,15 +1354,93 @@ async function migrateBooksFromS3() {
           bookDataArray = [parsedData];
         }
 
+        // Process pre-processed data if needed (extract from rawJsonResponse)
+        const processedBookArray = bookDataArray.map(book => {
+          if (book.rawJsonResponse && !book.volumeInfo) {
+            try {
+              // Sometimes rawJsonResponse might be double-stringified or have escape issues
+              let rawResponseStr = book.rawJsonResponse;
+
+              // If it's a stringified string (starts with quotes), parse it first
+              if (typeof rawResponseStr === 'string' && rawResponseStr.startsWith('"') && rawResponseStr.endsWith('"')) {
+                try {
+                  rawResponseStr = JSON.parse(rawResponseStr);
+                } catch {
+                  // Not double-stringified, continue with original
+                }
+              }
+
+              const rawData = JSON.parse(rawResponseStr);
+              if (rawData.volumeInfo || rawData.kind === 'books#volume') {
+                const storedTitle = book.title || 'N/A';
+                const realTitle = rawData.volumeInfo?.title || 'Unknown';
+                console.log(`[FIX] Extracting actual data from rawJsonResponse (stored title: "${storedTitle}", real title: "${realTitle}")`);
+
+                // Log author differences for debugging
+                if (book.authors && rawData.volumeInfo?.authors) {
+                  const outerAuthors = book.authors.join(', ');
+                  const innerAuthors = rawData.volumeInfo.authors.join(', ');
+                  if (outerAuthors !== innerAuthors) {
+                    console.log(`[INFO] Author mismatch - Outer: [${outerAuthors}], Inner: [${innerAuthors}]`);
+                  }
+                }
+
+                return rawData;
+              } else {
+                // rawJsonResponse parsed but doesn't have expected structure
+                console.warn(`[WARNING] rawJsonResponse parsed but lacks volumeInfo. Using original book data.`);
+                return book;
+              }
+            } catch (e) {
+              console.error(`[ERROR] Failed to parse rawJsonResponse: ${e.message}`);
+              // Log additional context for debugging
+              console.error(`[ERROR] Book ID: ${book.id}, Has rawJsonResponse: ${!!book.rawJsonResponse}, Length: ${book.rawJsonResponse?.length || 0}`);
+
+              // If we have some valid data in the outer object, use it as fallback
+              if (book.id && (book.authors || book.publisher || book.description)) {
+                console.warn(`[FALLBACK] Using outer pre-processed data despite rawJsonResponse parse failure`);
+                console.warn(`[FALLBACK] Available fields: authors=${!!book.authors}, publisher=${!!book.publisher}, description=${!!book.description}`);
+                // Still return the book to attempt migration with partial data
+                return book;
+              }
+
+              // Try to diagnose the issue
+              if (book.rawJsonResponse) {
+                const preview = book.rawJsonResponse.substring(0, 100);
+                const ending = book.rawJsonResponse.substring(Math.max(0, book.rawJsonResponse.length - 50));
+                console.error(`[ERROR] rawJsonResponse start: ${preview}...`);
+                console.error(`[ERROR] rawJsonResponse end: ...${ending}`);
+
+                // Check for common issues
+                if (!book.rawJsonResponse.trim().startsWith('{')) {
+                  console.error(`[ERROR] rawJsonResponse doesn't start with '{' - might be corrupted`);
+                }
+                if (!book.rawJsonResponse.trim().endsWith('}')) {
+                  console.error(`[ERROR] rawJsonResponse doesn't end with '}' - might be truncated`);
+                }
+              }
+            }
+          }
+          return book;
+        });
+
         // Deduplicate books within the same JSON file
-        const dedupedBooks = deduplicateJsonArray(bookDataArray);
+        const dedupedBooks = deduplicateJsonArray(processedBookArray);
 
         if (dedupedBooks.length > 1) {
           console.log(`[MULTI] Found ${dedupedBooks.length} unique books in ${key}`);
         }
 
         // Extract Google Books ID from key (e.g., books/v1/ABC123.json -> ABC123)
-        const baseGoogleBooksId = key.split('/').pop().replace('.json', '');
+        let baseGoogleBooksId = key.split('/').pop().replace('.json', '');
+
+        // Handle edge case where ID starts with -- (SQL comment syntax)
+        // Replace leading dashes with underscores to avoid SQL issues
+        if (baseGoogleBooksId.startsWith('--')) {
+          console.warn(`[WARNING] Google Books ID starts with '--' which could be interpreted as SQL comment: ${baseGoogleBooksId}`);
+          baseGoogleBooksId = baseGoogleBooksId.replace(/^-+/, match => '_'.repeat(match.length));
+          console.log(`[FIX] Converted to safe ID: ${baseGoogleBooksId}`);
+        }
 
         // Process each unique book in the file
         for (let bookIndex = 0; bookIndex < dedupedBooks.length; bookIndex++) {
@@ -1433,7 +1470,7 @@ async function migrateBooksFromS3() {
             console.log(`[SUCCESS] Book UUID: ${bookId}, Tables: ${tablesWritten.join(', ')}`);
 
             // Track operation types
-            if (debugInfo && debugInfo.operations) {
+            if (debugInfo?.operations) {
               if (debugInfo.operations.books === 'INSERT') {
                 booksInserted++;
               } else if (debugInfo.operations.books === 'UPDATE') {
@@ -1478,11 +1515,10 @@ async function migrateBooksFromS3() {
             errorLogger.logError(`${key}[${bookIndex}]`, bookError, {
               googleBooksId,
               title: bookData.volumeInfo?.title || bookData.title,
-              ...(bookError.context || {})
+              ...bookError.context
             });
 
             errors++;
-            continue; // Continue with next book in the file
           }
         }
 
