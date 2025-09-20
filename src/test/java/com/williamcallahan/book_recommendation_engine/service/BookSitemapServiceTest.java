@@ -3,7 +3,6 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
-import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

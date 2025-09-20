@@ -76,7 +76,7 @@ class PostgresBookReaderDedupeTest {
                 .verifyComplete();
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings("unchecked")
     private void stubDatabaseQueries() {
         Book canonical = buildCanonicalFixture();
 

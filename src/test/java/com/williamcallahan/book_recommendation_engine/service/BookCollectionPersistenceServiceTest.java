@@ -18,7 +18,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -47,7 +46,7 @@ class BookCollectionPersistenceServiceTest {
 
         when(jdbcTemplate.queryForObject(
                 anyString(),
-                any(RowMapper.class),
+                org.mockito.ArgumentMatchers.<RowMapper<String>>any(),
                 any(), any(), any(), any(), any(), any(), any(), any(), any()
         )).thenReturn("collection-123");
 
@@ -64,12 +63,11 @@ class BookCollectionPersistenceServiceTest {
 
         assertThat(result).contains("collection-123");
 
-        ArgumentCaptor<RowMapper<String>> mapperCaptor = ArgumentCaptor.forClass(RowMapper.class);
         ArgumentCaptor<Object> argCaptor = ArgumentCaptor.forClass(Object.class);
 
         verify(jdbcTemplate).queryForObject(
                 startsWith("INSERT INTO book_collections (id, collection_type, source, provider_list_id"),
-                mapperCaptor.capture(),
+                org.mockito.ArgumentMatchers.<RowMapper<String>>any(),
                 argCaptor.capture(), argCaptor.capture(), argCaptor.capture(), argCaptor.capture(),
                 argCaptor.capture(), argCaptor.capture(), argCaptor.capture(), argCaptor.capture(), argCaptor.capture()
         );
