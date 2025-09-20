@@ -28,6 +28,53 @@ const CONFIG = {
 };
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+function normalizeCollectionName(name) {
+  if (!name) return null;
+  return name.toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function titleizeFromSlug(slug) {
+  if (!slug) return '';
+  return slug.split('-')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function sanitizeIsbn(raw) {
+  if (!raw) return null;
+  const cleaned = raw.replace(/[^0-9Xx]/g, '').toUpperCase();
+  return cleaned.length === 0 ? null : cleaned;
+}
+
+function extractIsoDate(value) {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  const datePart = trimmed.includes('T') ? trimmed.split('T')[0] : trimmed;
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+}
+
+function toIntegerOrNull(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+// ============================================================================
 // ID GENERATORS
 // ============================================================================
 
@@ -75,6 +122,49 @@ class JsonParser {
   }
 
   /**
+   * Find the start of valid JSON in a corrupted string
+   */
+  findJsonStart(str) {
+    // First try to find any { or [
+    const firstBrace = str.indexOf('{');
+    const firstBracket = str.indexOf('[');
+
+    let jsonStart = -1;
+    if (firstBrace >= 0 && (firstBracket === -1 || firstBrace < firstBracket)) {
+      jsonStart = firstBrace;
+    } else if (firstBracket >= 0) {
+      jsonStart = firstBracket;
+    }
+
+    // If we found a { or [, return it
+    if (jsonStart >= 0 && jsonStart < 1000) {
+      return { index: jsonStart, name: 'JSON start' };
+    }
+
+    // Otherwise look for specific patterns
+    const patterns = [
+      { pattern: '{"id":', name: 'id object' },
+      { pattern: '{"kind":', name: 'kind object' },
+      { pattern: '{"title":', name: 'title object' },
+      { pattern: '{"volumeInfo":', name: 'volumeInfo object' },
+      { pattern: '{ "id":', name: 'id object with space' },
+      { pattern: '{ "kind":', name: 'kind object with space' },
+      { pattern: '[{"', name: 'array of objects' }
+    ];
+
+    let bestMatch = { index: -1, name: '' };
+
+    for (const { pattern, name } of patterns) {
+      const idx = str.indexOf(pattern);
+      if (idx >= 0 && (bestMatch.index === -1 || idx < bestMatch.index)) {
+        bestMatch = { index: idx, name };
+      }
+    }
+
+    return bestMatch;
+  }
+
+  /**
    * Main parse method - handles all corruption patterns
    */
   parse(bodyString, filename) {
@@ -83,50 +173,33 @@ class JsonParser {
       throw new Error('Empty file');
     }
 
-    // Strip null bytes (0x00) and other control characters except newlines, tabs, and carriage returns
-    let containsNull = false;
-    const cleaned = [...bodyString].map(ch => {
-      const code = ch.charCodeAt(0);
-      if (code === 0) {
-        containsNull = true;
-        return '';
-      }
-      // Remove control chars: 0x01-0x08, 0x0B, 0x0C, 0x0E-0x1F, 0x7F
-      if ((code >= 1 && code <= 8) || code === 11 || code === 12 || (code >= 14 && code <= 31) || code === 127) {
-        return '';
-      }
-      return ch;
-    }).join('');
-    if (containsNull) {
+    // Strip null bytes and control characters if present
+    if (bodyString.includes('\x00')) {
       console.warn(`[WARNING] File ${filename} contains null bytes, stripping them`);
+      bodyString = bodyString.replace(/\x00/g, '');
     }
+
+    // Also strip other problematic control characters except newlines, tabs, and carriage returns
+    const cleaned = bodyString.replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
     if (cleaned !== bodyString) {
       console.warn(`[WARNING] File ${filename} contains control characters, stripping them`);
       bodyString = cleaned;
     }
 
-    // Trim and re-assign to work with clean content
+    // Trim whitespace
     bodyString = bodyString.trim();
 
-    // Some files might have garbage before the JSON, try to find the first { or [
-    const jsonStart = Math.min(
-      bodyString.indexOf('{') === -1 ? Infinity : bodyString.indexOf('{'),
-      bodyString.indexOf('[') === -1 ? Infinity : bodyString.indexOf('[')
-    );
-
-    if (jsonStart === Infinity || jsonStart > 100) {
-      // If no JSON start found or it's too far into the file, it's probably not JSON
-      throw new Error('File does not appear to be JSON (does not start with { or [)');
-    }
-
-    if (jsonStart > 0) {
-      console.warn(`[WARNING] File ${filename} has ${jsonStart} bytes of garbage before JSON, stripping`);
-      bodyString = bodyString.substring(jsonStart);
-    }
-
-    // Final check
+    // Check if it starts with valid JSON
     if (!bodyString.startsWith('{') && !bodyString.startsWith('[')) {
-      throw new Error('File does not appear to be JSON after cleanup');
+      // Try to find JSON start
+      const jsonMatch = this.findJsonStart(bodyString);
+
+      if (jsonMatch.index === -1) {
+        throw new Error('No valid JSON patterns found in file');
+      }
+
+      console.warn(`[WARNING] Found ${jsonMatch.name} at position ${jsonMatch.index}, stripping ${jsonMatch.index} bytes of corruption`);
+      bodyString = bodyString.substring(jsonMatch.index);
     }
 
     // Step 2: Split concatenated objects if needed
@@ -287,12 +360,26 @@ class BookMigrator {
   constructor(client, debugMode = false) {
     this.client = client;
     this.debug = debugMode;
+    this.contextLabel = null;
+  }
+
+  setContextLabel(label) {
+    this.contextLabel = label;
+  }
+
+  log(message) {
+    if (this.contextLabel) {
+      console.log(`   [#${this.contextLabel}] ${message}`);
+    } else {
+      console.log(`   ${message}`);
+    }
   }
 
   /**
    * Migrate a single book to the database
    */
-  async migrate(googleBooksId, bookData) {
+  async migrate(googleBooksId, bookData, contextLabel) {
+    this.setContextLabel(contextLabel);
     // Sanitize Google Books ID for SQL safety
     const safeId = this.sanitizeGoogleBooksId(googleBooksId);
 
@@ -313,8 +400,11 @@ class BookMigrator {
     // Insert join table data (must be sequential for foreign keys)
     await this.insertAuthors(bookId, fields.authors);
     await this.insertCategories(bookId, fields.categories);
+    await this.insertQualifierCollections(bookId, fields.qualifiers);
 
-    return { bookId, title: fields.title };
+    const result = { bookId, title: fields.title };
+    this.setContextLabel(null);
+    return result;
   }
 
   /**
@@ -344,6 +434,7 @@ class BookMigrator {
       description: volumeInfo.description || null,
       authors: volumeInfo.authors || [],
       categories: volumeInfo.categories || [],
+      qualifiers: bookData.qualifiers || bookData.Qualifiers || {},
 
       // Publishing info
       publisher: volumeInfo.publisher || null,
@@ -437,6 +528,8 @@ class BookMigrator {
     );
 
     if (externalCheck.rows.length > 0) {
+      this.log(`↻ Reusing existing book ${externalCheck.rows[0].book_id} via external id ${googleBooksId}`);
+      this.setContextLabel(null);
       return externalCheck.rows[0].book_id;
     }
 
@@ -448,7 +541,11 @@ class BookMigrator {
         'SELECT id FROM books WHERE isbn13 = $1 LIMIT 1',
         [fields.isbn13]
       );
-      if (res.rows.length > 0) existingBook = res.rows[0];
+      if (res.rows.length > 0) {
+        this.log(`↻ Reusing existing book ${res.rows[0].id} via ISBN13 ${fields.isbn13}`);
+        this.setContextLabel(null);
+        existingBook = res.rows[0];
+      }
     }
 
     if (!existingBook && fields.isbn10) {
@@ -456,10 +553,15 @@ class BookMigrator {
         'SELECT id FROM books WHERE isbn10 = $1 LIMIT 1',
         [fields.isbn10]
       );
-      if (res.rows.length > 0) existingBook = res.rows[0];
+      if (res.rows.length > 0) {
+        this.log(`↻ Reusing existing book ${res.rows[0].id} via ISBN10 ${fields.isbn10}`);
+        this.setContextLabel(null);
+        existingBook = res.rows[0];
+      }
     }
 
     if (existingBook) {
+      this.setContextLabel(null);
       return existingBook.id;
     }
 
@@ -480,6 +582,8 @@ class BookMigrator {
        fields.isbn10, fields.isbn13, fields.publishedDate,
        fields.language, fields.publisher, fields.pageCount, slug]
     );
+
+    this.log(`✨ Inserted canonical book ${bookId} (slug ${slug})`);
 
     return bookId;
   }
@@ -529,6 +633,15 @@ class BookMigrator {
    * Insert external ID record
    */
   async insertExternalId(bookId, googleBooksId, fields) {
+    const existingExternalId = await this.client.query(
+      `SELECT id FROM book_external_ids
+       WHERE source = 'GOOGLE_BOOKS' AND external_id = $1
+       LIMIT 1`,
+      [googleBooksId]
+    );
+
+    const externalIdReuse = existingExternalId.rows.length > 0;
+
     // Check if another external ID already has these ISBNs
     // If so, we'll store NULL for the ISBNs to avoid duplicate constraint violations
     // The ISBNs are already linked to the book via the books table
@@ -543,7 +656,7 @@ class BookMigrator {
         [fields.isbn13]
       );
       if (existingIsbn13.rows.length > 0 && existingIsbn13.rows[0].external_id !== googleBooksId) {
-        console.log(`[INFO] ISBN13 ${fields.isbn13} already linked via external ID ${existingIsbn13.rows[0].external_id}`);
+        this.log(`[INFO] ISBN13 ${fields.isbn13} already linked via external ID ${existingIsbn13.rows[0].external_id}`);
         providerIsbn13 = null; // Don't duplicate the ISBN in external_ids table
       }
     }
@@ -556,7 +669,7 @@ class BookMigrator {
         [fields.isbn10]
       );
       if (existingIsbn10.rows.length > 0 && existingIsbn10.rows[0].external_id !== googleBooksId) {
-        console.log(`[INFO] ISBN10 ${fields.isbn10} already linked via external ID ${existingIsbn10.rows[0].external_id}`);
+        this.log(`[INFO] ISBN10 ${fields.isbn10} already linked via external ID ${existingIsbn10.rows[0].external_id}`);
         providerIsbn10 = null; // Don't duplicate the ISBN in external_ids table
       }
     }
@@ -592,12 +705,25 @@ class BookMigrator {
         fields.listPrice, fields.listPrice, fields.currencyCode
       ]
     );
+
+    if (externalIdReuse) {
+      this.log(`↻ Reusing existing book_external_ids row for ${googleBooksId}`);
+    } else {
+      this.log(`✨ Added book_external_ids row for ${googleBooksId}`);
+    }
   }
 
   /**
    * Insert raw JSON data
    */
   async insertRawData(bookId, bookData) {
+    const existingRaw = await this.client.query(
+      `SELECT id FROM book_raw_data
+       WHERE book_id = $1::uuid AND source = $2
+       LIMIT 1`,
+      [bookId, 'GOOGLE_BOOKS']
+    );
+
     await this.client.query(
       `INSERT INTO book_raw_data (
         id, book_id, raw_json_response, source,
@@ -610,6 +736,12 @@ class BookMigrator {
         fetched_at = NOW()`,
       [generateNanoId(10), bookId, JSON.stringify(bookData), 'GOOGLE_BOOKS']
     );
+
+    if (existingRaw.rows.length > 0) {
+      this.log(`↻ Reusing existing book_raw_data row for book ${bookId}`);
+    } else {
+      this.log(`✨ Added book_raw_data row for book ${bookId}`);
+    }
   }
 
   /**
@@ -621,6 +753,13 @@ class BookMigrator {
     for (const [imageType, url] of Object.entries(imageLinks)) {
       if (!url) continue;
 
+      const existingImage = await this.client.query(
+        `SELECT id FROM book_image_links
+         WHERE book_id = $1::uuid AND image_type = $2
+         LIMIT 1`,
+        [bookId, imageType]
+      );
+
       await this.client.query(
         `INSERT INTO book_image_links (
           id, book_id, image_type, url, source, created_at
@@ -631,6 +770,12 @@ class BookMigrator {
           url = EXCLUDED.url`,
         [generateNanoId(10), bookId, imageType, url, 'GOOGLE_BOOKS']
       );
+
+      if (existingImage.rows.length > 0) {
+        this.log(`↻ Reusing existing book_image_links row (${imageType}) for book ${bookId}`);
+      } else {
+        this.log(`✨ Added book_image_links row (${imageType}) for book ${bookId}`);
+      }
     }
   }
 
@@ -652,6 +797,13 @@ class BookMigrator {
 
     if (!height && !width && !thickness) return;
 
+    const existingDimensions = await this.client.query(
+      `SELECT id FROM book_dimensions
+       WHERE book_id = $1::uuid
+       LIMIT 1`,
+      [bookId]
+    );
+
     await this.client.query(
       `INSERT INTO book_dimensions (
         id, book_id, height_cm, width_cm, thickness_cm, created_at
@@ -664,6 +816,12 @@ class BookMigrator {
         thickness_cm = COALESCE(EXCLUDED.thickness_cm, book_dimensions.thickness_cm)`,
       [generateNanoId(8), bookId, height, width, thickness]
     );
+
+    if (existingDimensions.rows.length > 0) {
+      this.log(`↻ Reusing existing book_dimensions row for book ${bookId}`);
+    } else {
+      this.log(`✨ Added book_dimensions row for book ${bookId}`);
+    }
   }
 
   /**
@@ -676,16 +834,35 @@ class BookMigrator {
       const authorName = authors[i];
       if (!authorName?.trim()) continue;
 
+      const normalizedName = this.normalizeAuthorName(authorName);
+      const existingAuthor = await this.client.query(
+        'SELECT id FROM authors WHERE name = $1 LIMIT 1',
+        [authorName]
+      );
+
       // Insert or get author
       const authorResult = await this.client.query(
         `INSERT INTO authors (id, name, normalized_name, created_at, updated_at)
          VALUES ($1, $2, $3, NOW(), NOW())
          ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
          RETURNING id`,
-        [generateNanoId(10), authorName, this.normalizeAuthorName(authorName)]
+        [generateNanoId(10), authorName, normalizedName]
       );
 
       const authorId = authorResult.rows[0].id;
+
+      if (existingAuthor.rows.length > 0) {
+        this.log(`↻ Reusing existing author ${authorId} (${authorName})`);
+      } else {
+        this.log(`✨ Inserted author ${authorId} (${authorName})`);
+      }
+
+      const existingJoin = await this.client.query(
+        `SELECT id FROM book_authors_join
+         WHERE book_id = $1::uuid AND author_id = $2
+         LIMIT 1`,
+        [bookId, authorId]
+      );
 
       // Link book to author
       await this.client.query(
@@ -694,6 +871,12 @@ class BookMigrator {
          ON CONFLICT (book_id, author_id) DO UPDATE SET position = EXCLUDED.position`,
         [generateNanoId(12), bookId, authorId, i]
       );
+
+      if (existingJoin.rows.length > 0) {
+        this.log(`↻ Reusing existing book_authors_join row for author ${authorId} and book ${bookId}`);
+      } else {
+        this.log(`✨ Linked author ${authorId} to book ${bookId}`);
+      }
     }
   }
 
@@ -718,52 +901,409 @@ class BookMigrator {
     for (const categoryName of categories) {
       if (!categoryName?.trim()) continue;
 
-      // Insert or get category
-      const normalized = categoryName.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-
-      let collectionId;
-      const insertResult = await this.client.query(
-        `INSERT INTO book_collections (
-          id, collection_type, source, display_name, normalized_name,
-          created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, NOW(), NOW()
-        )
-        ON CONFLICT (collection_type, source, normalized_name)
-        WHERE collection_type = 'CATEGORY' AND normalized_name IS NOT NULL
-        DO NOTHING
-        RETURNING id`,
-        [generateNanoId(8), 'CATEGORY', 'GOOGLE_BOOKS', categoryName, normalized]
+      const normalized = normalizeCollectionName(categoryName);
+      const existingCategory = await this.client.query(
+        `SELECT id FROM book_collections
+         WHERE collection_type = 'CATEGORY' AND source = 'GOOGLE_BOOKS' AND normalized_name = $1
+         LIMIT 1`,
+        [normalized]
       );
 
-      if (insertResult.rows.length > 0) {
-        collectionId = insertResult.rows[0].id;
-      } else {
-        // Find existing
-        const findResult = await this.client.query(
-          `SELECT id FROM book_collections
-           WHERE display_name = $1 AND collection_type = $2 AND source = $3`,
-          [categoryName, 'CATEGORY', 'GOOGLE_BOOKS']
+      let collectionId;
+      if (existingCategory.rows.length > 0) {
+        collectionId = existingCategory.rows[0].id;
+        this.log(`↻ Reusing category collection ${collectionId} (${categoryName})`);
+        await this.client.query(
+          `UPDATE book_collections
+           SET display_name = $1, updated_at = NOW()
+           WHERE id = $2`,
+          [categoryName, collectionId]
         );
-        if (findResult.rows.length > 0) {
-          collectionId = findResult.rows[0].id;
-        }
+      } else {
+        const insertedCategory = await this.client.query(
+          `INSERT INTO book_collections (
+            id, collection_type, source, display_name, normalized_name,
+            created_at, updated_at
+          ) VALUES (
+            $1, 'CATEGORY', 'GOOGLE_BOOKS', $2, $3, NOW(), NOW()
+          )
+          RETURNING id`,
+          [generateNanoId(8), categoryName, normalized]
+        );
+        collectionId = insertedCategory.rows[0].id;
+        this.log(`✨ Created category collection ${collectionId} (${categoryName})`);
       }
 
-      if (collectionId) {
-        // Link book to collection
-        await this.client.query(
-          `INSERT INTO book_collections_join (
+      const existingJoin = await this.client.query(
+        `SELECT id FROM book_collections_join
+         WHERE collection_id = $1 AND book_id = $2::uuid
+         LIMIT 1`,
+        [collectionId, bookId]
+      );
+
+      await this.client.query(
+        `INSERT INTO book_collections_join (
             id, collection_id, book_id, created_at, updated_at
-          ) VALUES (
+         ) VALUES (
             $1, $2, $3::uuid, NOW(), NOW()
-          )
-          ON CONFLICT (collection_id, book_id) DO NOTHING`,
-          [generateNanoId(12), collectionId, bookId]
-        );
+         )
+         ON CONFLICT (collection_id, book_id) DO UPDATE SET
+            updated_at = NOW()`,
+        [generateNanoId(12), collectionId, bookId]
+      );
+
+      if (existingJoin.rows.length > 0) {
+        this.log(`↻ Reusing category membership for collection ${collectionId} → book ${bookId}`);
+      } else {
+        this.log(`✨ Linked book ${bookId} to category ${collectionId}`);
       }
     }
   }
+
+  async insertQualifierCollections(bookId, qualifiers) {
+    if (!qualifiers || Object.keys(qualifiers).length === 0) {
+      return;
+    }
+
+    const nytQualifier = qualifiers.nytBestseller;
+    if (!nytQualifier) {
+      return;
+    }
+
+    const qualifierDetails = typeof nytQualifier === 'object' && nytQualifier !== null ? nytQualifier : {};
+    const listCodeRaw = qualifierDetails.list || qualifierDetails.listCode || 'nyt-hardcover-fiction';
+    const normalizedList = normalizeCollectionName(listCodeRaw) || 'nyt-bestsellers';
+    let resolvedDisplay = qualifierDetails.displayName && qualifierDetails.displayName.trim().length > 0
+      ? qualifierDetails.displayName.trim()
+      : titleizeFromSlug(normalizedList);
+    if (!resolvedDisplay.toLowerCase().startsWith('nyt')) {
+      resolvedDisplay = `NYT ${resolvedDisplay}`;
+    }
+    const displayName = resolvedDisplay.trim();
+
+    const rank = Number.isFinite(qualifierDetails.rank) ? qualifierDetails.rank : (Number.isFinite(qualifierDetails.position) ? qualifierDetails.position : null);
+    const weeksOnList = Number.isFinite(qualifierDetails.weeksOnList) ? qualifierDetails.weeksOnList : null;
+
+    const existingCollection = await this.client.query(
+      `SELECT id FROM book_collections
+       WHERE collection_type = 'BESTSELLER_LIST' AND source = 'NYT' AND normalized_name = $1
+       LIMIT 1`,
+      [normalizedList]
+    );
+
+    let collectionId;
+    if (existingCollection.rows.length > 0) {
+      collectionId = existingCollection.rows[0].id;
+      this.log(`↻ Reusing NYT qualifier collection ${collectionId} (${displayName})`);
+      await this.client.query(
+        `UPDATE book_collections
+         SET provider_list_code = $1,
+             display_name = $2,
+             updated_at = NOW()
+         WHERE id = $3`,
+        [normalizedList, displayName, collectionId]
+      );
+    } else {
+      const inserted = await this.client.query(
+        `INSERT INTO book_collections (
+             id, collection_type, source, provider_list_code, display_name, normalized_name,
+             created_at, updated_at
+         ) VALUES (
+             $1, 'BESTSELLER_LIST', 'NYT', $2, $3, $4, NOW(), NOW()
+         )
+         RETURNING id`,
+        [generateNanoId(8), normalizedList, displayName, normalizedList]
+      );
+      collectionId = inserted.rows[0].id;
+      this.log(`✨ Created NYT qualifier collection ${collectionId} (${displayName})`);
+    }
+
+    const existingJoin = await this.client.query(
+      `SELECT id FROM book_collections_join
+       WHERE collection_id = $1 AND book_id = $2::uuid
+       LIMIT 1`,
+      [collectionId, bookId]
+    );
+
+    await this.client.query(
+      `INSERT INTO book_collections_join (
+            id, collection_id, book_id, position, weeks_on_list, created_at, updated_at
+       ) VALUES (
+            $1, $2, $3::uuid, $4, $5, NOW(), NOW()
+       )
+       ON CONFLICT (collection_id, book_id) DO UPDATE SET
+            position = COALESCE(EXCLUDED.position, book_collections_join.position),
+            weeks_on_list = COALESCE(EXCLUDED.weeks_on_list, book_collections_join.weeks_on_list),
+            updated_at = NOW()`,
+      [generateNanoId(12), collectionId, bookId, rank ?? null, weeksOnList ?? null]
+    );
+
+    if (existingJoin.rows.length > 0) {
+      this.log(`↻ Reusing NYT qualifier membership for book ${bookId}`);
+    } else {
+      this.log(`✨ Linked book ${bookId} to NYT qualifier list ${collectionId}`);
+    }
+  }
+}
+
+class NytListMigrator {
+  constructor(client, debugMode = false) {
+    this.client = client;
+    this.debug = debugMode;
+  }
+
+  async migrateList(s3Key, bodyString, ordinal) {
+    console.log(`\n📚 Processing list [#L${ordinal}]: ${s3Key}`);
+
+    let listJson;
+    try {
+      listJson = JSON.parse(bodyString);
+    } catch (error) {
+      console.error(`   ❌ Failed to parse NYT list JSON (${s3Key}): ${error.message}`);
+      throw error;
+    }
+
+    const listCodeRaw = listJson.list_name_encoded || listJson.listNameEncoded || null;
+    if (!listCodeRaw) {
+      console.warn(`   ⚠️ [#L${ordinal}] Skipping list without list_name_encoded field.`);
+      return;
+    }
+
+    const normalizedList = normalizeCollectionName(listCodeRaw) || normalizeCollectionName(listJson.display_name || listCodeRaw);
+    const providerListId = listJson.list_id || listJson.listId || null;
+    const displayName = listJson.display_name || titleizeFromSlug(normalizedList || listCodeRaw);
+    const description = listJson.list_name || displayName;
+    const bestsellersDate = extractIsoDate(listJson.bestsellers_date) || extractIsoDate(listJson.bestsellersDate);
+    const effectivePublishedDate = extractIsoDate(listJson.published_date) || extractIsoDate(listJson.publishedDate) || bestsellersDate;
+    const rawJson = JSON.stringify(listJson);
+
+    const collectionId = await this.upsertCollection({
+      providerListId,
+      listCode: listCodeRaw,
+      normalizedList,
+      displayName,
+      description,
+      bestsellersDate,
+      publishedDate: effectivePublishedDate,
+      rawJson,
+      ordinal
+    });
+
+    const booksArray = Array.isArray(listJson.books) ? listJson.books : [];
+    if (booksArray.length === 0) {
+      console.log(`   ℹ️  [#L${ordinal}] List contains no book entries.`);
+      return;
+    }
+
+    let linked = 0;
+    let skipped = 0;
+    let entry = 0;
+    for (const bookNode of booksArray) {
+      entry += 1;
+      const linkedBook = await this.upsertMembership(collectionId, normalizedList, bookNode, `${ordinal}.${entry}`);
+      if (linkedBook) {
+        linked += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+
+    console.log(`   ✅ [#L${ordinal}] Linked ${linked} book(s); ${skipped} skipped (missing canonical entry).`);
+  }
+
+  async upsertCollection({ providerListId, listCode, normalizedList, displayName, description, bestsellersDate, publishedDate, rawJson, ordinal }) {
+    const insertId = generateNanoId(8);
+    let inserted = false;
+
+    const insertResult = await this.client.query(
+      `INSERT INTO book_collections (
+          id, collection_type, source, provider_list_id, provider_list_code,
+          display_name, normalized_name, description, bestsellers_date, published_date,
+          raw_data_json, created_at, updated_at
+      ) VALUES (
+          $1, 'BESTSELLER_LIST', 'NYT', $2, $3, $4, $5, $6,
+          $7::date, $8::date, $9::jsonb, NOW(), NOW()
+      )
+      ON CONFLICT (source, provider_list_code, published_date) DO NOTHING
+      RETURNING id`,
+      [insertId, providerListId, listCode, displayName, normalizedList, description, bestsellersDate, publishedDate, rawJson]
+    );
+
+    let collectionId;
+    if (insertResult.rowCount > 0) {
+      inserted = true;
+      collectionId = insertResult.rows[0].id;
+      console.log(`   ✨ [#L${ordinal}] Created bestseller collection ${displayName} (${listCode}) → ${collectionId}`);
+    } else {
+      const existing = await this.client.query(
+        `SELECT id FROM book_collections
+         WHERE source = 'NYT' AND provider_list_code = $1 AND published_date = $2::date
+         LIMIT 1`,
+        [listCode, publishedDate]
+      );
+      if (existing.rowCount === 0) {
+        throw new Error(`Unable to resolve collection id for list ${listCode} (${publishedDate}).`);
+      }
+      collectionId = existing.rows[0].id;
+      console.log(`   ↻ [#L${ordinal}] Reusing bestseller collection ${displayName} (${listCode}) → ${collectionId}`);
+    }
+
+    await this.client.query(
+      `UPDATE book_collections
+       SET provider_list_id = $1,
+           display_name = $2,
+           normalized_name = $3,
+           description = $4,
+           bestsellers_date = $5::date,
+           published_date = $6::date,
+           raw_data_json = $7::jsonb,
+           updated_at = NOW()
+       WHERE id = $8`,
+      [providerListId, displayName, normalizedList, description, bestsellersDate, publishedDate, rawJson, collectionId]
+    );
+
+    return collectionId;
+  }
+
+  async upsertMembership(collectionId, normalizedList, bookNode, ordinalLabel) {
+    const isbn13 = sanitizeIsbn(bookNode.primary_isbn13 || bookNode.primaryIsbn13);
+    const isbn10 = sanitizeIsbn(bookNode.primary_isbn10 || bookNode.primaryIsbn10);
+    const canonicalId = await this.resolveCanonicalBookId(isbn13, isbn10);
+
+    if (!canonicalId) {
+      const identifier = isbn13 || isbn10 || 'unknown ISBN';
+      console.warn(`   ⚠️ [#L${ordinalLabel}] Skipping NYT entry; canonical book not found for ${identifier}.`);
+      return false;
+    }
+
+    const rank = toIntegerOrNull(bookNode.rank);
+    const weeksOnList = toIntegerOrNull(bookNode.weeks_on_list || bookNode.weeksOnList);
+    const rankLastWeek = toIntegerOrNull(bookNode.rank_last_week || bookNode.rankLastWeek);
+    const peakPosition = toIntegerOrNull(bookNode.audiobook_rank || bookNode.audiobookRank);
+    const providerRef = bookNode.amazon_product_url || bookNode.amazonProductUrl || null;
+    const rawItemJson = JSON.stringify(bookNode);
+
+    const membershipId = generateNanoId(12);
+    const insertResult = await this.client.query(
+      `INSERT INTO book_collections_join (
+          id, collection_id, book_id, position, weeks_on_list, rank_last_week,
+          peak_position, provider_isbn13, provider_isbn10, provider_book_ref,
+          raw_item_json, created_at, updated_at
+       ) VALUES (
+          $1, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NOW(), NOW()
+       )
+       ON CONFLICT (collection_id, book_id) DO NOTHING
+       RETURNING id`,
+      [membershipId, collectionId, canonicalId, rank ?? null, weeksOnList ?? null, rankLastWeek ?? null, peakPosition ?? null, isbn13, isbn10, providerRef, rawItemJson]
+    );
+
+    if (insertResult.rowCount > 0) {
+      console.log(`   ✨ [#L${ordinalLabel}] Added book ${canonicalId} to NYT ${normalizedList} (rank ${rank ?? 'n/a'})`);
+    } else {
+      console.log(`   ↻ [#L${ordinalLabel}] Reusing bestseller membership for book ${canonicalId} (rank ${rank ?? 'n/a'})`);
+    }
+
+    await this.client.query(
+      `UPDATE book_collections_join
+       SET position = $3,
+           weeks_on_list = $4,
+           rank_last_week = $5,
+           peak_position = $6,
+           provider_isbn13 = $7,
+           provider_isbn10 = $8,
+           provider_book_ref = $9,
+           raw_item_json = $10::jsonb,
+           updated_at = NOW()
+       WHERE collection_id = $1 AND book_id = $2::uuid`,
+      [collectionId, canonicalId, rank ?? null, weeksOnList ?? null, rankLastWeek ?? null, peakPosition ?? null, isbn13, isbn10, providerRef, rawItemJson]
+    );
+
+    return true;
+  }
+
+  async resolveCanonicalBookId(isbn13, isbn10) {
+    if (isbn13) {
+      const bookByIsbn13 = await this.client.query('SELECT id FROM books WHERE isbn13 = $1 LIMIT 1', [isbn13]);
+      if (bookByIsbn13.rowCount > 0) {
+        return bookByIsbn13.rows[0].id;
+      }
+      const externalByIsbn13 = await this.client.query(
+        `SELECT book_id FROM book_external_ids
+         WHERE provider_isbn13 = $1 OR external_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [isbn13]
+      );
+      if (externalByIsbn13.rowCount > 0) {
+        return externalByIsbn13.rows[0].book_id;
+      }
+    }
+
+    if (isbn10) {
+      const bookByIsbn10 = await this.client.query('SELECT id FROM books WHERE isbn10 = $1 LIMIT 1', [isbn10]);
+      if (bookByIsbn10.rowCount > 0) {
+        return bookByIsbn10.rows[0].id;
+      }
+      const externalByIsbn10 = await this.client.query(
+        `SELECT book_id FROM book_external_ids
+         WHERE provider_isbn10 = $1 OR external_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [isbn10]
+      );
+      if (externalByIsbn10.rowCount > 0) {
+        return externalByIsbn10.rows[0].book_id;
+      }
+    }
+
+    return null;
+  }
+}
+
+async function migrateNytLists({ s3Client, bucket, batchSize, migrator }) {
+  let continuationToken = null;
+  let processed = 0;
+  let errors = 0;
+
+  do {
+    const command = new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: 'lists/nyt/',
+      MaxKeys: batchSize,
+      ContinuationToken: continuationToken
+    });
+
+    const result = await s3Client.send(command);
+    if (!result.Contents || result.Contents.length === 0) {
+      break;
+    }
+
+    for (const obj of result.Contents) {
+      const key = obj.Key;
+      if (!key.endsWith('.json')) {
+        continue;
+      }
+
+      try {
+        const getCommand = new GetObjectCommand({ Bucket: bucket, Key: key });
+        const s3Object = await s3Client.send(getCommand);
+        const bodyString = await streamToString(s3Object.Body);
+        const ordinal = processed + 1;
+        await migrator.migrateList(key, bodyString, ordinal);
+        processed += 1;
+      } catch (error) {
+        console.error(`❌ Failed to process NYT list ${key}: ${error.message}`);
+        if (migrator.debug && error.stack) {
+          console.error(error.stack);
+        }
+        errors += 1;
+      }
+    }
+
+    continuationToken = result.NextContinuationToken;
+  } while (continuationToken);
+
+  return { processed, errors };
 }
 
 // ============================================================================
@@ -843,9 +1383,11 @@ async function migrate() {
   // Initialize helpers
   const jsonParser = new JsonParser(CONFIG.DEBUG_MODE);
   const bookMigrator = new BookMigrator(pgClient, CONFIG.DEBUG_MODE);
+  const nytListMigrator = new NytListMigrator(pgClient, CONFIG.DEBUG_MODE);
 
   // Statistics
-  let processed = 0;
+  let processedBooks = 0;
+  let processedLists = 0;
   let skipped = 0;
   let errors = 0;
   let continuationToken = null;
@@ -865,16 +1407,17 @@ async function migrate() {
       const key = obj.Key;
       if (!key.endsWith('.json')) continue;
 
-      // Handle skipping
-      if (skipped < CONFIG.SKIP_RECORDS) {
-        skipped++;
-        continue;
-      }
+      // Only apply skip/limit logic to canonical book objects
+      if (key.startsWith('books/')) {
+        if (skipped < CONFIG.SKIP_RECORDS) {
+          skipped++;
+          continue;
+        }
 
-      // Check max limit
-      if (CONFIG.MAX_RECORDS > 0 && processed >= CONFIG.MAX_RECORDS) {
-        console.log(`\n✅ Reached max records limit: ${CONFIG.MAX_RECORDS}`);
-        break;
+        if (CONFIG.MAX_RECORDS > 0 && processedBooks >= CONFIG.MAX_RECORDS) {
+          console.log(`\n✅ Reached max records limit: ${CONFIG.MAX_RECORDS}`);
+          break;
+        }
       }
 
       try {
@@ -883,37 +1426,38 @@ async function migrate() {
         const s3Object = await s3Client.send(getCommand);
         const bodyString = await streamToString(s3Object.Body);
 
-        console.log(`\n📖 Processing: ${key}`);
+        if (key.startsWith('books/')) {
+          const recordIndex = processedBooks + 1;
+          console.log(`\n📖 Processing [#${recordIndex}]: ${key}`);
 
-        // Parse JSON (handles all corruption patterns)
-        const books = jsonParser.parse(bodyString, key);
-        console.log(`   Found ${books.length} unique book(s)`);
+          const books = jsonParser.parse(bodyString, key);
+          console.log(`   Found ${books.length} unique book(s)`);
 
-        // Extract base Google Books ID
-        let baseId = key.split('/').pop().replace('.json', '');
+          let baseId = key.split('/').pop().replace('.json', '');
 
-        // Process each book
-        for (let i = 0; i < books.length; i++) {
-          const book = books[i];
-          const googleBooksId = books.length > 1 ? `${baseId}_${i}` : baseId;
+          for (let i = 0; i < books.length; i++) {
+            const book = books[i];
+            const googleBooksId = books.length > 1 ? `${baseId}_${i}` : baseId;
+            const bookOrdinalLabel = books.length > 1 ? `${recordIndex}.${i + 1}` : `${recordIndex}`;
 
-          await pgClient.query('BEGIN');
+            await pgClient.query('BEGIN');
 
-          try {
-            const result = await bookMigrator.migrate(googleBooksId, book);
-            await pgClient.query('COMMIT');
-            console.log(`   ✅ Migrated: ${result.title} (${result.bookId})`);
-          } catch (e) {
-            await pgClient.query('ROLLBACK');
-            console.error(`   ❌ Failed: ${e.message}`);
-            if (CONFIG.DEBUG_MODE) {
-              console.error(e.stack);
+            try {
+            const result = await bookMigrator.migrate(googleBooksId, book, bookOrdinalLabel);
+              await pgClient.query('COMMIT');
+              console.log(`   ✅ [#${bookOrdinalLabel}] Migrated: ${result.title} (${result.bookId})`);
+            } catch (e) {
+              await pgClient.query('ROLLBACK');
+              console.error(`   ❌ Failed: ${e.message}`);
+              if (CONFIG.DEBUG_MODE) {
+                console.error(e.stack);
+              }
+              errors++;
             }
-            errors++;
           }
-        }
 
-        processed++;
+          processedBooks++;
+        }
 
       } catch (e) {
         console.error(`❌ Failed to process ${key}: ${e.message}`);
@@ -923,7 +1467,17 @@ async function migrate() {
 
     continuationToken = result.NextContinuationToken;
 
-  } while (continuationToken && (CONFIG.MAX_RECORDS === 0 || processed < CONFIG.MAX_RECORDS));
+  } while (continuationToken && (CONFIG.MAX_RECORDS === 0 || processedBooks < CONFIG.MAX_RECORDS));
+
+  // Process NYT list snapshots
+  const listResult = await migrateNytLists({
+    s3Client,
+    bucket: s3Bucket,
+    batchSize: CONFIG.BATCH_SIZE,
+    migrator: nytListMigrator
+  });
+  processedLists += listResult.processed;
+  errors += listResult.errors;
 
   // Refresh materialized view
   console.log('\n🔄 Refreshing search view...');
@@ -935,7 +1489,8 @@ async function migrate() {
   console.log('\n' + '='.repeat(60));
   console.log('📊 MIGRATION COMPLETE');
   console.log('='.repeat(60));
-  console.log(`✅ Processed: ${processed}`);
+  console.log(`✅ Book files processed: ${processedBooks}`);
+  console.log(`📚 NYT list files processed: ${processedLists}`);
   console.log(`❌ Errors: ${errors}`);
   console.log(`⏭️  Skipped: ${skipped}`);
   console.log('='.repeat(60));

@@ -33,7 +33,7 @@ This document tracks all code changes required to retrofit the application for t
 - [x] Insert raw API payloads into `book_raw_data` per source with `fetched_at`/`contributed_at` timestamps to audit upstream data.
 - [x] Normalize authors: upsert into `authors`, maintain order in `book_authors_join`; external IDs pending future providers.
 - [x] Map Google categories and NYT lists into `book_collections` / `book_collections_join` with correct `collection_type`, `source`, ranking metadata, and provider references.
-- [ ] Capture physical metadata in `book_dimensions` whenever height/width/thickness/weight are present.
+- [x] Capture physical metadata in `book_dimensions` whenever height/width/thickness/weight are present. (2025-09-20)
 - [x] Store canonical cover path in `books.s3_image_path`, push external image URLs into `book_image_links`, and sync `book_editions` links only when a work has multiple canonical siblings.
 - [x] Extract shared persistence helpers for authors, categories, qualifier tags, and collections so orchestrator/scheduler reuse a single implementation.
 - [x] Replace legacy `book_lists` / `book_lists_join` SQL with `book_collections` tables across insert/update/select flows.
@@ -42,7 +42,7 @@ This document tracks all code changes required to retrofit the application for t
   - [x] Fold in dimensions + raw payload joins so physical metadata/debug provenance flow through the reader (`PostgresBookReader` now hydrates `book_dimensions` + latest `book_raw_data`).
 - [x] Hydrate edition chains by joining `book_editions`/`book_editions_chain` so services can return sibling formats in a single query.
 - [x] Ensure dependent table inserts use NanoIDs from `IdGenerator` and run inside transactions/batched operations for referential integrity.
-- [ ] Trigger `refresh_book_search_view()` after bulk writes and expose throttled refresh hook for orchestrated jobs.
+- [x] Trigger `refresh_book_search_view()` after bulk writes and expose throttled refresh hook for orchestrated jobs. (2025-09-20)
 - [x] Flip tiered fetch pipeline to Postgres-first (DB → S3 → APIs) and treat S3 JSON as optional fallback cache only — `PostgresBookReader` now fronts all identifier lookups and returns canonical slugs (2025-09-20).
 
 ### [ ] `/src/main/java/com/williamcallahan/book_recommendation_engine/model/Book.java`
@@ -109,11 +109,11 @@ This document tracks all code changes required to retrofit the application for t
 **Priority**: HIGH
 **Changes Required**:
 
-- [ ] Create new service to wrap search functions
-- [ ] Implement searchBooks() method calling PostgreSQL function
-- [ ] Implement searchByISBN() method
-- [ ] Implement searchAuthors() method
-- [ ] Add method to refresh materialized view after bulk updates
+- [x] Create new service to wrap search functions (BookSearchService wired for Postgres search, 2025-09-20)
+- [x] Implement searchBooks() method calling PostgreSQL function
+- [x] Implement searchByISBN() method (returns canonical result metadata, 2025-09-20)
+- [x] Implement searchAuthors() method (Postgres relevance ranking, 2025-09-20)
+- [x] Add method to refresh materialized view after bulk updates (BookSearchService.refreshMaterializedView(), 2025-09-20)
 
 ### [ ] `/src/main/java/com/williamcallahan/book_recommendation_engine/service/BookApiProxy.java`
 
