@@ -42,7 +42,7 @@ class BookSupplementalPersistenceServiceTest {
 
     @Test
     void assignQualifierTags_persistsMetadataJson() {
-        when(jdbcTemplate.queryForObject(anyString(), any(Object[].class), any(RowMapper.class)))
+        when(jdbcTemplate.queryForObject(anyString(), any(RowMapper.class), any(Object[].class)))
                 .thenReturn("tag-001");
 
         ArgumentCaptor<String> metadataCaptor = ArgumentCaptor.forClass(String.class);

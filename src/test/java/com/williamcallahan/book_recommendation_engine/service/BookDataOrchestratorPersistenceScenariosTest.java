@@ -75,8 +75,8 @@ class BookDataOrchestratorPersistenceScenariosTest {
 
     @Test
     void resolveCanonicalBookId_prefersExistingExternalMapping() {
-        lenient().when(jdbcTemplate.query(anyString(), ArgumentMatchers.<Object[]>any(), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
+        lenient().when(jdbcTemplate.<String>query(anyString(), ArgumentMatchers.<RowMapper<String>>any(), ArgumentMatchers.<Object[]>any()))
+                .thenReturn(Collections.<String>emptyList());
         whenExternalIdLookupReturns("existing-book-id");
 
         Book incoming = new Book();
@@ -102,12 +102,12 @@ class BookDataOrchestratorPersistenceScenariosTest {
         book.setEditionGroupKey("group-key");
         book.setEditionNumber(2);
 
-        lenient().when(jdbcTemplate.query(anyString(), ArgumentMatchers.<Object[]>any(), any(RowMapper.class)))
-                .thenReturn(Collections.emptyList());
+        lenient().when(jdbcTemplate.<String>query(anyString(), ArgumentMatchers.<RowMapper<String>>any(), ArgumentMatchers.<Object[]>any()))
+                .thenReturn(Collections.<String>emptyList());
 
         doAnswer(invocation -> {
             PreparedStatementSetter setter = invocation.getArgument(1);
-            RowMapper<?> rowMapper = invocation.getArgument(2);
+            RowMapper<Object> rowMapper = invocation.getArgument(2);
             setter.setValues(mock(PreparedStatement.class));
 
             ResultSet primary = mockResult("primary-id", 2);
@@ -117,7 +117,7 @@ class BookDataOrchestratorPersistenceScenariosTest {
                     rowMapper.mapRow(sibling, 1)
             );
         }).when(jdbcTemplate).query(eq("SELECT id, edition_number FROM books WHERE edition_group_key = ?"),
-                any(PreparedStatementSetter.class), any(RowMapper.class));
+                any(PreparedStatementSetter.class), ArgumentMatchers.<RowMapper<Object>>any());
 
         ReflectionTestUtils.invokeMethod(orchestrator, "synchronizeEditionRelationships", "primary-id", book);
 
@@ -144,11 +144,12 @@ class BookDataOrchestratorPersistenceScenariosTest {
     }
 
     private void whenExternalIdLookupReturns(String bookId) {
-        doAnswer(invocation -> List.of(bookId)).when(jdbcTemplate).query(
+        lenient().when(jdbcTemplate.<String>query(
                 eq("SELECT book_id FROM book_external_ids WHERE source = ? AND external_id = ? LIMIT 1"),
-                any(Object[].class),
-                any(RowMapper.class)
-        );
+                ArgumentMatchers.<RowMapper<String>>any(),
+                eq("GOOGLE_BOOKS"),
+                any()
+        )).thenReturn(List.of(bookId));
     }
 
     private ResultSet mockResult(String id, Integer editionNumber) throws SQLException {

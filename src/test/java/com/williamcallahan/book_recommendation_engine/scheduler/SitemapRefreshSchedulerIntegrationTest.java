@@ -1,5 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.scheduler;
 
+import org.springframework.lang.NonNull;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.model.Book;
@@ -79,7 +81,7 @@ class SitemapRefreshSchedulerIntegrationTest {
 
         ObjectProvider<S3BookCoverService> coverProvider = new ObjectProvider<>() {
             @Override
-            public S3BookCoverService getObject(Object... args) {
+            public @NonNull S3BookCoverService getObject(@NonNull Object... args) {
                 return coverService;
             }
 
@@ -94,7 +96,7 @@ class SitemapRefreshSchedulerIntegrationTest {
             }
 
             @Override
-            public S3BookCoverService getObject() {
+            public @NonNull S3BookCoverService getObject() {
                 return coverService;
             }
         };

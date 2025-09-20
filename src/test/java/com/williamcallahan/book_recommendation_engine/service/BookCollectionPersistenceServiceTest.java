@@ -12,11 +12,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,8 +45,11 @@ class BookCollectionPersistenceServiceTest {
         ObjectNode raw = objectMapper.createObjectNode();
         raw.put("list_name", "Hardcover Fiction");
 
-        when(jdbcTemplate.queryForObject(anyString(), any(Object[].class), any(RowMapper.class)))
-                .thenReturn("collection-123");
+        when(jdbcTemplate.queryForObject(
+                anyString(),
+                any(RowMapper.class),
+                any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn("collection-123");
 
         Optional<String> result = service.upsertBestsellerCollection(
                 "nyt-fiction-2024-38",
@@ -59,18 +64,21 @@ class BookCollectionPersistenceServiceTest {
 
         assertThat(result).contains("collection-123");
 
-        ArgumentCaptor<Object[]> paramsCaptor = ArgumentCaptor.forClass(Object[].class);
+        ArgumentCaptor<RowMapper<String>> mapperCaptor = ArgumentCaptor.forClass(RowMapper.class);
+        ArgumentCaptor<Object> argCaptor = ArgumentCaptor.forClass(Object.class);
+
         verify(jdbcTemplate).queryForObject(
                 startsWith("INSERT INTO book_collections (id, collection_type, source, provider_list_id"),
-                paramsCaptor.capture(),
-                any(RowMapper.class)
+                mapperCaptor.capture(),
+                argCaptor.capture(), argCaptor.capture(), argCaptor.capture(), argCaptor.capture(),
+                argCaptor.capture(), argCaptor.capture(), argCaptor.capture(), argCaptor.capture(), argCaptor.capture()
         );
 
-        Object[] params = paramsCaptor.getValue();
-        assertThat(params[1]).isEqualTo("nyt-fiction-2024-38");
-        assertThat(params[2]).isEqualTo("hardcover-fiction");
-        assertThat(params[3]).isEqualTo("NYT Hardcover Fiction");
-        assertThat(params[4]).isEqualTo("hardcover-fiction");
-        assertThat(params[8]).isEqualTo(raw.toString());
+        List<Object> captured = argCaptor.getAllValues();
+        assertThat(captured.get(1)).isEqualTo("nyt-fiction-2024-38");
+        assertThat(captured.get(2)).isEqualTo("hardcover-fiction");
+        assertThat(captured.get(3)).isEqualTo("NYT Hardcover Fiction");
+        assertThat(captured.get(4)).isEqualTo("hardcover-fiction");
+        assertThat(captured.get(8)).isEqualTo(raw.toString());
     }
 }
