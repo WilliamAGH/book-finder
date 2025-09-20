@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Consolidated sitemap refresh job that warms Postgres queries, persists S3 artefacts, and hydrates external data.
