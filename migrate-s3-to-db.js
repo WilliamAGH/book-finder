@@ -7,9 +7,9 @@
 
 const { Client } = require('pg');
 const { S3Client, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
-const fs = require('fs');
-const crypto = require('crypto');
-const path = require('path');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = require('node:path');
 
 // Parse command line args
 const args = process.argv.slice(2);
@@ -105,7 +105,7 @@ function generateSlug(title, firstAuthor) {
       }
     }
 
-    slug = slug + '-' + authorSlug;
+    slug = `${slug}-${authorSlug}`;
   }
 
   // Final truncation to 100 chars
@@ -286,6 +286,13 @@ function loadEnvFile() {
   }
 }
 
+// Edition sync function removed - using work_clusters system
+function syncEditionLinks_REMOVED() {
+  return;
+}
+
+// Original function commented out for reference
+/*
 async function syncEditionLinks(client, {
   bookId,
   editionGroupKey,
@@ -313,12 +320,8 @@ async function syncEditionLinks(client, {
     return;
   }
 
-  const siblingResult = await client.query(
-    `SELECT id, COALESCE(edition_number, 1) AS edition_number
-       FROM books
-      WHERE edition_group_key = $1`,
-    [editionGroupKey]
-  );
+  // Edition system has been removed - skip sibling processing
+  const siblingResult = { rows: [] };
 
   if (siblingResult.rows.length === 0) {
     return;
@@ -390,6 +393,7 @@ async function syncEditionLinks(client, {
     if (operations) operations.book_editions = `LINK:${linksCreated}`;
   }
 }
+*/
 
 async function streamToString(stream) {
   const chunks = [];
@@ -454,7 +458,7 @@ function mergeBookRecords(existing, newRecord) {
         ...new Map([
           ...(volumeInfo.industryIdentifiers || []),
           ...(newVolumeInfo.industryIdentifiers || [])
-        ].map(id => [id.type + ':' + id.identifier, id])).values()
+        ].map(id => [`${id.type}:${id.identifier}`, id])).values()
       ],
       // Average the ratings if both exist
       averageRating: (volumeInfo.averageRating && newVolumeInfo.averageRating)
@@ -572,18 +576,7 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
   const authors = volumeInfo.authors || [];
   const categories = volumeInfo.categories || [];
 
-  // Extract edition information early for debug info
-  let editionNumber = null;
-  let editionGroupKey = null;
-
-  try {
-    editionNumber = extractEditionNumber(volumeInfo, metadata, actualBookData);
-    editionGroupKey = buildEditionGroupKey(title, authors);
-  } catch (e) {
-    console.error(`[ERROR] Failed to extract edition info for ${googleBooksId}: ${e.message}`);
-    editionNumber = null;
-    editionGroupKey = buildEditionGroupKey(title, authors); // Still try to build group key
-  }
+  // Edition management removed - using work_clusters system now
 
   // Store source data for debug
   if (DEBUG_MODE) {
@@ -595,9 +588,8 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
       authors: authors.join(', ') || '(none)',
       publisher: publisher || '(none)',
       published_date: publishedDate || '(none)',
-      categories: categories.join(', ') || '(none)',
-      edition_number: editionNumber ?? '(none)',
-      edition_group_key: editionGroupKey || '(none)'
+      categories: categories.join(', ') || '(none)'
+      // edition_number and edition_group_key removed from schema
     };
   }
 
@@ -771,18 +763,16 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
         INSERT INTO books (
           id, title, subtitle, description, isbn10, isbn13,
           published_date, language, publisher, page_count,
-          edition_number, edition_group_key,
           slug, created_at, updated_at
         ) VALUES (
           $1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, NOW(), NOW()
+          $11, NOW(), NOW()
         )
       `;
 
       await client.query(bookSql, [
         bookId, title, subtitle, description, isbn10, isbn13,
         pubDate, language, publisher, pageCount,
-        editionNumber, editionGroupKey,
         slug
       ]);
       tablesWritten.push('books');
@@ -799,28 +789,20 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
           language = COALESCE(NULLIF($7, ''), language),
           publisher = COALESCE(NULLIF($8, ''), publisher),
           page_count = COALESCE($9, page_count),
-          edition_number = COALESCE($10, edition_number),
-          edition_group_key = COALESCE(NULLIF($11, ''), edition_group_key),
           updated_at = NOW()
         WHERE id = $1::uuid
       `;
 
       await client.query(updateSql, [
         bookId, subtitle, description, isbn10, isbn13,
-        pubDate, language, publisher, pageCount,
-        editionNumber, editionGroupKey
+        pubDate, language, publisher, pageCount
       ]);
       tablesWritten.push('books-updated');
       if (DEBUG_MODE) debugInfo.operations.books = 'UPDATE';
     }
 
-    await syncEditionLinks(client, {
-      bookId,
-      editionGroupKey,
-      editionNumber,
-      tablesWritten,
-      debugInfo
-    });
+    // Edition sync removed - using work_clusters system now
+    // await syncEditionLinks(...)
 
     // 2. Insert into book_external_ids (provider-specific data)
     const externalIdSql = `
@@ -1136,7 +1118,7 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
 function displayDebugTable(debugInfo) {
   if (!debugInfo) return;
 
-  console.log('\n' + '='.repeat(120));
+  console.log(`\n${'='.repeat(120)}`);
   console.log('DEBUG: MIGRATION MAPPING AND OPERATIONS');
   console.log('='.repeat(120));
 
@@ -1193,7 +1175,7 @@ function displayDebugTable(debugInfo) {
   }
   printTable(mappedTable);
 
-  console.log('\n' + '='.repeat(120) + '\n');
+  console.log(`\n${'='.repeat(120)}\n`);
 }
 
 function printTable(rows) {
@@ -1210,7 +1192,7 @@ function printTable(rows) {
     const formattedRow = row.map((cell, i) =>
       String(cell).padEnd(columnWidths[i])
     ).join(' │ ');
-    console.log('  ' + formattedRow);
+    console.log(`  ${formattedRow}`);
   });
 }
 
@@ -1525,7 +1507,7 @@ async function migrateBooksFromS3() {
   await client.end();
 
   // Display quality control summary
-  console.log('\n' + '='.repeat(80));
+  console.log(`\n${'='.repeat(80)}`);
   console.log('MIGRATION COMPLETE - QUALITY CONTROL SUMMARY');
   console.log('='.repeat(80));
 
@@ -1589,7 +1571,7 @@ async function migrateBooksFromS3() {
     booksMerged
   });
 
-  console.log('\n' + '='.repeat(80));
+  console.log(`\n${'='.repeat(80)}`);
 }
 
 // Run migration
