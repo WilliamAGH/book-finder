@@ -9,7 +9,7 @@ Jobs are enabled by `@EnableScheduling` in `BookRecommendationEngineApplication.
 | Scheduler File Path                                  | Main Method                        | Default Schedule                  | Cron Property (`application.properties`) | Description                                      |
 | :--------------------------------------------------- | :--------------------------------- | :-------------------------------- | :--------------------------------------- | :----------------------------------------------- |
 | `.../scheduler/BookCacheWarmingScheduler.java`       | `warmPopularBookCaches()`          | Daily at 3 AM (`0 0 3 * * ?`)     | `app.cache.warming.cron`                 | Caches popular/recent books.                     |
-| `.../scheduler/SitemapUpdateScheduler.java`          | `scheduleSitemapBookIdUpdate()`    | Hourly (`0 0 * * * *`)            | (Hardcoded)                              | Updates S3 book ID list for sitemap.             |
+| `.../scheduler/SitemapRefreshScheduler.java`         | `refreshSitemapArtifacts()`        | Hourly at :15 (`0 15 * * * *`)    | `sitemap.scheduler-cron`                 | Consolidated sitemap refresh: warms queries, uploads S3 snapshot, optional external hydration, cover warmups. |
 | `.../scheduler/NewYorkTimesBestsellerScheduler.java` | `processNewYorkTimesBestsellers()` | Sunday at 4 AM (`0 0 4 * * SUN`)  | `app.nyt.scheduler.cron`                 | Fetches NYT bestsellers, updates S3 data.        |
 
 **Notes on Cron:**
