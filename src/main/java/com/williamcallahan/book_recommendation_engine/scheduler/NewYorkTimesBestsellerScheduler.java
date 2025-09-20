@@ -23,6 +23,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Locale;
 
+import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
+import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+
 /**
  * Scheduler that ingests New York Times bestseller data directly into Postgres.
  * <p>
@@ -141,8 +144,8 @@ public class NewYorkTimesBestsellerScheduler {
     }
 
     private void persistListEntry(String collectionId, String listCode, JsonNode bookNode) {
-        String isbn13 = sanitizeIsbn(bookNode.path("primary_isbn13").asText(null));
-        String isbn10 = sanitizeIsbn(bookNode.path("primary_isbn10").asText(null));
+        String isbn13 = IsbnUtils.sanitize(bookNode.path("primary_isbn13").asText(null));
+        String isbn10 = IsbnUtils.sanitize(bookNode.path("primary_isbn10").asText(null));
 
         String canonicalId = resolveCanonicalBookId(isbn13, isbn10);
         if (canonicalId == null) {
@@ -229,9 +232,7 @@ public class NewYorkTimesBestsellerScheduler {
         if (value == null) {
             return null;
         }
-        return jdbcTemplate.query(sql,
-                ps -> ps.setString(1, value),
-                rs -> rs.next() ? rs.getString(1) : null);
+        return JdbcUtils.optionalString(jdbcTemplate, sql, value).orElse(null);
     }
 
     private void assignCoreTags(String bookId, String listCode, Integer rank) {
@@ -255,11 +256,4 @@ public class NewYorkTimesBestsellerScheduler {
         }
     }
 
-    private String sanitizeIsbn(String raw) {
-        if (raw == null) {
-            return null;
-        }
-        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase(Locale.ROOT);
-        return cleaned.isBlank() ? null : cleaned;
-    }
 }

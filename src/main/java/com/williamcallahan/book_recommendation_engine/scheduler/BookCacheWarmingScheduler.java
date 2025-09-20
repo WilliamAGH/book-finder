@@ -13,6 +13,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -124,7 +125,7 @@ public class BookCacheWarmingScheduler {
             // Calculate how many books we can warm based on current API usage
             // We want to leave some headroom for user requests
             int hourlyLimit = rateLimit * 60; // Max requests per hour based on rate limit
-            int requestBudget = Math.max(0, hourlyLimit / 2 - currentHourlyRequests); // Use at most half the remaining budget
+            int requestBudget = PagingUtils.atLeast(hourlyLimit / 2 - currentHourlyRequests, 0); // Use at most half the remaining budget
             int booksToWarm = Math.min(Math.min(bookIdsToWarm.size(), maxBooksPerRun), requestBudget);
             
             logger.info("Warming {} books based on rate limit {} per minute and current API usage", 

@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookSitemapService
 import com.williamcallahan.book_recommendation_engine.service.SitemapService;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import com.williamcallahan.book_recommendation_engine.service.image.S3BookCoverService;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -61,8 +62,8 @@ public class SitemapRefreshScheduler {
         BookSitemapService.SnapshotSyncResult snapshotResult = bookSitemapService.synchronizeSnapshot();
         List<BookSitemapItem> books = snapshotResult.snapshot().books();
 
-        int coverSampleSize = Math.max(0, sitemapProperties.getSchedulerCoverSampleSize());
-        int externalHydrationLimit = Math.max(0, sitemapProperties.getSchedulerExternalHydrationSize());
+        int coverSampleSize = PagingUtils.atLeast(sitemapProperties.getSchedulerCoverSampleSize(), 0);
+        int externalHydrationLimit = PagingUtils.atLeast(sitemapProperties.getSchedulerExternalHydrationSize(), 0);
 
         BookSitemapService.ExternalHydrationSummary hydrationSummary =
                 bookSitemapService.hydrateExternally(books, externalHydrationLimit);
