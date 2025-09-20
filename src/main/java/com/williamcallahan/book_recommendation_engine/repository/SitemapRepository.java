@@ -5,8 +5,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -68,7 +67,7 @@ public class SitemapRepository {
             return jdbcTemplate.query(sql, rs -> {
                 Map<String, Integer> counts = new LinkedHashMap<>();
                 while (rs.next()) {
-                    counts.put(rs.getString("bucket").toUpperCase(), rs.getInt("total"));
+                    counts.put(rs.getString("bucket").toUpperCase(Locale.ROOT), rs.getInt("total"));
                 }
                 return counts;
             });
@@ -83,7 +82,7 @@ public class SitemapRepository {
         }
         String expr = LETTER_BUCKET_EXPRESSION.formatted("title", "title");
         String sql = "SELECT COUNT(*) FROM books WHERE slug IS NOT NULL AND " + expr + " = ?";
-        return Objects.requireNonNullElse(jdbcTemplate.queryForObject(sql, Integer.class, bucket.toLowerCase()), 0);
+        return Objects.requireNonNullElse(jdbcTemplate.queryForObject(sql, Integer.class, bucket.toLowerCase(Locale.ROOT)), 0);
     }
 
     public List<BookRow> fetchBooksForBucket(String bucket, int limit, int offset) {
@@ -95,7 +94,7 @@ public class SitemapRepository {
                      "WHERE slug IS NOT NULL AND " + expr + " = ? " +
                      "ORDER BY lower(title), slug LIMIT ? OFFSET ?";
         try {
-            return jdbcTemplate.query(sql, BOOK_ROW_MAPPER, bucket.toLowerCase(), limit, offset);
+            return jdbcTemplate.query(sql, BOOK_ROW_MAPPER, bucket.toLowerCase(Locale.ROOT), limit, offset);
         } catch (DataAccessException e) {
             return Collections.emptyList();
         }
@@ -124,7 +123,7 @@ public class SitemapRepository {
             return jdbcTemplate.query(sql, rs -> {
                 Map<String, Integer> counts = new LinkedHashMap<>();
                 while (rs.next()) {
-                    counts.put(rs.getString("bucket").toUpperCase(), rs.getInt("total"));
+                    counts.put(rs.getString("bucket").toUpperCase(Locale.ROOT), rs.getInt("total"));
                 }
                 return counts;
             });
@@ -139,7 +138,7 @@ public class SitemapRepository {
         }
         String expr = LETTER_BUCKET_EXPRESSION.formatted("COALESCE(normalized_name, name)", "COALESCE(normalized_name, name)");
         String sql = "SELECT COUNT(*) FROM authors WHERE " + expr + " = ?";
-        return Objects.requireNonNullElse(jdbcTemplate.queryForObject(sql, Integer.class, bucket.toLowerCase()), 0);
+        return Objects.requireNonNullElse(jdbcTemplate.queryForObject(sql, Integer.class, bucket.toLowerCase(Locale.ROOT)), 0);
     }
 
     public List<AuthorRow> fetchAuthorsForBucket(String bucket, int limit, int offset) {
@@ -154,7 +153,7 @@ public class SitemapRepository {
                     rs.getString("id"),
                     rs.getString("name"),
                     rs.getTimestamp("updated_at") != null ? rs.getTimestamp("updated_at").toInstant() : Instant.EPOCH
-            ), bucket.toLowerCase(), limit, offset);
+            ), bucket.toLowerCase(Locale.ROOT), limit, offset);
         } catch (DataAccessException e) {
             return Collections.emptyList();
         }

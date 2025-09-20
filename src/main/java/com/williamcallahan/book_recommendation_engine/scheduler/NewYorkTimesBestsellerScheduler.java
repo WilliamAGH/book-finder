@@ -21,6 +21,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Locale;
 
 /**
  * Scheduler that ingests New York Times bestseller data directly into Postgres.
@@ -115,7 +116,7 @@ public class NewYorkTimesBestsellerScheduler {
 
         String providerListId = listNode.path("list_id").asText(null);
         String description = listNode.path("list_name").asText(null);
-        String normalized = listCode.toLowerCase();
+        String normalized = listCode.toLowerCase(Locale.ROOT);
 
         LocalDate listPublishedDate = parseDate(listNode.path("published_date").asText(null));
         if (listPublishedDate == null) {
@@ -258,7 +259,7 @@ public class NewYorkTimesBestsellerScheduler {
         if (raw == null) {
             return null;
         }
-        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase();
+        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase(Locale.ROOT);
         return cleaned.isBlank() ? null : cleaned;
     }
 }

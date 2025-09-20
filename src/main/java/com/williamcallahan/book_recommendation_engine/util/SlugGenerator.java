@@ -1,6 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.util;
 
 import java.text.Normalizer;
+import java.util.Locale;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -91,7 +92,7 @@ public final class SlugGenerator {
         }
 
         // Convert to lowercase
-        String slug = input.toLowerCase().trim();
+        String slug = input.toLowerCase(Locale.ROOT).trim();
 
         // Normalize Unicode characters (é -> e, etc.)
         slug = Normalizer.normalize(slug, Normalizer.Form.NFD);

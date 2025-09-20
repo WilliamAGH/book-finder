@@ -21,6 +21,8 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceNam
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Base64;
 
 /**
@@ -92,7 +94,7 @@ public final class ImageCacheUtils {
             String urlWithoutParams = queryParamIndex > 0 ? url.substring(0, queryParamIndex) : url;
             int lastDotIndex = urlWithoutParams.lastIndexOf(".");
             if (lastDotIndex > 0 && lastDotIndex < urlWithoutParams.length() - 1) {
-                String ext = urlWithoutParams.substring(lastDotIndex).toLowerCase();
+                String ext = urlWithoutParams.substring(lastDotIndex).toLowerCase(Locale.ROOT);
                 // Basic validation for common image extensions
                 if (ext.matches("\\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff)")) {
                     extension = ext;
@@ -115,7 +117,7 @@ public final class ImageCacheUtils {
      */
     public static String generateFilenameFromUrl(String url) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] hash = digest.digest(url.getBytes());
+        byte[] hash = digest.digest(url.getBytes(StandardCharsets.UTF_8));
         String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
         String extension = getFileExtensionFromUrl(url);
         // Use a portion of the hash to keep filename length reasonable
@@ -168,7 +170,7 @@ public final class ImageCacheUtils {
             return ImageSourceName.UNKNOWN;
         }
         // Simplified mapping, can be expanded for more precise matching
-        String lowerSourceName = sourceNameString.toLowerCase();
+        String lowerSourceName = sourceNameString.toLowerCase(Locale.ROOT);
         if (lowerSourceName.contains("openlibrary")) return ImageSourceName.OPEN_LIBRARY;
         if (lowerSourceName.contains("google") || lowerSourceName.contains("googlebooks")) return ImageSourceName.GOOGLE_BOOKS;
         if (lowerSourceName.contains("longitood")) return ImageSourceName.LONGITOOD;
@@ -178,7 +180,7 @@ public final class ImageCacheUtils {
 
         try {
             // Attempt direct enum conversion for exact matches (case-insensitive for valueOf)
-            return ImageSourceName.valueOf(sourceNameString.toUpperCase().replaceAll("[^A-Z0-9_]", ""));
+            return ImageSourceName.valueOf(sourceNameString.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9_]", ""));
         } catch (IllegalArgumentException e) {
             return ImageSourceName.UNKNOWN;
         }

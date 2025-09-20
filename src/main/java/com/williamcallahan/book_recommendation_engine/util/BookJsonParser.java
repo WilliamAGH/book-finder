@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Locale;
 
 
 public class BookJsonParser {
@@ -252,9 +253,9 @@ public class BookJsonParser {
         if (value == null) {
             return "";
         }
-        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKD)
+            String normalized = Normalizer.normalize(value, Normalizer.Form.NFKD)
             .replaceAll("\\p{M}+", "")
-            .toLowerCase()
+            .toLowerCase(Locale.ROOT)
             .replaceAll("[^a-z0-9\\s]+", " ")
             .trim()
             .replaceAll("\\s+", " ");
@@ -536,7 +537,7 @@ public class BookJsonParser {
             return qualifiers;
         }
         
-        String normalizedQuery = query.toLowerCase().trim();
+        String normalizedQuery = query.toLowerCase(Locale.ROOT).trim();
         
         if (normalizedQuery.contains("new york times bestseller") || 
             normalizedQuery.contains("nyt bestseller") ||
@@ -579,7 +580,7 @@ public class BookJsonParser {
         if (isbn == null) {
             return false;
         }
-        String sanitizedIsbn = isbn.replace("-", "").replace(" ", "").toUpperCase();
+        String sanitizedIsbn = isbn.replace("-", "").replace(" ", "").toUpperCase(Locale.ROOT);
         if (sanitizedIsbn.length() == 10) {
             // Basic check for ISBN-10 (9 digits + 1 check digit which can be X)
             return sanitizedIsbn.matches("^[0-9]{9}[0-9X]$");
