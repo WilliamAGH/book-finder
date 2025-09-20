@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.service.SitemapService.Aut
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.PagedResult;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.SitemapOverview;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
 @WebMvcTest(SitemapController.class)
+@AutoConfigureMockMvc(addFilters = false)
 class SitemapControllerTest {
 
     @Autowired
@@ -50,7 +52,7 @@ class SitemapControllerTest {
         Map<String, Integer> defaultCounts = SitemapService.LETTER_BUCKETS.stream()
                 .collect(Collectors.toMap(letter -> letter, letter -> 0));
         when(sitemapService.getOverview()).thenReturn(new SitemapOverview(defaultCounts, defaultCounts));
-        when(sitemapService.normalizeBucket(Mockito.anyString())).thenAnswer(invocation -> {
+        when(sitemapService.normalizeBucket(Mockito.any())).thenAnswer(invocation -> {
             String arg = invocation.getArgument(0);
             return arg == null ? "A" : arg.toUpperCase();
         });

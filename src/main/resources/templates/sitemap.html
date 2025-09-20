@@ -37,7 +37,7 @@
                     <a th:each="letter : ${letters}"
                        th:href="@{/sitemap(view=${viewType}, letter=${letter}, page=1)}"
                        th:text="${letter}"
-                       th:class="${letter == activeLetter} ? 'badge bg-primary text-decoration-none' : 'badge bg-light text-dark text-decoration-none'}"></a>
+                       th:class="${letter == activeLetter} ? 'badge bg-primary text-decoration-none' : 'badge bg-light text-dark text-decoration-none'"></a>
                 </div>
             </div>
         </div>
