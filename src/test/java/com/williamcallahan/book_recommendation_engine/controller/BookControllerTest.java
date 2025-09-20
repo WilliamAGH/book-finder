@@ -33,7 +33,6 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -75,6 +74,7 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.query", equalTo("Fixture")))
                 .andExpect(jsonPath("$.results", hasSize(1)))
                 .andExpect(jsonPath("$.results[0].id", equalTo(fixtureBook.getId())))
+                .andExpect(jsonPath("$.results[0].slug", equalTo(fixtureBook.getSlug())))
                 .andExpect(jsonPath("$.results[0].cover.preferredUrl", containsString("preferred")))
                 .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")));
     }
@@ -88,6 +88,7 @@ class BookControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
+                .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())))
                 .andExpect(jsonPath("$.authors[0].name", equalTo("Fixture Author")))
                 .andExpect(jsonPath("$.cover.s3ImagePath", equalTo(fixtureBook.getS3ImagePath())));
     }
@@ -100,7 +101,8 @@ class BookControllerTest {
 
         performAsync(get("/api/books/fixture-book-of-secrets"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())));
+                .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
+                .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())));
     }
 
     @Test
@@ -136,6 +138,7 @@ class BookControllerTest {
         Book book = new Book();
         book.setId(id);
         book.setTitle(title);
+        book.setSlug("fixture-title");
         book.setDescription("Fixture Description");
         book.setAuthors(List.of("Fixture Author"));
         book.setCategories(List.of("NYT Fiction"));
