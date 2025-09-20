@@ -288,7 +288,7 @@ public class HomeController {
         return Flux.fromIterable(books)
             .concatMap(book -> { // concatMap preserves order and processes one by one
                 if (book == null) {
-                    return Mono.justOrEmpty(null); 
+                    return Mono.<Book>empty(); 
                 }
                 return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
                     .map(coverImagesResult -> {
@@ -558,8 +558,8 @@ public class HomeController {
                             String searchTermOnError = asinOnError != null ? asinOnError : (book.getTitle() != null ? book.getTitle() : "");
                             try {
                                 searchTermOnError = URLEncoder.encode(searchTermOnError, "UTF-8");
-                            } catch (Exception e) {
-                                logger.warn("Failed to encode search term for Audible link on error: {}", searchTermOnError);
+                        } catch (Exception ex) {
+                            logger.warn("Failed to encode search term for Audible link on error: {}", searchTermOnError);
                             }
                             String audibleUrlOnError = "https://www.amazon.com/s?k=" + searchTermOnError + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
                             affiliateLinksOnError.put("audible", audibleUrlOnError);
@@ -588,7 +588,7 @@ public class HomeController {
                 Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 10)  // Request 10 instead of 6
                     .flatMap(similarBooksList -> Flux.fromIterable(similarBooksList)
                         .concatMap(similarBook -> {
-                            if (similarBook == null) return Mono.justOrEmpty(null);
+                            if (similarBook == null) return Mono.<Book>empty();
                             return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(similarBook)
                                 .map(coverResult -> {
                                     similarBook.setCoverImages(coverResult);

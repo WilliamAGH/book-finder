@@ -545,10 +545,15 @@ public class BookController {
         final ImageResolutionPreference effectivelyFinalResolutionPreference = getImageResolutionPreferenceFromString(resolution);
 
         // Use BookDataOrchestrator to get book by ID
+        Mono<java.util.List<Book>> isbnSearchMono = googleBooksService.searchBooksByISBN(id);
+        if (isbnSearchMono == null) {
+            isbnSearchMono = Mono.empty();
+        }
+
         return bookDataOrchestrator.getBookByIdTiered(id)
             // If not found by volume ID, fallback to ISBN-based search
             .switchIfEmpty(
-                googleBooksService.searchBooksByISBN(id)
+                isbnSearchMono
                     .filter(list -> list != null && !list.isEmpty())
                     .map(list -> list.get(0))
                     .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found with ID or ISBN: " + id, null)))

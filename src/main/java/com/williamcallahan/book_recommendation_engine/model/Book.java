@@ -56,6 +56,9 @@ public class Book {
 
     private CoverImages coverImages;
 
+    private Integer editionNumber;
+    private String editionGroupKey;
+
     private List<EditionInfo> otherEditions;
     private String asin; // For Amazon Standard Identification Number, useful for Audible
     
@@ -848,6 +851,22 @@ public class Book {
      */
     public void setCoverImages(CoverImages coverImages) {
         this.coverImages = coverImages;
+    }
+
+    public Integer getEditionNumber() {
+        return editionNumber;
+    }
+
+    public void setEditionNumber(Integer editionNumber) {
+        this.editionNumber = editionNumber;
+    }
+
+    public String getEditionGroupKey() {
+        return editionGroupKey;
+    }
+
+    public void setEditionGroupKey(String editionGroupKey) {
+        this.editionGroupKey = editionGroupKey;
     }
 
     /**
