@@ -690,3 +690,38 @@ const BookFormatter = {
 
 // Make initializeBookCovers globally accessible if search.js needs to call it
 window.initializeBookCovers = initializeBookCovers;
+
+/**
+ * Affiliate link click tracking
+ * Tracks outbound clicks on affiliate links for analytics purposes
+ */
+(function() {
+    // Set up delegated event listener for affiliate link clicks
+    document.addEventListener('click', function(e) {
+        const link = e.target.closest('a.clicky_log_outbound');
+        if (!link) return;
+
+        // Log the click for analytics
+        const href = link.href;
+        const bookId = link.getAttribute('data-book-id') || 'unknown';
+        const affiliate = link.getAttribute('data-affiliate') || 'unknown';
+
+        // Send analytics event (customize based on your analytics provider)
+        if (typeof gtag !== 'undefined') {
+            // Google Analytics
+            gtag('event', 'click', {
+                'event_category': 'affiliate',
+                'event_label': affiliate,
+                'value': bookId,
+                'transport_type': 'beacon'
+            });
+        }
+
+        // Console log for debugging
+        console.log('Affiliate link clicked:', {
+            affiliate: affiliate,
+            bookId: bookId,
+            url: href
+        });
+    }, { capture: true });
+})();
