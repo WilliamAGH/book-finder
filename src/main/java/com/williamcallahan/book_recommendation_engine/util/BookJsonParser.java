@@ -18,19 +18,25 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.text.Normalizer;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
 public class BookJsonParser {
 
     private static final Logger logger = LoggerFactory.getLogger(BookJsonParser.class);
+    private static final Pattern EDITION_WORD_PATTERN = Pattern.compile("(\\d+)(?:st|nd|rd|th)?\\s*(?:edition|ed\\b)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TRAILING_NUMBER_PATTERN = Pattern.compile("(\\d+)(?:\\.\\d+)*$");
+    private static final Pattern QUALIFIER_NORMALIZE_PATTERN = Pattern.compile("[^a-z0-9]+");
 
     /**
      * Converts Google Books API JSON to Book object
@@ -51,6 +57,8 @@ public class BookJsonParser {
         setAdditionalFields(item, book);
         setLinks(item, book);
         extractQualifiersFromItem(item, book); // Extract qualifiers if present
+        normalizeQualifierKeys(book);
+        applyEditionMetadata(item, book);
 
         return book;
     }
@@ -106,6 +114,151 @@ public class BookJsonParser {
             }
             book.setOtherEditions(otherEditions);
         }
+    }
+
+    private static void normalizeQualifierKeys(Book book) {
+        Map<String, Object> qualifiers = book.getQualifiers();
+        if (qualifiers == null || qualifiers.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> normalized = new HashMap<>();
+        qualifiers.forEach((key, value) -> {
+            if (key == null) return;
+            String trimmed = key.trim().toLowerCase();
+            if (trimmed.isEmpty()) return;
+            String canonical = QUALIFIER_NORMALIZE_PATTERN.matcher(trimmed).replaceAll("_");
+            canonical = canonical.replaceAll("_{2,}", "_");
+            canonical = canonical.replaceAll("^_+|_+$", "");
+            if (!canonical.isEmpty()) {
+                normalized.put(canonical, value);
+            }
+        });
+
+        if (!normalized.isEmpty()) {
+            book.setQualifiers(normalized);
+        }
+    }
+
+    private static void applyEditionMetadata(JsonNode item, Book book) {
+        Integer editionNumber = deriveEditionNumber(item, book);
+        if (editionNumber != null) {
+            book.setEditionNumber(editionNumber);
+        }
+
+        String groupKey = buildEditionGroupKey(book);
+        if (groupKey != null && !groupKey.isBlank()) {
+            book.setEditionGroupKey(groupKey);
+        }
+    }
+
+    private static Integer deriveEditionNumber(JsonNode item, Book book) {
+        List<Integer> candidates = new ArrayList<>();
+
+        JsonNode volumeInfo = item != null ? item.get("volumeInfo") : null;
+        if (volumeInfo != null) {
+            addEditionCandidate(candidates, volumeInfo.get("edition"));
+            addEditionCandidate(candidates, volumeInfo.get("editionInformation"));
+            addEditionCandidate(candidates, volumeInfo.get("editionInfo"));
+            addEditionCandidate(candidates, volumeInfo.get("contentVersion"));
+            if (volumeInfo.has("subtitle")) {
+                addEditionCandidate(candidates, volumeInfo.get("subtitle"));
+            }
+            if (volumeInfo.has("title")) {
+                addEditionCandidate(candidates, volumeInfo.get("title"));
+            }
+        }
+
+        if (item != null) {
+            addEditionCandidate(candidates, item.get("edition"));
+            addEditionCandidate(candidates, item.get("editionNumber"));
+            addEditionCandidate(candidates, item.get("edition_number"));
+        }
+
+        Map<String, Object> qualifiers = book.getQualifiers();
+        if (qualifiers != null) {
+            addEditionCandidate(candidates, qualifiers.get("edition_number"));
+            addEditionCandidate(candidates, qualifiers.get("edition-number"));
+            addEditionCandidate(candidates, qualifiers.get("edition"));
+        }
+
+        addEditionCandidate(candidates, book.getTitle());
+
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    private static void addEditionCandidate(List<Integer> candidates, Object value) {
+        Integer parsed = parseEditionCandidate(value);
+        if (parsed != null) {
+            candidates.add(parsed);
+        }
+    }
+
+    private static Integer parseEditionCandidate(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            int candidate = number.intValue();
+            return candidate > 0 ? candidate : null;
+        }
+        if (value instanceof JsonNode node) {
+            if (node.isNumber()) {
+                int candidate = node.intValue();
+                return candidate > 0 ? candidate : null;
+            }
+            if (node.isTextual()) {
+                return parseEditionCandidate(node.textValue());
+            }
+            return null;
+        }
+        if (value instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.isEmpty()) {
+                return null;
+            }
+            try {
+                int direct = Integer.parseInt(trimmed);
+                if (direct > 0) {
+                    return direct;
+                }
+            } catch (NumberFormatException ignored) {
+                Matcher editionMatcher = EDITION_WORD_PATTERN.matcher(trimmed);
+                if (editionMatcher.find()) {
+                    int candidate = Integer.parseInt(editionMatcher.group(1));
+                    return candidate > 0 ? candidate : null;
+                }
+                Matcher trailingMatcher = TRAILING_NUMBER_PATTERN.matcher(trimmed);
+                if (trailingMatcher.find()) {
+                    int candidate = Integer.parseInt(trailingMatcher.group(1));
+                    return candidate > 0 ? candidate : null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String buildEditionGroupKey(Book book) {
+        String titleComponent = normalizeKeyComponent(book.getTitle());
+        if (titleComponent.isEmpty()) {
+            return null;
+        }
+        List<String> authors = book.getAuthors();
+        String authorComponent = (authors != null && !authors.isEmpty()) ? normalizeKeyComponent(authors.get(0)) : "";
+        return authorComponent.isEmpty() ? titleComponent : titleComponent + "__" + authorComponent;
+    }
+
+    private static String normalizeKeyComponent(String value) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKD)
+            .replaceAll("\\p{M}+", "")
+            .toLowerCase()
+            .replaceAll("[^a-z0-9\\s]+", " ")
+            .trim()
+            .replaceAll("\\s+", " ");
+        return normalized;
     }
 
     /**

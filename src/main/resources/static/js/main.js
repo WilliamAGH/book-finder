@@ -16,7 +16,7 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
     imgElement.setAttribute('data-natural-height', naturalHeight);
     
     // Calculate aspect ratio
-    const aspectRatio = naturalWidth / naturalHeight;
+    const _aspectRatio = naturalWidth / naturalHeight;
     
     // The image will now rely on its container and its own CSS rules
     // (e.g., object-fit: contain and max-width/max-height: 100%)
@@ -319,6 +319,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             colorSchemeQuery.addEventListener('change', handleSystemColorSchemeChange);
         } catch (error) {
+            console.warn('MediaQueryList.addEventListener unsupported, falling back:', error);
             // Fallback for older browsers
             try {
                 // Safari 13.1 and older support
@@ -466,7 +467,7 @@ function initializeBookCovers() {
     console.log('Initializing ' + covers.length + ' book covers.');
 
     const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
-    const MAX_RETRIES = 1;
+    // const _MAX_RETRIES = 1; // reserved for future use
     
     covers.forEach((cover, index) => {
         if (cover.getAttribute('data-cover-initialized') === 'true') {
@@ -624,12 +625,12 @@ function handleImageFailure() {
 /**
  * Reset search form
  */
-function resetSearchForm() {
-    document.getElementById('searchForm')?.reset();
-}
+// function resetSearchForm() {
+//     document.getElementById('searchForm')?.reset();
+// }
 
 // Format book data for consistent display
-const BookFormatter = {
+const _BookFormatter = {
     /**
      * Format authors list into a readable string
      * @param {Array} authors - Array of author names
@@ -674,17 +675,16 @@ const BookFormatter = {
      */
     formatPublishedDate: function(dateString) {
         if (!dateString) return 'Unknown';
-        
-        try {
-            const date = new Date(dateString);
-            return date.toLocaleDateString(undefined, { 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-            });
-        } catch (e) {
+        const timestamp = Date.parse(dateString);
+        if (Number.isNaN(timestamp)) {
             return dateString;
         }
+        const date = new Date(timestamp);
+        return date.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
     }
 };
 

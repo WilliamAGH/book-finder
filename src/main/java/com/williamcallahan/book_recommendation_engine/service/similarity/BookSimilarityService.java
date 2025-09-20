@@ -36,7 +36,6 @@ public class BookSimilarityService {
     private final BookDataOrchestrator bookDataOrchestrator; // To fetch source book for fallback
     private final WebClient embeddingClient;
     private final boolean embeddingServiceEnabled;
-    private final String embeddingServiceUrl;
 
     @Value("${app.cache.enabled:true}") // May influence DB vector search
     private boolean cacheEnabled;
@@ -50,7 +49,6 @@ public class BookSimilarityService {
         this.googleBooksService = googleBooksService;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.embeddingServiceEnabled = embeddingServiceEnabled;
-        this.embeddingServiceUrl = embeddingServiceUrl;
         String baseUrl = embeddingServiceUrl != null ? embeddingServiceUrl : "http://localhost:8095/api/embedding";
         this.embeddingClient = webClientBuilder.baseUrl(baseUrl).build();
         

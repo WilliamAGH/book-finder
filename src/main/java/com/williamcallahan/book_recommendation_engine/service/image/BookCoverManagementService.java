@@ -38,7 +38,7 @@ public class BookCoverManagementService {
     private static final Logger logger = LoggerFactory.getLogger(BookCoverManagementService.class);
 
     @Value("${app.cover-cache.enabled:true}")
-    private boolean cacheEnabled;
+    private boolean cacheEnabled = true;
     
     // CDN URL for S3-stored cover images
     @Value("${s3.cdn-url}")
@@ -130,7 +130,7 @@ public class BookCoverManagementService {
                         CoverImages s3Result = new CoverImages();
                         s3Result.setPreferredUrl(imageDetailsFromS3.getUrlOrPath());
                         s3Result.setSource(CoverImageSource.S3_CACHE);
-                        s3Result.setFallbackUrl((book.getS3ImagePath() != null && !book.getS3ImagePath().equals(localPlaceholderPath)) ? book.getS3ImagePath() : localPlaceholderPath);
+                        s3Result.setFallbackUrl(determineFallbackUrl(book, imageDetailsFromS3.getUrlOrPath(), localPlaceholderPath));
                         coverCacheManager.putFinalImageDetails(identifierKey, imageDetailsFromS3); // Cache S3 ImageDetails
                         return Mono.just(s3Result);
                     }
@@ -310,8 +310,20 @@ public class BookCoverManagementService {
                         identifierKey, bookIdForLog, finalImageDetails.getCoverImageSource());
                     
                     try {
-                        Path cacheDir = Paths.get(localDiskCoverCacheService.getCacheDirString());
-                        // Ensure finalImageDetails.getUrlOrPath() is not null before creating Path
+                        String cacheDirString = localDiskCoverCacheService.getCacheDirString();
+                        if (cacheDirString == null || cacheDirString.isBlank()) {
+                            logger.warn("Background: Cache directory unavailable for {}. Skipping S3 upload and using local details.", identifierKey);
+                            coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
+                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
+                            return;
+                        }
+                        Path cacheDir = Paths.get(cacheDirString);
+                        if (finalImageDetails.getUrlOrPath() == null) {
+                            logger.warn("Background: Image path for {} is null; skipping S3 upload.", identifierKey);
+                            coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
+                            eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, localPlaceholderPath, book.getId(), CoverImageSource.LOCAL_CACHE));
+                            return;
+                        }
                         Path relativeImagePath = Paths.get(finalImageDetails.getUrlOrPath()).getFileName(); 
                         Path localImagePath = cacheDir.resolve(relativeImagePath);
 
