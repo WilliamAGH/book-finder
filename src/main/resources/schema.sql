@@ -14,8 +14,7 @@ create table if not exists books (
   language text, -- JSON: volumeInfo.language (ISO 639-1 code like 'en')
   publisher text, -- JSON: volumeInfo.publisher
   page_count integer, -- JSON: volumeInfo.pageCount or volumeInfo.printedPageCount
-  edition_number integer, -- Normalized edition number (highest governs primary selection)
-  edition_group_key text, -- Normalized work key (title + primary author) for linking sibling editions
+  -- Removed edition_number and edition_group_key (replaced with work_clusters system)
   slug text unique, -- SEO-friendly URL slug (e.g., 'harry-potter-philosophers-stone-j-k-rowling')
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -32,7 +31,7 @@ create index if not exists idx_books_isbn13 on books(isbn13) where isbn13 is not
 create index if not exists idx_books_isbn10 on books(isbn10) where isbn10 is not null;
 create unique index if not exists uq_books_isbn13 on books(isbn13) where isbn13 is not null;
 create unique index if not exists uq_books_isbn10 on books(isbn10) where isbn10 is not null;
-create index if not exists idx_books_edition_group_key on books(edition_group_key) where edition_group_key is not null;
+-- Removed idx_books_edition_group_key index (using work_clusters instead)
 create index if not exists idx_books_slug on books(slug); -- Always index slug for URL lookups
 -- Removed idx_books_s3_image_path - images are now tracked in book_image_links table
 create index if not exists idx_books_created_at on books(created_at desc);
@@ -51,8 +50,7 @@ comment on column books.published_date is 'Publication date from volumeInfo.publ
 comment on column books.language is 'Language code (ISO 639-1) from volumeInfo.language';
 comment on column books.publisher is 'Publisher name from volumeInfo.publisher';
 comment on column books.page_count is 'Page count from volumeInfo.pageCount or printedPageCount';
-comment on column books.edition_number is 'Edition number (if known) used to determine primary release for sibling editions';
-comment on column books.edition_group_key is 'Normalized work key (title + primary author) for grouping sibling editions';
+-- Removed edition_number and edition_group_key column comments (using work_clusters instead)
 comment on column books.slug is 'SEO-friendly URL slug generated once at creation, remains stable even if title/authors change';
 
 -- External IDs mapping for many-to-one association to canonical books
@@ -100,6 +98,12 @@ create table if not exists book_external_ids (
   list_price numeric,
   retail_price numeric,
   currency_code text,
+  -- Work identifiers (for clustering editions)
+  oclc_work_id text, -- OCLC Work ID from WorldCat
+  openlibrary_work_id text, -- OpenLibrary work identifier (e.g., /works/OL45804W)
+  goodreads_work_id text, -- Goodreads work ID for grouping editions
+  google_canonical_id text, -- Google Books ID extracted from canonicalVolumeLink
+
   -- Metadata
   last_updated timestamptz,
   created_at timestamptz not null default now(),
@@ -134,51 +138,96 @@ comment on column book_external_ids.print_type is 'Content type from volumeInfo.
 comment on column book_external_ids.maturity_rating is 'Content rating from volumeInfo.maturityRating';
 comment on column book_external_ids.saleability is 'Sale status from saleInfo.saleability';
 
--- Edition relationships for DRY linking of sibling canonical books
-create table if not exists book_editions (
-  id text primary key, -- NanoID (12 chars via IdGenerator.generateLong())
-  book_id uuid not null references books(id) on delete cascade,
-  related_book_id uuid not null references books(id) on delete cascade,
-  link_source text not null, -- Origin of the link (S3_MIGRATION, INGESTION, MANUAL)
-  relationship_type text default 'ALTERNATE_EDITION', -- How the related book participates (ALTERNATE_EDITION, TRANSLATION, AUDIOBOOK, etc.)
+-- ============================================================================
+-- WORK CLUSTERING SYSTEM (replaces edition system)
+-- ============================================================================
+
+-- Work clusters table - groups books that are different editions of the same work
+create table if not exists work_clusters (
+  id uuid primary key default gen_random_uuid(),
+
+  -- ISBN-based clustering
+  isbn_prefix text, -- First 9-11 digits of ISBN-13 (publisher/work identifier)
+
+  -- External work identifiers
+  oclc_work_id text,
+  openlibrary_work_id text,
+  goodreads_work_id text,
+  google_canonical_id text, -- Extracted from canonicalVolumeLink
+
+  -- Cluster metadata
+  canonical_title text not null,
+  canonical_author text,
+  confidence_score float default 0.5 check (confidence_score >= 0 and confidence_score <= 1),
+  cluster_method text not null, -- 'ISBN_PREFIX', 'EXTERNAL_ID', 'ML_SIMILARITY', 'MANUAL'
+
+  -- Statistics
+  member_count integer default 0,
+
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  check (book_id <> related_book_id)
+  updated_at timestamptz not null default now()
 );
 
-create unique index if not exists uq_book_editions_pair on book_editions(book_id, related_book_id);
-create index if not exists idx_book_editions_book_id on book_editions(book_id);
-create index if not exists idx_book_editions_related_book_id on book_editions(related_book_id);
+-- Unique constraints for external identifiers
+create unique index if not exists uq_work_clusters_isbn_prefix
+  on work_clusters(isbn_prefix) where isbn_prefix is not null;
+create unique index if not exists uq_work_clusters_oclc
+  on work_clusters(oclc_work_id) where oclc_work_id is not null;
+create unique index if not exists uq_work_clusters_openlibrary
+  on work_clusters(openlibrary_work_id) where openlibrary_work_id is not null;
+create unique index if not exists uq_work_clusters_goodreads
+  on work_clusters(goodreads_work_id) where goodreads_work_id is not null;
+create unique index if not exists uq_work_clusters_google
+  on work_clusters(google_canonical_id) where google_canonical_id is not null;
 
-comment on table book_editions is 'Links canonical books that represent the same work; rows only exist when multiple sibling editions are present.';
-comment on column book_editions.book_id is 'Primary (highest edition number) canonical book in an edition set.';
-comment on column book_editions.related_book_id is 'Sibling canonical book linked to the primary record.';
-comment on column book_editions.link_source is 'Process that established this link (migration, ingestion, manual curation, etc.).';
-comment on column book_editions.relationship_type is 'Descriptor of the relationship between linked books (ALTERNATE_EDITION, AUDIOBOOK, etc.).';
+-- Indexes for lookups
+create index if not exists idx_work_clusters_method on work_clusters(cluster_method);
+create index if not exists idx_work_clusters_confidence on work_clusters(confidence_score desc);
 
--- View exposing edition chains in both directions for efficient UI traversal
-create or replace view book_editions_chain as
+comment on table work_clusters is 'Groups books that are different editions of the same work';
+comment on column work_clusters.isbn_prefix is 'First 9-11 digits of ISBN-13 identifying publisher and work';
+comment on column work_clusters.cluster_method is 'How this cluster was created: ISBN_PREFIX, EXTERNAL_ID, ML_SIMILARITY, MANUAL';
+
+-- Work cluster membership
+create table if not exists work_cluster_members (
+  cluster_id uuid not null references work_clusters(id) on delete cascade,
+  book_id uuid not null references books(id) on delete cascade,
+  is_primary boolean default false, -- The "best" edition in this cluster
+  confidence float default 0.5 check (confidence >= 0 and confidence <= 1),
+  join_reason text not null, -- 'ISBN_PREFIX', 'OCLC_MATCH', 'OPENLIBRARY_MATCH', etc.
+  joined_at timestamptz not null default now(),
+  primary key (cluster_id, book_id)
+);
+
+create index if not exists idx_work_cluster_members_book on work_cluster_members(book_id);
+create index if not exists idx_work_cluster_members_primary
+  on work_cluster_members(cluster_id, is_primary) where is_primary = true;
+
+comment on table work_cluster_members is 'Links books to their work clusters with confidence scoring';
+comment on column work_cluster_members.is_primary is 'Marks the best/primary edition in this cluster';
+comment on column work_cluster_members.join_reason is 'Why this book was added to this cluster';
+
+-- View to easily see book editions
+create or replace view book_work_editions as
 select
-  be.book_id,
-  be.related_book_id,
-  be.id as edition_link_id,
-  be.relationship_type,
-  be.link_source,
-  be.created_at,
-  be.updated_at
-from book_editions be
-union all
-select
-  be.related_book_id as book_id,
-  be.book_id as related_book_id,
-  be.id as edition_link_id,
-  be.relationship_type,
-  be.link_source,
-  be.created_at,
-  be.updated_at
-from book_editions be;
+  b1.id as book_id,
+  b1.title,
+  b1.isbn13,
+  wc.canonical_title as work_title,
+  b2.id as related_book_id,
+  b2.title as related_title,
+  b2.isbn13 as related_isbn13,
+  b2.publisher as related_publisher,
+  wcm1.confidence,
+  wc.cluster_method
+from work_cluster_members wcm1
+join work_clusters wc on wc.id = wcm1.cluster_id
+join work_cluster_members wcm2 on wcm1.cluster_id = wcm2.cluster_id
+join books b1 on b1.id = wcm1.book_id
+join books b2 on b2.id = wcm2.book_id
+where wcm1.book_id != wcm2.book_id;
 
-comment on view book_editions_chain is 'Pre-resolved edition relationships for chaining canonical books in both directions.';
+comment on view book_work_editions is 'Shows all editions of books in the same work cluster';
 
 -- Tags / qualifiers --------------------------------------------------------
 
@@ -689,7 +738,6 @@ returns table (
   authors text,
   isbn13 text,
   isbn10 text,
-  s3_image_path text,
   published_date date,
   publisher text
 ) as $$
@@ -927,3 +975,116 @@ $$ language plpgsql;
 
 comment on function generate_slug is 'Generate URL slug from title and optional author, used during migration';
 comment on function generate_all_book_slugs is 'Batch generate slugs for all books that dont have one, used after data migration';
+
+-- ============================================================================
+-- WORK CLUSTERING FUNCTIONS
+-- ============================================================================
+
+-- Extract ISBN work prefix (publisher + title identifier)
+create or replace function extract_isbn_work_prefix(isbn13 text)
+returns text as $$
+begin
+  if isbn13 is null or length(isbn13) < 13 then
+    return null;
+  end if;
+
+  -- Remove any non-digits
+  isbn13 := regexp_replace(isbn13, '[^0-9]', '', 'g');
+
+  if length(isbn13) != 13 then
+    return null;
+  end if;
+
+  -- Return first 11 digits (groups editions from same publisher)
+  return substring(isbn13, 1, 11);
+end;
+$$ language plpgsql immutable;
+
+-- Cluster books by ISBN prefix
+create or replace function cluster_books_by_isbn()
+returns table (clusters_created integer, books_clustered integer) as $$
+declare
+  rec record;
+  cluster_uuid uuid;
+  clusters_count integer := 0;
+  books_count integer := 0;
+  book_uuid uuid;
+begin
+  for rec in
+    select
+      extract_isbn_work_prefix(isbn13) as prefix,
+      array_agg(id order by published_date desc nulls last) as book_ids,
+      min(title) as canonical_title,
+      count(*) as book_count
+    from books
+    where isbn13 is not null
+    group by extract_isbn_work_prefix(isbn13)
+    having count(*) > 1 and extract_isbn_work_prefix(isbn13) is not null
+  loop
+    insert into work_clusters (isbn_prefix, canonical_title, confidence_score, cluster_method, member_count)
+    values (rec.prefix, rec.canonical_title, 0.9, 'ISBN_PREFIX', rec.book_count)
+    on conflict (isbn_prefix)
+    do update set
+      canonical_title = excluded.canonical_title,
+      member_count = excluded.member_count,
+      updated_at = now()
+    returning id into cluster_uuid;
+
+    clusters_count := clusters_count + 1;
+
+    -- Add members (first one is primary)
+    for i in 1..array_length(rec.book_ids, 1) loop
+      book_uuid := rec.book_ids[i];
+
+      insert into work_cluster_members (cluster_id, book_id, is_primary, confidence, join_reason)
+      values (cluster_uuid, book_uuid, (i = 1), 0.9, 'ISBN_PREFIX')
+      on conflict (cluster_id, book_id) do nothing;
+
+      books_count := books_count + 1;
+    end loop;
+  end loop;
+
+  return query select clusters_count, books_count;
+end;
+$$ language plpgsql;
+
+-- Get all editions of a book
+create or replace function get_book_editions(target_book_id uuid)
+returns table (
+  book_id uuid,
+  title text,
+  subtitle text,
+  isbn13 text,
+  isbn10 text,
+  publisher text,
+  published_date date,
+  is_primary boolean,
+  confidence float,
+  cluster_method text
+) as $$
+begin
+  return query
+  select distinct
+    b.id,
+    b.title,
+    b.subtitle,
+    b.isbn13,
+    b.isbn10,
+    b.publisher,
+    b.published_date,
+    wcm.is_primary,
+    wcm.confidence,
+    wc.cluster_method
+  from work_cluster_members wcm1
+  join work_cluster_members wcm on wcm.cluster_id = wcm1.cluster_id
+  join books b on b.id = wcm.book_id
+  join work_clusters wc on wc.id = wcm.cluster_id
+  where wcm1.book_id = target_book_id
+    and wcm.book_id != target_book_id
+  order by wcm.is_primary desc, wcm.confidence desc, b.published_date desc;
+end;
+$$ language plpgsql;
+
+comment on function extract_isbn_work_prefix is 'Extracts work identifier from ISBN-13 (first 11 digits)';
+comment on function cluster_books_by_isbn is 'Groups books by ISBN prefix to find editions of the same work';
+comment on function get_book_editions is 'Returns all editions of a book from its work cluster';
