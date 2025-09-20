@@ -101,10 +101,11 @@ openlibrary:
     api:
       url: ${OPENLIBRARY_API_URL:https://openlibrary.org}
 
-# Sitemap S3 configuration
+# Sitemap configuration
 sitemap:
-  s3:
-    accumulated-ids-key: sitemap/accumulated-book-ids.json
+  base-url: ${SITEMAP_BASE_URL:https://findmybook.net}
+  html-page-size: 100
+  xml-page-size: 5000
 
 # Common Logging (can be overridden by profiles)
 logging:
