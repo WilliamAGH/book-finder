@@ -111,11 +111,9 @@ public class DevModeConfig {
                 caffeineCacheManager.getCacheNames().stream()
                     .map(cacheName -> {
                         org.springframework.cache.Cache cache = caffeineCacheManager.getCache(cacheName);
-                        String cacheStats = "Cache object is null";
-                        if (cache != null) {
-                            Object nativeCache = cache.getNativeCache();
-                            cacheStats = nativeCache != null ? nativeCache.toString() : "No native cache object";
-                        }
+                        String cacheStats;
+                        Object nativeCache = (cache != null) ? cache.getNativeCache() : null;
+                        cacheStats = (nativeCache != null) ? nativeCache.toString() : (cache == null ? "Cache object is null" : "No native cache object");
                         return String.format("%s: %s", cacheName, cacheStats);
                     })
                     .reduce((a, b) -> a + ", " + b)

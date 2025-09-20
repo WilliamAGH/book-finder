@@ -12,6 +12,8 @@
 
 package com.williamcallahan.book_recommendation_engine;
 
+import java.io.IOException;
+import java.util.Locale;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.ApplicationArguments;
@@ -74,7 +76,7 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (IOException | SecurityException e) {
             // Silently continue if .env loading fails
         }
     }
@@ -87,7 +89,7 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
                 url = System.getProperty("SPRING_DATASOURCE_URL");
             }
             if (url == null || url.isBlank()) return;
-            String lower = url.toLowerCase();
+            String lower = url.toLowerCase(Locale.ROOT);
             if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) return;
 
             // Manual parsing to handle postgres:// format properly
@@ -208,7 +210,7 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
             // Echo minimal confirmation to stdout (password omitted)
             String safeUrl = jdbcUrl.replaceAll("://[^@]+@", "://***:***@");
             System.out.println("[DB] Normalized SPRING_DATASOURCE_URL to JDBC: " + safeUrl);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // If parsing fails, leave as-is; Spring will surface the connection error
             System.err.println("[DB] Failed to normalize SPRING_DATASOURCE_URL: " + e.getMessage());
         }
@@ -230,7 +232,7 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
 
         if (args.containsOption("migrate.s3.lists")) {
             String provider = args.containsOption("migrate.lists.provider") ? args.getOptionValues("migrate.lists.provider").get(0) : "NYT";
-            String listPrefix = args.containsOption("migrate.lists.prefix") ? args.getOptionValues("migrate.lists.prefix").get(0) : ("lists/" + provider.toLowerCase() + "/");
+            String listPrefix = args.containsOption("migrate.lists.prefix") ? args.getOptionValues("migrate.lists.prefix").get(0) : ("lists/" + provider.toLowerCase(Locale.ROOT) + "/");
             int maxLists = parseIntArg(args, "migrate.lists.max", 0);
             int skipLists = parseIntArg(args, "migrate.lists.skip", 0);
             if (bookDataOrchestrator != null) {

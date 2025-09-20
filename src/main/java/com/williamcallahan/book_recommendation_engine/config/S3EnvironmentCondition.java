@@ -20,7 +20,7 @@ import org.springframework.lang.NonNull;
 
 public class S3EnvironmentCondition implements Condition {
 
-    private static boolean messageLogged = false;
+    private static volatile boolean messageLogged = false;
 
     @Override
     public boolean matches(@NonNull ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {

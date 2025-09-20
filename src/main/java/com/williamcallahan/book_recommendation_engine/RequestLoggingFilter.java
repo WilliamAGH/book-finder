@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.Locale;
 import java.util.Set;
 
 @Component
@@ -53,7 +54,7 @@ public class RequestLoggingFilter implements Filter {
         String ext = "";
         int dotIdx = uri.lastIndexOf('.');
         if (dotIdx > 0 && dotIdx < uri.length() - 1) {
-            ext = uri.substring(dotIdx + 1).toLowerCase();
+            ext = uri.substring(dotIdx + 1).toLowerCase(Locale.ROOT);
         }
         boolean isApi = uri.startsWith("/api");
         Set<String> logExts = Set.of("png","jpg","jpeg","svg","css","js","ico","html");

@@ -1,5 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.config;
 
+import java.util.Locale;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.env.EnvironmentPostProcessor;
 import org.springframework.core.Ordered;
@@ -38,7 +39,7 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
             return;
         }
 
-        String lower = url.toLowerCase();
+        String lower = url.toLowerCase(Locale.ROOT);
         if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) {
             return; // already JDBC or some other supported format
         }
@@ -149,7 +150,7 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
             MutablePropertySources sources = environment.getPropertySources();
             // Highest precedence so these values win over application.yml
             sources.addFirst(new MapPropertySource("databaseUrlProcessor", overrides));
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             // Leave the value as-is; Spring will surface connection errors if invalid
         }
     }
