@@ -43,36 +43,27 @@ public class SitemapController {
     @GetMapping("/sitemap")
     public String sitemapLanding(@RequestParam(name = "view", required = false) String view,
                                  @RequestParam(name = "letter", required = false) String letter,
-                                 @RequestParam(name = "page", required = false, defaultValue = "1") int page,
-                                 Model model) {
-        String normalizedView = (view == null || view.isBlank()) ? "authors" : view.toLowerCase();
+                                 @RequestParam(name = "page", required = false, defaultValue = "1") int page) {
+        String normalizedView = normalizeView(view);
         String bucket = sitemapService.normalizeBucket(letter);
-        SitemapOverview overview = sitemapService.getOverview();
+        int safePage = Math.max(page, 1);
+        return "redirect:/sitemap/" + normalizedView + "/" + bucket + "/" + safePage;
+    }
 
-        if ("books".equals(normalizedView)) {
-            PagedResult<BookSitemapItem> books = sitemapService.getBooksByLetter(bucket, page);
-            model.addAttribute("books", books.items());
-            model.addAttribute("totalPages", books.totalPages());
-            model.addAttribute("totalItems", books.totalItems());
-        } else {
-            normalizedView = "authors";
-            PagedResult<AuthorSection> authors = sitemapService.getAuthorsByLetter(bucket, page);
-            model.addAttribute("authors", authors.items());
-            model.addAttribute("totalPages", authors.totalPages());
-            model.addAttribute("totalItems", authors.totalItems());
+    @GetMapping("/sitemap/{view}/{letter}/{page}")
+    public String sitemapDynamic(@PathVariable String view,
+                                 @PathVariable String letter,
+                                 @PathVariable int page,
+                                 Model model) {
+        String normalizedView = normalizeView(view);
+        String bucket = sitemapService.normalizeBucket(letter);
+        int safePage = Math.max(page, 1);
+
+        if (!normalizedView.equals(view) || !bucket.equals(letter) || safePage != page) {
+            return "redirect:/sitemap/" + normalizedView + "/" + bucket + "/" + safePage;
         }
 
-        model.addAttribute("viewType", normalizedView);
-        model.addAttribute("activeLetter", bucket);
-        model.addAttribute("letters", SitemapService.LETTER_BUCKETS);
-        model.addAttribute("bookLetterCounts", overview.bookLetterCounts());
-        model.addAttribute("authorLetterCounts", overview.authorLetterCounts());
-        model.addAttribute("pageNumber", Math.max(page, 1));
-        model.addAttribute("baseUrl", sitemapProperties.getBaseUrl());
-
-        model.addAttribute("pageTitle", "Sitemap");
-        model.addAttribute("pageDescription", "Browse all book and author pages indexed for search engines.");
-        return "sitemap";
+        return populateSitemapModel(normalizedView, bucket, safePage, model);
     }
 
     @GetMapping(value = "/sitemap.xml", produces = MediaType.APPLICATION_XML_VALUE)
@@ -86,11 +77,6 @@ public class SitemapController {
         StringBuilder xml = new StringBuilder();
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.append("<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
-        xml.append("  <sitemap>\n");
-        xml.append("    <loc").append(">").append(escapeXml(baseUrl + "/sitemap-static.xml")).append("</loc>\n");
-        xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(now)).append("</lastmod>\n");
-        xml.append("  </sitemap>\n");
-
         for (int i = 1; i <= totalBookPages; i++) {
             xml.append("  <sitemap>\n");
             xml.append("    <loc>").append(escapeXml(baseUrl + "/sitemap-xml/books/" + i + ".xml")).append("</loc>\n");
@@ -177,5 +163,47 @@ public class SitemapController {
                 .replace("'", "&apos;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;");
+    }
+
+    private String normalizeView(String view) {
+        if (view == null || view.isBlank()) {
+            return "authors";
+        }
+        String candidate = view.trim().toLowerCase();
+        return "books".equals(candidate) ? "books" : "authors";
+    }
+
+    private String populateSitemapModel(String view,
+                                        String bucket,
+                                        int page,
+                                        Model model) {
+        SitemapOverview overview = sitemapService.getOverview();
+
+        if ("books".equals(view)) {
+            PagedResult<BookSitemapItem> books = sitemapService.getBooksByLetter(bucket, page);
+            model.addAttribute("books", books.items());
+            model.addAttribute("totalPages", books.totalPages());
+            model.addAttribute("totalItems", books.totalItems());
+        } else {
+            PagedResult<AuthorSection> authors = sitemapService.getAuthorsByLetter(bucket, page);
+            model.addAttribute("authors", authors.items());
+            model.addAttribute("totalPages", authors.totalPages());
+            model.addAttribute("totalItems", authors.totalItems());
+        }
+
+        model.addAttribute("viewType", view);
+        model.addAttribute("activeLetter", bucket);
+        model.addAttribute("letters", SitemapService.LETTER_BUCKETS);
+        model.addAttribute("bookLetterCounts", overview.bookLetterCounts());
+        model.addAttribute("authorLetterCounts", overview.authorLetterCounts());
+        model.addAttribute("pageNumber", page);
+        model.addAttribute("baseUrl", sitemapProperties.getBaseUrl());
+        String canonicalPath = "/sitemap/" + view + "/" + bucket + "/" + page;
+        String canonicalUrl = sitemapProperties.getBaseUrl() + canonicalPath;
+        model.addAttribute("canonicalPath", canonicalPath);
+        model.addAttribute("canonicalUrl", canonicalUrl);
+        model.addAttribute("pageTitle", "Sitemap");
+        model.addAttribute("pageDescription", "Browse all book and author pages indexed for search engines.");
+        return "sitemap";
     }
 }
