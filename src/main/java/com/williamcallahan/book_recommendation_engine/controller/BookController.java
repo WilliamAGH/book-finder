@@ -3,11 +3,15 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.williamcallahan.book_recommendation_engine.controller.dto.BookDto;
 import com.williamcallahan.book_recommendation_engine.controller.dto.BookDtoMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -19,8 +23,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/books")
@@ -41,9 +47,9 @@ public class BookController {
     public Mono<ResponseEntity<SearchResponse>> searchBooks(@RequestParam String query,
                                                             @RequestParam(name = "startIndex", defaultValue = "0") int startIndex,
                                                             @RequestParam(name = "maxResults", defaultValue = "10") int maxResults) {
-        String normalizedQuery = normalizeQuery(query);
-        int safeStartIndex = Math.max(0, startIndex);
-        int safeMaxResults = Math.min(Math.max(maxResults, 1), 50);
+        String normalizedQuery = SearchQueryUtils.normalize(query);
+        int safeStartIndex = PagingUtils.atLeast(startIndex, 0);
+        int safeMaxResults = PagingUtils.clamp(maxResults, 1, 50);
         int desiredTotalResults = Math.min(200, safeStartIndex + safeMaxResults);
 
         return bookDataOrchestrator.searchBooksTiered(normalizedQuery, null, desiredTotalResults, null)
@@ -52,6 +58,22 @@ public class BookController {
                 .map(ResponseEntity::ok)
                 .onErrorResume(ex -> {
                     logger.error("Failed to search books for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
+                });
+    }
+
+    @GetMapping("/authors/search")
+    public Mono<ResponseEntity<AuthorSearchResponse>> searchAuthors(@RequestParam String query,
+                                                                    @RequestParam(name = "limit", defaultValue = "10") int limit) {
+        String normalizedQuery = SearchQueryUtils.normalize(query);
+        int safeLimit = PagingUtils.clamp(limit, 1, 100);
+
+        return bookDataOrchestrator.searchAuthors(normalizedQuery, safeLimit)
+                .defaultIfEmpty(List.of())
+                .map(results -> buildAuthorResponse(normalizedQuery, safeLimit, results))
+                .map(ResponseEntity::ok)
+                .onErrorResume(ex -> {
+                    logger.error("Failed to search authors for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
                 });
     }
@@ -71,7 +93,7 @@ public class BookController {
     @GetMapping("/{identifier}/similar")
     public Mono<ResponseEntity<List<BookDto>>> getSimilarBooks(@PathVariable String identifier,
                                                                @RequestParam(name = "limit", defaultValue = "5") int limit) {
-        int safeLimit = Math.min(Math.max(limit, 1), 20);
+        int safeLimit = PagingUtils.clamp(limit, 1, 20);
         return fetchBook(identifier)
                 .flatMap(book -> recommendationService.getSimilarBooks(book.getId(), safeLimit)
                         .defaultIfEmpty(List.of())
@@ -104,24 +126,73 @@ public class BookController {
         int total = safeResults.size();
         int fromIndex = Math.min(startIndex, total);
         int toIndex = Math.min(fromIndex + maxResults, total);
-        List<BookDto> page = safeResults.subList(fromIndex, toIndex).stream()
-                .map(BookDtoMapper::toDto)
+        List<SearchHitDto> page = safeResults.subList(fromIndex, toIndex).stream()
+                .map(this::toSearchHit)
                 .toList();
         return new SearchResponse(query, startIndex, maxResults, total, page);
     }
 
-    private String normalizeQuery(String query) {
-        if (query == null) {
-            return "*";
+    private SearchHitDto toSearchHit(Book book) {
+        BookDto dto = BookDtoMapper.toDto(book);
+        Map<String, Object> extras = dto.extras();
+        String matchType = null;
+        Double relevance = null;
+        if (extras != null && !extras.isEmpty()) {
+            Object matchValue = extras.get("search.matchType");
+            if (matchValue != null) {
+                matchType = matchValue.toString();
+            }
+            Object scoreValue = extras.get("search.relevanceScore");
+            if (scoreValue instanceof Number number) {
+                relevance = number.doubleValue();
+            } else if (scoreValue != null) {
+                try {
+                    relevance = Double.parseDouble(scoreValue.toString());
+                } catch (NumberFormatException ignored) {
+                }
+            }
         }
-        String trimmed = query.trim();
-        return trimmed.isEmpty() ? "*" : trimmed;
+        return new SearchHitDto(dto, matchType, relevance);
+    }
+
+    private AuthorSearchResponse buildAuthorResponse(String query,
+                                                     int limit,
+                                                     List<BookSearchService.AuthorResult> results) {
+        List<BookSearchService.AuthorResult> safeResults = results == null ? List.of() : results;
+        List<AuthorHitDto> hits = safeResults.stream()
+                .sorted(Comparator.comparingDouble(BookSearchService.AuthorResult::relevanceScore).reversed())
+                .map(this::toAuthorHit)
+                .toList();
+        return new AuthorSearchResponse(query, limit, hits);
+    }
+
+    private AuthorHitDto toAuthorHit(BookSearchService.AuthorResult authorResult) {
+        return new AuthorHitDto(
+                authorResult.authorId(),
+                authorResult.authorName(),
+                authorResult.bookCount(),
+                authorResult.relevanceScore()
+        );
     }
 
     private record SearchResponse(String query,
                                   int startIndex,
                                   int maxResults,
                                   int totalResults,
-                                  List<BookDto> results) {
+                                  List<SearchHitDto> results) {
+    }
+
+    private record SearchHitDto(@JsonUnwrapped BookDto book, String matchType, Double relevanceScore) {
+    }
+
+    private record AuthorSearchResponse(String query,
+                                        int limit,
+                                        List<AuthorHitDto> results) {
+    }
+
+    private record AuthorHitDto(String id,
+                                String name,
+                                long bookCount,
+                                double relevanceScore) {
     }
 }

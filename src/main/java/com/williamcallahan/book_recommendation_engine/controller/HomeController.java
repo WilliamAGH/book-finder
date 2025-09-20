@@ -26,6 +26,7 @@ import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedServ
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
+import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
@@ -688,8 +689,9 @@ public class HomeController {
      */
     @GetMapping("/book/isbn/{isbn}")
     public Mono<RedirectView> bookDetailByIsbn(@PathVariable String isbn) {
-        // Sanitize input by removing hyphens and spaces
-        String sanitizedIsbn = sanitizeIsbn(isbn);
+        // Sanitize input by removing non-ISBN characters
+        String sanitized = IsbnUtils.sanitize(isbn);
+        final String sanitizedIsbn = sanitized != null ? sanitized : "";
         
         // Validate ISBN format
         if (!isValidIsbn(sanitizedIsbn)) {
@@ -697,36 +699,33 @@ public class HomeController {
             return Mono.just(new RedirectView("/?error=invalidIsbn&originalIsbn=" + isbn));
         }
         
-        return googleBooksService.searchBooksByISBN(sanitizedIsbn)
-            .map(books -> {
-                if (!books.isEmpty()) {
-                    Book firstBook = books.get(0); // Take the first match
-                    if (firstBook != null && firstBook.getId() != null) {
-                        logger.info("Redirecting ISBN {} to book ID: {}", sanitizedIsbn, firstBook.getId());
-                        return new RedirectView("/book/" + firstBook.getId());
-                    }
+        return bookDataOrchestrator.getBookByIdTiered(sanitizedIsbn)
+            .map(book -> {
+                if (book == null) {
+                    return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
                 }
-                logger.warn("No book found for ISBN: {} (sanitized: {}), redirecting to homepage with notification.", isbn, sanitizedIsbn);
+
+                String redirectTarget = book.getSlug();
+                if (redirectTarget == null || redirectTarget.isBlank()) {
+                    redirectTarget = book.getId();
+                }
+
+                if (redirectTarget != null && !redirectTarget.isBlank()) {
+                    logger.info("Redirecting ISBN {} to canonical identifier: {}", sanitizedIsbn, redirectTarget);
+                    return new RedirectView("/book/" + redirectTarget);
+                }
+
+                logger.warn("Book fetched for ISBN {} but no canonical identifier available. Redirecting to homepage.", sanitizedIsbn);
                 return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
             })
-            .defaultIfEmpty(new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn)) // If reactive stream is empty
+            .switchIfEmpty(Mono.fromSupplier(() -> {
+                logger.warn("No book found for ISBN: {} (sanitized: {}), redirecting to homepage with notification.", isbn, sanitizedIsbn);
+                return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
+            }))
             .onErrorResume(e -> {
                 logger.error("Error during ISBN lookup for {}: {}", isbn, e.getMessage(), e);
                 return Mono.just(new RedirectView("/?error=lookupError&isbn=" + sanitizedIsbn));
             });
-    }
-    
-    /**
-     * Sanitize ISBN by removing hyphens, spaces, and converting to uppercase
-     * 
-     * @param isbn Raw ISBN input
-     * @return Sanitized ISBN
-     */
-    private String sanitizeIsbn(String isbn) {
-        if (isbn == null) {
-            return "";
-        }
-        return isbn.replaceAll("[\\s-]", "").toUpperCase(Locale.ROOT);
     }
     
     /**
@@ -752,7 +751,8 @@ public class HomeController {
     @GetMapping("/book/isbn13/{isbn13}")
     public Mono<RedirectView> bookDetailByIsbn13(@PathVariable String isbn13) {
         // Sanitize input
-        String sanitizedIsbn = sanitizeIsbn(isbn13);
+        String sanitized = IsbnUtils.sanitize(isbn13);
+        final String sanitizedIsbn = sanitized != null ? sanitized : "";
         
         // Validate ISBN-13 format specifically
         if (!ISBN13_PATTERN.matcher(sanitizedIsbn).matches()) {
@@ -774,7 +774,8 @@ public class HomeController {
     @GetMapping("/book/isbn10/{isbn10}")
     public Mono<RedirectView> bookDetailByIsbn10(@PathVariable String isbn10) {
         // Sanitize input
-        String sanitizedIsbn = sanitizeIsbn(isbn10);
+        String sanitized = IsbnUtils.sanitize(isbn10);
+        final String sanitizedIsbn = sanitized != null ? sanitized : "";
         
         // Validate ISBN-10 format specifically
         if (!ISBN10_PATTERN.matcher(sanitizedIsbn).matches()) {

@@ -37,6 +37,7 @@ public final class BookDtoMapper {
         List<AuthorDto> authors = mapAuthors(book);
         List<String> categories = book.getCategories() == null ? List.of() : List.copyOf(book.getCategories());
         List<TagDto> tags = mapTags(book);
+        List<CollectionDto> collections = mapCollections(book);
         List<EditionDto> editions = mapEditions(book);
         List<String> recommendationIds = book.getCachedRecommendationIds() == null
                 ? List.of()
@@ -52,7 +53,7 @@ public final class BookDtoMapper {
                 publication,
                 authors,
                 categories,
-                List.of(), // Collections/normalized lists will be populated once Postgres-first data is fully wired
+                collections,
                 tags,
                 cover,
                 editions,
@@ -98,6 +99,22 @@ public final class BookDtoMapper {
         }
         return book.getQualifiers().entrySet().stream()
                 .map(entry -> new TagDto(entry.getKey(), toAttributeMap(entry.getValue())))
+                .toList();
+    }
+
+    private static List<CollectionDto> mapCollections(Book book) {
+        List<Book.CollectionAssignment> assignments = book.getCollections();
+        if (assignments == null || assignments.isEmpty()) {
+            return List.of();
+        }
+        return assignments.stream()
+                .map(assignment -> new CollectionDto(
+                        assignment.getCollectionId(),
+                        assignment.getName(),
+                        assignment.getCollectionType(),
+                        assignment.getRank(),
+                        assignment.getSource()
+                ))
                 .toList();
     }
 

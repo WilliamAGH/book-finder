@@ -3,21 +3,22 @@ package com.williamcallahan.book_recommendation_engine.controller;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
+import com.williamcallahan.book_recommendation_engine.util.EnumParsingUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.context.request.async.DeferredResult;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
-import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
-import reactor.core.publisher.Mono;
+
 import reactor.core.Disposable;
-import java.util.Locale;
+import reactor.core.publisher.Mono;
 
 /**
  * Controller for book cover image operations and retrieval
@@ -248,11 +249,11 @@ public class BookCoverController {
      * @return The corresponding CoverImageSource enum value
      */
     private CoverImageSource parsePreferredSource(String sourceParam) {
-        try {
-            return CoverImageSource.valueOf(sourceParam.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            logger.warn("Invalid source parameter: {}. Defaulting to ANY.", sourceParam);
-            return CoverImageSource.ANY;
-        }
+        return EnumParsingUtils.parseOrDefault(
+                sourceParam,
+                CoverImageSource.class,
+                CoverImageSource.ANY,
+                invalid -> logger.warn("Invalid source parameter: {}. Defaulting to ANY.", invalid)
+        );
     }
 }

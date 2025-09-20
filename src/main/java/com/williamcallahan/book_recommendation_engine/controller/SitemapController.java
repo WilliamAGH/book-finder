@@ -7,6 +7,7 @@ import com.williamcallahan.book_recommendation_engine.service.SitemapService.Aut
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.PagedResult;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.SitemapOverview;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -44,7 +45,7 @@ public class SitemapController {
                                  @RequestParam(name = "page", required = false, defaultValue = "1") int page) {
         String normalizedView = normalizeView(view);
         String bucket = sitemapService.normalizeBucket(letter);
-        int safePage = Math.max(page, 1);
+        int safePage = PagingUtils.atLeast(page, 1);
         return "redirect:/sitemap/" + normalizedView + "/" + bucket + "/" + safePage;
     }
 
@@ -55,7 +56,7 @@ public class SitemapController {
                                  Model model) {
         String normalizedView = normalizeView(view);
         String bucket = sitemapService.normalizeBucket(letter);
-        int safePage = Math.max(page, 1);
+        int safePage = PagingUtils.atLeast(page, 1);
 
         if (!normalizedView.equals(view) || !bucket.equals(letter) || safePage != page) {
             return "redirect:/sitemap/" + normalizedView + "/" + bucket + "/" + safePage;

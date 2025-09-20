@@ -5,7 +5,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
-import java.util.Locale;
+import com.williamcallahan.book_recommendation_engine.util.EnumParsingUtils;
 
 /**
  * Controller advice for managing image resolution preferences
@@ -32,16 +32,9 @@ public class ImageResolutionPreferenceController {
     public ImageResolutionPreference addResolutionPreference(
             @RequestParam(required = false, defaultValue = "ANY") String resolutionPref) {
         
-        // Parse the resolution parameter
-        ImageResolutionPreference preferredResolution;
-        try {
-            preferredResolution = ImageResolutionPreference.valueOf(resolutionPref.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            preferredResolution = ImageResolutionPreference.ANY;
-        }
-        
-        // Return the preferred resolution to be added to the model
-        return preferredResolution;
+        return EnumParsingUtils.parseOrDefault(resolutionPref,
+                ImageResolutionPreference.class,
+                ImageResolutionPreference.ANY);
     }
     
     /**
