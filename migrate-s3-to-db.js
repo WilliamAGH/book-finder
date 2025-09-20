@@ -808,7 +808,7 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
       } else {
         pubDate = publishedDate;
       }
-    } catch (_e) {
+    } catch {
       pubDate = null;
     }
   }
@@ -1005,7 +1005,7 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
               collectionId = findResult.rows[0].id;
             }
           }
-        } catch (e) {
+        } catch {
           // Collection might already exist, try to find it
           const findResult = await client.query(
             'SELECT id FROM book_collections WHERE display_name = $1 AND collection_type = $2 AND source = $3',
@@ -1247,7 +1247,7 @@ function printTable(rows) {
   }
 
   // Print rows
-  rows.forEach((row, index) => {
+  rows.forEach((row) => {
     const formattedRow = row.map((cell, i) =>
       String(cell).padEnd(columnWidths[i])
     ).join(' │ ');
