@@ -1,285 +1,156 @@
-/**
- * Test suite for BookController REST API endpoints
- * 
- * @author William Callahan
- */
 package com.williamcallahan.book_recommendation_engine.controller;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.AfterEach;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
-import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
-import com.williamcallahan.book_recommendation_engine.service.S3RetryService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
-import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
-import java.util.Collections;
-import java.util.concurrent.CompletableFuture;
+import java.util.Map;
 
-import org.mockito.Mockito;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.reset;
-
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-import static org.hamcrest.Matchers.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-
-@WebMvcTest(com.williamcallahan.book_recommendation_engine.controller.BookController.class)
+@WebMvcTest(BookController.class)
 @AutoConfigureMockMvc(addFilters = false)
 class BookControllerTest {
 
-    @TestConfiguration
-    static class BookControllerTestConfiguration {
+    @Autowired
+    private MockMvc mockMvc;
 
-        @Bean
-        public BookDataOrchestrator bookDataOrchestrator() {
-            return Mockito.mock(BookDataOrchestrator.class);
-        }
+    @Autowired
+    private ObjectMapper objectMapper;
 
-        @Bean
-        public GoogleBooksService googleBooksService() {
-            return Mockito.mock(GoogleBooksService.class);
-        }
+    @MockBean
+    private BookDataOrchestrator bookDataOrchestrator;
 
-        @Bean
-        public RecommendationService recommendationService() {
-            return Mockito.mock(RecommendationService.class);
-        }
+    @MockBean
+    private RecommendationService recommendationService;
 
-        @Bean
-        public RecentlyViewedService recentlyViewedService() {
-            return Mockito.mock(RecentlyViewedService.class);
-        }
+    private Book fixtureBook;
 
-        @Bean
-        public BookImageOrchestrationService bookImageOrchestrationService() {
-            return Mockito.mock(BookImageOrchestrationService.class);
-        }
-
-        @Bean
-        public WebClient.Builder webClientBuilder() {
-            WebClient.Builder builderMock = Mockito.mock(WebClient.Builder.class);
-            WebClient clientMock = Mockito.mock(WebClient.class);
-            Mockito.when(builderMock.baseUrl(anyString())).thenReturn(builderMock);
-            Mockito.when(builderMock.build()).thenReturn(clientMock);
-            return builderMock;
-        }
-
-        @Bean
-        public S3RetryService s3RetryService() {
-            return Mockito.mock(S3RetryService.class);
-        }
-
-        @Bean
-        public boolean isYearFilteringEnabled() {
-            return false;
-        }
+    @BeforeEach
+    void setUp() {
+        fixtureBook = buildBook("11111111-1111-4111-8111-111111111111", "Fixture Title");
+        when(bookDataOrchestrator.getBookBySlugTiered(anyString())).thenReturn(Mono.empty());
     }
 
-  @Autowired
-  private MockMvc mockMvc;
+    @Test
+    @DisplayName("GET /api/books/search returns DTO results")
+    void searchBooks_returnsDtos() throws Exception {
+        when(bookDataOrchestrator.searchBooksTiered(eq("Fixture"), eq(null), eq(5), eq(null)))
+                .thenReturn(Mono.just(List.of(fixtureBook)));
 
-  @Autowired
-  private ObjectMapper objectMapper;
-
-  @Autowired
-  private BookDataOrchestrator bookDataOrchestrator;
-
-  @Autowired
-  private GoogleBooksService googleBooksService;
-
-  @Autowired
-  private RecommendationService recommendationService;
-  
-  @Autowired
-  private BookImageOrchestrationService bookImageOrchestrationService; 
-
-  @AfterEach
-  void tearDown() {
-    reset(bookDataOrchestrator, googleBooksService, recommendationService, bookImageOrchestrationService); 
-  }
-
-  @BeforeEach
-  void commonMockSetup() {
-    when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class), any(ImageResolutionPreference.class)))
-        .thenAnswer(invocation -> {
-            Book book = invocation.getArgument(0);
-            return CompletableFuture.completedFuture(book.getCoverImageUrl());
-        });
-  }
-
-  /**
-   * Creates a test book with basic properties for testing
-   *
-   * @param id The Google Books ID to assign
-   * @param title Book title
-   * @param author Book author name
-   * @return Configured book instance
-   */
-  private Book createTestBook(String id, String title, String author) {
-      Book book = new Book();
-      book.setId(id);
-      book.setTitle(title);
-      book.setAuthors(List.of(author));
-      book.setDescription("Test description for " + title);
-      book.setCoverImageUrl("http://example.com/cover/" + (id != null ? id : "new") + ".jpg");
-      book.setImageUrl("http://example.com/image/" + (id != null ? id : "new") + ".jpg");
-      return book;
-  }
-
-  @Test
-  @DisplayName("GET /api/books/search - empty list returns 200 and [] in results")
-  void searchBooks_emptyList_returnsEmptyArrayInResults() throws Exception {
-    when(googleBooksService.searchBooksAsyncReactive(eq("*"), eq(null), anyInt(), eq(null))).thenReturn(Mono.just(Collections.emptyList()));
-    
-    ResultActions result = performAsync(get("/api/books/search").param("query", ""));
-
-    result.andExpect(status().isOk())
-      .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-      .andExpect(jsonPath("$.results", hasSize(0)));
-  }
-
-  @Test
-  @DisplayName("GET /api/books/search - non-empty list returns 200 and array of books in results")
-  void searchBooks_nonEmptyList_returnsArrayInResults() throws Exception {
-    Book book = createTestBook("1", "Effective Java", "Joshua Bloch");
-    when(googleBooksService.searchBooksAsyncReactive(eq("*"), eq(null), anyInt(), eq(null))).thenReturn(Mono.just(List.of(book)));
-    
-    ResultActions result = performAsync(get("/api/books/search").param("query", ""));
-
-    result.andExpect(status().isOk())
-      .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-      .andExpect(jsonPath("$.results", hasSize(1)))
-      .andExpect(jsonPath("$.results[0].id").value("1"))
-      .andExpect(jsonPath("$.results[0].title").value("Effective Java"))
-      .andExpect(jsonPath("$.results[0].authors[0]").value("Joshua Bloch"));
-  }
-
-  @Test
-  @DisplayName("GET /api/books/{id} - existing id returns 200 and book JSON")
-  void getBookById_found_returnsBook() throws Exception {
-    Book book = createTestBook("1", "Domain-Driven Design", "Eric Evans");
-    when(bookDataOrchestrator.getBookByIdTiered("1")).thenReturn(Mono.just(book));
-
-    ResultActions result = performAsync(get("/api/books/1"));
-
-    result.andExpect(status().isOk())
-      .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-      .andExpect(jsonPath("$.id").value("1"))
-      .andExpect(jsonPath("$.title").value("Domain-Driven Design"))
-      .andExpect(jsonPath("$.authors[0]").value("Eric Evans"));
-  }
-
-  @Test
-  @DisplayName("GET /api/books/{id} - non-existent id returns 404")
-  void getBookById_notFound_returns404() throws Exception {
-    when(bookDataOrchestrator.getBookByIdTiered("99")).thenReturn(Mono.empty());
-    
-    performAsync(get("/api/books/99"))
-      .andExpect(status().isNotFound());
-  }
-
-  @Test
-  @DisplayName("POST /api/books - valid input returns 201 and created book")
-  void createBook_validInput_returnsCreated() throws Exception {
-    Book input = createTestBook("1", "Clean Code", "Robert C. Martin");
-
-    ResultActions result = performAsync(post("/api/books")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(input)));
-
-    result.andExpect(status().isCreated())
-        .andExpect(header().string("Location", containsString("/api/books/1"))) 
-        .andExpect(jsonPath("$.id").value("1")) 
-        .andExpect(jsonPath("$.title").value("Clean Code"))
-        .andExpect(jsonPath("$.authors[0]").value("Robert C. Martin"));
-  }
-
-  @Test
-  @DisplayName("POST /api/books - invalid input returns 400")
-  void createBook_invalidInput_returnsBadRequest() throws Exception {
-    Book invalid = createTestBook(null, "", "Author"); 
-    performAsync(post("/api/books")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(invalid)))
-        .andExpect(status().isBadRequest());
-  }
-
-  @Test
-  @DisplayName("PUT /api/books/{id} - existing id returns 200 and updated book")
-  void updateBook_found_returnsUpdated() throws Exception {
-    Book updatePayload = createTestBook("1", "Refactoring", "Martin Fowler"); 
-    when(bookDataOrchestrator.getBookByIdTiered("1")).thenReturn(Mono.just(updatePayload));
-
-    ResultActions result = performAsync(put("/api/books/1") 
-        .contentType(MediaType.APPLICATION_JSON)
-        .content(objectMapper.writeValueAsString(updatePayload)));
-
-    result.andExpect(status().isOk())
-      .andExpect(jsonPath("$.id").value("1"))
-      .andExpect(jsonPath("$.title").value("Refactoring"));
-  }
-
-  @Test
-  @DisplayName("PUT /api/books/{id} - non-existent id returns 404")
-  void updateBook_notFound_returns404() throws Exception {
-    Book updatePayload = createTestBook("99", "Non Existent", "Author");
-    when(bookDataOrchestrator.getBookByIdTiered("99")).thenReturn(Mono.empty());
-
-    ResultActions result = performAsync(put("/api/books/99") 
-        .contentType(MediaType.APPLICATION_JSON)
-        .content(objectMapper.writeValueAsString(updatePayload)));
-
-    result.andExpect(status().isOk())
-      .andExpect(jsonPath("$.id").value("99"));
-  }
-
-  @Test
-  @DisplayName("DELETE /api/books/{id} - existing id returns 204")
-  void deleteBook_found_returnsNoContent() throws Exception {
-    mockMvc.perform(delete("/api/books/1")) 
-      .andExpect(status().isOk());
-  }
-
-  @Test
-  @DisplayName("DELETE /api/books/{id} - non-existent id returns 404")
-  void deleteBook_notFound_returns404() throws Exception {
-    mockMvc.perform(delete("/api/books/99")) 
-      .andExpect(status().isOk());
-  }
-
-  private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {
-    ResultActions initialAction = mockMvc.perform(builder);
-    MvcResult mvcResult = initialAction.andReturn();
-    if (mvcResult.getRequest().isAsyncStarted()) {
-      return mockMvc.perform(asyncDispatch(mvcResult));
+        performAsync(get("/api/books/search")
+                .param("query", "Fixture")
+                .param("maxResults", "5"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.query", equalTo("Fixture")))
+                .andExpect(jsonPath("$.results", hasSize(1)))
+                .andExpect(jsonPath("$.results[0].id", equalTo(fixtureBook.getId())))
+                .andExpect(jsonPath("$.results[0].cover.preferredUrl", containsString("preferred")))
+                .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")));
     }
-    return initialAction;
-  }
+
+    @Test
+    @DisplayName("GET /api/books/{id} returns mapped DTO")
+    void getBookByIdentifier_returnsDto() throws Exception {
+        when(bookDataOrchestrator.getBookByIdTiered(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
+
+        performAsync(get("/api/books/" + fixtureBook.getId()))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
+                .andExpect(jsonPath("$.authors[0].name", equalTo("Fixture Author")))
+                .andExpect(jsonPath("$.cover.s3ImagePath", equalTo(fixtureBook.getS3ImagePath())));
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{slug} falls back to slug lookup")
+    void getBookBySlug_fallsBackToSlugLookup() throws Exception {
+        when(bookDataOrchestrator.getBookByIdTiered("fixture-book-of-secrets")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.getBookBySlugTiered("fixture-book-of-secrets")).thenReturn(Mono.just(fixtureBook));
+
+        performAsync(get("/api/books/fixture-book-of-secrets"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())));
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{id} returns 404 when not found")
+    void getBook_notFound() throws Exception {
+        when(bookDataOrchestrator.getBookByIdTiered("missing")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.getBookBySlugTiered("missing")).thenReturn(Mono.empty());
+
+        performAsync(get("/api/books/missing"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{id}/similar returns mapped DTOs")
+    void getSimilarBooks_returnsDtos() throws Exception {
+        Book similar = buildBook("22222222-2222-4222-8222-222222222222", "Sibling Title");
+        when(bookDataOrchestrator.getBookByIdTiered(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
+        when(recommendationService.getSimilarBooks(eq(fixtureBook.getId()), anyInt()))
+                .thenReturn(Mono.just(List.of(similar)));
+
+        performAsync(get("/api/books/" + fixtureBook.getId() + "/similar").param("limit", "3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].id", equalTo(similar.getId())));
+    }
+
+    private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {
+        MvcResult result = mockMvc.perform(builder).andReturn();
+        return mockMvc.perform(asyncDispatch(result));
+    }
+
+    private Book buildBook(String id, String title) {
+        Book book = new Book();
+        book.setId(id);
+        book.setTitle(title);
+        book.setDescription("Fixture Description");
+        book.setAuthors(List.of("Fixture Author"));
+        book.setCategories(List.of("NYT Fiction"));
+        book.setS3ImagePath("s3://covers/" + id + ".jpg");
+        book.setExternalImageUrl("https://example.test/cover/" + id + ".jpg");
+        book.setCoverImageWidth(640);
+        book.setCoverImageHeight(960);
+        book.setIsCoverHighResolution(true);
+        book.setQualifiers(Map.of("nytBestseller", Map.of("rank", 1)));
+        book.setCachedRecommendationIds(List.of("rec-1", "rec-2"));
+
+        CoverImages coverImages = new CoverImages("https://cdn.test/preferred/" + id + ".jpg",
+                "https://cdn.test/fallback/" + id + ".jpg",
+                CoverImageSource.GOOGLE_BOOKS);
+        book.setCoverImages(coverImages);
+        return book;
+    }
 }
