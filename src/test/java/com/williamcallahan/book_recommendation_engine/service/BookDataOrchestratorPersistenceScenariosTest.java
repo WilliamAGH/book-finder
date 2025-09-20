@@ -1,13 +1,16 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.PreparedStatementSetter;
 import org.springframework.jdbc.core.RowMapper;
@@ -57,6 +60,9 @@ class BookDataOrchestratorPersistenceScenariosTest {
     @Mock
     private JdbcTemplate jdbcTemplate;
 
+    @Mock
+    private BookSearchService bookSearchService;
+
     private BookDataOrchestrator orchestrator;
 
     @BeforeEach
@@ -68,15 +74,22 @@ class BookDataOrchestratorPersistenceScenariosTest {
                 openLibraryBookDataService,
                 bookDataAggregatorService,
                 supplementalPersistenceService,
-                collectionPersistenceService
+                collectionPersistenceService,
+                bookSearchService
         );
         ReflectionTestUtils.setField(orchestrator, "jdbcTemplate", jdbcTemplate);
+
+        lenient().when(bookSearchService.searchBooks(anyString(), any())).thenReturn(List.of());
+        lenient().when(bookSearchService.searchByIsbn(anyString())).thenReturn(java.util.Optional.empty());
+        lenient().when(bookSearchService.searchAuthors(anyString(), any())).thenReturn(List.of());
+        lenient().doNothing().when(bookSearchService).refreshMaterializedView();
+
+        lenient().when(jdbcTemplate.queryForObject(anyString(), eq(String.class), ArgumentMatchers.<Object[]>any()))
+                .thenThrow(new EmptyResultDataAccessException(1));
     }
 
     @Test
     void resolveCanonicalBookId_prefersExistingExternalMapping() {
-        lenient().when(jdbcTemplate.<String>query(anyString(), ArgumentMatchers.<RowMapper<String>>any(), ArgumentMatchers.<Object[]>any()))
-                .thenReturn(Collections.<String>emptyList());
         whenExternalIdLookupReturns("existing-book-id");
 
         Book incoming = new Book();
@@ -143,13 +156,38 @@ class BookDataOrchestratorPersistenceScenariosTest {
         );
     }
 
+    @Test
+    void parseBookJsonPayload_handlesConcatenatedAndPreProcessedRecords() {
+        String payload = "{\"id\":\"-0UZAAAAYAAJ\",\"title\":\"-0UZAAAAYAAJ\",\"authors\":[\"Ralph Tate\",\"Samuel Peckworth Woodward\"],\"publisher\":\"C. Lockwood and Company\",\"publishedDate\":\"1830\",\"pageCount\":627,\"rawJsonResponse\":\"{\\\"kind\\\":\\\"books#volume\\\",\\\"id\\\":\\\"-0UZAAAAYAAJ\\\",\\\"etag\\\":\\\"PAlEva08Grw\\\",\\\"selfLink\\\":\\\"https://www.googleapis.com/books/v1/volumes/-0UZAAAAYAAJ\\\",\\\"volumeInfo\\\":{\\\"title\\\":\\\"A Manual of the Mollusca\\\",\\\"subtitle\\\":\\\"Being a Treatise on Recent and Fossil Shells\\\",\\\"authors\\\":[\\\"Samuel Peckworth Woodward\\\",\\\"Ralph Tate\\\"],\\\"publisher\\\":\\\"C. Lockwood and Company\\\",\\\"publishedDate\\\":\\\"1830\\\",\\\"pageCount\\\":627}}\",\"rawJsonSource\":\"GoogleBooks\",\"contributingSources\":[\"GoogleBooks\"]}{\"id\":\"-0UZAAAAYAAJ\",\"title\":\"-0UZAAAAYAAJ\",\"authors\":[\"Ralph Tate\",\"Samuel Peckworth Woodward\"],\"publisher\":\"C. Lockwood and Company\",\"publishedDate\":\"1830\",\"pageCount\":627,\"rawJsonResponse\":\"{\\\"kind\\\":\\\"books#volume\\\",\\\"id\\\":\\\"-0UZAAAAYAAJ\\\",\\\"volumeInfo\\\":{\\\"title\\\":\\\"A Manual of the Mollusca\\\"}}\",\"rawJsonSource\":\"GoogleBooks\",\"contributingSources\":[\"GoogleBooks\"]}";
+
+        @SuppressWarnings("unchecked")
+        List<JsonNode> result = ReflectionTestUtils.invokeMethod(orchestrator, "parseBookJsonPayload", payload, "test.json");
+
+        assertThat(result).hasSize(1);
+        JsonNode first = result.get(0);
+        assertThat(first.path("volumeInfo").path("title").asText()).isEqualTo("A Manual of the Mollusca");
+    }
+
+    @Test
+    void parseBookJsonPayload_unwrapsRawJsonResponse() {
+        String payload = "{\"id\":\"--AMEAAAQBAJ\",\"title\":\"--AMEAAAQBAJ\",\"authors\":[\"Gabriel Gambetta\"],\"description\":\"Computer graphics book\",\"publisher\":\"No Starch Press\",\"publishedDate\":\"2021-05-18\",\"pageCount\":248,\"rawJsonResponse\":\"{\\\"volumeInfo\\\":{\\\"title\\\":\\\"Computer Graphics from Scratch\\\",\\\"authors\\\":[\\\"Gabriel Gambetta\\\"]}}\",\"rawJsonSource\":\"GoogleBooks\"}";
+
+        @SuppressWarnings("unchecked")
+        List<JsonNode> result = ReflectionTestUtils.invokeMethod(orchestrator, "parseBookJsonPayload", payload, "single.json");
+
+        assertThat(result).hasSize(1);
+        JsonNode node = result.get(0);
+        assertThat(node.path("volumeInfo").path("title").asText()).isEqualTo("Computer Graphics from Scratch");
+        assertThat(node.path("volumeInfo").path("authors").isArray()).isTrue();
+    }
+
     private void whenExternalIdLookupReturns(String bookId) {
-        lenient().when(jdbcTemplate.<String>query(
+        lenient().when(jdbcTemplate.queryForObject(
                 eq("SELECT book_id FROM book_external_ids WHERE source = ? AND external_id = ? LIMIT 1"),
-                ArgumentMatchers.<RowMapper<String>>any(),
+                eq(String.class),
                 eq("GOOGLE_BOOKS"),
                 any()
-        )).thenReturn(List.of(bookId));
+        )).thenReturn(bookId);
     }
 
     private ResultSet mockResult(String id, Integer editionNumber) throws SQLException {

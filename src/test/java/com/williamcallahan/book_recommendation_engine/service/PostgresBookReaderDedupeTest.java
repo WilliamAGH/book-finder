@@ -1,6 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,11 +46,20 @@ class PostgresBookReaderDedupeTest {
                 Mockito.mock(OpenLibraryBookDataService.class),
                 Mockito.mock(BookDataAggregatorService.class),
                 Mockito.mock(BookSupplementalPersistenceService.class),
-                Mockito.mock(BookCollectionPersistenceService.class)
+                Mockito.mock(BookCollectionPersistenceService.class),
+                createBookSearchServiceMock()
         );
         orchestrator.setJdbcTemplate(jdbcTemplate);
 
         stubDatabaseQueries();
+    }
+
+    private BookSearchService createBookSearchServiceMock() {
+        BookSearchService searchService = Mockito.mock(BookSearchService.class);
+        lenient().when(searchService.searchBooks(anyString(), any())).thenReturn(List.of());
+        lenient().when(searchService.searchByIsbn(anyString())).thenReturn(java.util.Optional.empty());
+        lenient().doNothing().when(searchService).refreshMaterializedView();
+        return searchService;
     }
 
     @Test

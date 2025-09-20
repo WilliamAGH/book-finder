@@ -74,7 +74,9 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.results[0].id", equalTo(fixtureBook.getId())))
                 .andExpect(jsonPath("$.results[0].slug", equalTo(fixtureBook.getSlug())))
                 .andExpect(jsonPath("$.results[0].cover.preferredUrl", containsString("preferred")))
-                .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")));
+                .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")))
+                .andExpect(jsonPath("$.results[0].collections", hasSize(1)))
+                .andExpect(jsonPath("$.results[0].collections[0].name", equalTo("NYT Hardcover Fiction")));
     }
 
     @Test
@@ -88,7 +90,8 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
                 .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())))
                 .andExpect(jsonPath("$.authors[0].name", equalTo("Fixture Author")))
-                .andExpect(jsonPath("$.cover.s3ImagePath", equalTo(fixtureBook.getS3ImagePath())));
+                .andExpect(jsonPath("$.cover.s3ImagePath", equalTo(fixtureBook.getS3ImagePath())))
+                .andExpect(jsonPath("$.collections[0].type", equalTo("BESTSELLER_LIST")));
     }
 
     @Test
@@ -100,7 +103,8 @@ class BookControllerTest {
         performAsync(get("/api/books/fixture-book-of-secrets"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
-                .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())));
+                .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())))
+                .andExpect(jsonPath("$.collections", hasSize(1)));
     }
 
     @Test
@@ -152,6 +156,8 @@ class BookControllerTest {
                 "https://cdn.test/fallback/" + id + ".jpg",
                 CoverImageSource.GOOGLE_BOOKS);
         book.setCoverImages(coverImages);
+        Book.CollectionAssignment assignment = new Book.CollectionAssignment("nyt-hardcover-fiction", "NYT Hardcover Fiction", "BESTSELLER_LIST", 1, "NYT");
+        book.setCollections(List.of(assignment));
         return book;
     }
 }
