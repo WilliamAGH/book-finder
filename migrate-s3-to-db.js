@@ -404,6 +404,65 @@ async function streamToString(stream) {
 }
 
 // ============================================================================
+// NORMALIZATION HELPERS
+// ============================================================================
+
+function normalizeAuthorName(name) {
+  if (!name || !name.trim()) return null;
+
+  let normalized = name.toLowerCase();
+
+  // Remove accents/diacritics
+  normalized = normalized
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  // Handle suffixes (Jr., Sr., III, etc.)
+  normalized = normalized
+    .replace(/\s+jr\.?(?:\s|$)/gi, ' jr')
+    .replace(/\s+sr\.?(?:\s|$)/gi, ' sr')
+    .replace(/\s+ii+(?:\s|$)/gi, ' ii')
+    .replace(/\s+iv(?:\s|$)/gi, ' iv')
+    .replace(/\s+ph\.?d\.?(?:\s|$)/gi, ' phd')
+    .replace(/\s+m\.?d\.?(?:\s|$)/gi, ' md');
+
+  // Remove possessives
+  normalized = normalized.replace(/['']s\b/g, '');
+
+  // Handle corporate suffixes
+  normalized = normalized
+    .replace(/\s+inc\.?(?:\s|$)/gi, ' inc')
+    .replace(/\s+corp\.?(?:\s|$)/gi, ' corp')
+    .replace(/\s+ltd\.?(?:\s|$)/gi, ' ltd')
+    .replace(/\s+llc\.?(?:\s|$)/gi, ' llc')
+    .replace(/\s+co\.?(?:\s|$)/gi, ' co');
+
+  // Remove editorial annotations
+  normalized = normalized
+    .replace(/\[from old catalog\]/gi, '')
+    .replace(/\(editor\)/gi, '')
+    .replace(/\(author\)/gi, '')
+    .replace(/\(translator\)/gi, '')
+    .replace(/\(ed\.\)/gi, '');
+
+  // Handle "Last, First" → "first last"
+  if (normalized.match(/^[a-z]+,\s+[a-z]+/)) {
+    const parts = normalized.split(',').map(p => p.trim());
+    if (parts.length === 2) {
+      normalized = `${parts[1]} ${parts[0]}`;
+    }
+  }
+
+  // Remove punctuation and normalize spaces
+  normalized = normalized
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return normalized;
+}
+
+// ============================================================================
 // DEDUPLICATION HELPERS
 // ============================================================================
 
@@ -882,7 +941,7 @@ async function migrateBookToDb(client, googleBooksId, bookData, _rawJson) {
         const authorResult = await client.query(authorSql, [
           generateNanoId(10),
           authorName,
-          authorName.toLowerCase().replace(/[^a-z0-9\s]/g, '')
+          normalizeAuthorName(authorName)
         ]);
 
         const authorId = authorResult.rows[0].id;
