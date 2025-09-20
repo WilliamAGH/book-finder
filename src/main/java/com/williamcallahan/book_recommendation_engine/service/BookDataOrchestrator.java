@@ -16,12 +16,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
+import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -33,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -40,6 +47,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 import software.amazon.awssdk.services.s3.model.S3Object;
+import java.sql.Date;
 import java.util.UUID;
 
 @Service
@@ -53,23 +61,37 @@ public class BookDataOrchestrator {
     private final OpenLibraryBookDataService openLibraryBookDataService;
     // private final LongitoodBookDataService longitoodBookDataService; // Removed
     private final BookDataAggregatorService bookDataAggregatorService;
+    private final BookSupplementalPersistenceService supplementalPersistenceService;
+    private final BookCollectionPersistenceService collectionPersistenceService;
     @Autowired(required = false)
     private JdbcTemplate jdbcTemplate; // Optional DB layer
     @Autowired(required = false)
     private S3StorageService s3StorageService; // Optional S3 layer
+    private TransactionTemplate transactionTemplate;
 
     public BookDataOrchestrator(S3RetryService s3RetryService,
                                 GoogleApiFetcher googleApiFetcher,
                                 ObjectMapper objectMapper,
                                 OpenLibraryBookDataService openLibraryBookDataService,
                                 // LongitoodBookDataService longitoodBookDataService, // Removed
-                                BookDataAggregatorService bookDataAggregatorService) {
+                                BookDataAggregatorService bookDataAggregatorService,
+                                BookSupplementalPersistenceService supplementalPersistenceService,
+                                BookCollectionPersistenceService collectionPersistenceService) {
         this.s3RetryService = s3RetryService;
         this.googleApiFetcher = googleApiFetcher;
         this.objectMapper = objectMapper;
         this.openLibraryBookDataService = openLibraryBookDataService;
         // this.longitoodBookDataService = longitoodBookDataService; // Removed
         this.bookDataAggregatorService = bookDataAggregatorService;
+        this.supplementalPersistenceService = supplementalPersistenceService;
+        this.collectionPersistenceService = collectionPersistenceService;
+    }
+
+    @Autowired(required = false)
+    public void setTransactionManager(PlatformTransactionManager transactionManager) {
+        if (transactionManager != null) {
+            this.transactionTemplate = new TransactionTemplate(transactionManager);
+        }
     }
 
     private Mono<Book> fetchFromApisAndAggregate(String bookId) {
@@ -529,7 +551,7 @@ public class BookDataOrchestrator {
 
             if (canonicalId == null) {
                 // No existing record found; use incoming id if present, otherwise generate
-                canonicalId = (incomingId != null && !incomingId.isEmpty()) ? incomingId : UUID.randomUUID().toString();
+                canonicalId = (incomingId != null && !incomingId.isEmpty()) ? incomingId : IdGenerator.uuidV7();
             }
 
             incoming.setId(canonicalId);
@@ -543,76 +565,6 @@ public class BookDataOrchestrator {
     // --- DB helpers ---
 
     // --- Lists upsert helpers ---
-    /**
-     * Upserts a provider-agnostic list into book_lists and returns the list_id.
-     */
-    public String upsertList(String source,
-                             String providerListCode,
-                             java.time.LocalDate publishedDate,
-                             String displayName,
-                             java.time.LocalDate bestsellersDate,
-                             String updatedFrequency,
-                             String providerListId,
-                             JsonNode rawListJson) {
-        if (jdbcTemplate == null) return null;
-        if (source == null || providerListCode == null || publishedDate == null) return null;
-
-        String deterministicKey = source + ":" + providerListCode + ":" + publishedDate.toString();
-        String listId = UUID.nameUUIDFromBytes(deterministicKey.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
-
-        try {
-            jdbcTemplate.update(
-                "INSERT INTO book_lists (list_id, source, provider_list_id, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
-                "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, bestsellers_date = EXCLUDED.bestsellers_date, updated_frequency = EXCLUDED.updated_frequency, raw_list_json = EXCLUDED.raw_list_json, updated_at = now()",
-                listId,
-                source,
-                providerListId,
-                providerListCode,
-                displayName,
-                bestsellersDate,
-                publishedDate,
-                updatedFrequency,
-                rawListJson != null ? rawListJson.toString() : null
-            );
-            return listId;
-        } catch (Exception e) {
-            logger.warn("List upsert failed for {}:{}:{} - {}", source, providerListCode, publishedDate, e.getMessage());
-            return listId;
-        }
-    }
-
-    /**
-     * Upserts a join row linking a list and a canonical book in book_lists_join.
-     */
-    public void upsertListJoin(String listId,
-                               String canonicalBookId,
-                               Integer position,
-                               Integer weeksOnList,
-                               String providerIsbn13,
-                               String providerIsbn10,
-                               String providerBookRef,
-                               JsonNode rawItemJson) {
-        if (jdbcTemplate == null || listId == null || canonicalBookId == null) return;
-        try {
-            jdbcTemplate.update(
-                "INSERT INTO book_lists_join (list_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
-                "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, provider_book_ref = EXCLUDED.provider_book_ref, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
-                listId,
-                canonicalBookId,
-                position,
-                weeksOnList,
-                providerIsbn13,
-                providerIsbn10,
-                providerBookRef,
-                rawItemJson != null ? rawItemJson.toString() : null
-            );
-        } catch (Exception e) {
-            logger.warn("List join upsert failed for list={} book={}: {}", listId, canonicalBookId, e.getMessage());
-        }
-    }
-
     /**
      * Bulk migrates S3-stored list JSONs into the neutral book_lists and book_lists_join tables.
      * Example provider: "NYT", prefix: "lists/nyt/".
@@ -681,7 +633,9 @@ public class BookDataOrchestrator {
                     continue;
                 }
 
-                String listId = upsertList(provider, listNameEncoded, publishedDate, displayName, bestsellersDate, updatedFrequency, null, listJson);
+                String listId = collectionPersistenceService
+                    .upsertList(provider, listNameEncoded, publishedDate, displayName, bestsellersDate, updatedFrequency, null, listJson)
+                    .orElse(null);
                 if (listId == null) continue;
 
                 JsonNode booksArray = listJson.path("books");
@@ -704,7 +658,7 @@ public class BookDataOrchestrator {
                         // If still not found, try to upsert a minimal record from item if we have enough data
                         if (canonicalId == null) {
                             Book minimal = new Book();
-                            minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : UUID.randomUUID().toString()));
+                            minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : IdGenerator.uuidV7()));
                             minimal.setIsbn13(isbn13);
                             minimal.setIsbn10(isbn10);
                             minimal.setTitle(item.path("title").asText(null));
@@ -714,7 +668,7 @@ public class BookDataOrchestrator {
                             canonicalId = minimal.getId();
                         }
 
-                        upsertListJoin(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
+                        collectionPersistenceService.upsertListMembership(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
                     }
                 }
 
@@ -733,7 +687,7 @@ public class BookDataOrchestrator {
         if (jdbcTemplate == null || id == null) return Optional.empty();
         try {
             return jdbcTemplate.query(
-                "SELECT id, title, description, \"s3-image-path\" as s3_image_path, external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count FROM books WHERE id = ?",
+                "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE id = ?",
                 ps -> ps.setString(1, id),
                 rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
             );
@@ -746,7 +700,7 @@ public class BookDataOrchestrator {
         if (jdbcTemplate == null || isbn13 == null) return Optional.empty();
         try {
             return jdbcTemplate.query(
-                "SELECT id, title, description, \"s3-image-path\" as s3_image_path, external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count FROM books WHERE isbn13 = ?",
+                "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE isbn13 = ?",
                 ps -> ps.setString(1, isbn13),
                 rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
             );
@@ -759,7 +713,7 @@ public class BookDataOrchestrator {
         if (jdbcTemplate == null || isbn10 == null) return Optional.empty();
         try {
             return jdbcTemplate.query(
-                "SELECT id, title, description, \"s3-image-path\" as s3_image_path, external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count FROM books WHERE isbn10 = ?",
+                "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE isbn10 = ?",
                 ps -> ps.setString(1, isbn10),
                 rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
             );
@@ -772,7 +726,7 @@ public class BookDataOrchestrator {
         if (jdbcTemplate == null || externalId == null) return Optional.empty();
         try {
             return jdbcTemplate.query(
-                "SELECT b.id, b.title, b.description, b.\"s3-image-path\" as s3_image_path, b.external_image_url, b.isbn10, b.isbn13, b.published_date, b.language, b.publisher, b.info_link, b.preview_link, b.purchase_link, b.list_price, b.currency_code, b.average_rating, b.ratings_count, b.page_count " +
+                "SELECT b.id, b.title, b.description, b.s3_image_path, b.isbn10, b.isbn13, b.published_date, b.language, b.publisher, b.page_count " +
                 "FROM book_external_ids e JOIN books b ON b.id = e.book_id WHERE e.external_id = ? LIMIT 1",
                 ps -> ps.setString(1, externalId),
                 rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
@@ -788,99 +742,411 @@ public class BookDataOrchestrator {
         b.setTitle(rs.getString("title"));
         b.setDescription(rs.getString("description"));
         b.setS3ImagePath(rs.getString("s3_image_path"));
-        b.setExternalImageUrl(rs.getString("external_image_url"));
         b.setIsbn10(rs.getString("isbn10"));
         b.setIsbn13(rs.getString("isbn13"));
         java.sql.Date d = rs.getDate("published_date");
-        b.setPublishedDate(d); // Book expects java.util.Date; java.sql.Date is a subclass
+        if (d != null) {
+            b.setPublishedDate(new java.util.Date(d.getTime()));
+        }
         b.setLanguage(rs.getString("language"));
         b.setPublisher(rs.getString("publisher"));
-        b.setInfoLink(rs.getString("info_link"));
-        b.setPreviewLink(rs.getString("preview_link"));
-        b.setPurchaseLink(rs.getString("purchase_link"));
-        java.math.BigDecimal listPrice = (java.math.BigDecimal) rs.getObject("list_price");
-        b.setListPrice(listPrice != null ? listPrice.doubleValue() : null);
-        b.setCurrencyCode(rs.getString("currency_code"));
-        java.math.BigDecimal avgRating = (java.math.BigDecimal) rs.getObject("average_rating");
-        b.setAverageRating(avgRating != null ? avgRating.doubleValue() : null);
-        Integer ratingsCount = (Integer) rs.getObject("ratings_count");
-        b.setRatingsCount(ratingsCount);
         Integer pageCount = (Integer) rs.getObject("page_count");
         b.setPageCount(pageCount);
         return b;
     }
 
     private void saveToDatabase(Book book, JsonNode sourceJson) {
-        if (jdbcTemplate == null || book == null) return;
-        try {
-            String canonicalId = book.getId();
-            if (canonicalId == null || canonicalId.isEmpty()) {
-                canonicalId = UUID.randomUUID().toString();
-                book.setId(canonicalId);
-            }
+        if (jdbcTemplate == null || book == null) {
+            return;
+        }
 
-            jdbcTemplate.update(
-                "INSERT INTO books (id, title, description, \"s3-image-path\", external_image_url, isbn10, isbn13, published_date, language, publisher, info_link, preview_link, purchase_link, list_price, currency_code, average_rating, ratings_count, page_count) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                "ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, \"s3-image-path\" = EXCLUDED.\"s3-image-path\", external_image_url = EXCLUDED.external_image_url, isbn10 = EXCLUDED.isbn10, isbn13 = EXCLUDED.isbn13, published_date = EXCLUDED.published_date, language = EXCLUDED.language, publisher = EXCLUDED.publisher, info_link = EXCLUDED.info_link, preview_link = EXCLUDED.preview_link, purchase_link = EXCLUDED.purchase_link, list_price = EXCLUDED.list_price, currency_code = EXCLUDED.currency_code, average_rating = EXCLUDED.average_rating, ratings_count = EXCLUDED.ratings_count, page_count = EXCLUDED.page_count",
-                canonicalId,
-                book.getTitle(),
-                book.getDescription(),
-                book.getS3ImagePath(),
-                book.getExternalImageUrl(),
-                book.getIsbn10(),
-                book.getIsbn13(),
-                book.getPublishedDate(),
-                book.getLanguage(),
-                book.getPublisher(),
-                book.getInfoLink(),
-                book.getPreviewLink(),
-                book.getPurchaseLink(),
-                book.getListPrice(),
-                book.getCurrencyCode(),
-                book.getAverageRating(),
-                book.getRatingsCount(),
-                book.getPageCount()
-            );
+        Runnable work = () -> persistCanonicalBook(book, sourceJson);
 
-            upsertExternalId(canonicalId, "ISBN13", book.getIsbn13());
-            upsertExternalId(canonicalId, "ISBN10", book.getIsbn10());
-            if (sourceJson != null) {
-                String googleId = sourceJson.path("id").asText(null);
-                if (googleId != null && !googleId.isEmpty() && !looksLikeUuid(googleId)) {
-                    upsertExternalId(canonicalId, "GOOGLE_BOOKS", googleId);
-                }
-                String nytBookUri = sourceJson.path("nytMetadata").path("bookUri").asText(null);
-                if (nytBookUri == null || nytBookUri.isEmpty()) {
-                    nytBookUri = sourceJson.path("nyt_data_only").path("book_uri").asText(null);
-                }
-                if (nytBookUri != null && !nytBookUri.isEmpty()) {
-                    upsertExternalId(canonicalId, "NYT", nytBookUri);
-                }
-            }
-        } catch (Exception e) {
-            logger.warn("DB upsert failed for {}: {}", book.getId(), e.getMessage());
+        if (transactionTemplate != null) {
+            transactionTemplate.executeWithoutResult(status -> work.run());
+        } else {
+            work.run();
         }
     }
 
-    private void upsertExternalId(String canonicalId, String source, String externalId) {
-        if (jdbcTemplate == null || canonicalId == null || externalId == null || externalId.isEmpty()) return;
+    private void persistCanonicalBook(Book book, JsonNode sourceJson) {
+        String googleId = extractGoogleId(sourceJson, book);
+        String isbn13 = sanitizeIsbn(book.getIsbn13());
+        String isbn10 = sanitizeIsbn(book.getIsbn10());
+
+        if (isbn13 != null) {
+            book.setIsbn13(isbn13);
+        }
+        if (isbn10 != null) {
+            book.setIsbn10(isbn10);
+        }
+
+        String canonicalId = resolveCanonicalBookId(book, googleId, isbn13, isbn10);
+        boolean isNew = false;
+
+        if (canonicalId == null) {
+            canonicalId = IdGenerator.uuidV7();
+            isNew = true;
+        }
+
+        book.setId(canonicalId);
+
+        String slug = resolveSlug(canonicalId, book, isNew);
+        upsertBookRecord(book, slug);
+
+        if (googleId != null) {
+            upsertExternalMetadata(canonicalId, "GOOGLE_BOOKS", googleId, book, sourceJson);
+        }
+
+        if (isbn13 != null) {
+            upsertExternalMetadata(canonicalId, "ISBN13", isbn13, book, null);
+        }
+        if (isbn10 != null) {
+            upsertExternalMetadata(canonicalId, "ISBN10", isbn10, book, null);
+        }
+
+        if (sourceJson != null && sourceJson.size() > 0) {
+            persistRawJson(canonicalId, sourceJson, determineSource(sourceJson));
+        }
+
+        supplementalPersistenceService.persistAuthors(canonicalId, book.getAuthors());
+        supplementalPersistenceService.persistCategories(canonicalId, book.getCategories());
+        persistImageLinks(canonicalId, book);
+        supplementalPersistenceService.assignQualifierTags(canonicalId, book.getQualifiers());
+        synchronizeEditionRelationships(canonicalId, book);
+    }
+
+    private String extractGoogleId(JsonNode sourceJson, Book book) {
+        if (sourceJson != null && sourceJson.hasNonNull("id")) {
+            return sourceJson.get("id").asText();
+        }
+        String rawId = book.getId();
+        if (rawId != null && !looksLikeUuid(rawId)) {
+            return rawId;
+        }
+        return null;
+    }
+
+    private String resolveCanonicalBookId(Book book, String googleId, String isbn13, String isbn10) {
+        String existing = null;
+
+        if (googleId != null) {
+            existing = queryForId("SELECT book_id FROM book_external_ids WHERE source = ? AND external_id = ? LIMIT 1", "GOOGLE_BOOKS", googleId);
+            if (existing != null) return existing;
+        }
+
+        String potential = book.getId();
+        if (potential != null && looksLikeUuid(potential)) {
+            existing = queryForId("SELECT id FROM books WHERE id = ? LIMIT 1", potential);
+            if (existing != null) return existing;
+        }
+
+        if (isbn13 != null) {
+            existing = queryForId("SELECT id FROM books WHERE isbn13 = ? LIMIT 1", isbn13);
+            if (existing != null) return existing;
+
+            existing = queryForId("SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1", isbn13);
+            if (existing != null) return existing;
+        }
+
+        if (isbn10 != null) {
+            existing = queryForId("SELECT id FROM books WHERE isbn10 = ? LIMIT 1", isbn10);
+            if (existing != null) return existing;
+
+            existing = queryForId("SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1", isbn10);
+            if (existing != null) return existing;
+        }
+
+        return null;
+    }
+
+    private String queryForId(String sql, Object... params) {
         try {
-            jdbcTemplate.update(
-                "INSERT INTO book_external_ids (book_id, source, external_id) VALUES (?, ?, ?) ON CONFLICT (source, external_id) DO UPDATE SET book_id = EXCLUDED.book_id",
-                canonicalId, source, externalId
-            );
-        } catch (Exception e) {
-            logger.debug("External ID upsert skipped for source={}, id={}: {}", source, externalId, e.getMessage());
+            List<String> ids = jdbcTemplate.query(sql, params, (rs, rowNum) -> rs.getString(1));
+            return ids.isEmpty() ? null : ids.get(0);
+        } catch (DataAccessException ex) {
+            logger.debug("Query failed: {}", ex.getMessage());
+            return null;
         }
     }
 
-    private boolean looksLikeUuid(String s) {
+    private String resolveSlug(String bookId, Book book, boolean isNew) {
+        if (!isNew) {
+            String existing = queryForId("SELECT slug FROM books WHERE id = ?", bookId);
+            if (existing != null && !existing.isBlank()) {
+                return existing;
+            }
+        }
+
+        String desired = SlugGenerator.generateBookSlug(book.getTitle(), book.getAuthors());
+        if (desired == null || desired.isBlank() || jdbcTemplate == null) {
+            return null;
+        }
+
         try {
-            UUID.fromString(s);
-            return true;
-        } catch (Exception ignored) {
+            return jdbcTemplate.queryForObject("SELECT ensure_unique_slug(?)", new Object[]{desired}, String.class);
+        } catch (DataAccessException ex) {
+            return desired;
+        }
+    }
+
+    private void upsertBookRecord(Book book, String slug) {
+        java.util.Date published = book.getPublishedDate();
+        Date sqlDate = published != null ? new Date(published.getTime()) : null;
+        Integer editionNumber = book.getEditionNumber();
+        String editionGroupKey = book.getEditionGroupKey();
+
+        jdbcTemplate.update(
+            "INSERT INTO books (id, title, subtitle, description, isbn10, isbn13, published_date, language, publisher, page_count, edition_number, edition_group_key, slug, s3_image_path, created_at, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
+            "ON CONFLICT (id) DO UPDATE SET " +
+            "title = EXCLUDED.title, " +
+            "subtitle = COALESCE(EXCLUDED.subtitle, books.subtitle), " +
+            "description = COALESCE(EXCLUDED.description, books.description), " +
+            "isbn10 = COALESCE(EXCLUDED.isbn10, books.isbn10), " +
+            "isbn13 = COALESCE(EXCLUDED.isbn13, books.isbn13), " +
+            "published_date = COALESCE(EXCLUDED.published_date, books.published_date), " +
+            "language = COALESCE(EXCLUDED.language, books.language), " +
+            "publisher = COALESCE(EXCLUDED.publisher, books.publisher), " +
+            "page_count = COALESCE(EXCLUDED.page_count, books.page_count), " +
+            "edition_number = COALESCE(EXCLUDED.edition_number, books.edition_number), " +
+            "edition_group_key = COALESCE(EXCLUDED.edition_group_key, books.edition_group_key), " +
+            "slug = COALESCE(EXCLUDED.slug, books.slug), " +
+            "s3_image_path = COALESCE(EXCLUDED.s3_image_path, books.s3_image_path), " +
+            "updated_at = NOW()",
+            book.getId(),
+            book.getTitle(),
+            null,
+            book.getDescription(),
+            book.getIsbn10(),
+            book.getIsbn13(),
+            sqlDate,
+            book.getLanguage(),
+            book.getPublisher(),
+            book.getPageCount(),
+            book.getEditionNumber(),
+            book.getEditionGroupKey(),
+            slug,
+            book.getS3ImagePath()
+        );
+    }
+
+    private void upsertExternalMetadata(String bookId, String source, String externalId, Book book, JsonNode sourceJson) {
+        if (externalId == null || externalId.isBlank()) {
+            return;
+        }
+
+        Double listPrice = book.getListPrice();
+        String currency = book.getCurrencyCode();
+        Double averageRating = book.getAverageRating();
+        Integer ratingsCount = book.getRatingsCount();
+
+        jdbcTemplate.update(
+            "INSERT INTO book_external_ids (id, book_id, source, external_id, provider_isbn10, provider_isbn13, info_link, preview_link, purchase_link, web_reader_link, average_rating, ratings_count, pdf_available, epub_available, list_price, currency_code, created_at, last_updated) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
+            "ON CONFLICT (source, external_id) DO UPDATE SET " +
+            "book_id = EXCLUDED.book_id, " +
+            "info_link = COALESCE(EXCLUDED.info_link, book_external_ids.info_link), " +
+            "preview_link = COALESCE(EXCLUDED.preview_link, book_external_ids.preview_link), " +
+            "purchase_link = COALESCE(EXCLUDED.purchase_link, book_external_ids.purchase_link), " +
+            "web_reader_link = COALESCE(EXCLUDED.web_reader_link, book_external_ids.web_reader_link), " +
+            "average_rating = COALESCE(EXCLUDED.average_rating, book_external_ids.average_rating), " +
+            "ratings_count = COALESCE(EXCLUDED.ratings_count, book_external_ids.ratings_count), " +
+            "pdf_available = COALESCE(EXCLUDED.pdf_available, book_external_ids.pdf_available), " +
+            "epub_available = COALESCE(EXCLUDED.epub_available, book_external_ids.epub_available), " +
+            "list_price = COALESCE(EXCLUDED.list_price, book_external_ids.list_price), " +
+            "currency_code = COALESCE(EXCLUDED.currency_code, book_external_ids.currency_code), " +
+            "last_updated = NOW()",
+            IdGenerator.generate(),
+            bookId,
+            source,
+            externalId,
+            book.getIsbn10(),
+            book.getIsbn13(),
+            book.getInfoLink(),
+            book.getPreviewLink(),
+            book.getPurchaseLink(),
+            book.getWebReaderLink(),
+            averageRating,
+            ratingsCount,
+            book.getPdfAvailable(),
+            book.getEpubAvailable(),
+            listPrice,
+            currency
+        );
+    }
+
+    private void persistRawJson(String bookId, JsonNode sourceJson, String source) {
+        if (sourceJson == null || sourceJson.isEmpty()) {
+            return;
+        }
+        try {
+            String payload = objectMapper.writeValueAsString(sourceJson);
+            jdbcTemplate.update(
+                "INSERT INTO book_raw_data (id, book_id, raw_json_response, source, fetched_at, contributed_at, created_at) " +
+                "VALUES (?, ?, ?::jsonb, ?, NOW(), NOW(), NOW()) " +
+                "ON CONFLICT (book_id, source) DO UPDATE SET raw_json_response = EXCLUDED.raw_json_response, fetched_at = NOW(), contributed_at = NOW(), updated_at = NOW()",
+                IdGenerator.generate(),
+                bookId,
+                payload,
+                source
+            );
+        } catch (Exception e) {
+            logger.warn("Failed to persist raw JSON for book {}: {}", bookId, e.getMessage());
+        }
+    }
+
+    private String determineSource(JsonNode sourceJson) {
+        if (sourceJson == null) {
+            return "AGGREGATED";
+        }
+        if (sourceJson.has("source")) {
+            return sourceJson.get("source").asText("AGGREGATED");
+        }
+        return "AGGREGATED";
+    }
+
+
+    private void persistImageLinks(String bookId, Book book) {
+        CoverImages images = book.getCoverImages();
+        if (images == null) {
+            images = new CoverImages();
+        }
+
+        if (images.getPreferredUrl() != null) {
+            upsertImageLink(bookId, "preferred", images.getPreferredUrl(), images.getSource() != null ? images.getSource().name() : null);
+        }
+        if (images.getFallbackUrl() != null) {
+            upsertImageLink(bookId, "fallback", images.getFallbackUrl(), images.getSource() != null ? images.getSource().name() : null);
+        }
+        if (book.getExternalImageUrl() != null) {
+            upsertImageLink(bookId, "external", book.getExternalImageUrl(), "EXTERNAL");
+        }
+        if (book.getS3ImagePath() != null) {
+            upsertImageLink(bookId, "s3", book.getS3ImagePath(), "S3");
+        }
+    }
+
+    private void upsertImageLink(String bookId, String type, String url, String source) {
+        jdbcTemplate.update(
+            "INSERT INTO book_image_links (id, book_id, image_type, url, source, created_at) VALUES (?, ?, ?, ?, ?, NOW()) " +
+            "ON CONFLICT (book_id, image_type) DO UPDATE SET url = EXCLUDED.url, source = EXCLUDED.source, created_at = book_image_links.created_at",
+            IdGenerator.generate(),
+            bookId,
+            type,
+            url,
+            source
+        );
+    }
+
+    private void synchronizeEditionRelationships(String bookId, Book book) {
+        if (jdbcTemplate == null || bookId == null || bookId.isBlank()) {
+            return;
+        }
+
+        String groupKey = book.getEditionGroupKey();
+        Integer editionNumber = book.getEditionNumber();
+
+        if (groupKey == null) {
+            deleteEditionLinksForBooks(Collections.singletonList(bookId));
+            return;
+        }
+
+        List<EditionLinkRecord> siblings = jdbcTemplate.query(
+            "SELECT id, edition_number FROM books WHERE edition_group_key = ?",
+            ps -> ps.setString(1, groupKey),
+            (rs, rowNum) -> {
+                String id = rs.getString("id");
+                Integer stored = (Integer) rs.getObject("edition_number");
+                int normalized = (stored != null && stored > 0) ? stored : 1;
+                return new EditionLinkRecord(id, normalized);
+            }
+        );
+
+        if (siblings.isEmpty()) {
+            return;
+        }
+
+        List<EditionLinkRecord> normalized = new ArrayList<>(siblings.size());
+        for (EditionLinkRecord record : siblings) {
+            int number = record.editionNumber();
+            if (record.id().equals(bookId) && editionNumber != null) {
+                number = Math.max(editionNumber, 1);
+            }
+            normalized.add(new EditionLinkRecord(record.id(), Math.max(number, 1)));
+        }
+
+        if (normalized.size() <= 1) {
+            deleteEditionLinksForBooks(Collections.singletonList(bookId));
+            return;
+        }
+
+        normalized.sort((a, b) -> {
+            int diff = Integer.compare(b.editionNumber(), a.editionNumber());
+            if (diff != 0) return diff;
+            return a.id().compareTo(b.id());
+        });
+
+        List<String> groupIds = new ArrayList<>(normalized.size());
+        for (EditionLinkRecord record : normalized) {
+            groupIds.add(record.id());
+        }
+        deleteEditionLinksForBooks(groupIds);
+
+        EditionLinkRecord primary = normalized.get(0);
+        for (int i = 1; i < normalized.size(); i++) {
+            EditionLinkRecord sibling = normalized.get(i);
+            jdbcTemplate.update(
+                "INSERT INTO book_editions (id, book_id, related_book_id, link_source, relationship_type, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, NOW(), NOW()) " +
+                "ON CONFLICT (book_id, related_book_id) DO UPDATE SET link_source = EXCLUDED.link_source, relationship_type = EXCLUDED.relationship_type, updated_at = NOW()",
+                IdGenerator.generateLong(),
+                primary.id(),
+                sibling.id(),
+                "INGESTION",
+                "ALTERNATE_EDITION"
+            );
+        }
+    }
+
+    private void deleteEditionLinksForBooks(List<String> ids) {
+        if (jdbcTemplate == null || ids == null || ids.isEmpty()) {
+            return;
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String id : ids) {
+            if (id != null && !id.isBlank()) {
+                unique.add(id);
+            }
+        }
+        for (String id : unique) {
+            jdbcTemplate.update(
+                "DELETE FROM book_editions WHERE book_id = ? OR related_book_id = ?",
+                id,
+                id
+            );
+        }
+    }
+
+    private record EditionLinkRecord(String id, int editionNumber) {}
+
+    private boolean looksLikeUuid(String value) {
+        if (value == null || value.isBlank()) {
             return false;
         }
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
+    }
+
+    private String sanitizeIsbn(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase();
+        return cleaned.isBlank() ? null : cleaned;
     }
 }
