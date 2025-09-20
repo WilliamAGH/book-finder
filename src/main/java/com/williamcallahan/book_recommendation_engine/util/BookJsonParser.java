@@ -536,9 +536,12 @@ public class BookJsonParser {
         if (query == null || query.trim().isEmpty()) {
             return qualifiers;
         }
-        
-        String normalizedQuery = query.toLowerCase(Locale.ROOT).trim();
-        
+
+        String normalizedQuery = SearchQueryUtils.canonicalize(query);
+        if (normalizedQuery == null || normalizedQuery.isEmpty()) {
+            return qualifiers;
+        }
+
         if (normalizedQuery.contains("new york times bestseller") || 
             normalizedQuery.contains("nyt bestseller") ||
             normalizedQuery.contains("ny times bestseller")) {
