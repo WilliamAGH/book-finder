@@ -27,6 +27,8 @@ import org.springframework.http.MediaType;
 import java.util.List;
 import java.util.ArrayList;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.anyString; // For mocking getSimilarBooks
 import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBooks
 import static org.mockito.ArgumentMatchers.any; // For mocking any objects
@@ -128,6 +130,41 @@ class HomeControllerTest {
     
         // Configure RecentlyViewedService with empty view history
         when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
+
+        when(bookDataOrchestrator.getBookByIdTiered(anyString())).thenReturn(Mono.empty());
+    }
+
+    @Test
+    void shouldRedirectIsbnToCanonicalSlugWhenFoundInPostgres() {
+        String isbn = "978-0590353427";
+        String sanitizedIsbn = "9780590353427";
+
+        Book canonicalBook = createTestBook("123e4567-e89b-12d3-a456-426614174000", "Test Title", "Author A");
+        canonicalBook.setSlug("test-title");
+
+        when(bookDataOrchestrator.getBookByIdTiered(eq(sanitizedIsbn))).thenReturn(Mono.just(canonicalBook));
+
+        webTestClient.get().uri("/book/isbn/" + isbn)
+            .exchange()
+            .expectStatus().is3xxRedirection()
+            .expectHeader().valueEquals("Location", "/book/" + canonicalBook.getSlug());
+
+        verify(googleBooksService, never()).searchBooksByISBN(anyString());
+    }
+
+    @Test
+    void shouldRedirectToNotFoundWhenIsbnMissingFromPostgresAndApis() {
+        String rawIsbn = "978-0307465351";
+        String sanitizedIsbn = "9780307465351";
+
+        when(bookDataOrchestrator.getBookByIdTiered(eq(sanitizedIsbn))).thenReturn(Mono.empty());
+
+        webTestClient.get().uri("/book/isbn/" + rawIsbn)
+            .exchange()
+            .expectStatus().is3xxRedirection()
+            .expectHeader().valueEquals("Location", "/?info=bookNotFound&isbn=" + sanitizedIsbn);
+
+        verify(googleBooksService, never()).searchBooksByISBN(anyString());
     }
     /**
      * Helper method to create test Book instances
