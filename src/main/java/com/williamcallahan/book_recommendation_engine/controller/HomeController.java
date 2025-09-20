@@ -492,7 +492,13 @@ public class HomeController {
                         }
                         // Generate Audible affiliate link
                         if (amazonAssociateTag != null) {
-                            String audibleUrl = "https://www.amazon.com/s?k=" + (asin != null ? asin : (title != null ? title.replace(" ", "+") : "")) + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
+                            String searchTerm = asin != null ? asin : (title != null ? title : "");
+                            try {
+                                searchTerm = URLEncoder.encode(searchTerm, "UTF-8");
+                            } catch (Exception e) {
+                                logger.warn("Failed to encode search term for Audible link: {}", searchTerm);
+                            }
+                            String audibleUrl = "https://www.amazon.com/s?k=" + searchTerm + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
                             affiliateLinks.put("audible", audibleUrl);
                         }
                         // Generate Amazon affiliate link using ISBN or title
@@ -549,7 +555,13 @@ public class HomeController {
                             }
                         }
                         if (amazonAssociateTag != null) {
-                            String audibleUrlOnError = "https://www.amazon.com/s?k=" + (asinOnError != null ? asinOnError : (book.getTitle() != null ? book.getTitle().replace(" ", "+") : "")) + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
+                            String searchTermOnError = asinOnError != null ? asinOnError : (book.getTitle() != null ? book.getTitle() : "");
+                            try {
+                                searchTermOnError = URLEncoder.encode(searchTermOnError, "UTF-8");
+                            } catch (Exception e) {
+                                logger.warn("Failed to encode search term for Audible link on error: {}", searchTermOnError);
+                            }
+                            String audibleUrlOnError = "https://www.amazon.com/s?k=" + searchTermOnError + "&tag=" + amazonAssociateTag + "&linkCode=ur2&linkId=audible";
                             affiliateLinksOnError.put("audible", audibleUrlOnError);
                         }
                         // Generate Amazon affiliate link on error fallback
