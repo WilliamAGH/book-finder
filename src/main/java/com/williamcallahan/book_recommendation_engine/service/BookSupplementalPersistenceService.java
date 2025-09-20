@@ -126,8 +126,8 @@ public class BookSupplementalPersistenceService {
             return jdbcTemplate.queryForObject(
                 "INSERT INTO authors (id, name, normalized_name, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (name) DO UPDATE SET updated_at = NOW() RETURNING id",
-                new Object[]{IdGenerator.generate(), name, normalized},
-                (rs, rowNum) -> rs.getString("id")
+                (rs, rowNum) -> rs.getString("id"),
+                IdGenerator.generate(), name, normalized
             );
         } catch (DataAccessException ex) {
             return queryForId("SELECT id FROM authors WHERE name = ?", name);
@@ -139,8 +139,8 @@ public class BookSupplementalPersistenceService {
             return jdbcTemplate.queryForObject(
                 "INSERT INTO book_tags (id, key, display_name, tag_type, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (key) DO UPDATE SET display_name = COALESCE(book_tags.display_name, EXCLUDED.display_name), updated_at = NOW() RETURNING id",
-                new Object[]{IdGenerator.generate(), key, displayName, tagType},
-                (rs, rowNum) -> rs.getString("id")
+                (rs, rowNum) -> rs.getString("id"),
+                IdGenerator.generate(), key, displayName, tagType
             );
         } catch (DataAccessException ex) {
             return queryForId("SELECT id FROM book_tags WHERE key = ?", key);
@@ -168,7 +168,7 @@ public class BookSupplementalPersistenceService {
             return null;
         }
         try {
-            return jdbcTemplate.queryForObject(sql, args, String.class);
+            return jdbcTemplate.queryForObject(sql, String.class, args);
         } catch (DataAccessException ex) {
             return null;
         }

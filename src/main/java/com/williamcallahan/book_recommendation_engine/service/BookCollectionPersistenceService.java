@@ -32,8 +32,8 @@ public class BookCollectionPersistenceService {
                 "INSERT INTO book_collections (id, collection_type, source, display_name, normalized_name, created_at, updated_at) " +
                 "VALUES (?, 'CATEGORY', 'GOOGLE_BOOKS', ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (collection_type, source, normalized_name) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = NOW() RETURNING id",
-                new Object[]{IdGenerator.generateShort(), displayName, normalized},
-                (rs, rowNum) -> rs.getString("id")
+                (rs, rowNum) -> rs.getString("id"),
+                IdGenerator.generateShort(), displayName, normalized
             );
             return Optional.ofNullable(id);
         } catch (DataAccessException ex) {
@@ -80,18 +80,16 @@ public class BookCollectionPersistenceService {
             "INSERT INTO book_collections (id, collection_type, source, provider_list_id, provider_list_code, display_name, normalized_name, description, bestsellers_date, published_date, raw_data_json, created_at, updated_at) " +
             "VALUES (?, 'BESTSELLER_LIST', 'NYT', ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
             "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, description = EXCLUDED.description, raw_data_json = EXCLUDED.raw_data_json, updated_at = NOW() RETURNING id",
-            new Object[]{
-                IdGenerator.generateShort(),
-                providerListId,
-                listCode,
-                displayName,
-                normalized,
-                description,
-                bestsellersDate,
-                publishedDate,
-                rawJson
-            },
-            (rs, rowNum) -> rs.getString("id")
+            (rs, rowNum) -> rs.getString("id"),
+            IdGenerator.generateShort(),
+            providerListId,
+            listCode,
+            displayName,
+            normalized,
+            description,
+            bestsellersDate,
+            publishedDate,
+            rawJson
         );
 
         return Optional.ofNullable(id);
@@ -197,7 +195,7 @@ public class BookCollectionPersistenceService {
             return null;
         }
         try {
-            return jdbcTemplate.queryForObject(sql, args, String.class);
+            return jdbcTemplate.queryForObject(sql, String.class, args);
         } catch (DataAccessException ex) {
             return null;
         }

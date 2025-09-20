@@ -172,7 +172,7 @@ public class SitemapRepository {
         sql = sql.formatted(placeholders);
         Object[] params = authorIds.toArray();
         try {
-            return jdbcTemplate.query(sql, params, rs -> {
+            return jdbcTemplate.query(sql, rs -> {
                 Map<String, List<BookRow>> results = new LinkedHashMap<>();
                 while (rs.next()) {
                     String authorId = rs.getString("author_id");
@@ -185,7 +185,7 @@ public class SitemapRepository {
                     results.computeIfAbsent(authorId, k -> new ArrayList<>()).add(row);
                 }
                 return results;
-            });
+            }, params);
         } catch (DataAccessException e) {
             return Collections.emptyMap();
         }

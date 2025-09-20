@@ -853,7 +853,7 @@ public class BookDataOrchestrator {
 
     private String queryForId(String sql, Object... params) {
         try {
-            List<String> ids = jdbcTemplate.query(sql, params, (rs, rowNum) -> rs.getString(1));
+            List<String> ids = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString(1), params);
             return ids.isEmpty() ? null : ids.get(0);
         } catch (DataAccessException ex) {
             logger.debug("Query failed: {}", ex.getMessage());
@@ -875,7 +875,7 @@ public class BookDataOrchestrator {
         }
 
         try {
-            return jdbcTemplate.queryForObject("SELECT ensure_unique_slug(?)", new Object[]{desired}, String.class);
+            return jdbcTemplate.queryForObject("SELECT ensure_unique_slug(?)", String.class, desired);
         } catch (DataAccessException ex) {
             return desired;
         }
@@ -884,8 +884,7 @@ public class BookDataOrchestrator {
     private void upsertBookRecord(Book book, String slug) {
         java.util.Date published = book.getPublishedDate();
         Date sqlDate = published != null ? new Date(published.getTime()) : null;
-        Integer editionNumber = book.getEditionNumber();
-        String editionGroupKey = book.getEditionGroupKey();
+        // editionNumber and editionGroupKey are used directly below from the book instance
 
         jdbcTemplate.update(
             "INSERT INTO books (id, title, subtitle, description, isbn10, isbn13, published_date, language, publisher, page_count, edition_number, edition_group_key, slug, s3_image_path, created_at, updated_at) " +
@@ -927,6 +926,49 @@ public class BookDataOrchestrator {
             return;
         }
 
+        // Check if another external ID already has these ISBNs
+        // If so, we'll store NULL for the ISBNs to avoid duplicate constraint violations
+        String providerIsbn10 = book.getIsbn10();
+        String providerIsbn13 = book.getIsbn13();
+
+        // Check for existing ISBN13 in book_external_ids
+        if (providerIsbn13 != null && !providerIsbn13.isBlank()) {
+            try {
+                List<String> existingIds = jdbcTemplate.query(
+                    "SELECT external_id FROM book_external_ids WHERE source = ? AND provider_isbn13 = ? LIMIT 1",
+                    (rs, rowNum) -> rs.getString("external_id"),
+                    source, providerIsbn13
+                );
+
+                if (!existingIds.isEmpty() && !existingIds.get(0).equals(externalId)) {
+                    logger.info("[INFO] ISBN13 {} already linked via external ID {}, clearing it for new external ID {}",
+                        providerIsbn13, existingIds.get(0), externalId);
+                    providerIsbn13 = null; // Don't duplicate the ISBN in external_ids table
+                }
+            } catch (DataAccessException ex) {
+                logger.debug("Error checking existing ISBN13: {}", ex.getMessage());
+            }
+        }
+
+        // Check for existing ISBN10 in book_external_ids
+        if (providerIsbn10 != null && !providerIsbn10.isBlank()) {
+            try {
+                List<String> existingIds = jdbcTemplate.query(
+                    "SELECT external_id FROM book_external_ids WHERE source = ? AND provider_isbn10 = ? LIMIT 1",
+                    (rs, rowNum) -> rs.getString("external_id"),
+                    source, providerIsbn10
+                );
+
+                if (!existingIds.isEmpty() && !existingIds.get(0).equals(externalId)) {
+                    logger.info("[INFO] ISBN10 {} already linked via external ID {}, clearing it for new external ID {}",
+                        providerIsbn10, existingIds.get(0), externalId);
+                    providerIsbn10 = null; // Don't duplicate the ISBN in external_ids table
+                }
+            } catch (DataAccessException ex) {
+                logger.debug("Error checking existing ISBN10: {}", ex.getMessage());
+            }
+        }
+
         Double listPrice = book.getListPrice();
         String currency = book.getCurrencyCode();
         Double averageRating = book.getAverageRating();
@@ -952,8 +994,8 @@ public class BookDataOrchestrator {
             bookId,
             source,
             externalId,
-            book.getIsbn10(),
-            book.getIsbn13(),
+            providerIsbn10,  // Use the potentially cleared ISBN10
+            providerIsbn13,  // Use the potentially cleared ISBN13
             book.getInfoLink(),
             book.getPreviewLink(),
             book.getPurchaseLink(),
