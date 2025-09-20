@@ -12,10 +12,12 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
@@ -24,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,9 +39,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -46,9 +49,11 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
+import org.postgresql.util.PGobject;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import java.sql.Date;
 import java.util.UUID;
+import java.util.Locale;
 
 @Service
 public class BookDataOrchestrator {
@@ -63,8 +68,8 @@ public class BookDataOrchestrator {
     private final BookDataAggregatorService bookDataAggregatorService;
     private final BookSupplementalPersistenceService supplementalPersistenceService;
     private final BookCollectionPersistenceService collectionPersistenceService;
-    @Autowired(required = false)
     private JdbcTemplate jdbcTemplate; // Optional DB layer
+    private PostgresBookReader postgresBookReader;
     @Autowired(required = false)
     private S3StorageService s3StorageService; // Optional S3 layer
     private TransactionTemplate transactionTemplate;
@@ -85,6 +90,12 @@ public class BookDataOrchestrator {
         this.bookDataAggregatorService = bookDataAggregatorService;
         this.supplementalPersistenceService = supplementalPersistenceService;
         this.collectionPersistenceService = collectionPersistenceService;
+    }
+
+    @Autowired(required = false)
+    public void setJdbcTemplate(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.postgresBookReader = jdbcTemplate != null ? new PostgresBookReader(jdbcTemplate, objectMapper) : null;
     }
 
     @Autowired(required = false)
@@ -587,7 +598,7 @@ public class BookDataOrchestrator {
             logger.warn("S3→DB list migration skipped: S3 is not configured (S3StorageService is null).");
             return;
         }
-        final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "lists/" + (provider != null ? provider.toLowerCase() : "") + "/";
+        final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "lists/" + (provider != null ? provider.toLowerCase(Locale.ROOT) : "") + "/";
         logger.info("Starting S3→DB list migration: provider='{}', prefix='{}', max={}, skip={}", provider, effectivePrefix, maxRecords, skipRecords);
 
         List<S3Object> objects = s3StorageService.listObjects(effectivePrefix);
@@ -693,90 +704,46 @@ public class BookDataOrchestrator {
         logger.info("S3→DB list migration completed. Processed {} list file(s).", processed.get());
     }
     private Optional<Book> findInDatabaseById(String id) {
-        if (jdbcTemplate == null || id == null) return Optional.empty();
-        try {
-            return jdbcTemplate.query(
-                "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE id = ?",
-                ps -> ps.setString(1, id),
-                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
-            );
-        } catch (Exception e) {
+        if (postgresBookReader == null || id == null) {
             return Optional.empty();
         }
+        return postgresBookReader.fetchByCanonicalId(id);
     }
 
     private Optional<Book> findInDatabaseBySlug(String slug) {
-        if (jdbcTemplate == null || slug == null) {
+        if (postgresBookReader == null || slug == null) {
             return Optional.empty();
         }
-        try {
-            return jdbcTemplate.query(
-                    "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE slug = ?",
-                    ps -> ps.setString(1, slug),
-                    rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
-            );
-        } catch (Exception e) {
-            return Optional.empty();
-        }
+        return postgresBookReader.fetchBySlug(slug);
     }
 
     private Optional<Book> findInDatabaseByIsbn13(String isbn13) {
-        if (jdbcTemplate == null || isbn13 == null) return Optional.empty();
-        try {
-            return jdbcTemplate.query(
-                "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE isbn13 = ?",
-                ps -> ps.setString(1, isbn13),
-                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
-            );
-        } catch (Exception e) {
+        if (postgresBookReader == null) {
             return Optional.empty();
         }
+        String sanitized = sanitizeIsbn(isbn13);
+        if (sanitized == null) {
+            return Optional.empty();
+        }
+        return postgresBookReader.fetchByIsbn13(sanitized);
     }
 
     private Optional<Book> findInDatabaseByIsbn10(String isbn10) {
-        if (jdbcTemplate == null || isbn10 == null) return Optional.empty();
-        try {
-            return jdbcTemplate.query(
-                "SELECT id, title, description, s3_image_path, isbn10, isbn13, published_date, language, publisher, page_count FROM books WHERE isbn10 = ?",
-                ps -> ps.setString(1, isbn10),
-                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
-            );
-        } catch (Exception e) {
+        if (postgresBookReader == null) {
             return Optional.empty();
         }
+        String sanitized = sanitizeIsbn(isbn10);
+        if (sanitized == null) {
+            return Optional.empty();
+        }
+        return postgresBookReader.fetchByIsbn10(sanitized);
     }
 
     private Optional<Book> findInDatabaseByAnyExternalId(String externalId) {
-        if (jdbcTemplate == null || externalId == null) return Optional.empty();
-        try {
-            return jdbcTemplate.query(
-                "SELECT b.id, b.title, b.description, b.s3_image_path, b.isbn10, b.isbn13, b.published_date, b.language, b.publisher, b.page_count " +
-                "FROM book_external_ids e JOIN books b ON b.id = e.book_id WHERE e.external_id = ? LIMIT 1",
-                ps -> ps.setString(1, externalId),
-                rs -> rs.next() ? Optional.of(mapRowToBook(rs)) : Optional.empty()
-            );
-        } catch (Exception e) {
+        if (postgresBookReader == null || externalId == null) {
             return Optional.empty();
         }
-    }
-
-    private Book mapRowToBook(ResultSet rs) throws java.sql.SQLException {
-        Book b = new Book();
-        b.setId(rs.getString("id"));
-        b.setTitle(rs.getString("title"));
-        b.setDescription(rs.getString("description"));
-        b.setS3ImagePath(rs.getString("s3_image_path"));
-        b.setIsbn10(rs.getString("isbn10"));
-        b.setIsbn13(rs.getString("isbn13"));
-        java.sql.Date d = rs.getDate("published_date");
-        if (d != null) {
-            b.setPublishedDate(new java.util.Date(d.getTime()));
-        }
-        b.setLanguage(rs.getString("language"));
-        b.setPublisher(rs.getString("publisher"));
-        Integer pageCount = (Integer) rs.getObject("page_count");
-        b.setPageCount(pageCount);
-        return b;
+        return postgresBookReader.fetchByExternalId(externalId);
     }
 
     private void saveToDatabase(Book book, JsonNode sourceJson) {
@@ -1154,6 +1121,460 @@ public class BookDataOrchestrator {
 
     private record EditionLinkRecord(String id, int editionNumber) {}
 
+    private static final class PostgresBookReader {
+
+        private static final Logger LOG = LoggerFactory.getLogger(PostgresBookReader.class);
+        private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+
+        private final JdbcTemplate jdbcTemplate;
+        private final ObjectMapper objectMapper;
+
+        PostgresBookReader(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+            this.jdbcTemplate = jdbcTemplate;
+            this.objectMapper = objectMapper;
+        }
+
+        Optional<Book> fetchByCanonicalId(String id) {
+            if (id == null) {
+                return Optional.empty();
+            }
+            UUID canonicalId;
+            try {
+                canonicalId = UUID.fromString(id);
+            } catch (IllegalArgumentException ex) {
+                return Optional.empty();
+            }
+            return loadAggregate(canonicalId);
+        }
+
+        Optional<Book> fetchBySlug(String slug) {
+            if (slug == null || slug.isBlank()) {
+                return Optional.empty();
+            }
+            return queryForUuid("SELECT id FROM books WHERE slug = ? LIMIT 1", slug.trim())
+                    .flatMap(this::loadAggregate);
+        }
+
+        Optional<Book> fetchByIsbn13(String isbn13) {
+            if (isbn13 == null || isbn13.isBlank()) {
+                return Optional.empty();
+            }
+            Optional<UUID> canonical = queryForUuid("SELECT id FROM books WHERE isbn13 = ? LIMIT 1", isbn13)
+                    .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1", isbn13));
+            return canonical.flatMap(this::loadAggregate);
+        }
+
+        Optional<Book> fetchByIsbn10(String isbn10) {
+            if (isbn10 == null || isbn10.isBlank()) {
+                return Optional.empty();
+            }
+            Optional<UUID> canonical = queryForUuid("SELECT id FROM books WHERE isbn10 = ? LIMIT 1", isbn10)
+                    .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1", isbn10));
+            return canonical.flatMap(this::loadAggregate);
+        }
+
+        Optional<Book> fetchByExternalId(String externalId) {
+            if (externalId == null || externalId.isBlank()) {
+                return Optional.empty();
+            }
+            String trimmed = externalId.trim();
+            Optional<UUID> canonical = queryForUuid("SELECT book_id FROM book_external_ids WHERE external_id = ? LIMIT 1", trimmed)
+                    .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1", trimmed))
+                    .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1", trimmed))
+                    .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_asin = ? LIMIT 1", trimmed));
+            return canonical.flatMap(this::loadAggregate);
+        }
+
+        private Optional<Book> loadAggregate(UUID canonicalId) {
+            String sql = """
+                    SELECT id::text, slug, title, description, isbn10, isbn13, published_date, language, publisher, page_count
+                    FROM books
+                    WHERE id = ?
+                    """;
+            try {
+                return jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), rs -> {
+                    if (!rs.next()) {
+                        return Optional.<Book>empty();
+                    }
+                    Book book = new Book();
+                    book.setId(rs.getString("id"));
+                    book.setSlug(rs.getString("slug"));
+                    book.setTitle(rs.getString("title"));
+                    book.setDescription(rs.getString("description"));
+                    book.setIsbn10(rs.getString("isbn10"));
+                    book.setIsbn13(rs.getString("isbn13"));
+                    java.sql.Date published = rs.getDate("published_date");
+                    if (published != null) {
+                        book.setPublishedDate(new java.util.Date(published.getTime()));
+                    }
+                    book.setLanguage(rs.getString("language"));
+                    book.setPublisher(rs.getString("publisher"));
+                    Integer pageCount = (Integer) rs.getObject("page_count");
+                    book.setPageCount(pageCount);
+
+                    hydrateAuthors(book, canonicalId);
+                    hydrateCategories(book, canonicalId);
+                    hydrateDimensions(book, canonicalId);
+                    hydrateRawPayload(book, canonicalId);
+                    hydrateTags(book, canonicalId);
+                    hydrateEditions(book, canonicalId);
+                    hydrateCover(book, canonicalId);
+                    hydrateRecommendations(book, canonicalId);
+                    hydrateProviderMetadata(book, canonicalId);
+
+                    return Optional.of(book);
+                });
+            } catch (DataAccessException ex) {
+                LOG.debug("Postgres reader failed to load canonical book {}: {}", canonicalId, ex.getMessage());
+                return Optional.empty();
+            }
+        }
+
+        private void hydrateAuthors(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT a.name
+                    FROM book_authors_join baj
+                    JOIN authors a ON a.id = baj.author_id
+                    WHERE baj.book_id = ?
+                    ORDER BY baj.position
+                    """;
+            try {
+                List<String> authors = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), (rs, rowNum) -> rs.getString("name"));
+                book.setAuthors(authors == null || authors.isEmpty() ? List.of() : authors);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate authors for {}: {}", canonicalId, ex.getMessage());
+                book.setAuthors(List.of());
+            }
+        }
+
+        private void hydrateCategories(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT bc.display_name
+                    FROM book_collections_join bcj
+                    JOIN book_collections bc ON bc.id = bcj.collection_id
+                    WHERE bcj.book_id = ?
+                      AND bc.collection_type = 'CATEGORY'
+                    ORDER BY COALESCE(bcj.position, 9999), lower(bc.display_name)
+                    """;
+            try {
+                List<String> categories = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), (rs, rowNum) -> rs.getString("display_name"));
+                book.setCategories(categories == null || categories.isEmpty() ? List.of() : categories);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate categories for {}: {}", canonicalId, ex.getMessage());
+                book.setCategories(List.of());
+            }
+        }
+
+        private void hydrateDimensions(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT height_cm, width_cm, thickness_cm, weight_grams
+                    FROM book_dimensions
+                    WHERE book_id = ?
+                    LIMIT 1
+                    """;
+            try {
+                jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), rs -> {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    book.setHeightCm(toDouble(rs.getBigDecimal("height_cm")));
+                    book.setWidthCm(toDouble(rs.getBigDecimal("width_cm")));
+                    book.setThicknessCm(toDouble(rs.getBigDecimal("thickness_cm")));
+                    book.setWeightGrams(toDouble(rs.getBigDecimal("weight_grams")));
+                    return null;
+                });
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate dimensions for {}: {}", canonicalId, ex.getMessage());
+                book.setHeightCm(null);
+                book.setWidthCm(null);
+                book.setThicknessCm(null);
+                book.setWeightGrams(null);
+            }
+        }
+
+        private void hydrateRawPayload(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT raw_json_response::text
+                    FROM book_raw_data
+                    WHERE book_id = ?
+                    ORDER BY contributed_at DESC
+                    LIMIT 1
+                    """;
+            try {
+                String rawJson = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), rs -> rs.next() ? rs.getString(1) : null);
+                if (rawJson != null && !rawJson.isBlank()) {
+                    book.setRawJsonResponse(rawJson);
+                }
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate raw payload for {}: {}", canonicalId, ex.getMessage());
+            }
+        }
+
+        private void hydrateTags(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT bt.key, bt.display_name, bta.source, bta.confidence, bta.metadata
+                    FROM book_tag_assignments bta
+                    JOIN book_tags bt ON bt.id = bta.tag_id
+                    WHERE bta.book_id = ?
+                    """;
+            try {
+                Map<String, Object> tags = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), rs -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    while (rs.next()) {
+                        String key = rs.getString("key");
+                        if (key == null || key.isBlank()) {
+                            continue;
+                        }
+                        Map<String, Object> attributes = new LinkedHashMap<>();
+                        String displayName = rs.getString("display_name");
+                        if (displayName != null && !displayName.isBlank()) {
+                            attributes.put("displayName", displayName);
+                        }
+                        String source = rs.getString("source");
+                        if (source != null && !source.isBlank()) {
+                            attributes.put("source", source);
+                        }
+                        Double confidence = (Double) rs.getObject("confidence");
+                        if (confidence != null) {
+                            attributes.put("confidence", confidence);
+                        }
+                        Map<String, Object> metadata = parseJsonAttributes(rs.getObject("metadata"));
+                        if (!metadata.isEmpty()) {
+                            attributes.put("metadata", metadata);
+                        }
+                        result.put(key, attributes);
+                    }
+                    return result;
+                });
+                book.setQualifiers(tags);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate tags for {}: {}", canonicalId, ex.getMessage());
+                book.setQualifiers(Map.of());
+            }
+        }
+
+        private void hydrateEditions(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT b.id::text as edition_id,
+                           b.slug,
+                           b.title,
+                           b.isbn13,
+                           b.isbn10,
+                           b.publisher,
+                           b.published_date,
+                           wc.cluster_method,
+                           wcm.confidence,
+                           bei.external_id as google_books_id,
+                           b.s3_image_path
+                    FROM work_cluster_members wcm1
+                    JOIN work_cluster_members wcm ON wcm.cluster_id = wcm1.cluster_id
+                    JOIN books b ON b.id = wcm.book_id
+                    JOIN work_clusters wc ON wc.id = wcm.cluster_id
+                    LEFT JOIN book_external_ids bei
+                           ON bei.book_id = b.id AND bei.source = 'GOOGLE_BOOKS'
+                    WHERE wcm1.book_id = ?
+                      AND wcm.book_id <> ?
+                    ORDER BY wcm.is_primary DESC,
+                             wcm.confidence DESC NULLS LAST,
+                             b.published_date DESC NULLS LAST,
+                             lower(b.title)
+                    """;
+            try {
+                List<Book.EditionInfo> editions = jdbcTemplate.query(sql,
+                        ps -> {
+                            ps.setObject(1, canonicalId);
+                            ps.setObject(2, canonicalId);
+                        },
+                        (rs, rowNum) -> {
+                            Book.EditionInfo info = new Book.EditionInfo();
+                            info.setGoogleBooksId(rs.getString("google_books_id"));
+                            info.setType(rs.getString("cluster_method"));
+                            String slug = rs.getString("slug");
+                            info.setIdentifier(slug != null && !slug.isBlank() ? slug : rs.getString("edition_id"));
+                            info.setEditionIsbn13(rs.getString("isbn13"));
+                            info.setEditionIsbn10(rs.getString("isbn10"));
+                            java.sql.Date published = rs.getDate("published_date");
+                            if (published != null) {
+                                info.setPublishedDate(new java.util.Date(published.getTime()));
+                            }
+                            info.setCoverImageUrl(rs.getString("s3_image_path"));
+                            return info;
+                        });
+                book.setOtherEditions(editions.isEmpty() ? List.of() : editions);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate editions for {}: {}", canonicalId, ex.getMessage());
+                book.setOtherEditions(List.of());
+            }
+        }
+
+        private void hydrateCover(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT image_type, url, source, s3_image_path, width, height, is_high_resolution
+                    FROM book_image_links
+                    WHERE book_id = ?
+                    ORDER BY CASE image_type
+                        WHEN 'extraLarge' THEN 1
+                        WHEN 'large' THEN 2
+                        WHEN 'medium' THEN 3
+                        WHEN 'small' THEN 4
+                        WHEN 'thumbnail' THEN 5
+                        WHEN 'smallThumbnail' THEN 6
+                        ELSE 7
+                    END, created_at DESC
+                    LIMIT 2
+                    """;
+            try {
+                List<CoverCandidate> candidates = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), (rs, rowNum) -> new CoverCandidate(
+                        rs.getString("url"),
+                        rs.getString("s3_image_path"),
+                        rs.getString("source"),
+                        rs.getObject("width", Integer.class),
+                        rs.getObject("height", Integer.class),
+                        rs.getObject("is_high_resolution", Boolean.class)
+                ));
+                if (candidates.isEmpty()) {
+                    return;
+                }
+                CoverCandidate primary = candidates.get(0);
+                book.setExternalImageUrl(primary.url());
+                book.setS3ImagePath(primary.s3Path());
+                book.setCoverImageWidth(primary.width());
+                book.setCoverImageHeight(primary.height());
+                book.setIsCoverHighResolution(primary.highRes());
+                CoverImages coverImages = new CoverImages(primary.url(),
+                        candidates.size() > 1 ? candidates.get(1).url() : primary.url(),
+                        toCoverSource(primary.source()));
+                book.setCoverImages(coverImages);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate cover for {}: {}", canonicalId, ex.getMessage());
+            }
+        }
+
+        private void hydrateRecommendations(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT recommended_book_id::text
+                    FROM book_recommendations
+                    WHERE source_book_id = ?
+                    ORDER BY score DESC NULLS LAST, created_at DESC
+                    LIMIT 20
+                    """;
+            try {
+                List<String> recommendations = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), (rs, rowNum) -> rs.getString("recommended_book_id"));
+                book.setCachedRecommendationIds(recommendations == null || recommendations.isEmpty() ? List.of() : recommendations);
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate recommendations for {}: {}", canonicalId, ex.getMessage());
+                book.setCachedRecommendationIds(List.of());
+            }
+        }
+
+        private void hydrateProviderMetadata(Book book, UUID canonicalId) {
+            String sql = """
+                    SELECT info_link, preview_link, web_reader_link, purchase_link,
+                           average_rating, ratings_count, list_price, currency_code, provider_asin
+                    FROM book_external_ids
+                    WHERE book_id = ?
+                    ORDER BY CASE WHEN source = 'GOOGLE_BOOKS' THEN 0 ELSE 1 END, created_at DESC
+                    LIMIT 1
+                    """;
+            try {
+                jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), rs -> {
+                    if (!rs.next()) {
+                        return null;
+                    }
+                    book.setInfoLink(rs.getString("info_link"));
+                    book.setPreviewLink(rs.getString("preview_link"));
+                    book.setWebReaderLink(rs.getString("web_reader_link"));
+                    book.setPurchaseLink(rs.getString("purchase_link"));
+                    Double averageRating = (Double) rs.getObject("average_rating");
+                    if (averageRating != null) {
+                        book.setAverageRating(averageRating);
+                        book.setHasRatings(Boolean.TRUE);
+                    }
+                    Integer ratingsCount = (Integer) rs.getObject("ratings_count");
+                    if (ratingsCount != null) {
+                        book.setRatingsCount(ratingsCount);
+                        book.setHasRatings(ratingsCount > 0);
+                    }
+                    java.math.BigDecimal listPrice = rs.getBigDecimal("list_price");
+                    if (listPrice != null) {
+                        book.setListPrice(listPrice.doubleValue());
+                    }
+                    String currency = rs.getString("currency_code");
+                    if (currency != null && !currency.isBlank()) {
+                        book.setCurrencyCode(currency);
+                    }
+                    String asin = rs.getString("provider_asin");
+                    if (asin != null && !asin.isBlank()) {
+                        book.setAsin(asin);
+                    }
+                    return null;
+                });
+            } catch (DataAccessException ex) {
+                LOG.debug("Failed to hydrate provider metadata for {}: {}", canonicalId, ex.getMessage());
+            }
+        }
+
+        private Optional<UUID> queryForUuid(String sql, Object param) {
+            try {
+                UUID result = jdbcTemplate.queryForObject(sql, UUID.class, param);
+                return Optional.ofNullable(result);
+            } catch (EmptyResultDataAccessException ex) {
+                return Optional.empty();
+            } catch (DataAccessException ex) {
+                LOG.debug("Postgres lookup failed for value {}: {}", param, ex.getMessage());
+                return Optional.empty();
+            }
+        }
+
+        private Map<String, Object> parseJsonAttributes(Object value) {
+            if (value == null) {
+                return Map.of();
+            }
+            try {
+                String json = null;
+                if (value instanceof PGobject pgObject && pgObject.getValue() != null) {
+                    json = pgObject.getValue();
+                } else if (value instanceof String str) {
+                    json = str;
+                }
+                if (json != null && !json.isBlank()) {
+                    return objectMapper.readValue(json, MAP_TYPE);
+                }
+                if (value instanceof Map<?, ?> mapValue) {
+                    Map<String, Object> copy = new LinkedHashMap<>();
+                    mapValue.forEach((k, v) -> copy.put(String.valueOf(k), v));
+                    return copy;
+                }
+            } catch (Exception ex) {
+                LOG.debug("Failed to parse tag metadata: {}", ex.getMessage());
+            }
+            return Map.of();
+        }
+
+        private CoverImageSource toCoverSource(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return CoverImageSource.UNDEFINED;
+            }
+            try {
+                return CoverImageSource.valueOf(raw.trim().toUpperCase());
+            } catch (IllegalArgumentException ex) {
+                return CoverImageSource.UNDEFINED;
+            }
+        }
+
+        private Double toDouble(java.math.BigDecimal value) {
+            return value == null ? null : value.doubleValue();
+        }
+
+        private record CoverCandidate(String url,
+                                      String s3Path,
+                                      String source,
+                                      Integer width,
+                                      Integer height,
+                                      Boolean highRes) {
+        }
+    }
+
     private boolean looksLikeUuid(String value) {
         if (value == null || value.isBlank()) {
             return false;
@@ -1170,7 +1591,7 @@ public class BookDataOrchestrator {
         if (raw == null) {
             return null;
         }
-        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase();
+        String cleaned = raw.replaceAll("[^0-9Xx]", "").toUpperCase(java.util.Locale.ROOT);
         return cleaned.isBlank() ? null : cleaned;
     }
 }
