@@ -200,6 +200,10 @@ This document tracks all code changes required to retrofit the application for t
 
 ## Next Actions
 1. **Extend integration coverage** – baseline unit suite now passes via `./mvnw -q -DskipITs -Pci-skip-wro test`; add integration scenarios for dedupe, edition chaining, NYT ingest, and tag persistence ahead of controller DTO rewrites.
+   - [x] Added sitemap scheduler smoke test (`SitemapRefreshSchedulerIntegrationTest`) to exercise snapshot upload, external hydration, and cover warmups together (2025-09-19).
+   - [x] Published reusable Postgres fixtures (`PostgresFixtures` + `book_with_collections_and_tags.json`) for consistent test data (2025-09-19).
+   - [x] Introduced shared `BookDto` / mapper layer to centralise API response mapping ahead of controller rewrites (2025-09-19).
+   - [x] Add dedicated scenarios for dedupe, edition chaining, NYT ingest, and tag persistence. (2025-09-19) – see new tests under `src/test/java/com/williamcallahan/book_recommendation_engine/service`.
 2. **Expose normalized data in public APIs** – update controllers/DTOs (see `BookController` task) so clients get editions, tags, and collection data directly from Postgres.
 3. **Recommendation-layer refactor** – migrate cached recommendations to Postgres, tag results appropriately, and retire S3 JSON usage.
 4. **Legacy cleanup** – remove `DuplicateBookService`, `BookSimilarityService`, and S3 JSON helpers once all callers use the Postgres-first pipeline (shared persistence services now cover authors/categories/tags).
@@ -213,13 +217,15 @@ This document tracks all code changes required to retrofit the application for t
 - [x] `BookCoverManagementServiceTest` – Updated fallback handling in `src/main/java/com/williamcallahan/book_recommendation_engine/service/image/BookCoverManagementService.java:133` so S3 hits surface canonical URLs and StepVerifier assertions now succeed.
 - [x] Re-ran `./mvnw -q -DskipITs -Pci-skip-wro test` (2025-09-19 20:41 PT) – full unit suite green; retain command for future regression checks.
 
-### [ ] `/src/main/java/com/williamcallahan/book_recommendation_engine/service/BookSitemapService.java`
+### [x] `/src/main/java/com/williamcallahan/book_recommendation_engine/service/BookSitemapService.java`
 
 **Priority**: MEDIUM
 **Changes Required**:
 
-- [ ] Source book IDs/URLs directly from Postgres (slug + updated_at) instead of S3 JSON files.
-- [ ] Introduce pagination/batching queries to generate sitemap feeds from `books` + `book_collections`.
+- [x] Source book IDs/URLs directly from Postgres (slug + updated_at) instead of S3 JSON files.
+- [x] Introduce pagination/batching queries to generate sitemap feeds from `books` + `book_collections`.
+- [x] Enforce `sitemap.s3.accumulated-ids-key` configuration when S3 uploads are enabled to prevent silent skips (fail-fast guard added 2025-09-19).
+- [x] Consolidated scheduler now drives Postgres snapshot upload, optional S3 persistence, external hydration, and cover warmups (`SitemapRefreshScheduler`).
 
 ### [ ] `/src/main/java/com/williamcallahan/book_recommendation_engine/service/image/BookImageOrchestrationService.java`
 
@@ -258,6 +264,8 @@ This document tracks all code changes required to retrofit the application for t
 ## 🟢 Migration Scripts
 
 ### [ ] `/migrate-s3-to-db.js` (Node.js migration script)
+
+- Schema reference: see `book_recommendation_engine_uml.puml` for the current ER diagram backbone. Regenerate via `./mvnw -q -DskipITs -Pci-skip-wro test && plantuml book_recommendation_engine_uml.puml` when tables change.
 
 **Priority**: HIGH
 **Changes Required**:
