@@ -14,7 +14,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,12 +77,20 @@ class BookSitemapServiceTest {
         assertThat(payload).contains("\"slug\":\"slug-1\"");
 
         JsonNode root = new ObjectMapper().readTree(payload);
+        assertThat(root.size()).isEqualTo(3);
         assertThat(root.get("totalBooks").asInt()).isEqualTo(1);
         assertThat(root.get("generatedAt").asText()).isNotBlank();
-        JsonNode first = root.withArray("books").get(0);
+        JsonNode booksNode = root.get("books");
+        assertThat(booksNode).isNotNull();
+        assertThat(booksNode.isArray()).isTrue();
+        assertThat(booksNode.size()).isEqualTo(1);
+
+        JsonNode first = booksNode.get(0);
         assertThat(first.get("id").asText()).isEqualTo("book-1");
         assertThat(first.get("slug").asText()).isEqualTo("slug-1");
         assertThat(first.get("title").asText()).isEqualTo("Title");
+        assertThat(first.get("updatedAt").asText()).isEqualTo("2024-01-01T00:00:00Z");
+        assertThat(collectFieldNames(first)).containsExactlyInAnyOrder("id", "slug", "title", "updatedAt");
     }
 
     @Test
@@ -101,4 +112,12 @@ class BookSitemapServiceTest {
         verify(bookDataOrchestrator, times(1)).getBookByIdTiered("book-2");
     }
 
+    private Set<String> collectFieldNames(JsonNode node) {
+        Set<String> names = new HashSet<>();
+        Iterator<String> iterator = node.fieldNames();
+        while (iterator.hasNext()) {
+            names.add(iterator.next());
+        }
+        return names;
+    }
 }
