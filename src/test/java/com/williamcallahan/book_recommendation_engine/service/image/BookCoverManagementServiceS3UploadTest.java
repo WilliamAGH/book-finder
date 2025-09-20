@@ -21,12 +21,15 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSour
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.CompletableFuture;
@@ -35,6 +38,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import org.mockito.ArgumentMatcher;
 
+import java.util.Comparator;
+
 /**
  * Unit tests for S3 upload functionality in BookCoverManagementService
  */
@@ -42,10 +47,7 @@ public class BookCoverManagementServiceS3UploadTest {
     
     private static final Logger logger = LoggerFactory.getLogger(BookCoverManagementServiceS3UploadTest.class);
 
-    // Path strings used in tests
     private final String LOCAL_PLACEHOLDER_PATH = "/images/placeholder-book-cover.svg";
-    private final String CACHE_DIR_NAME = "book-covers";
-    private final String CACHE_DIR_PATH = "/tmp/book-covers";
     
     /**
      * Tests the scenario where a locally cached image is successfully uploaded to S3
@@ -74,91 +76,81 @@ public class BookCoverManagementServiceS3UploadTest {
             cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService
         );
         
-        // Set up test book
         Book testBook = createTestBook();
-        String identifierKey = "test-book-id"; // Assuming createTestBook sets ID to "test-book-id"
-        
-        // Configure mock behaviors
+        String identifierKey = ImageCacheUtils.getIdentifierKey(testBook);
+
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
-        when(diskService.getCacheDirName()).thenReturn(CACHE_DIR_NAME);
-        when(diskService.getCacheDirString()).thenReturn(CACHE_DIR_PATH);
-        
-        // Local cache hit that will be uploaded to S3
-        ImageDetails localCacheImageDetails = new ImageDetails(
-            CACHE_DIR_PATH + "/test-image.jpg", // Simulate a local file path
-            "GOOGLE_BOOKS",
-            "test-image.jpg",
-            CoverImageSource.LOCAL_CACHE,
-            ImageResolutionPreference.ORIGINAL,
-            500, 700
-        );
-        
-        when(sourceFetchingService.getBestCoverImageUrlAsync(
-                eq(testBook), anyString(), any(ImageProvenanceData.class)))
-            .thenReturn(CompletableFuture.completedFuture(localCacheImageDetails));
-        
-        // Configure S3 upload success result
-        ImageDetails s3UploadedImageDetails = new ImageDetails(
-            "https://cdn.example.com/books/test-image.jpg",
-            "S3_CACHE", // Source name for S3
-            "books/test-image.jpg", // Key for S3
-            CoverImageSource.S3_CACHE,
-            ImageResolutionPreference.ORIGINAL,
-            500, 700
-        );
-        
-        when(s3Service.uploadProcessedCoverToS3Async(
-                any(byte[].class),
+
+        Path tempDir = Files.createTempDirectory("cover-cache-success");
+        try {
+            String cacheDirName = tempDir.getFileName().toString();
+            when(diskService.getCacheDirName()).thenReturn(cacheDirName);
+            when(diskService.getCacheDirString()).thenReturn(tempDir.toString());
+
+            Path localFile = tempDir.resolve("test-image.jpg");
+            Files.write(localFile, testImageBytes);
+
+            ImageDetails localCacheImageDetails = new ImageDetails(
+                "/" + cacheDirName + "/test-image.jpg",
+                "GOOGLE_BOOKS",
+                "test-image.jpg",
+                CoverImageSource.LOCAL_CACHE,
+                ImageResolutionPreference.ORIGINAL,
+                500, 700
+            );
+
+            when(sourceFetchingService.getBestCoverImageUrlAsync(
+                    eq(testBook), anyString(), any(ImageProvenanceData.class)))
+                .thenReturn(CompletableFuture.completedFuture(localCacheImageDetails));
+
+            ImageDetails s3UploadedImageDetails = new ImageDetails(
+                "https://cdn.example.com/books/test-image.jpg",
+                "S3_CACHE",
+                "books/test-image.jpg",
+                CoverImageSource.S3_CACHE,
+                ImageResolutionPreference.ORIGINAL,
+                500, 700
+            );
+
+            when(s3Service.uploadProcessedCoverToS3Async(
+                    any(byte[].class),
+                    eq(".jpg"),
+                    isNull(),
+                    eq(500),
+                    eq(700),
+                    eq(testBook.getId()),
+                    eq("GOOGLE_BOOKS"),
+                    any(ImageProvenanceData.class)))
+                .thenReturn(Mono.just(s3UploadedImageDetails));
+
+            logger.info("Testing S3 upload functionality by calling BookCoverManagementService.processCoverInBackground");
+            bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
+
+            verify(s3Service, timeout(1000)).uploadProcessedCoverToS3Async(
+                eq(testImageBytes),
                 eq(".jpg"),
-                isNull(), // Assuming no CDN prefix for this direct upload call
+                isNull(),
                 eq(500),
                 eq(700),
                 eq(testBook.getId()),
-                eq("GOOGLE_BOOKS"), // Source name from localCacheImageDetails
-                any(ImageProvenanceData.class)))
-            .thenReturn(Mono.just(s3UploadedImageDetails));
+                eq("GOOGLE_BOOKS"),
+                any(ImageProvenanceData.class)
+            );
 
-        // Mock file reading for the S3 upload part within BookCoverManagementService
-        // This requires knowing the path construction logic or mocking Files.readAllBytes
-        // For simplicity, let's assume the testImageBytes are correctly read if the path matches.
-        // If BookCoverManagementService uses diskService.getCacheDirString() + filename:
-        Path mockLocalImagePath = Paths.get(CACHE_DIR_PATH, "test-image.jpg");
-        try (var mockedFiles = mockStatic(java.nio.file.Files.class)) {
-            mockedFiles.when(() -> java.nio.file.Files.exists(mockLocalImagePath)).thenReturn(true);
-            mockedFiles.when(() -> java.nio.file.Files.readAllBytes(mockLocalImagePath)).thenReturn(testImageBytes);
+            verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(s3UploadedImageDetails));
 
-            // ACT
-            logger.info("Testing S3 upload functionality by calling BookCoverManagementService.processCoverInBackground");
-            bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
+            verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+                @Override
+                public boolean matches(BookCoverUpdatedEvent event) {
+                    return event.getIdentifierKey().equals(identifierKey) &&
+                           event.getNewCoverUrl().equals(s3UploadedImageDetails.getUrlOrPath()) &&
+                           event.getSource() == CoverImageSource.S3_CACHE;
+                }
+            }));
+        } finally {
+            deleteDirectoryRecursively(tempDir);
         }
-        
-        // ASSERT
-        // Verify S3 upload was attempted with correct parameters
-        // Use Mockito timeout to wait for async operations
-        verify(s3Service, timeout(1000)).uploadProcessedCoverToS3Async(
-            eq(testImageBytes),
-            eq(".jpg"),
-            isNull(),
-            eq(500),
-            eq(700),
-            eq(testBook.getId()),
-            eq("GOOGLE_BOOKS"),
-            any(ImageProvenanceData.class)
-        );
-        
-        // Verify cache is updated with S3 details
-        verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(s3UploadedImageDetails));
-        
-        // Verify event is published with S3 details
-        verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
-            @Override
-            public boolean matches(BookCoverUpdatedEvent event) {
-                return event.getIdentifierKey().equals(identifierKey) &&
-                       event.getNewCoverUrl().equals(s3UploadedImageDetails.getUrlOrPath()) && // Corrected method name
-                       event.getSource() == CoverImageSource.S3_CACHE;
-            }
-        }));
     }
     
     /**
@@ -189,75 +181,71 @@ public class BookCoverManagementServiceS3UploadTest {
             cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService
         );
         
-        // Set up test book
         Book testBook = createTestBook();
-        String identifierKey = "test-book-id";
-        
-        // Configure mock behaviors
+        String identifierKey = ImageCacheUtils.getIdentifierKey(testBook);
+
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
-        when(diskService.getCacheDirName()).thenReturn(CACHE_DIR_NAME);
-        when(diskService.getCacheDirString()).thenReturn(CACHE_DIR_PATH);
-        
-        // Local cache hit that will attempt S3 upload
-        ImageDetails localCacheImageDetails = new ImageDetails(
-            CACHE_DIR_PATH + "/test-image.jpg", // Simulate a local file path
-            "GOOGLE_BOOKS",
-            "test-image.jpg",
-            CoverImageSource.LOCAL_CACHE,
-            ImageResolutionPreference.ORIGINAL,
-            500, 700
-        );
-        
-        when(sourceFetchingService.getBestCoverImageUrlAsync(
-                eq(testBook), anyString(), any(ImageProvenanceData.class)))
-            .thenReturn(CompletableFuture.completedFuture(localCacheImageDetails));
-            
-        // Configure S3 upload to fail
-        when(s3Service.uploadProcessedCoverToS3Async(
-                any(byte[].class),
+
+        Path tempDir = Files.createTempDirectory("cover-cache-failure");
+        try {
+            String cacheDirName = tempDir.getFileName().toString();
+            when(diskService.getCacheDirName()).thenReturn(cacheDirName);
+            when(diskService.getCacheDirString()).thenReturn(tempDir.toString());
+
+            Path localFile = tempDir.resolve("test-image.jpg");
+            Files.write(localFile, testImageBytes);
+
+            ImageDetails localCacheImageDetails = new ImageDetails(
+                "/" + cacheDirName + "/test-image.jpg",
+                "GOOGLE_BOOKS",
+                "test-image.jpg",
+                CoverImageSource.LOCAL_CACHE,
+                ImageResolutionPreference.ORIGINAL,
+                500, 700
+            );
+
+            when(sourceFetchingService.getBestCoverImageUrlAsync(
+                    eq(testBook), anyString(), any(ImageProvenanceData.class)))
+                .thenReturn(CompletableFuture.completedFuture(localCacheImageDetails));
+
+            when(s3Service.uploadProcessedCoverToS3Async(
+                    any(byte[].class),
+                    anyString(),
+                    isNull(),
+                    anyInt(),
+                    anyInt(),
+                    eq(testBook.getId()),
+                    eq("GOOGLE_BOOKS"),
+                    any(ImageProvenanceData.class)))
+                .thenReturn(Mono.error(new RuntimeException("S3 upload failed")));
+
+            bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
+
+            verify(s3Service, timeout(1000)).uploadProcessedCoverToS3Async(
+                eq(testImageBytes),
                 anyString(),
                 isNull(),
                 anyInt(),
                 anyInt(),
                 eq(testBook.getId()),
                 eq("GOOGLE_BOOKS"),
-                any(ImageProvenanceData.class)))
-            .thenReturn(Mono.error(new RuntimeException("S3 upload failed")));
+                any(ImageProvenanceData.class)
+            );
 
-        Path mockLocalImagePath = Paths.get(CACHE_DIR_PATH, "test-image.jpg");
-        try (var mockedFiles = mockStatic(java.nio.file.Files.class)) {
-            mockedFiles.when(() -> java.nio.file.Files.exists(mockLocalImagePath)).thenReturn(true);
-            mockedFiles.when(() -> java.nio.file.Files.readAllBytes(mockLocalImagePath)).thenReturn(testImageBytes);
-        
-            // ACT
-            bookCoverManagementService.processCoverInBackground(testBook, "http://example.com/provisional.jpg");
+            verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(localCacheImageDetails));
+            verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
+                @Override
+                public boolean matches(BookCoverUpdatedEvent event) {
+                    return event.getIdentifierKey().equals(identifierKey) &&
+                           event.getNewCoverUrl().equals(localCacheImageDetails.getUrlOrPath()) &&
+                           event.getSource() == localCacheImageDetails.getCoverImageSource();
+                }
+            }));
+
+        } finally {
+            deleteDirectoryRecursively(tempDir);
         }
-            
-        // ASSERT
-        // Verify S3 upload was attempted
-        // Use Mockito timeout to wait for async operations
-        verify(s3Service, timeout(1000)).uploadProcessedCoverToS3Async(
-            eq(testImageBytes),
-            anyString(),
-            isNull(),
-            anyInt(),
-            anyInt(),
-            eq(testBook.getId()),
-            eq("GOOGLE_BOOKS"),
-            any(ImageProvenanceData.class)
-        );
-            
-        // Verify fallback to local cache details in cacheManager and eventPublisher
-        verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(localCacheImageDetails));
-        verify(eventPublisher, timeout(1000)).publishEvent(argThat(new ArgumentMatcher<BookCoverUpdatedEvent>() {
-            @Override
-            public boolean matches(BookCoverUpdatedEvent event) {
-                return event.getIdentifierKey().equals(identifierKey) &&
-                       event.getNewCoverUrl().equals(localCacheImageDetails.getUrlOrPath()) && // Corrected method name
-                       event.getSource() == localCacheImageDetails.getCoverImageSource();
-            }
-        }));
     }
     
     /**
@@ -287,7 +275,7 @@ public class BookCoverManagementServiceS3UploadTest {
         );
         
         Book testBook = createTestBook();
-        String identifierKey = "test-book-id";
+        String identifierKey = ImageCacheUtils.getIdentifierKey(testBook);
         
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
@@ -331,6 +319,25 @@ public class BookCoverManagementServiceS3UploadTest {
                        event.getSource() == placeholderDetails.getCoverImageSource();
             }
         }));
+    }
+
+    private void deleteDirectoryRecursively(Path directory) {
+        if (directory == null) {
+            return;
+        }
+        try {
+            Files.walk(directory)
+                .sorted(Comparator.reverseOrder())
+                .forEach(path -> {
+                    try {
+                        Files.deleteIfExists(path);
+                    } catch (IOException ignored) {
+                        // Best effort cleanup for temp test artifacts
+                    }
+                });
+        } catch (IOException ignored) {
+            // No-op for test cleanup failures
+        }
     }
     
     /**

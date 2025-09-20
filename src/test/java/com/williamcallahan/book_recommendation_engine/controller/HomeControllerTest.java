@@ -10,9 +10,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrat
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
-import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
+// Use fully-qualified names for image services to avoid import resolution issues in test slice
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import org.junit.jupiter.api.Test;
@@ -64,13 +62,13 @@ class HomeControllerTest {
     
     @org.springframework.beans.factory.annotation.Autowired
     @SuppressWarnings("unused")
-    private BookImageOrchestrationService bookImageOrchestrationService;
+    private com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService bookImageOrchestrationService;
     
     @org.springframework.beans.factory.annotation.Autowired
-    private BookCoverManagementService bookCoverManagementService;
+    private com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService bookCoverManagementService;
 
     @org.springframework.beans.factory.annotation.Autowired
-    private LocalDiskCoverCacheService localDiskCoverCacheService;
+    private com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService localDiskCoverCacheService;
     
     @org.springframework.beans.factory.annotation.Autowired
     @SuppressWarnings("unused")
@@ -89,9 +87,9 @@ class HomeControllerTest {
         @Bean BookDataOrchestrator bookDataOrchestrator() { return Mockito.mock(BookDataOrchestrator.class); }
         @Bean GoogleBooksService googleBooksService() { return Mockito.mock(GoogleBooksService.class); }
         @Bean RecentlyViewedService recentlyViewedService() { return Mockito.mock(RecentlyViewedService.class); }
-        @Bean BookImageOrchestrationService bookImageOrchestrationService() { return Mockito.mock(BookImageOrchestrationService.class); }
-        @Bean BookCoverManagementService bookCoverManagementService() { return Mockito.mock(BookCoverManagementService.class); }
-        @Bean LocalDiskCoverCacheService localDiskCoverCacheService() { return Mockito.mock(LocalDiskCoverCacheService.class); }
+        @Bean com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService bookImageOrchestrationService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.class); }
+        @Bean com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService bookCoverManagementService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService.class); }
+        @Bean com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService localDiskCoverCacheService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.EnvironmentService environmentService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.EnvironmentService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.DuplicateBookService.class); }
         @Bean NewYorkTimesService newYorkTimesService() { return Mockito.mock(NewYorkTimesService.class); }
