@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
-import com.williamcallahan.book_recommendation_engine.service.image.S3BookCoverService;
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import org.slf4j.Logger;
@@ -21,7 +20,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -38,21 +36,18 @@ public class BookSitemapService {
     private final ObjectMapper objectMapper;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final S3StorageService s3StorageService;
-    private final S3BookCoverService s3BookCoverService;
 
     @Autowired
     public BookSitemapService(SitemapService sitemapService,
                               SitemapProperties sitemapProperties,
                               ObjectMapper objectMapper,
                               @Autowired(required = false) BookDataOrchestrator bookDataOrchestrator,
-                              @Autowired(required = false) S3StorageService s3StorageService,
-                              @Autowired(required = false) S3BookCoverService s3BookCoverService) {
+                              @Autowired(required = false) S3StorageService s3StorageService) {
         this.sitemapService = sitemapService;
         this.sitemapProperties = sitemapProperties;
         this.objectMapper = objectMapper;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.s3StorageService = s3StorageService;
-        this.s3BookCoverService = s3BookCoverService;
     }
 
     public SnapshotSyncResult synchronizeSnapshot() {
@@ -126,8 +121,14 @@ public class BookSitemapService {
         for (BookSitemapItem item : slice) {
             try {
                 Mono<Book> mono = bookDataOrchestrator.getBookByIdTiered(item.bookId());
-                mono.timeout(Duration.ofSeconds(15)).blockOptional(Duration.ofSeconds(20));
-                succeeded.incrementAndGet();
+                boolean present = mono.timeout(Duration.ofSeconds(15))
+                        .blockOptional(Duration.ofSeconds(20))
+                        .isPresent();
+                if (present) {
+                    succeeded.incrementAndGet();
+                } else {
+                    failures.incrementAndGet();
+                }
             } catch (Exception e) {
                 failures.incrementAndGet();
                 logger.debug("Hydration attempt failed for book {}: {}", item.bookId(), e.getMessage());
@@ -135,38 +136,6 @@ public class BookSitemapService {
         }
 
         return new ExternalHydrationSummary(limit, slice.size(), succeeded.get(), failures.get());
-    }
-
-    public int warmCoverAssets(List<BookSitemapItem> candidates, int limit) {
-        if (candidates == null || candidates.isEmpty() || limit <= 0) {
-            return 0;
-        }
-        if (s3BookCoverService == null) {
-            logger.debug("Skipping cover warmup – S3BookCoverService not available.");
-            return 0;
-        }
-
-        List<BookSitemapItem> slice = candidates.stream().limit(limit).collect(Collectors.toList());
-        AtomicInteger attempts = new AtomicInteger();
-
-        for (BookSitemapItem item : slice) {
-            Book book = new Book();
-            book.setId(item.bookId());
-            book.setTitle(item.title());
-            try {
-                CompletableFuture<?> future = s3BookCoverService.fetchCover(book)
-                        .exceptionally(ex -> {
-                            logger.debug("Cover warmup failed for {}: {}", item.bookId(), ex.getMessage());
-                            return null;
-                        });
-                future.join();
-                attempts.incrementAndGet();
-            } catch (Exception e) {
-                logger.debug("Cover warmup encountered error for {}: {}", item.bookId(), e.getMessage());
-            }
-        }
-
-        return attempts.get();
     }
 
     private String buildSnapshotPayload(SitemapSnapshot snapshot) throws JsonProcessingException {
