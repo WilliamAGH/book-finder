@@ -9,6 +9,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,6 +49,16 @@ public class BookSitemapService {
         this.objectMapper = objectMapper;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.s3StorageService = s3StorageService;
+    }
+
+    @PostConstruct
+    void validateConfiguration() {
+        if (s3StorageService != null) {
+            String s3Key = sitemapProperties.getS3AccumulatedIdsKey();
+            if (s3Key == null || s3Key.isBlank()) {
+                throw new IllegalStateException("BookSitemapService requires sitemap.s3.accumulated-ids-key when S3 storage is enabled.");
+            }
+        }
     }
 
     public SnapshotSyncResult synchronizeSnapshot() {
