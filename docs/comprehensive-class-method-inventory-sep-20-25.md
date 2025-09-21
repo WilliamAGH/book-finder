@@ -1440,6 +1440,83 @@
 
 ## Comprehensive Duplication Analysis
 
+### Source of Truth Declarations (as of Sep 21, 2025)
+
+For each identified duplication area, the single source of truth (SSOT) is declared below. All follower usages have been updated where practical in this pass; any remaining edge sites are listed for follow-up.
+
+1) Database Query Patterns
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/JdbcUtils.java
+- Status: CanonicalBookPersistenceService / PostgresBookRepository / BookSupplementalPersistenceService continue to depend on JdbcTemplate directly for complex SQL; JdbcUtils is the shared helper for optionals, existence, typed queries. Further refactors can adopt JdbcUtils where trivial.
+
+2) ID Resolution and Lookup Patterns
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/BookLookupService.java
+- Status: In use across PostgresBookRepository, CanonicalBookPersistenceService, NewYorkTimesBestsellerScheduler.
+
+3) Tiered Data Access Patterns (DB → S3 → APIs)
+- SSOT (fetch-by-id/slug): src/main/java/com/williamcallahan/book_recommendation_engine/service/BookDataOrchestrator.java
+- SSOT (search): src/main/java/com/williamcallahan/book_recommendation_engine/service/TieredBookSearchService.java
+- Status: Controllers and proxies route through these. BookController now delegates canonical resolution to BookDataOrchestrator.fetchCanonicalBookReactive().
+
+4) Reactive Programming Patterns (error handling for controllers/services)
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/ReactiveErrorUtils.java and ReactiveControllerUtils.java
+- Status: BookController converted. Additional services continue to use onErrorResume/LoggingUtils; can be migrated incrementally.
+
+5) URL Pattern Matching and Source Detection
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/UrlPatternMatcher.java
+- Status: BookCoverManagementService updated to use UrlPatternMatcher for source inference. Other sites (if any) should use the same.
+
+6) Caching and Warming Patterns
+- SSOT: Cover caching managed by BookCoverManagementService; query warming handled within SitemapRefreshScheduler and BookCacheWarmingScheduler.
+- Status: No base class introduced; existing responsibilities retained. Consider WarmingUtils in future if patterns expand.
+
+7) Configuration and Environment Detection
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/ApplicationConstants.java and src/main/java/com/williamcallahan/book_recommendation_engine/service/EnvironmentService.java
+
+8) JSON Serialization and Parsing
+- SSOT (Google Books → Book): src/main/java/com/williamcallahan/book_recommendation_engine/util/BookJsonParser.java
+- SSOT (general date parsing shared): src/main/java/com/williamcallahan/book_recommendation_engine/util/DateParsingUtils.java
+- Status: BookJsonParser updated to use DateParsingUtils.parseFlexibleDate.
+
+9) Input Validation and Sanitization
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/ValidationUtils.java and IsbnUtils.java
+
+10) Pagination and Result Limiting
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/PagingUtils.java
+- Status: BookSearchService, controllers, and services use PagingUtils; normalization wrappers removed.
+
+11) Upsert and Persistence Patterns
+- SSOT helpers: JdbcUtils (query helpers), IdGenerator (ID creation)
+
+12) Circuit Breaker and Resilience Patterns
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/ApiCircuitBreakerService.java (+ Resilience4j annotations)
+
+13) Affiliate Link Generation
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/AffiliateLinkService.java
+
+14) Book Cover Processing
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/image/BookCoverManagementService.java
+
+15) SEO and Keywords Generation
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/SeoUtils.java
+
+16) Slug Generation
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/SlugGenerator.java
+
+17) Compression Utilities
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/CompressionUtils.java
+
+18) Date Parsing
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/DateParsingUtils.java
+- Status: Adopted in BookJsonParser, OpenLibraryBookDataService, and NYT scheduler.
+
+19) Retry Logic
+- SSOT: S3-specific: src/main/java/com/williamcallahan/book_recommendation_engine/service/S3RetryService.java
+- General retry utils: To be introduced if non-S3 sites proliferate.
+
+20) Search Query Normalization
+- SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/SearchQueryUtils.java
+- Status: BookSearchService now calls SearchQueryUtils directly (wrappers removed).
+
 Based on the complete class and method inventory, here are the key areas of duplication and opportunities for centralization:
 
 ### 1. Database Query Patterns ✅ **CENTRALIZED**
@@ -1457,13 +1534,12 @@ Based on the complete class and method inventory, here are the key areas of dupl
 
 **Central Authority:** `BookLookupService`
 - **Location:** `src/main/java/.../service/BookLookupService.java`
-- **Provides:** `findBookIdByIsbn13()`, `findBookIdByIsbn10()`, `resolveCanonicalBookId()`, `findBookIdByExternalId()`
-- **Classes That Should Use It:**
-  - BookDataOrchestrator - Has duplicate ID resolution logic
-  - BookRecommendationPersistenceService - Implements own UUID resolution
-  - CanonicalBookPersistenceService - Has `resolveCanonicalBookId()` duplicate
-  - NewYorkTimesBestsellerScheduler - Has own `resolveCanonicalBookId()`
-- **Action:** Replace all custom ID resolution with BookLookupService calls
+- **Provides:** `findBookIdByIsbn()`, `findBookIdByIsbn13()`, `findBookIdByIsbn10()`, `findBookIdByExternalIdentifier()`, `resolveCanonicalBookId()`
+- **Already Using It:**
+  - PostgresBookRepository (all ISBN/external hydration now funnels through `BookLookupService`)
+  - CanonicalBookPersistenceService & BookDataOrchestrator (canonical lookup helpers)
+  - NewYorkTimesBestsellerScheduler (tiered ISBN resolution)
+- **Action:** _Completed_ – remaining direct SQL lookups consolidated into `BookLookupService`
 
 ### 3. Tiered Data Access Patterns ❌ **NEEDS CREATION**
 
@@ -1596,6 +1672,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 **Central Authority:** `BookCoverManagementService`
 - **Location:** `src/main/java/.../service/image/BookCoverManagementService.java`
 - **Provides:** `prepareBooksForDisplay()`, `prepareBookForDisplay()`, `getInitialCoverUrlAndTriggerBackgroundUpdate()`
+- **Shared Helpers:** `ExternalCoverFetchHelper` consolidates external source downloads/provenance for Google/OpenLibrary/Longitood services
 - **Already Using It:**
   - HomeController - Using prepareBooksForDisplay()
 - **Action:** Ensure all controllers use these methods
