@@ -1,5 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,28 @@ public class BookLookupService {
 
     public BookLookupService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /**
+     * Find a book ID by an arbitrary ISBN string. Handles sanitisation and automatically routes to the
+     * appropriate ISBN-13 or ISBN-10 lookup.
+     */
+    public Optional<String> findBookIdByIsbn(String rawIsbn) {
+        String cleaned = IsbnUtils.sanitize(rawIsbn);
+        if (cleaned == null) {
+            return Optional.empty();
+        }
+
+        if (cleaned.length() == 13) {
+            return findBookIdByIsbn13(cleaned);
+        }
+
+        if (cleaned.length() == 10) {
+            return findBookIdByIsbn10(cleaned);
+        }
+
+        // If we cannot definitively tell, try ISBN13 first and fallback to ISBN10.
+        return findBookIdByIsbn13(cleaned).or(() -> findBookIdByIsbn10(cleaned));
     }
 
     /**
@@ -142,6 +165,39 @@ public class BookLookupService {
             ex -> log.debug("Query failed for book ID: {}", ex.getMessage()),
             bookId
         );
+    }
+
+    /**
+     * Locate a book ID using any identifier stored in book_external_ids (external_id, provider_isbn13,
+     * provider_isbn10, provider_asin). Used to consolidate scattered lookup patterns.
+     */
+    public Optional<String> findBookIdByExternalIdentifier(String identifier) {
+        if (ValidationUtils.isNullOrBlank(identifier)) {
+            return Optional.empty();
+        }
+
+        String trimmed = identifier.trim();
+
+        return JdbcUtils.optionalString(
+                jdbcTemplate,
+                "SELECT book_id FROM book_external_ids WHERE external_id = ? LIMIT 1",
+                ex -> log.debug("Query failed for external_id {}: {}", trimmed, ex.getMessage()),
+                trimmed)
+            .or(() -> JdbcUtils.optionalString(
+                jdbcTemplate,
+                "SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1",
+                ex -> log.debug("Query failed for provider_isbn13 {}: {}", trimmed, ex.getMessage()),
+                trimmed))
+            .or(() -> JdbcUtils.optionalString(
+                jdbcTemplate,
+                "SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1",
+                ex -> log.debug("Query failed for provider_isbn10 {}: {}", trimmed, ex.getMessage()),
+                trimmed))
+            .or(() -> JdbcUtils.optionalString(
+                jdbcTemplate,
+                "SELECT book_id FROM book_external_ids WHERE provider_asin = ? LIMIT 1",
+                ex -> log.debug("Query failed for provider_asin {}: {}", trimmed, ex.getMessage()),
+                trimmed));
     }
 
     /**

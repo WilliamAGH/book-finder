@@ -11,6 +11,7 @@ import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import java.sql.Date;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -165,7 +166,7 @@ public class CanonicalBookPersistenceService {
             return sourceJson.get("id").asText();
         }
         String rawId = book.getId();
-        if (rawId != null && !looksLikeUuid(rawId)) {
+        if (rawId != null && !UuidUtils.looksLikeUuid(rawId)) {
             return rawId;
         }
         return null;
@@ -190,7 +191,7 @@ public class CanonicalBookPersistenceService {
 
         // Try the book's ID if it looks like a UUID
         String potential = book.getId();
-        if (potential != null && looksLikeUuid(potential)) {
+        if (potential != null && UuidUtils.looksLikeUuid(potential)) {
             String existing = bookLookupService.findBookById(potential).orElse(null);
             if (existing != null) {
                 return existing;
@@ -374,7 +375,7 @@ public class CanonicalBookPersistenceService {
     }
 
     private void persistDimensions(String bookId, Book book) {
-        if (jdbcTemplate == null || bookId == null || !looksLikeUuid(bookId)) {
+        if (jdbcTemplate == null || bookId == null || !UuidUtils.looksLikeUuid(bookId)) {
             return;
         }
 
@@ -554,17 +555,6 @@ public class CanonicalBookPersistenceService {
         return "AGGREGATED";
     }
 
-    private boolean looksLikeUuid(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-        try {
-            java.util.UUID.fromString(value);
-            return true;
-        } catch (IllegalArgumentException ex) {
-            return false;
-        }
-    }
 
     private record EditionLinkRecord(String id, int editionNumber) {}
 

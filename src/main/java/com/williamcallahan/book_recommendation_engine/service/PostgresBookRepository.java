@@ -6,15 +6,15 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
-import static com.williamcallahan.book_recommendation_engine.util.ApplicationConstants.Database.Queries.BOOK_BY_ISBN10;
-import static com.williamcallahan.book_recommendation_engine.util.ApplicationConstants.Database.Queries.BOOK_BY_ISBN13;
 import static com.williamcallahan.book_recommendation_engine.util.ApplicationConstants.Database.Queries.BOOK_BY_SLUG;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -40,10 +40,20 @@ public class PostgresBookRepository {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final BookLookupService bookLookupService;
 
-    public PostgresBookRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+    public PostgresBookRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper, BookLookupService bookLookupService) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+        this.bookLookupService = bookLookupService;
+    }
+
+    /**
+     * Backward-compatible constructor for tests and legacy callers.
+     * Creates a BookLookupService using the provided JdbcTemplate.
+     */
+    public PostgresBookRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
+        this(jdbcTemplate, objectMapper, new BookLookupService(jdbcTemplate));
     }
 
     Optional<Book> fetchByCanonicalId(String id) {
@@ -68,33 +78,107 @@ public class PostgresBookRepository {
     }
 
     Optional<Book> fetchByIsbn13(String isbn13) {
-        if (isbn13 == null || isbn13.isBlank()) {
-            return Optional.empty();
-        }
-        Optional<UUID> canonical = queryForUuid(BOOK_BY_ISBN13, isbn13)
-                .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1", isbn13));
-        return canonical.flatMap(this::loadAggregate);
+        return lookupAndHydrate(bookLookupService.findBookIdByIsbn(isbn13));
     }
 
     Optional<Book> fetchByIsbn10(String isbn10) {
-        if (isbn10 == null || isbn10.isBlank()) {
-            return Optional.empty();
-        }
-        Optional<UUID> canonical = queryForUuid(BOOK_BY_ISBN10, isbn10)
-                .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1", isbn10));
-        return canonical.flatMap(this::loadAggregate);
+        return lookupAndHydrate(bookLookupService.findBookIdByIsbn(isbn10));
     }
 
     Optional<Book> fetchByExternalId(String externalId) {
-        if (externalId == null || externalId.isBlank()) {
+        return lookupAndHydrate(bookLookupService.findBookIdByExternalIdentifier(externalId));
+    }
+
+    private Optional<Book> lookupAndHydrate(Optional<String> idOptional) {
+        return idOptional.flatMap(this::loadAggregate);
+    }
+
+    List<Book> fetchLatestBestsellerBooks(String providerListCode, int limit) {
+        if (providerListCode == null || providerListCode.isBlank() || limit <= 0) {
+            return List.of();
+        }
+
+        try {
+            UUID collectionId = jdbcTemplate.query(
+                """
+                    SELECT id
+                    FROM book_collections
+                    WHERE collection_type = 'BESTSELLER_LIST'
+                      AND source = 'NYT'
+                      AND provider_list_code = ?
+                    ORDER BY published_date DESC, updated_at DESC
+                    LIMIT 1
+                """,
+                ps -> ps.setString(1, providerListCode.trim()),
+                rs -> rs.next() ? (UUID) rs.getObject("id") : null
+            );
+
+            if (collectionId == null) {
+                return List.of();
+            }
+
+            List<CollectionEntry> entries = jdbcTemplate.query(
+                """
+                    SELECT bcj.book_id, bcj.position
+                    FROM book_collections_join bcj
+                    WHERE bcj.collection_id = ?
+                    ORDER BY COALESCE(bcj.position, 2147483647), bcj.created_at ASC
+                    LIMIT ?
+                """,
+                ps -> {
+                    ps.setObject(1, collectionId);
+                    ps.setInt(2, limit);
+                },
+                (rs, rowNum) -> new CollectionEntry((UUID) rs.getObject("book_id"), (Integer) rs.getObject("position"))
+            );
+
+            if (entries.isEmpty()) {
+                return List.of();
+            }
+
+            List<Book> books = new ArrayList<>(entries.size());
+            for (CollectionEntry entry : entries) {
+                Optional<Book> maybeBook = loadAggregate(entry.bookId());
+                if (maybeBook.isEmpty()) {
+                    continue;
+                }
+
+                Book book = maybeBook.get();
+                if (entry.rank() != null) {
+                    List<Book.CollectionAssignment> adjustedAssignments = book.getCollections().stream()
+                        .map(assignment -> assignment.getCollectionId() != null && assignment.getCollectionId().equals(collectionId.toString())
+                            ? new Book.CollectionAssignment(
+                                assignment.getCollectionId(),
+                                assignment.getName(),
+                                assignment.getCollectionType(),
+                                entry.rank(),
+                                assignment.getSource()
+                              )
+                            : assignment)
+                        .collect(Collectors.toList());
+                    book.setCollections(adjustedAssignments);
+                }
+
+                books.add(book);
+            }
+
+            return books;
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to fetch NYT bestseller books for {}: {}", providerListCode, ex.getMessage());
+            return List.of();
+        }
+    }
+
+    private Optional<Book> loadAggregate(String canonicalId) {
+        if (canonicalId == null || canonicalId.isBlank()) {
             return Optional.empty();
         }
-        String trimmed = externalId.trim();
-        Optional<UUID> canonical = queryForUuid("SELECT book_id FROM book_external_ids WHERE external_id = ? LIMIT 1", trimmed)
-                .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1", trimmed))
-                .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1", trimmed))
-                .or(() -> queryForUuid("SELECT book_id FROM book_external_ids WHERE provider_asin = ? LIMIT 1", trimmed));
-        return canonical.flatMap(this::loadAggregate);
+        try {
+            return loadAggregate(UUID.fromString(canonicalId));
+        } catch (IllegalArgumentException ex) {
+            LOG.debug("Value {} is not a valid UUID", canonicalId);
+            return Optional.empty();
+        }
     }
 
     private Optional<Book> loadAggregate(UUID canonicalId) {
@@ -531,6 +615,9 @@ public class PostgresBookRepository {
 
     private Double toDouble(java.math.BigDecimal value) {
         return value == null ? null : value.doubleValue();
+    }
+
+    private record CollectionEntry(UUID bookId, Integer rank) {
     }
 
     private record CoverCandidate(String url,

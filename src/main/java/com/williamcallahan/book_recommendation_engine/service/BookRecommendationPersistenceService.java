@@ -3,6 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -105,9 +106,10 @@ public class BookRecommendationPersistenceService {
             return Mono.empty();
         }
 
-        try {
-            return Mono.just(UUID.fromString(identifier));
-        } catch (IllegalArgumentException ex) {
+        UUID uuid = UuidUtils.parseUuidOrNull(identifier);
+        if (uuid != null) {
+            return Mono.just(uuid);
+        } else {
             if (bookDataOrchestrator == null) {
                 return Mono.empty();
             }
@@ -116,9 +118,10 @@ public class BookRecommendationPersistenceService {
                     if (resolved == null || resolved.getId() == null) {
                         return Mono.empty();
                     }
-                    try {
-                        return Mono.just(UUID.fromString(resolved.getId()));
-                    } catch (IllegalArgumentException inner) {
+                    UUID resolvedUuid = UuidUtils.parseUuidOrNull(resolved.getId());
+                    if (resolvedUuid != null) {
+                        return Mono.just(resolvedUuid);
+                    } else {
                         log.debug("Resolved book {} still lacks canonical UUID: {}", identifier, resolved.getId());
                         return Mono.empty();
                     }

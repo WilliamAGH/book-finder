@@ -32,7 +32,7 @@ public class BookSearchService {
         if (jdbcTemplate == null) {
             return List.of();
         }
-        String sanitizedQuery = normaliseQuery(query);
+        String sanitizedQuery = SearchQueryUtils.normalize(query);
         int safeLimit = PagingUtils.safeLimit(limit != null ? limit : 0, DEFAULT_LIMIT, 1, MAX_LIMIT);
         try {
             return jdbcTemplate.query(
@@ -58,7 +58,7 @@ public class BookSearchService {
         if (jdbcTemplate == null) {
             return Optional.empty();
         }
-        String sanitized = normaliseIsbn(isbnQuery);
+        String sanitized = IsbnUtils.sanitize(isbnQuery);
         if (sanitized == null) {
             return Optional.empty();
         }
@@ -88,7 +88,7 @@ public class BookSearchService {
         if (jdbcTemplate == null) {
             return List.of();
         }
-        String sanitizedQuery = normaliseQuery(query);
+        String sanitizedQuery = SearchQueryUtils.normalize(query);
         int safeLimit = PagingUtils.safeLimit(limit != null ? limit : 0, DEFAULT_LIMIT, 1, MAX_LIMIT);
         try {
             return jdbcTemplate.query(
@@ -118,14 +118,6 @@ public class BookSearchService {
         } catch (DataAccessException ex) {
             log.debug("Failed to refresh book_search_view: {}", ex.getMessage());
         }
-    }
-
-    private String normaliseQuery(String query) {
-        return SearchQueryUtils.normalize(query);
-    }
-
-    private String normaliseIsbn(String isbnQuery) {
-        return IsbnUtils.sanitize(isbnQuery);
     }
 
     public record SearchResult(UUID bookId, double relevanceScore, String matchType) {
