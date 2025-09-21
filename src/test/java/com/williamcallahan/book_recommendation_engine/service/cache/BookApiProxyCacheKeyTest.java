@@ -42,6 +42,7 @@ class BookApiProxyCacheKeyTest {
                 tempDir.toString(),
                 false,
                 false,
+                false,
                 bookDataOrchestrator
         );
 
@@ -72,6 +73,7 @@ class BookApiProxyCacheKeyTest {
                 mockService,
                 true,
                 tempDir.toString(),
+                false,
                 false,
                 false,
                 bookDataOrchestrator

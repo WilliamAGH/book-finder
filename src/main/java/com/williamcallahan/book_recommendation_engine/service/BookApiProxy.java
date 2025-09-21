@@ -55,6 +55,7 @@ public class BookApiProxy {
     private final String localCacheDirectory;
     private final boolean alwaysCheckS3First;
     private final boolean logApiCalls;
+    private final boolean googleFallbackEnabled;
 
     /**
      * Constructs the BookApiProxy with necessary dependencies
@@ -72,6 +73,7 @@ public class BookApiProxy {
                        @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
                        @Value("${app.s3-cache.always-check-first:false}") boolean alwaysCheckS3First,
                        @Value("${app.api-client.log-calls:true}") boolean logApiCalls,
+                       @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled,
                        BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
         this.s3StorageService = s3StorageService;
@@ -81,6 +83,7 @@ public class BookApiProxy {
         this.localCacheDirectory = localCacheDirectory;
         this.alwaysCheckS3First = alwaysCheckS3First;
         this.logApiCalls = logApiCalls;
+        this.googleFallbackEnabled = googleFallbackEnabled;
         this.bookDataOrchestrator = bookDataOrchestrator;
         
         // Create local cache directory if needed
@@ -226,6 +229,11 @@ public class BookApiProxy {
                         logger.info("Making REAL API call to Google Books for book ID: {}", bookId);
                     }
 
+                    if (!googleFallbackEnabled) {
+                        logger.debug("Google fallback disabled for book ID '{}'. Skipping external API call.", bookId);
+                        return CompletableFuture.completedFuture(null);
+                    }
+
                     return googleBooksService.getBookById(bookId)
                         .thenApply(book -> {
                             if (book != null && localCacheEnabled) {
@@ -243,6 +251,11 @@ public class BookApiProxy {
                     }
                 });
         } else {
+            if (!googleFallbackEnabled) {
+                logger.debug("Google fallback disabled for book ID '{}'. Returning empty result.", bookId);
+                future.complete(null);
+                return;
+            }
             googleBooksService.getBookById(bookId)
                 .thenAccept(book -> {
                     if (book != null && localCacheEnabled) {
@@ -373,6 +386,12 @@ public class BookApiProxy {
                                           String langCode,
                                           CompletableFuture<List<Book>> future) {
         if (future.isDone()) {
+            return;
+        }
+
+        if (!googleFallbackEnabled) {
+            logger.debug("Google fallback disabled for search '{}'. Returning empty result set.", normalizedQuery);
+            future.complete(List.of());
             return;
         }
 

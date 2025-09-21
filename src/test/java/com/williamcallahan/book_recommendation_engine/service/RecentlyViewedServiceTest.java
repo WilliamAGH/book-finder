@@ -31,7 +31,11 @@ class RecentlyViewedServiceTest {
         when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of()));
 
-        recentlyViewedService = new RecentlyViewedService(googleBooksService, duplicateBookService, bookDataOrchestrator);
+        recentlyViewedService = createService(false);
+    }
+
+    private RecentlyViewedService createService(boolean googleFallbackEnabled) {
+        return new RecentlyViewedService(googleBooksService, duplicateBookService, bookDataOrchestrator, googleFallbackEnabled);
     }
 
     @Test
@@ -50,6 +54,8 @@ class RecentlyViewedServiceTest {
 
     @Test
     void fetchDefaultBooks_fallsBackToGoogleWhenPostgresEmpty() {
+        recentlyViewedService = createService(true);
+
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of()));
 
@@ -67,6 +73,8 @@ class RecentlyViewedServiceTest {
 
     @Test
     void fetchDefaultBooks_googleFallbackOnPostgresError() {
+        recentlyViewedService = createService(true);
+
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.error(new RuntimeException("boom")));
 
@@ -80,6 +88,19 @@ class RecentlyViewedServiceTest {
 
         verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
+    }
+
+    @Test
+    void fetchDefaultBooks_returnsEmptyWhenFallbackDisabled() {
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+            .thenReturn(Mono.just(List.of()));
+
+        StepVerifier.create(recentlyViewedService.fetchDefaultBooksAsync())
+            .expectNext(List.of())
+            .verifyComplete();
+
+        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
     }
 
     private Book buildBook(String id, int year) {

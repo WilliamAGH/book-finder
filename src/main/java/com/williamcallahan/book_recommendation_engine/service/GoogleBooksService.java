@@ -129,28 +129,7 @@ public class GoogleBooksService {
 
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
 
-        return Flux.range(0, (maxTotalResultsToFetch + maxResultsPerPage - 1) / maxResultsPerPage)
-            .map(page -> page * maxResultsPerPage)
-            .concatMap(startIndex ->
-                // Delegate to searchBooks and handle errors per page to avoid bubbling up
-                searchBooks(query, startIndex, effectiveOrderBy, langCode)
-                    .flatMapMany(responseNode -> {
-                        if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
-                            List<JsonNode> items = new ArrayList<>();
-                            responseNode.get("items").forEach(items::add);
-                            return Flux.fromIterable(items);
-                        }
-                        return Flux.empty();
-                    })
-                    .onErrorResume(e -> {
-                        logger.error("Error fetching page {} for query '{}': {}", startIndex, query, e.getMessage());
-                        apiRequestMonitor.recordFailedRequest(
-                            "volumes/search/reactive/" + query,
-                            e.getMessage()
-                        );
-                        return Flux.empty();
-                    })
-            )
+        return googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
             .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode)) // Use BookJsonParser
             .filter(Objects::nonNull)
             .map(book -> {
