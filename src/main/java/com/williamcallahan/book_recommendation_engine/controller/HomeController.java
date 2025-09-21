@@ -49,6 +49,7 @@ import java.util.Collections;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -296,6 +297,9 @@ public class HomeController {
                 }
                 return bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(book)
                     .map(coverImagesResult -> {
+                        if (book.getSlug() == null || book.getSlug().isBlank()) {
+                            book.setSlug(book.getId());
+                        }
                         book.setCoverImages(coverImagesResult);
                         if (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) {
                             book.setS3ImagePath(coverImagesResult.getPreferredUrl());
@@ -314,6 +318,9 @@ public class HomeController {
                         logger.warn("Error getting initial cover URL for book with identifier '{}' in home: {}", identifierForLog, e.getMessage());
                         if (book.getS3ImagePath() == null || book.getS3ImagePath().isEmpty()) {
                            book.setS3ImagePath("/images/placeholder-book-cover.svg");
+                        }
+                        if (book.getSlug() == null || book.getSlug().isBlank()) {
+                            book.setSlug(book.getId());
                         }
                         // Ensure CoverImages is at least initialized to avoid NPEs in template
                         if (book.getCoverImages() == null) {
@@ -438,8 +445,38 @@ public class HomeController {
         model.addAttribute("ogImage", "https://findmybook.net/images/og-logo.png"); // Default OG image
         model.addAttribute("keywords", "book, literature, reading, book details"); // Default keywords
 
+        // Canonicalize to slug: if the requested identifier is not the slug, redirect to slug
+        Mono<String> redirectIfNonCanonical = fetchCanonicalBook(id)
+            .flatMap(found -> {
+                if (found == null) {
+                    return Mono.empty();
+                }
+                String canonical = (found.getSlug() != null && !found.getSlug().isBlank()) ? found.getSlug() : found.getId();
+                if (canonical != null && !canonical.equals(id)) {
+                    StringBuilder qs = new StringBuilder();
+                    boolean first = true;
+                    if (query != null && !query.isBlank()) {
+                        qs.append(first ? "?" : "&").append("query=").append(URLEncoder.encode(query, java.nio.charset.StandardCharsets.UTF_8));
+                        first = false;
+                    }
+                    if (page > 0) {
+                        qs.append(first ? "?" : "&").append("page=").append(page);
+                        first = false;
+                    }
+                    if (sort != null && !sort.isBlank()) {
+                        qs.append(first ? "?" : "&").append("sort=").append(sort);
+                        first = false;
+                    }
+                    if (view != null && !view.isBlank()) {
+                        qs.append(first ? "?" : "&").append("view=").append(view);
+                    }
+                    return Mono.just("redirect:/book/" + canonical + qs);
+                }
+                return Mono.empty();
+            });
+
         // Use BookDataOrchestrator to get the main book
-        Mono<Book> bookMonoWithCover = bookDataOrchestrator.getBookByIdTiered(id)
+        Mono<Book> bookMonoWithCover = fetchCanonicalBook(id)
             // If not found by volume ID, fallback to ISBN-based search
             .switchIfEmpty(
                 googleBooksService.searchBooksByISBN(id)
@@ -474,7 +511,10 @@ public class HomeController {
                                             : "https://findmybook.net/images/og-logo.png";
                         model.addAttribute("ogImage", finalOgImage);
                         
-                        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
+                        String canonicalIdentifier = book.getSlug() != null && !book.getSlug().isBlank()
+                            ? book.getSlug()
+                            : book.getId();
+                        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + canonicalIdentifier);
                         model.addAttribute("keywords", generateKeywords(book));
 
                         // Populate other editions/duplicates
@@ -539,7 +579,10 @@ public class HomeController {
                                             : "https://findmybook.net/images/og-logo.png";
                         model.addAttribute("ogImage", errorOgImage);
 
-                        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + book.getId());
+                        String canonicalIdentifier = book.getSlug() != null && !book.getSlug().isBlank()
+                            ? book.getSlug()
+                            : book.getId();
+                        model.addAttribute("canonicalUrl", "https://findmybook.net/book/" + canonicalIdentifier);
                         model.addAttribute("keywords", generateKeywords(book));
                         
                         // Populate other editions/duplicates even on cover error, if book object exists
@@ -586,7 +629,8 @@ public class HomeController {
             })
             .onErrorResume(e -> Mono.empty()); // If getBookByIdReactive fails, propagate empty
 
-        return bookMonoWithCover
+        return redirectIfNonCanonical.switchIfEmpty(
+            bookMonoWithCover
             .flatMap(fetchedBook -> { // fetchedBook is the main book, potentially null if initial fetch failed and resulted in empty()
                 // Fetch similar books using RecommendationService
                 Mono<List<Book>> similarBooksMono = recommendationService.getSimilarBooks(id, 10)  // Request 10 instead of 6
@@ -637,7 +681,8 @@ public class HomeController {
                 }
             })
             .defaultIfEmpty("book") 
-            .onErrorReturn("book"); 
+            .onErrorReturn("book")
+        ); 
     }
     
     /**
@@ -680,6 +725,48 @@ public class HomeController {
                 .filter(kw -> kw.length() > 2) // Filter out very short words
                 .limit(15) // Limit number of keywords
                 .collect(Collectors.joining(", "));
+    }
+
+    private Mono<Book> fetchCanonicalBook(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return Mono.empty();
+        }
+
+        Mono<Book> dbBySlug = Mono.justOrEmpty(bookDataOrchestrator.getBookFromDatabaseBySlug(identifier));
+        Mono<Book> tieredBySlug = Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
+            return lookup == null ? Mono.empty() : lookup;
+        });
+
+        Mono<Book> dbById = isLikelyUuid(identifier)
+                ? Mono.justOrEmpty(bookDataOrchestrator.getBookFromDatabase(identifier))
+                : Mono.empty();
+
+        Mono<Book> tieredById = Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.getBookByIdTiered(identifier);
+            return lookup == null ? Mono.empty() : lookup;
+        });
+
+        Mono<Book> chainForUuid = dbById
+                .switchIfEmpty(dbBySlug)
+                .switchIfEmpty(tieredBySlug)
+                .switchIfEmpty(tieredById);
+
+        Mono<Book> chainForSlugOrOther = dbBySlug
+                .switchIfEmpty(tieredBySlug)
+                .switchIfEmpty(dbById)
+                .switchIfEmpty(tieredById);
+
+        return isLikelyUuid(identifier) ? chainForUuid : chainForSlugOrOther;
+    }
+
+    private boolean isLikelyUuid(String identifier) {
+        try {
+            UUID.fromString(identifier);
+            return true;
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
     }
 
     private Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit) {
