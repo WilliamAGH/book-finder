@@ -16,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -57,8 +58,20 @@ class CoverSourceFetchingServiceTest {
         given(s3BookCoverService.fetchCover(any(Book.class))).willReturn(CompletableFuture.completedFuture(Optional.empty()));
         given(openLibraryService.fetchOpenLibraryCoverDetails(any(), any()))
             .willReturn(CompletableFuture.completedFuture(Optional.empty()));
+        given(openLibraryService.fetchAndCacheCover(anyString(), anyString(), anyString(), any()))
+            .willAnswer(invocation -> CompletableFuture.completedFuture(
+                localDiskCoverCacheService.createPlaceholderImageDetails("open-library-test", "ol-mock")));
         given(longitoodService.fetchCover(any(Book.class)))
             .willReturn(CompletableFuture.completedFuture(Optional.empty()));
+        given(longitoodService.fetchAndCacheCover(any(Book.class), anyString(), any()))
+            .willAnswer(invocation -> CompletableFuture.completedFuture(
+                localDiskCoverCacheService.createPlaceholderImageDetails("longitood-test", "longitood-mock")));
+        given(googleBooksService.fetchCoverByIsbn(anyString(), anyString(), any(), any(LocalDiskCoverCacheService.class), any(CoverCacheManager.class)))
+            .willAnswer(invocation -> CompletableFuture.completedFuture(
+                localDiskCoverCacheService.createPlaceholderImageDetails("google-isbn", "google-isbn-mock")));
+        given(googleBooksService.fetchCoverByVolumeId(anyString(), anyString(), any(), any(LocalDiskCoverCacheService.class), any(CoverCacheManager.class)))
+            .willAnswer(invocation -> CompletableFuture.completedFuture(
+                localDiskCoverCacheService.createPlaceholderImageDetails("google-volume", "google-volume-mock")));
         given(coverCacheManager.isKnownBadImageUrl(any())).willReturn(false);
 
         service = new CoverSourceFetchingService(

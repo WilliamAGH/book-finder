@@ -94,7 +94,7 @@ class BookSitemapServiceTest {
 
     @Test
     void hydrateExternally_invokesOrchestratorUpToLimit() {
-        when(bookDataOrchestrator.getBookByIdTiered("book-1")).thenReturn(Mono.just(new com.williamcallahan.book_recommendation_engine.model.Book()));
+when(bookDataOrchestrator.getBookByIdTiered("book-1")).thenReturn(Mono.just(com.williamcallahan.book_recommendation_engine.testutil.BookTestData.minimalBook("book-1")));
         when(bookDataOrchestrator.getBookByIdTiered("book-2")).thenReturn(Mono.empty());
         List<BookSitemapItem> items = List.of(
                 new BookSitemapItem("book-1", "slug-1", "Title", Instant.now()),

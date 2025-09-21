@@ -126,15 +126,15 @@ class RecommendationServiceTest {
     }
 
     private Book buildBook(String id, String language, List<String> authors, List<String> categories) {
-        Book book = new Book();
-        book.setId(id);
-        book.setTitle("Title " + id);
-        book.setDescription("Description for " + id);
-        book.setLanguage(language);
-        book.setAuthors(authors);
-        book.setCategories(categories);
-        book.setS3ImagePath("https://cdn.example/" + id + ".jpg");
-        book.setPublishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z")));
-        return book;
+return com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id(id)
+                .title("Title " + id)
+                .description("Description for " + id)
+                .language(language)
+                .authors(authors)
+                .categories(categories)
+                .s3ImagePath("https://cdn.example/" + id + ".jpg")
+                .publishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z")))
+                .build();
     }
 }

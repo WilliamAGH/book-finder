@@ -4,6 +4,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.Book.EditionInfo;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import org.junit.jupiter.api.Test;
 
 import java.util.Date;
@@ -48,7 +49,7 @@ class BookDtoMapperTest {
         assertThat(dto.authors()).extracting(AuthorDto::name).containsExactly("Author One");
         assertThat(dto.categories()).containsExactly("Fiction");
         assertThat(dto.cover().preferredUrl()).isEqualTo("https://cdn.test/preferred.jpg");
-        assertThat(dto.cover().source()).isEqualTo("GOOGLE_BOOKS");
+        assertThat(dto.cover().source()).isEqualTo(ApplicationConstants.Provider.GOOGLE_BOOKS);
         assertThat(dto.tags()).hasSize(1);
         assertThat(dto.editions()).hasSize(1);
         assertThat(dto.recommendationIds()).containsExactly("rec-1", "rec-2");

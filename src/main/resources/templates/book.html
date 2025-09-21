@@ -203,8 +203,8 @@
                                 <!-- Authors -->
                                 <h5 class="card-subtitle mb-4 text-muted">
                                     By 
-                                    <span th:if="${book.authors == null || book.authors.empty}">Unknown Author</span>
-                                    <span th:if="${book.authors != null && !book.authors.empty}">
+<span th:if="${book.authors == null or #lists.isEmpty(book.authors)}">Unknown Author</span>
+                                    <span th:if="${book.authors != null and not #lists.isEmpty(book.authors)}">
                                         <span th:each="author, authorStat : ${book.authors}">
                                             <a th:href="@{/search(query=${author})}" class="text-decoration-none" th:text="${author}">Author Name</a><span th:if="${!authorStat.last}">, </span>
                                         </span>
@@ -239,7 +239,7 @@
                                 </div>
                                 
                                 <!-- Categories -->
-                                <div class="book-categories mb-4" th:if="${book.categories != null && !book.categories.empty}">
+<div class="book-categories mb-4" th:if="${book.categories != null and not #lists.isEmpty(book.categories)}">
                                     <h5 class="mb-3">Categories</h5>
                                     <div class="d-flex flex-wrap gap-2">
                                         <a th:each="category : ${book.categories}" 

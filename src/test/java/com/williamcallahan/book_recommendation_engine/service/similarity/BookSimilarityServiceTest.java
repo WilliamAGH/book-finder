@@ -244,9 +244,9 @@ class BookSimilarityServiceTest {
     void getSimilarBooksReactive_returnsEmptyWhenBookMissing() {
         when(bookDataOrchestrator.getBookByIdTiered(eq("missing"))).thenReturn(Mono.empty());
 
-        StepVerifier.create(bookSimilarityService.getSimilarBooksReactive("missing", 3))
-            .expectNext(List.of())
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyEmptyList(
+                bookSimilarityService.getSimilarBooksReactive("missing", 3)
+        );
 
         verifyNoInteractions(googleBooksService);
     }

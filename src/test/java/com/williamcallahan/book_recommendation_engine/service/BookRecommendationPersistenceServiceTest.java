@@ -10,7 +10,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 import java.util.List;
 import java.util.UUID;
@@ -45,8 +44,9 @@ class BookRecommendationPersistenceServiceTest {
 
         RecommendationRecord record = new RecommendationRecord(recommended, 6.0d, List.of("AUTHOR"));
 
-        StepVerifier.create(persistenceService.persistPipelineRecommendations(source, List.of(record)))
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyCompletes(
+                persistenceService.persistPipelineRecommendations(source, List.of(record))
+        );
 
         verify(jdbcTemplate).update("DELETE FROM book_recommendations WHERE source_book_id = ? AND source = ?", sourceUuid, "RECOMMENDATION_PIPELINE");
 
@@ -75,8 +75,9 @@ class BookRecommendationPersistenceServiceTest {
 
         when(bookDataOrchestrator.getBookByIdTiered("google-volume-id")).thenReturn(Mono.just(resolved));
 
-        StepVerifier.create(persistenceService.persistPipelineRecommendations(source, List.of(record)))
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyCompletes(
+                persistenceService.persistPipelineRecommendations(source, List.of(record))
+        );
 
         verify(jdbcTemplate).update("DELETE FROM book_recommendations WHERE source_book_id = ? AND source = ?", sourceUuid, "RECOMMENDATION_PIPELINE");
         verify(jdbcTemplate).update(startsWith("INSERT INTO book_recommendations"), any(), eq(sourceUuid), eq(resolvedUuid), eq("RECOMMENDATION_PIPELINE"), anyDouble(), any());
@@ -92,16 +93,17 @@ class BookRecommendationPersistenceServiceTest {
 
         when(bookDataOrchestrator.getBookByIdTiered("unresolvable-id")).thenReturn(Mono.empty());
 
-        StepVerifier.create(persistenceService.persistPipelineRecommendations(source, List.of(record)))
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyCompletes(
+                persistenceService.persistPipelineRecommendations(source, List.of(record))
+        );
 
         verifyNoInteractions(jdbcTemplate);
     }
 
-    private Book buildBook(String id) {
-        Book book = new Book();
-        book.setId(id);
-        book.setTitle("Title " + id);
-        return book;
+private Book buildBook(String id) {
+        return com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id(id)
+                .title("Title " + id)
+                .build();
     }
 }

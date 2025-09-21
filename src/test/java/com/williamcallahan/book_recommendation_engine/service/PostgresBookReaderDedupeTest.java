@@ -38,17 +38,29 @@ class PostgresBookReaderDedupeTest {
         lenient().when(s3RetryService.uploadJsonWithRetry(anyString(), anyString()))
                 .thenReturn(CompletableFuture.completedFuture(null));
 
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        var google = Mockito.mock(GoogleApiFetcher.class);
+        var openLibrary = Mockito.mock(OpenLibraryBookDataService.class);
+        var aggregator = Mockito.mock(BookDataAggregatorService.class);
+        var collection = Mockito.mock(BookCollectionPersistenceService.class);
+        var search = createBookSearchServiceMock();
+
+        PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om);
+
         orchestrator = new BookDataOrchestrator(
                 s3RetryService,
-                Mockito.mock(GoogleApiFetcher.class),
-                new com.fasterxml.jackson.databind.ObjectMapper(),
-                Mockito.mock(OpenLibraryBookDataService.class),
-                Mockito.mock(BookDataAggregatorService.class),
-                Mockito.mock(BookSupplementalPersistenceService.class),
-                Mockito.mock(BookCollectionPersistenceService.class),
-                createBookSearchServiceMock()
+                google,
+                om,
+                openLibrary,
+                aggregator,
+                collection,
+                search,
+                new BookS3CacheService(s3RetryService, om),
+                repo,
+                null,
+                null,
+                false
         );
-        orchestrator.setJdbcTemplate(jdbcTemplate);
 
         stubDatabaseQueries();
     }

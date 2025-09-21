@@ -24,6 +24,7 @@ import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCov
 import com.williamcallahan.book_recommendation_engine.service.image.OpenLibraryServiceImpl;
 import com.williamcallahan.book_recommendation_engine.service.image.S3BookCoverService;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
@@ -144,7 +145,7 @@ public class TestBookCoverConfig {
         LocalDiskCoverCacheService mockDiskCache = Mockito.mock(LocalDiskCoverCacheService.class);
 
         // Mock paths and directory names
-        Mockito.when(mockDiskCache.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
+        Mockito.when(mockDiskCache.getLocalPlaceholderPath()).thenReturn(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
         Mockito.when(mockDiskCache.getCacheDirName()).thenReturn("book-covers");
         Mockito.when(mockDiskCache.getCacheDirString()).thenReturn("/tmp/book-covers");
 
@@ -154,7 +155,7 @@ public class TestBookCoverConfig {
                 String bookIdForLog = invocation.getArgument(0);
                 String reasonSuffix = invocation.getArgument(1);
                 return new ImageDetails(
-                    "/images/placeholder-book-cover.svg",
+                    ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH,
                     "SYSTEM_PLACEHOLDER",
                     "placeholder-" + reasonSuffix + "-" + bookIdForLog,
                     CoverImageSource.LOCAL_CACHE,
@@ -404,7 +405,7 @@ public class TestBookCoverConfig {
                 
                 ImageDetails result = new ImageDetails(
                     "/book-covers/high-quality-" + bookId + ".jpg",
-                    "GOOGLE_BOOKS",
+                    ApplicationConstants.Provider.GOOGLE_BOOKS,
                     "high-quality-" + bookId + ".jpg",
                     CoverImageSource.GOOGLE_BOOKS,
                     ImageResolutionPreference.HIGH_ONLY,
@@ -435,7 +436,7 @@ public class TestBookCoverConfig {
             .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
         
         // Special case for test books
-        Mockito.when(mockService.fetchCover(Mockito.argThat(book -> 
+        Mockito.when(mockService.fetchCover(Mockito.argThat(book ->
                 book != null && "testbook123".equals(book.getId()))))
             .thenReturn(CompletableFuture.completedFuture(Optional.of(
                 new ImageDetails(
@@ -446,6 +447,16 @@ public class TestBookCoverConfig {
                     ImageResolutionPreference.ORIGINAL,
                     400, 600
                 )
+            )));
+        Mockito.when(mockService.fetchAndCacheCover(Mockito.any(Book.class), Mockito.anyString(), Mockito.any()))
+            .thenReturn(CompletableFuture.completedFuture(new ImageDetails(
+                "https://covers.longitood.com/mock.jpg",
+                "LONGITOOD",
+                "mock-longitood",
+                CoverImageSource.LONGITOOD,
+                ImageResolutionPreference.ORIGINAL,
+                400,
+                600
             )));
         
         logger.info("Mock LongitoodService configured for testing");
@@ -467,6 +478,16 @@ public class TestBookCoverConfig {
         // Default behavior to return empty
         Mockito.when(mockService.fetchOpenLibraryCoverDetails(Mockito.anyString(), Mockito.anyString()))
             .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
+        Mockito.when(mockService.fetchAndCacheCover(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+            .thenReturn(CompletableFuture.completedFuture(new ImageDetails(
+                "https://covers.openlibrary.org/b/isbn/mock-L.jpg",
+                "OPEN_LIBRARY",
+                "mock-isbn",
+                CoverImageSource.OPEN_LIBRARY,
+                ImageResolutionPreference.MEDIUM,
+                400,
+                600
+            )));
         
         // Special case for ISBN lookups
         Mockito.when(mockService.fetchOpenLibraryCoverDetails(
@@ -530,6 +551,38 @@ public class TestBookCoverConfig {
                 testBook.setRawJsonResponse("{\"kind\":\"books#volume\",\"id\":\"testbook123\"}");
                 return CompletableFuture.completedFuture(testBook);
             });
+
+        Mockito.when(mockService.fetchCoverByIsbn(
+                Mockito.anyString(),
+                Mockito.anyString(),
+                Mockito.any(),
+                Mockito.any(LocalDiskCoverCacheService.class),
+                Mockito.any(CoverCacheManager.class)))
+            .thenReturn(CompletableFuture.completedFuture(new ImageDetails(
+                "https://books.googleusercontent.com/mock-isbn.jpg",
+                "GOOGLE",
+                "mock-isbn",
+                CoverImageSource.GOOGLE_BOOKS,
+                ImageResolutionPreference.ORIGINAL,
+                600,
+                900
+            )));
+
+        Mockito.when(mockService.fetchCoverByVolumeId(
+                Mockito.anyString(),
+                Mockito.anyString(),
+                Mockito.any(),
+                Mockito.any(LocalDiskCoverCacheService.class),
+                Mockito.any(CoverCacheManager.class)))
+            .thenReturn(CompletableFuture.completedFuture(new ImageDetails(
+                "https://books.googleusercontent.com/mock-volume.jpg",
+                "GOOGLE",
+                "mock-volume",
+                CoverImageSource.GOOGLE_BOOKS,
+                ImageResolutionPreference.ORIGINAL,
+                600,
+                900
+            )));
         
         logger.info("Mock GoogleBooksService configured for testing");
         return mockService;

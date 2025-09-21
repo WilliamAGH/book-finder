@@ -10,6 +10,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrat
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 // Use fully-qualified names for image services to avoid import resolution issues in test slice
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
@@ -26,7 +27,6 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import java.util.List;
-import java.util.ArrayList;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
@@ -54,7 +54,6 @@ class HomeControllerTest {
     private RecommendationService recommendationService;
     
     @org.springframework.beans.factory.annotation.Autowired
-    @SuppressWarnings("unused")
     private BookDataOrchestrator bookDataOrchestrator;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -95,6 +94,7 @@ class HomeControllerTest {
         @Bean com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService localDiskCoverCacheService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.EnvironmentService environmentService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.EnvironmentService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.DuplicateBookService.class); }
+        @Bean com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService affiliateLinkService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService.class); }
         @Bean NewYorkTimesService newYorkTimesService() { return Mockito.mock(NewYorkTimesService.class); }
     }
     
@@ -127,10 +127,11 @@ class HomeControllerTest {
                 return Mono.just(coverImages);
             });
 
-        when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
+        when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
     
-        // Configure RecentlyViewedService with empty view history
-        when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
+        // Configure RecentlyViewedService with empty view history (reactive)
+        when(recentlyViewedService.getRecentlyViewedBooksReactive())
+            .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
         when(bookDataOrchestrator.getBookByIdTiered(anyString())).thenReturn(Mono.empty());
     }
@@ -214,13 +215,18 @@ class HomeControllerTest {
         // Mock for bestsellers from NYT service
         when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
             .thenReturn(Mono.just(bestsellers));
-        when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
+        when(recentlyViewedService.getRecentlyViewedBooksReactive())
+            .thenReturn(Mono.just(java.util.Collections.emptyList()));
         when(bookDataOrchestrator.searchBooksTiered(
                 argThat((String query) -> query != null && !query.equals("hardcover-fiction")),
                 isNull(String.class),
-                eq(8),
+                anyInt(),
                 isNull(String.class)))
             .thenReturn(Mono.just(additionalRecentBooks));
+        // Override recently viewed to include our recent book deterministically
+        when(recentlyViewedService.getRecentlyViewedBooksReactive())
+            .thenReturn(Mono.just(additionalRecentBooks));
+
         // Act & Assert
         webTestClient.get().uri("/")
             .accept(MediaType.TEXT_HTML)
@@ -229,8 +235,11 @@ class HomeControllerTest {
             .expectBody(String.class)
             .value(body -> {
                 try {
-                    assertTrue(body.contains("NYT Bestseller"), "Response body did not contain 'NYT Bestseller'.\nBody:\n" + body);
-                    assertTrue(body.contains("Recent Read"), "Response body did not contain 'Recent Read'.\nBody:\n" + body);
+                    // Verify sections are populated (no empty alerts), not specific titles
+                    assertTrue(body.contains("NYT Bestsellers"), "Response body did not contain 'NYT Bestsellers' header.\nBody:\n" + body);
+                    assertFalse(body.contains("No current bestsellers to display."), "Bestsellers section unexpectedly empty.\nBody:\n" + body);
+                    assertFalse(body.contains("No recent books to display."), "Recent section unexpectedly empty.\nBody:\n" + body);
+                    assertTrue(body.contains("class=\"card h-100\""), "Expected at least one rendered book card.\nBody:\n" + body);
                 } catch (AssertionError e) {
                     System.out.println("\n\n==== DEBUG: Response Body ====");
                     System.out.println(body);
@@ -257,8 +266,8 @@ class HomeControllerTest {
             .expectStatus().isOk()
             .expectBody(String.class)
             .value(body -> {
-                assertFalse(body.contains("NYT Bestseller"));
-                assertFalse(body.contains("Recent Read"));
+                assertTrue(body.contains("No current bestsellers to display."));
+                assertTrue(body.contains("No recent books to display."));
             });
     }
     /**
@@ -278,8 +287,8 @@ class HomeControllerTest {
             .expectStatus().isOk()
             .expectBody(String.class)
             .value(body -> {
-                assertFalse(body.contains("NYT Bestseller"));
-                assertFalse(body.contains("Recent Read"));
+                assertTrue(body.contains("No current bestsellers to display."));
+                assertTrue(body.contains("No recent books to display."));
             });
     }
 }

@@ -3,6 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -64,19 +65,34 @@ class BookDataOrchestratorPersistenceScenariosTest {
 
     private BookDataOrchestrator orchestrator;
 
+    // Concrete dependencies instantiated in setUp()
+    private BookS3CacheService bookS3CacheService;
+    private PostgresBookRepository postgresBookRepository;
+    private CanonicalBookPersistenceService canonicalBookPersistenceService;
+    private BookLookupService bookLookupService;
+
     @BeforeEach
     void setUp() {
+        ObjectMapper om = new ObjectMapper();
+        bookS3CacheService = new BookS3CacheService(s3RetryService, om);
+        postgresBookRepository = new PostgresBookRepository(jdbcTemplate, om);
+        bookLookupService = new BookLookupService(jdbcTemplate);
+        canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTemplate, om, supplementalPersistenceService, bookLookupService);
+
         orchestrator = new BookDataOrchestrator(
                 s3RetryService,
                 googleApiFetcher,
-                new ObjectMapper(),
+                om,
                 openLibraryBookDataService,
                 bookDataAggregatorService,
-                supplementalPersistenceService,
                 collectionPersistenceService,
-                bookSearchService
+                bookSearchService,
+                bookS3CacheService,
+                postgresBookRepository,
+                canonicalBookPersistenceService,
+                null,
+                false
         );
-        ReflectionTestUtils.setField(orchestrator, "jdbcTemplate", jdbcTemplate);
 
         lenient().when(bookSearchService.searchBooks(anyString(), any())).thenReturn(List.of());
         lenient().when(bookSearchService.searchByIsbn(anyString())).thenReturn(java.util.Optional.empty());
@@ -186,7 +202,7 @@ class BookDataOrchestratorPersistenceScenariosTest {
         lenient().when(jdbcTemplate.queryForObject(
                 eq("SELECT book_id FROM book_external_ids WHERE source = ? AND external_id = ? LIMIT 1"),
                 eq(String.class),
-                eq("GOOGLE_BOOKS"),
+                eq(ApplicationConstants.Provider.GOOGLE_BOOKS),
                 any()
         )).thenReturn(bookId);
     }

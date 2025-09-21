@@ -47,13 +47,12 @@ class RecentlyViewedServiceTest {
 
     @Test
     void fetchDefaultBooks_prefersPostgresResults() {
-        Book postgresBook = buildBook("postgres-book", 2022);
+Book postgresBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id("postgres-book").publishedDate(Date.from(Instant.parse("2022-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/postgres-book.jpg").build();
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of(postgresBook)));
 
-        StepVerifier.create(recentlyViewedService.fetchDefaultBooksAsync())
-            .expectNextMatches(results -> results.size() == 1 && "postgres-book".equals(results.get(0).getId()))
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "postgres-book");
 
         verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
@@ -68,13 +67,12 @@ class RecentlyViewedServiceTest {
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of()));
 
-        Book googleBook = buildBook("google-book", 2020);
+Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id("google-book").publishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/google-book.jpg").build();
         when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of(googleBook)));
 
-        StepVerifier.create(recentlyViewedService.fetchDefaultBooksAsync())
-            .expectNextMatches(results -> results.size() == 1 && "google-book".equals(results.get(0).getId()))
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "google-book");
 
         verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
@@ -89,13 +87,12 @@ class RecentlyViewedServiceTest {
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.error(new RuntimeException("boom")));
 
-        Book googleBook = buildBook("google-book", 2018);
+Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id("google-book").publishedDate(Date.from(Instant.parse("2018-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/google-book.jpg").build();
         when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of(googleBook)));
 
-        StepVerifier.create(recentlyViewedService.fetchDefaultBooksAsync())
-            .expectNextMatches(results -> results.size() == 1 && "google-book".equals(results.get(0).getId()))
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "google-book");
 
         verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
@@ -108,9 +105,7 @@ class RecentlyViewedServiceTest {
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of()));
 
-        StepVerifier.create(recentlyViewedService.fetchDefaultBooksAsync())
-            .expectNext(List.of())
-            .verifyComplete();
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyEmptyList(recentlyViewedService.fetchDefaultBooksAsync());
 
         verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
@@ -120,10 +115,11 @@ class RecentlyViewedServiceTest {
     void fetchDefaultBooks_usesRepositoryWhenAvailable() {
         Instant now = Instant.parse("2024-01-01T00:00:00Z");
         when(recentBookViewRepository.isEnabled()).thenReturn(true);
-        when(recentBookViewRepository.fetchMostRecentViews(anyInt()))
-            .thenReturn(List.of(new RecentBookViewRepository.ViewStats("uuid-1", now, 3L, 10L, 15L)));
+when(recentBookViewRepository.fetchMostRecentViews(anyInt()))
+            .thenReturn(List.of(com.williamcallahan.book_recommendation_engine.testutil.RecentViewStatsTestData.viewStats("uuid-1", now, 3L, 10L, 15L)));
 
-        Book dbBook = buildBook("uuid-1", 2021);
+Book dbBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id("uuid-1").publishedDate(Date.from(Instant.parse("2021-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/uuid-1.jpg").build();
         dbBook.setSlug("slug-uuid-1");
         when(bookDataOrchestrator.getBookFromDatabase("uuid-1"))
             .thenReturn(Optional.of(dbBook));
@@ -154,7 +150,8 @@ class RecentlyViewedServiceTest {
         when(recentBookViewRepository.fetchStatsForBook("uuid-2"))
             .thenReturn(Optional.of(new RecentBookViewRepository.ViewStats("uuid-2", now, 5L, 12L, 20L)));
 
-        Book book = buildBook("uuid-2", 2020);
+Book book = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+                .id("uuid-2").publishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/uuid-2.jpg").build();
         book.setSlug("slug-uuid-2");
 
         recentlyViewedService.addToRecentlyViewed(book);
@@ -167,13 +164,4 @@ class RecentlyViewedServiceTest {
         assertEquals(now, book.getQualifiers().get("recent.views.lastViewedAt"));
     }
 
-    private Book buildBook(String id, int year) {
-        Book book = new Book();
-        book.setId(id);
-        book.setTitle("Title " + id);
-        book.setS3ImagePath("https://cdn.example/" + id + ".jpg");
-        book.setPublishedDate(Date.from(Instant.parse(year + "-01-01T00:00:00Z")));
-        book.setSlug("slug-" + id);
-        return book;
-    }
 }

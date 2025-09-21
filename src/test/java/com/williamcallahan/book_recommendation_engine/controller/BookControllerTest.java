@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -40,7 +40,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SuppressWarnings({"removal"})
 @WebMvcTest({BookController.class, BookCoverController.class})
 @AutoConfigureMockMvc(addFilters = false)
 class BookControllerTest {
@@ -49,16 +48,16 @@ class BookControllerTest {
     private MockMvc mockMvc;
 
 
-    @MockBean
+    @MockitoBean
     private BookDataOrchestrator bookDataOrchestrator;
 
-    @MockBean
+    @MockitoBean
     private RecommendationService recommendationService;
 
-    @MockBean
+    @MockitoBean
     private GoogleBooksService googleBooksService;
 
-    @MockBean
+    @MockitoBean
     private BookImageOrchestrationService bookImageOrchestrationService;
 
     private Book fixtureBook;

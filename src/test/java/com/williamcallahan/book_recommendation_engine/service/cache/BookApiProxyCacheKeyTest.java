@@ -1,6 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service.cache;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.testutil.BookApiProxyFixtures;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookApiProxy;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksMockService;
@@ -27,23 +27,18 @@ class BookApiProxyCacheKeyTest {
 
     @Test
     void saveSearchUsesSearchQueryUtilsCacheKey() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
+GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
         S3StorageService s3StorageService = mock(S3StorageService.class);
         Optional<GoogleBooksMockService> mockService = Optional.empty();
         BookDataOrchestrator bookDataOrchestrator = mock(BookDataOrchestrator.class);
 
-        BookApiProxy proxy = new BookApiProxy(
+        BookApiProxy proxy = BookApiProxyFixtures.newProxy(
                 googleBooksService,
                 s3StorageService,
-                objectMapper,
                 mockService,
-                true,
-                tempDir.toString(),
-                false,
-                false,
-                false,
-                bookDataOrchestrator
+                bookDataOrchestrator,
+                tempDir,
+                true
         );
 
         String query = "C# in Depth";
@@ -60,23 +55,18 @@ class BookApiProxyCacheKeyTest {
 
     @Test
     void getSearchRespectsCacheKeyFormat() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
+GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
         S3StorageService s3StorageService = mock(S3StorageService.class);
         Optional<GoogleBooksMockService> mockService = Optional.empty();
         BookDataOrchestrator bookDataOrchestrator = mock(BookDataOrchestrator.class);
 
-        BookApiProxy proxy = new BookApiProxy(
+        BookApiProxy proxy = BookApiProxyFixtures.newProxy(
                 googleBooksService,
                 s3StorageService,
-                objectMapper,
                 mockService,
-                true,
-                tempDir.toString(),
-                false,
-                false,
-                false,
-                bookDataOrchestrator
+                bookDataOrchestrator,
+                tempDir,
+                true
         );
 
         String query = "Refactoring: Improving the Design of Existing Code";

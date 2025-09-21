@@ -130,6 +130,54 @@
     </div>
 </main>
 
+<!-- Book Card Fragment -->
+<div th:fragment="bookCard(book, showStats)" class="col-sm-6 col-md-4 col-lg-3" th:if="${book != null}" th:with="bookSlug=${book != null && book.slug != null ? book.slug : (book != null ? book.id : 'unknown')}">
+    <div class="card h-100">
+        <div class="position-relative book-cover-container">
+            <a th:href="@{'/book/' + ${bookSlug}}" class="d-block h-100">
+                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                     class="card-img-top book-cover"
+                     loading="lazy"
+                     alt="Book cover"
+                     title="Book cover"
+                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                     th:attr="data-book-id=${book.id},
+                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : book.externalImageUrl)},
+                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'},
+                              data-ultimate-fallback='/images/placeholder-book-cover.svg'">
+            </a>
+            <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
+                <i class="fas fa-star me-1"></i>
+                <span th:text="${book.averageRating}">4.5</span>
+            </div>
+        </div>
+        <div class="card-body">
+            <h5 class="card-title text-truncate">
+                <a th:href="@{'/book/' + ${bookSlug}}" th:text="${book.title}" class="text-decoration-none text-dark">Book Title</a>
+            </h5>
+            <p class="card-text small text-muted text-truncate" th:text="${book.authors != null && !book.authors.empty} ? ${book.authors[0]} : 'Unknown Author'">Author Name</p>
+            <div class="d-flex flex-wrap gap-2 small text-muted mt-2" th:if="${showStats}"
+                 th:unless="${book.qualifiers == null || (book.qualifiers['recent.views.24h'] == null && book.qualifiers['recent.views.7d'] == null && book.qualifiers['recent.views.30d'] == null)}">
+                <span class="badge bg-light text-dark"
+                      th:if="${book.qualifiers['recent.views.24h'] != null && book.qualifiers['recent.views.24h'] > 0}"
+                      th:text="${#numbers.formatInteger(book.qualifiers['recent.views.24h'], 0)} + ' in 24h'">0 in 24h</span>
+                <span class="badge bg-light text-dark"
+                      th:if="${book.qualifiers['recent.views.7d'] != null && book.qualifiers['recent.views.7d'] > 0}"
+                      th:text="${#numbers.formatInteger(book.qualifiers['recent.views.7d'], 0)} + ' in 7d'">0 in 7d</span>
+                <span class="badge bg-light text-dark"
+                      th:if="${book.qualifiers['recent.views.30d'] != null && book.qualifiers['recent.views.30d'] > 0}"
+                      th:text="${#numbers.formatInteger(book.qualifiers['recent.views.30d'], 0)} + ' in 30d'">0 in 30d</span>
+            </div>
+            <p class="small text-muted mb-0" th:if="${showStats && book.qualifiers != null && book.qualifiers['recent.views.lastViewedAt'] != null}"
+               th:text="${'Last viewed ' + #temporals.format(book.qualifiers['recent.views.lastViewedAt'], 'MMM d, h:mm a')}"></p>
+        </div>
+        <div class="card-footer bg-white border-top-0">
+            <a th:href="@{'/book/' + ${bookSlug}}" class="btn btn-sm btn-outline-primary d-block">View Details</a>
+        </div>
+    </div>
+</div>
+
 <!-- Footer -->
 <footer th:fragment="footer" class="footer modern-footer">
     <div class="container">

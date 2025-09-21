@@ -15,6 +15,9 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.testutil.BookTestData;
+import com.williamcallahan.book_recommendation_engine.testutil.TestFiles;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -26,7 +29,6 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Comparator;
 import java.io.IOException;
 import java.time.Duration;
 import org.junit.jupiter.api.Disabled;
@@ -66,13 +68,13 @@ public class BookCoverManagementServiceSmokeTest {
         bookCoverManagementService = mock(BookCoverManagementService.class);
         
         // Prepare test data
-        when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn("/images/placeholder-book-cover.svg");
+        when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
         when(localDiskCoverCacheService.getCacheDirName()).thenReturn("book-covers");
         
         // Configure mock behavior
         CoverImages mockCoverImages = new CoverImages(
             "/book-covers/test-image.jpg",
-            "/images/placeholder-book-cover.svg",
+            ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH,
             CoverImageSource.LOCAL_CACHE
         );
         
@@ -80,40 +82,33 @@ public class BookCoverManagementServiceSmokeTest {
         try {
             Path cachePath = Paths.get(cacheDirString);
             if (Files.exists(cachePath)) {
-                Files.walk(cachePath)
-                    .sorted(Comparator.reverseOrder())
-                    .map(Path::toFile)
-                    .forEach(file -> {
-                        try {
-                            Files.delete(file.toPath());
-                        } catch (IOException e) {
-                            logger.error("Failed to delete cached file: {} - {}", file, e.getMessage());
-                        }
-                    });
+                TestFiles.deleteRecursive(cachePath);
                 logger.info("Cleaned cache directory: {}", cacheDirString);
             }
-             if (!Files.exists(cachePath)) Files.createDirectories(cachePath);
+            if (!Files.exists(cachePath)) Files.createDirectories(cachePath);
         } catch (IOException e) {
             logger.error("Failed to clean or create cache directory: {} - {}", cacheDirString, e.getMessage(), e);
         }
 
-        book1_knownGood = new Book();
-        book1_knownGood.setId("knownGoodGoogleId1");
-        book1_knownGood.setIsbn13("9780553293357");
-        book1_knownGood.setTitle("Known Good Book (e.g., Game of Thrones)");
-        book1_knownGood.setCoverImageUrl(null);
+        book1_knownGood = BookTestData.aBook()
+                .id("knownGoodGoogleId1")
+                .isbn13("9780553293357")
+                .title("Known Good Book (e.g., Game of Thrones)")
+                .coverImageUrl(null)
+                .build();
 
-        book2_likelyPlaceholder = new Book();
-        book2_likelyPlaceholder.setId("obscureGoogleId1");
-        book2_likelyPlaceholder.setIsbn13("9780000000001");
-        book2_likelyPlaceholder.setTitle("Obscure Book Likely Placeholder");
-        book2_likelyPlaceholder.setCoverImageUrl(null);
+        book2_likelyPlaceholder = BookTestData.aBook()
+                .id("obscureGoogleId1")
+                .isbn13("9780000000001")
+                .title("Obscure Book Likely Placeholder")
+                .coverImageUrl(null)
+                .build();
 
-        book3_newToSystem = new Book();
-        book3_newToSystem.setId("newToSystemGoogleId1");
-        book3_newToSystem.setIsbn10("0451524934");
-        book3_newToSystem.setTitle("New To System Book (e.g., 1984)");
-        book3_newToSystem.setCoverImageUrl(null);
+        book3_newToSystem = BookTestData.aBook()
+                .id("newToSystemGoogleId1")
+                .title("New To System Book (e.g., 1984)")
+                .coverImageUrl(null)
+                .build();
         
         // Set up expected return values
         when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any()))
@@ -171,7 +166,7 @@ public class BookCoverManagementServiceSmokeTest {
                 
         String initialUrl = (initialCoverImages != null && initialCoverImages.getPreferredUrl() != null) 
             ? initialCoverImages.getPreferredUrl() 
-            : "/images/placeholder-book-cover.svg";
+            : ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH;
             
         logger.info("[{}] Initial URL: {}", bookLabel, initialUrl);
 
@@ -185,7 +180,7 @@ public class BookCoverManagementServiceSmokeTest {
                 
         String finalUrl = (finalCoverImages != null && finalCoverImages.getPreferredUrl() != null) 
             ? finalCoverImages.getPreferredUrl() 
-            : "/images/placeholder-book-cover.svg";
+            : ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH;
             
         logger.info("[{}] URL after background processing: {}", bookLabel, finalUrl);
 

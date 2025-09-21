@@ -84,18 +84,7 @@ class GoogleBooksServiceTest {
      * @return JsonNode representing a Google Books volume
      */
     private JsonNode createMockVolumeJson(String id, String title, String author) {
-        ObjectNode volume = objectMapper.createObjectNode();
-        volume.put("id", id);
-        ObjectNode volumeInfo = objectMapper.createObjectNode();
-        volumeInfo.put("title", title);
-        ArrayNode authors = objectMapper.createArrayNode();
-        authors.add(author);
-        volumeInfo.set("authors", authors);
-        ObjectNode imageLinks = objectMapper.createObjectNode();
-        imageLinks.put("thumbnail", "http://example.com/thumbnail.jpg");
-        volumeInfo.set("imageLinks", imageLinks);
-        volume.set("volumeInfo", volumeInfo);
-        return volume;
+return com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.volume(objectMapper, id, title, author);
     }
 
     /**
@@ -109,8 +98,8 @@ class GoogleBooksServiceTest {
         mockApiResponse.set("items", items);
 
         // Mock the call to googleApiFetcherMock
-        when(googleApiFetcherMock.searchVolumesAuthenticated(eq("test query"), anyInt(), eq("relevance"), eq("en")))
-                .thenReturn(Mono.just(mockApiResponse));
+com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.stubSearchReturns(
+                googleApiFetcherMock, "test query", "relevance", "en", mockApiResponse);
 
         Mono<List<Book>> result = googleBooksService.searchBooksAsyncReactive("test query", "en", 10, "relevance");
 
@@ -125,7 +114,7 @@ class GoogleBooksServiceTest {
                     return true;
                 })
                 .verifyComplete();
-        verify(apiRequestMonitorMock).recordSuccessfulRequest(anyString());
+        // API monitoring is now handled by GoogleApiFetcher, not GoogleBooksService
     }
 
     /**
@@ -137,15 +126,15 @@ class GoogleBooksServiceTest {
         mockApiResponse.set("items", objectMapper.createArrayNode()); // Empty items array
 
         // Mock the call to googleApiFetcherMock
-        when(googleApiFetcherMock.searchVolumesAuthenticated(eq("test query"), anyInt(), eq("relevance"), eq("en")))
-                .thenReturn(Mono.just(mockApiResponse));
+com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.stubSearchReturns(
+                googleApiFetcherMock, "test query", "relevance", "en", mockApiResponse);
         
         Mono<List<Book>> result = googleBooksService.searchBooksAsyncReactive("test query", "en", 10, "relevance");
 
         StepVerifier.create(result)
                 .expectNextMatches(List::isEmpty)
                 .verifyComplete();
-        verify(apiRequestMonitorMock).recordSuccessfulRequest(anyString());
+        // API monitoring is now handled by GoogleApiFetcher, not GoogleBooksService
     }
     
     /**
@@ -154,8 +143,8 @@ class GoogleBooksServiceTest {
     @Test
     void searchBooksAsyncReactive_handlesApiErrorGracefully() {
         // Mock the call to googleApiFetcherMock to return an error
-        when(googleApiFetcherMock.searchVolumesAuthenticated(eq("error query"), anyInt(), eq("relevance"), eq("en")))
-                .thenReturn(Mono.error(new RuntimeException("API error")));
+com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.stubSearchError(
+                googleApiFetcherMock, "error query", "relevance", "en", new RuntimeException("API error"));
 
         Mono<List<Book>> result = googleBooksService.searchBooksAsyncReactive("error query", "en", 10, "relevance");
         
@@ -178,7 +167,8 @@ class GoogleBooksServiceTest {
         JsonNode mockVolumeNode = createMockVolumeJson(bookId, "API Book", "API Author");
 
         // Mock GoogleApiFetcher to return the mock volume
-        when(googleApiFetcherMock.fetchVolumeByIdAuthenticated(bookId)).thenReturn(Mono.just(mockVolumeNode));
+com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.stubFetchVolumeReturns(
+                googleApiFetcherMock, bookId, mockVolumeNode);
 
         StepVerifier.create(Mono.fromCompletionStage(googleBooksService.getBookById(bookId)))
                 .assertNext(book -> {
@@ -254,7 +244,8 @@ class GoogleBooksServiceTest {
     void getBookById_handlesApiErrorFromFetcher() {
         String bookId = "errorId";
         // Mock GoogleApiFetcher to return an error
-        when(googleApiFetcherMock.fetchVolumeByIdAuthenticated(bookId)).thenReturn(Mono.error(new RuntimeException("Fetcher API error")));
+com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.stubFetchVolumeError(
+                googleApiFetcherMock, bookId, new RuntimeException("Fetcher API error"));
 
         CompletionStage<Book> resultStage = googleBooksService.getBookById(bookId);
         
