@@ -173,6 +173,12 @@ class JsonParser {
       throw new Error('Empty file');
     }
 
+    // Remove UTF-8 BOM if present
+    if (bodyString.charCodeAt(0) === 0xFEFF) {
+      console.warn(`[WARNING] File ${filename} starts with BOM (\uFEFF), stripping it`);
+      bodyString = bodyString.slice(1);
+    }
+
     // Strip null bytes and control characters if present
     if (bodyString.includes('\x00')) {
       console.warn(`[WARNING] File ${filename} contains null bytes, stripping them`);
@@ -189,32 +195,35 @@ class JsonParser {
     // Trim whitespace
     bodyString = bodyString.trim();
 
-    // Check if it starts with valid JSON
+    // Check if it starts with valid JSON; if not, find the first likely start
     if (!bodyString.startsWith('{') && !bodyString.startsWith('[')) {
-      // Try to find JSON start
       const jsonMatch = this.findJsonStart(bodyString);
-
       if (jsonMatch.index === -1) {
         throw new Error('No valid JSON patterns found in file');
       }
-
       console.warn(`[WARNING] Found ${jsonMatch.name} at position ${jsonMatch.index}, stripping ${jsonMatch.index} bytes of corruption`);
       bodyString = bodyString.substring(jsonMatch.index);
     }
 
-    // Step 2: Split concatenated objects if needed
-    const jsonObjects = this.splitConcatenated(bodyString, filename);
+    // Step 2: Extract all top-level JSON fragments (handles concatenation and trailing junk)
+    const fragments = this.extractJsonFragments(bodyString, filename);
 
-    // Step 3: Parse each object
+    // Step 3: Parse each fragment and normalize to book objects
     const parsedObjects = [];
-    for (const jsonStr of jsonObjects) {
+    for (const jsonStr of fragments) {
       try {
         const obj = JSON.parse(jsonStr);
-        parsedObjects.push(obj);
+        if (Array.isArray(obj)) {
+          parsedObjects.push(...obj);
+        } else if (obj && Array.isArray(obj.items)) {
+          parsedObjects.push(...obj.items);
+        } else {
+          parsedObjects.push(obj);
+        }
       } catch (e) {
         console.error(`[ERROR] Failed to parse JSON fragment: ${e.message}`);
         if (this.debug) {
-          console.error(`[DEBUG] Fragment start: ${jsonStr.substring(0, 100)}...`);
+          console.error(`[DEBUG] Fragment start: ${jsonStr.substring(0, 200)}...`);
         }
       }
     }
@@ -228,6 +237,7 @@ class JsonParser {
 
   /**
    * Split concatenated JSON objects (handles }{ pattern)
+   * Note: kept for backward compatibility but superseded by extractJsonFragments()
    */
   splitConcatenated(bodyString, filename) {
     // Check for concatenation pattern
@@ -266,6 +276,94 @@ class JsonParser {
 
     console.log(`[INFO] Split into ${objects.length} objects`);
     return objects;
+  }
+
+  /**
+   * Extract all top-level JSON fragments from a string.
+   * Robust against trailing garbage and multiple concatenated JSON values,
+   * while respecting strings and escape sequences.
+   */
+  extractJsonFragments(bodyString, filename) {
+    const fragments = [];
+    let i = 0;
+    const n = bodyString.length;
+
+    const isWhitespace = (ch) => ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t';
+
+    while (i < n) {
+      // Skip until next JSON start
+      while (i < n && !('{['.includes(bodyString[i]))) {
+        // If we encounter whitespace, just skip
+        if (!isWhitespace(bodyString[i])) {
+          // non-JSON byte outside fragments; will be ignored
+        }
+        i++;
+      }
+      if (i >= n) break;
+
+      // Found start of fragment
+      const start = i;
+      let depth = 0;
+      let inString = false;
+      let escapeNext = false;
+
+      for (; i < n; i++) {
+        const ch = bodyString[i];
+
+        if (inString) {
+          if (escapeNext) {
+            escapeNext = false;
+          } else if (ch === '\\') {
+            escapeNext = true;
+          } else if (ch === '"') {
+            inString = false;
+          }
+          continue;
+        }
+
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+
+        if (ch === '{' || ch === '[') {
+          depth++;
+        } else if (ch === '}' || ch === ']') {
+          depth--;
+          if (depth === 0) {
+            // End of this fragment
+            const end = i + 1;
+            fragments.push(bodyString.slice(start, end));
+            i = end; // move cursor past this fragment
+            break;
+          }
+        }
+      }
+
+      // If we reached end-of-string while still inside a fragment (truncated JSON)
+      if (i >= n && depth > 0) {
+        console.warn(`[WARNING] File ${filename} appears truncated; attempting to parse first ${Math.min(n - start, 200)} chars`);
+        fragments.push(bodyString.slice(start));
+        break;
+      }
+    }
+
+    // Log if there was trailing junk
+    const lastFragment = fragments[fragments.length - 1];
+    if (lastFragment) {
+      const tailIndex = bodyString.lastIndexOf(lastFragment) + lastFragment.length;
+      const trailing = bodyString.slice(tailIndex);
+      if (trailing.trim().length > 0) {
+        console.warn(`[WARNING] File ${filename} contains trailing non-JSON data after a valid JSON value; ignoring trailing ${trailing.length} bytes`);
+      }
+    }
+
+    // Fallback: if no fragments extracted, try legacy splitConcatenated
+    if (fragments.length === 0) {
+      return this.splitConcatenated(bodyString, filename);
+    }
+
+    return fragments;
   }
 
   /**
