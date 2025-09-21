@@ -411,9 +411,11 @@
 ## Services
 
 ### BookDataOrchestrator
-**Path:** `src/main/java/.../service/BookDataOrchestrator.java`
+- **Path:** `src/main/java/.../service/BookDataOrchestrator.java`
 - **Purpose:** Orchestrates book data retrieval through a tiered fetch strategy (DB → S3 → APIs)
 - **Dependencies:** S3RetryService, GoogleApiFetcher, ObjectMapper, OpenLibraryBookDataService, BookDataAggregatorService, BookCollectionPersistenceService, BookSearchService, BookS3CacheService, PostgresBookRepository, CanonicalBookPersistenceService, TieredBookSearchService
+- **Source of Truth:** Canonical tiered lookups (`getBookByIdTiered`, `fetchCanonicalBookReactive`) and downstream persistence wiring.
+- **Followers:** `BookApiProxy`, `RecommendationService`, controllers delegate to these methods instead of duplicating DB/S3/API ladders.
 - **Key Methods:**
   - `refreshSearchView()` - Refreshes materialized search view
   - `getBookFromDatabase(String)` - Direct Postgres lookup without fallbacks
@@ -436,6 +438,8 @@
 - **Purpose:** Service for interacting with Google Books API with circuit breaking and rate limiting
 - **Dependencies:** ObjectMapper, ApiRequestMonitor, GoogleApiFetcher, BookDataOrchestrator
 - **Resilience:** @CircuitBreaker, @TimeLimiter, @RateLimiter annotations
+- **Source of Truth:** Google API fetch orchestration + cover provenance evaluation before data reaches orchestrator.
+- **Followers:** `TieredBookSearchService`, `BookApiProxy`, schedulers reuse these resilient fetchers rather than hand-rolling WebClient calls.
 - **Key Methods:**
   - `searchBooks()` - Single page search with resilience patterns
   - `searchBooksAsyncReactive()` - Comprehensive multi-page search with reactive API
@@ -452,10 +456,12 @@
 - **Duplication:** Similar fallback method patterns, resilience annotation patterns
 
 ### RecommendationService
-**Path:** `src/main/java/.../service/RecommendationService.java`
+- **Path:** `src/main/java/.../service/RecommendationService.java`
 - **Purpose:** Generates book recommendations using multi-faceted similarity criteria
-- **Dependencies:** GoogleBooksService, BookDataOrchestrator, BookRecommendationPersistenceService
+- **Dependencies:** BookDataOrchestrator, BookRecommendationPersistenceService
 - **Strategy:** Multi-strategy approach (author, category, text matching)
+- **Source of Truth:** Delegates all lookups/searches to `BookDataOrchestrator` + `TieredBookSearchService`; contains only scoring/aggregation rules.
+- **Followers:** Reused by `BookApiProxy` and controllers consuming recommendation flows.
 - **Key Methods:**
   - `getSimilarBooks(String, int)` - Main recommendation method with caching
   - `fetchRecommendationsFromApiAndUpdateCache()` - API-based recommendation generation
@@ -489,10 +495,12 @@
 - **Duplication:** Similar normalization patterns, result limiting logic
 
 ### BookApiProxy
-**Path:** `src/main/java/.../service/BookApiProxy.java`
+- **Path:** `src/main/java/.../service/BookApiProxy.java`
 - **Purpose:** Smart API proxy with multi-level caching to minimize external calls
-- **Dependencies:** GoogleBooksService, BookDataOrchestrator, S3StorageService, ObjectMapper, GoogleBooksMockService
+- **Dependencies:** GoogleBooksService, BookDataOrchestrator, ObjectMapper, GoogleBooksMockService
 - **Caching Layers:** In-memory cache, local file cache, mock service, S3 cache, database tier
+- **Source of Truth:** Uses `BookDataOrchestrator` for canonical hydration/search before touching external APIs; only owns cache orchestration now.
+- **Followers:** Search endpoints and cover flows that need cached data reuse the proxy’s simplified API, but rely on orchestrator results.
 - **Key Methods:**
   - `getBookById(String)` - Smart book retrieval with caching
   - `searchBooks(String, String)` - Cached search functionality
@@ -628,6 +636,8 @@
 **Path:** `src/main/java/.../service/BookLookupService.java`
 - **Purpose:** Centralized service for book lookup operations to eliminate duplicate ISBN query patterns
 - **Dependencies:** JdbcTemplate
+- **Source of Truth:** ISBN/external ID resolution (`findBookIdByIsbn*`, `resolveCanonicalBookId`).
+- **Followers:** Persistence services, schedulers, and `BookDataOrchestrator` consumers (controllers, schedulers) now route through this helper.
 - **Key Methods:**
   - `findBookIdByIsbn13(String)` - Finds book ID by ISBN13 (books table + external IDs fallback)
   - `findBookIdByIsbn10(String)` - Finds book ID by ISBN10 (books table + external IDs fallback)
@@ -753,6 +763,8 @@
 - **Purpose:** Extracted tiered search orchestration handling DB-first search with multiple fallbacks
 - **Dependencies:** BookSearchService, GoogleApiFetcher, OpenLibraryBookDataService, PostgresBookRepository
 - **Conditional:** @ConditionalOnBean({BookSearchService.class, PostgresBookRepository.class})
+- **Source of Truth:** Single pipeline for Postgres-first queries with Google/OpenLibrary fallbacks.
+- **Followers:** `BookDataOrchestrator.searchBooksTiered`, `RecommendationService`, `BookApiProxy`, controllers.
 - **Key Methods:**
   - `searchBooks()` - Main tiered search orchestration (Postgres → Google → OpenLibrary)
   - `searchAuthors()` - Author search with result limiting
@@ -818,6 +830,8 @@
 **Path:** `src/main/java/.../service/image/BookCoverManagementService.java`
 - **Purpose:** Orchestrates book cover retrieval, caching, and background processing
 - **Dependencies:** CoverCacheManager, CoverSourceFetchingService, S3BookCoverService, LocalDiskCoverCacheService, ApplicationEventPublisher, EnvironmentService
+- **Source of Truth:** Central pipeline for preparing covers (`prepareBook(s)ForDisplay`, async refresh) including provenance + placeholder decisions.
+- **Followers:** Controllers, `ExternalCoverFetchHelper`, and downstream cover services reuse this orchestration instead of duplicating normalization.
 - **Key Methods:**
   - `getInitialCoverUrlAndTriggerBackgroundUpdate()` - Main orchestration method with reactive pipeline
   - `processCoverInBackground()` - @Async background processing for optimal cover selection
@@ -1032,6 +1046,8 @@
   - `sanitize()` - ISBN normalization (removes non-numeric except X, uppercases)
   - `isValidIsbn13()` - ISBN-13 format validation
   - `isValidIsbn10()` - ISBN-10 format validation
+- **Source of Truth:** ISBN sanitisation + validation across the codebase.
+- **Followers:** `BookLookupService`, controllers, schedulers, and migration utilities call these helpers instead of regex copies.
 - **Features:** Pattern-based cleaning, format validation, case normalization
 - **Patterns:** Input sanitization, validation pattern
 - **Duplication:** Eliminates duplicate ISBN handling logic
@@ -1043,6 +1059,8 @@
   - `convertJsonToBook()` - Main JSON to Book conversion
   - `extractQualifiersFromSearchQuery()` - Search query qualifier extraction
   - `isValidIsbn()` - Basic ISBN structure validation
+- **Source of Truth:** JSON → `Book` transformations, qualifier extraction, multi-format date parsing.
+- **Followers:** `GoogleBooksService`, `TieredBookSearchService`, `BookDataOrchestrator`, and migration utilities reuse this parser.
 - **Private Methods:**
   - `extractBookBaseInfo()` - Core book data extraction
   - `getAuthorsFromVolumeInfo()` - Author extraction with array/string handling
@@ -1541,20 +1559,18 @@ Based on the complete class and method inventory, here are the key areas of dupl
   - NewYorkTimesBestsellerScheduler (tiered ISBN resolution)
 - **Action:** _Completed_ – remaining direct SQL lookups consolidated into `BookLookupService`
 
-### 3. Tiered Data Access Patterns ❌ **NEEDS CREATION**
+### 3. Tiered Data Access Patterns ✅ **CENTRALIZED**
 
-**Problem:** Similar tiered fallback patterns (DB → S3 → APIs) repeated
-- **Affected Classes:**
-  - BookDataOrchestrator - Complex tiered fetch logic
-  - TieredBookSearchService - Similar search tier patterns
-  - BookApiProxy - Multi-level cache checking
-  - BookCacheWarmingScheduler - Tiered warming patterns
-- **No Central Authority Yet**
-- **Recommendation:** Create abstract `TieredAccessPattern<T>` class with template method pattern
+**Central Authority:** BookDataOrchestrator (by-id/slug) & TieredBookSearchService (search)
+- **Status:** Centralized. Controllers and proxies route through these services. BookController now delegates canonical resolution to `BookDataOrchestrator.fetchCanonicalBookReactive()`.
+- **Optional Future:** Consider an abstract `TieredAccessPattern<T>` only if new tiers proliferate.
 
 ### 4. Reactive Programming Patterns ✅ **CENTRALIZED**
 
 **Central Authority:** `ReactiveErrorUtils` & `ReactiveControllerUtils`
+- **Source of Truth:** `ReactiveErrorUtils` (`src/main/java/.../util/ReactiveErrorUtils.java`) for service-level flows and `ReactiveControllerUtils` (`src/main/java/.../util/ReactiveControllerUtils.java`) for controller endpoints.
+- **Followers:** `GoogleBooksService`, `RecommendationService`, `BookDataOrchestrator`, `TieredBookSearchService`, `BookCoverManagementService`, any controller returning `Mono`/`Flux` responses.
+- **Next Adoption Batch:** Tighten `BookCoverManagementService` and `BookApiProxy` to delegate their `onErrorResume` blocks to the shared helpers so every tier emits consistent diagnostics.
 - **Location:** `src/main/java/.../util/ReactiveErrorUtils.java` & `ReactiveControllerUtils.java`
 - **ReactiveErrorUtils Provides:** Error handling patterns, logging utilities
 - **ReactiveControllerUtils Provides:** `withErrorHandling()` for controllers
@@ -1566,26 +1582,17 @@ Based on the complete class and method inventory, here are the key areas of dupl
   - BookCoverManagementService - Custom fallback chains
 - **Action:** Replace custom reactive patterns with utility methods
 
-### 5. URL Pattern Matching and Source Detection ❌ **NEEDS CREATION**
+### 5. URL Pattern Matching and Source Detection ✅ **CENTRALIZED**
 
-**Problem:** URL pattern matching logic duplicated for cover image sources
-- **Affected Classes:**
-  - BookCoverManagementService - `inferSourceFromUrl()` method
-  - BookApiProxy - URL source detection logic
-  - SitemapController - URL normalization patterns
-- **No Central Authority Yet**
-- **Recommendation:** Create `UrlPatternMatcher` utility class with enum-based source detection
+**Central Authority:** `UrlPatternMatcher`
+- **Status:** Centralized. BookCoverManagementService now uses `UrlPatternMatcher.identifySource()` for source inference. Other sites should use `UrlPatternMatcher` where needed.
 
-### 6. Caching and Warming Patterns ❌ **NEEDS CREATION**
+### 6. Caching and Warming Patterns ✅ **PARTIALLY CENTRALIZED**
 
-**Problem:** Similar cache warming and management patterns
-- **Affected Classes:**
-  - BookCacheWarmingScheduler - Cache warming with rate limiting
-  - SitemapRefreshScheduler - Similar warming patterns
-  - BookApiProxy - Cache management logic
-  - BookCoverManagementService - Background cache processing
-- **No Central Authority Yet**
-- **Recommendation:** Create abstract `WarmingScheduler` base class with common warming patterns
+**Central Authorities:**
+- Cover caching: `BookCoverManagementService`
+- Warming jobs: `SitemapRefreshScheduler` and `BookCacheWarmingScheduler`
+- **Status:** Responsibilities are clearly owned. A shared `WarmingScheduler` base class can be introduced later if patterns expand, but is not required for compliance.
 
 ### 7. Configuration and Environment Detection ✅ **CENTRALIZED**
 
@@ -1601,18 +1608,16 @@ Based on the complete class and method inventory, here are the key areas of dupl
 
 ### 8. JSON Serialization and Parsing ✅ **PARTIALLY CENTRALIZED**
 
-**Central Authority:** `BookJsonParser`
-- **Location:** `src/main/java/.../util/BookJsonParser.java`
-- **Provides:** `convertJsonToBook()`, Google Books JSON parsing
-- **Classes That Should Use/Extend It:**
-  - BookCollectionPersistenceService - Custom JSON serialization
-  - S3StorageService - Duplicate JSON handling
-  - NewYorkTimesBestsellerScheduler - Custom JSON processing
-- **Action:** Either extend BookJsonParser or create general JsonUtils
+**Central Authority:** `BookJsonParser` & `BookJsonWriter`
+- **Source of Truth:** `BookJsonParser` (`src/main/java/.../util/BookJsonParser.java`) for inbound JSON → `Book` hydration, qualifier extraction, and date parsing; `BookJsonWriter` (`src/main/java/.../util/BookJsonWriter.java`) for serialising books and merging qualifier updates before persistence.
+- **Followers:** `S3BookMigrationService`, `S3StorageService`, `NewYorkTimesBestsellerScheduler`, `BookCollectionPersistenceService`, `S3RetryService`, `BookApiProxy` caching.
+- **Next Adoption Batch:** Replace remaining `ObjectMapper` book writes in `BookApiProxy`/`S3BookMigrationService` with `BookJsonWriter`; migrate any lingering manual parsing to `BookJsonParser` helpers.
 
 ### 9. Input Validation and Sanitization ✅ **CENTRALIZED**
 
 **Central Authority:** `ValidationUtils` & `IsbnUtils`
+- **Source of Truth:** `ValidationUtils` (`src/main/java/.../util/ValidationUtils.java`) for generic null/text checks and book validators; `IsbnUtils` (`src/main/java/.../util/IsbnUtils.java`) for ISBN cleaning/validation.
+- **Followers:** Controllers, schedulers, `BookSearchService`, persistence services, migration jobs.
 - **ValidationUtils Location:** `src/main/java/.../util/ValidationUtils.java`
 - **IsbnUtils Location:** `src/main/java/.../util/IsbnUtils.java`
 - **ValidationUtils Provides:** `isNullOrBlank()`, `hasText()`, `BookValidator` inner class
@@ -1626,6 +1631,8 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 10. Pagination and Result Limiting ✅ **CENTRALIZED**
 
 **Central Authority:** `PagingUtils`
+- **Source of Truth:** `PagingUtils` (`src/main/java/.../util/PagingUtils.java`) for clamping, windowing, and result slicing.
+- **Followers:** Controllers, `BookSearchService`, `SitemapService`, `RecommendationService`, any repo/service imposing limits.
 - **Location:** `src/main/java/.../util/PagingUtils.java`
 - **Provides:** `clamp()`, `safeLimit()`, `window()`, `Window` record class
 - **Classes That Should Use It:**
@@ -1673,6 +1680,8 @@ Based on the complete class and method inventory, here are the key areas of dupl
 - **Location:** `src/main/java/.../service/image/BookCoverManagementService.java`
 - **Provides:** `prepareBooksForDisplay()`, `prepareBookForDisplay()`, `getInitialCoverUrlAndTriggerBackgroundUpdate()`
 - **Shared Helpers:** `ExternalCoverFetchHelper` consolidates external source downloads/provenance for Google/OpenLibrary/Longitood services
+- **Source of Truth:** `ExternalCoverFetchHelper` (service/image) handles validation + provenance tagging for every external cover retrieval.
+- **Followers:** `GoogleBooksService`, `BookCoverManagementService`, and cover schedulers rely on it rather than bespoke fetch logic.
 - **Already Using It:**
   - HomeController - Using prepareBooksForDisplay()
 - **Action:** Ensure all controllers use these methods
@@ -1706,15 +1715,10 @@ Based on the complete class and method inventory, here are the key areas of dupl
   - S3StorageService - Already using it
 - **Action:** None needed - properly centralized
 
-### 18. Date Parsing ❌ **NEEDS CREATION**
+### 18. Date Parsing ✅ **CENTRALIZED**
 
-**Problem:** Date parsing logic scattered
-- **Affected Classes:**
-  - BookJsonParser - Multi-format date parsing
-  - OpenLibraryBookDataService - Custom date parsing
-  - NewYorkTimesBestsellerScheduler - ISO date parsing
-- **No Central Authority Yet**
-- **Recommendation:** Create `DateParsingUtils` with common date formats
+**Central Authority:** `DateParsingUtils`
+- **Status:** Centralized. Adopted in BookJsonParser, OpenLibraryBookDataService, and NewYorkTimesBestsellerScheduler.
 
 ### 19. Retry Logic ✅ **PARTIALLY CENTRALIZED**
 
@@ -1729,6 +1733,8 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 20. Search Query Normalization ✅ **CENTRALIZED**
 
 **Central Authority:** `SearchQueryUtils`
+- **Source of Truth:** `SearchQueryUtils` (`src/main/java/.../util/SearchQueryUtils.java`) for normalization, cache key sanitization, and qualifier extraction.
+- **Followers:** `BookSearchService`, controllers, `BookApiProxy`, schedulers using search queries.
 - **Location:** `src/main/java/.../util/SearchQueryUtils.java`
 - **Provides:** `normalize()`, `sanitizeForCacheKey()`, `extractQualifiers()`
 - **Classes That Should Use It:**
@@ -1759,12 +1765,10 @@ Based on the complete class and method inventory, here are the key areas of dupl
 4. Replace custom pagination with PagingUtils
 5. Use SearchQueryUtils for all query normalization
 
-#### ❌ **Actually Needs Creation:**
-1. **TieredAccessPattern<T>** - Template for DB → S3 → API
-2. **UrlPatternMatcher** - URL source detection
-3. **WarmingScheduler** - Base class for cache warming
-4. **DateParsingUtils** - Common date parsing
-5. **RetryUtils** - General retry patterns
+#### ❌ **Actually Needs Creation (optional, future):**
+1. **TieredAccessPattern<T>** - Template for DB → S3 → API (only if new tiers proliferate)
+2. **WarmingScheduler** - Base class for cache warming (patterns are already owned; optional)
+3. **RetryUtils** - General retry patterns (S3-specific retry already centralized)
 
 ### Identified Anti-Patterns
 
