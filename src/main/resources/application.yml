@@ -39,6 +39,8 @@ spring:
 
 app:
   features:
+    external-fallback:
+      enabled: ${APP_FEATURE_EXTERNAL_FALLBACK_ENABLED:false}
     google-fallback:
       enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:false}
   security:

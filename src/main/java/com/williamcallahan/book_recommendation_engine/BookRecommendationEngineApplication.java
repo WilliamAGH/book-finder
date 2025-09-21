@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.util.Locale;
 
 import com.williamcallahan.book_recommendation_engine.util.S3Paths;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.ApplicationArguments;
@@ -89,98 +90,17 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
         try {
             // Check environment variable first, then system property (from .env)
             String url = System.getenv("SPRING_DATASOURCE_URL");
-            if (url == null || url.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(url)) {
                 url = System.getProperty("SPRING_DATASOURCE_URL");
             }
-            if (url == null || url.isBlank()) return;
-            String lower = url.toLowerCase(Locale.ROOT);
-            if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) return;
+            if (ValidationUtils.isNullOrBlank(url)) return;
 
-            // Manual parsing to handle postgres:// format properly
-            // Format: postgres://username:password@host:port/database?params
-            String withoutScheme = url.substring(url.indexOf("://") + 3);
+            java.util.Optional<com.williamcallahan.book_recommendation_engine.config.DatabaseUrlEnvironmentPostProcessor.JdbcParseResult> parsed =
+                com.williamcallahan.book_recommendation_engine.config.DatabaseUrlEnvironmentPostProcessor.normalizePostgresUrl(url);
+            if (parsed.isEmpty()) return;
 
-            String username = null;
-            String password = null;
-            String hostPart;
-
-            // Check if credentials are present
-            if (withoutScheme.contains("@")) {
-                String[] parts = withoutScheme.split("@", 2);
-                String userInfo = parts[0];
-                hostPart = parts[1];
-
-                // Extract username and password
-                if (userInfo.contains(":")) {
-                    int colonIndex = userInfo.indexOf(":");
-                    username = userInfo.substring(0, colonIndex);
-                    password = userInfo.substring(colonIndex + 1);
-                } else {
-                    username = userInfo;
-                }
-            } else {
-                hostPart = withoutScheme;
-            }
-
-            // Parse host, port, database, and query params
-            String host;
-            int port = 5432;
-            String database = "postgres";
-            String query = null;
-
-            // Split by ? to separate query params
-            if (hostPart.contains("?")) {
-                String[] parts = hostPart.split("\\?", 2);
-                hostPart = parts[0];
-                query = parts[1];
-            }
-
-            // Split by / to separate database
-            if (hostPart.contains("/")) {
-                String[] parts = hostPart.split("/", 2);
-                String hostPortPart = parts[0];
-                database = parts[1];
-
-                // Extract host and port
-                if (hostPortPart.contains(":")) {
-                    String[] hostPortSplit = hostPortPart.split(":", 2);
-                    host = hostPortSplit[0];
-                    try {
-                        port = Integer.parseInt(hostPortSplit[1]);
-                    } catch (NumberFormatException e) {
-                        port = 5432;
-                    }
-                } else {
-                    host = hostPortPart;
-                }
-            } else {
-                // No database specified in URL
-                if (hostPart.contains(":")) {
-                    String[] hostPortSplit = hostPart.split(":", 2);
-                    host = hostPortSplit[0];
-                    try {
-                        port = Integer.parseInt(hostPortSplit[1]);
-                    } catch (NumberFormatException e) {
-                        port = 5432;
-                    }
-                } else {
-                    host = hostPart;
-                }
-            }
-
-            // Build JDBC URL
-            StringBuilder jdbc = new StringBuilder()
-                    .append("jdbc:postgresql://")
-                    .append(host)
-                    .append(":")
-                    .append(port)
-                    .append("/")
-                    .append(database);
-            if (query != null && !query.isBlank()) {
-                jdbc.append("?").append(query);
-            }
-
-            String jdbcUrl = jdbc.toString();
+            var result = parsed.get();
+            String jdbcUrl = result.jdbcUrl;
             // Set Spring + Hikari properties before the context initializes
             System.setProperty("spring.datasource.url", jdbcUrl);
             System.setProperty("spring.datasource.jdbc-url", jdbcUrl);
@@ -189,26 +109,26 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
 
             // Set username and password if extracted and not already provided
             String existingUser = System.getenv("SPRING_DATASOURCE_USERNAME");
-            if (existingUser == null || existingUser.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(existingUser)) {
                 existingUser = System.getProperty("SPRING_DATASOURCE_USERNAME");
             }
-            if (existingUser == null || existingUser.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(existingUser)) {
                 existingUser = System.getProperty("spring.datasource.username");
             }
 
             String existingPass = System.getenv("SPRING_DATASOURCE_PASSWORD");
-            if (existingPass == null || existingPass.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(existingPass)) {
                 existingPass = System.getProperty("SPRING_DATASOURCE_PASSWORD");
             }
-            if (existingPass == null || existingPass.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(existingPass)) {
                 existingPass = System.getProperty("spring.datasource.password");
             }
 
-            if ((existingUser == null || existingUser.isBlank()) && username != null && !username.isBlank()) {
-                System.setProperty("spring.datasource.username", username);
+            if (ValidationUtils.isNullOrBlank(existingUser) && ValidationUtils.hasText(result.username)) {
+                System.setProperty("spring.datasource.username", result.username);
             }
-            if ((existingPass == null || existingPass.isBlank()) && password != null && !password.isBlank()) {
-                System.setProperty("spring.datasource.password", password);
+            if (ValidationUtils.isNullOrBlank(existingPass) && ValidationUtils.hasText(result.password)) {
+                System.setProperty("spring.datasource.password", result.password);
             }
 
             // Echo minimal confirmation to stdout (password omitted)

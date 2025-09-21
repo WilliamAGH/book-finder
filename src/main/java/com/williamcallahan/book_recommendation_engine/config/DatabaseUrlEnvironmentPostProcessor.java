@@ -28,6 +28,117 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
     private static final String DS_PASSWORD = "spring.datasource.password";
     private static final String DS_DRIVER = "spring.datasource.driver-class-name";
 
+    /**
+     * Parsed JDBC output for a Postgres URL. username/password may be null if not provided.
+     */
+    public static final class JdbcParseResult {
+        public final String jdbcUrl;
+        public final String username;
+        public final String password;
+        public JdbcParseResult(String jdbcUrl, String username, String password) {
+            this.jdbcUrl = jdbcUrl;
+            this.username = username;
+            this.password = password;
+        }
+    }
+
+    /**
+     * Convert a postgres:// or postgresql:// URL to a JDBC URL and extract optional credentials.
+     * Returns empty when the input is blank or not a Postgres URL.
+     */
+    public static java.util.Optional<JdbcParseResult> normalizePostgresUrl(String url) {
+        if (url == null || url.isBlank()) return java.util.Optional.empty();
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) {
+            return java.util.Optional.empty();
+        }
+
+        // Manual parsing to handle postgres:// format properly
+        // Format: postgres://username:password@host:port/database?params
+        String withoutScheme = url.substring(url.indexOf("://") + 3);
+
+        String username = null;
+        String password = null;
+        String hostPart;
+
+        // Check if credentials are present
+        if (withoutScheme.contains("@")) {
+            String[] parts = withoutScheme.split("@", 2);
+            String userInfo = parts[0];
+            hostPart = parts[1];
+
+            // Extract username and password
+            if (userInfo.contains(":")) {
+                int colonIndex = userInfo.indexOf(":");
+                username = userInfo.substring(0, colonIndex);
+                password = userInfo.substring(colonIndex + 1);
+            } else {
+                username = userInfo;
+            }
+        } else {
+            hostPart = withoutScheme;
+        }
+
+        // Parse host, port, database, and query params
+        String host;
+        int port = 5432;
+        String database = "postgres";
+        String query = null;
+
+        // Split by ? to separate query params
+        if (hostPart.contains("?")) {
+            String[] queryParts = hostPart.split("\\?", 2);
+            hostPart = queryParts[0];
+            query = queryParts[1];
+        }
+
+        // Split by / to separate database
+        if (hostPart.contains("/")) {
+            String[] dbParts = hostPart.split("/", 2);
+            String hostPortPart = dbParts[0];
+            database = dbParts[1];
+
+            // Extract host and port
+            if (hostPortPart.contains(":")) {
+                String[] hostPortSplit = hostPortPart.split(":", 2);
+                host = hostPortSplit[0];
+                try {
+                    port = Integer.parseInt(hostPortSplit[1]);
+                } catch (NumberFormatException e) {
+                    port = 5432;
+                }
+            } else {
+                host = hostPortPart;
+            }
+        } else {
+            // No database specified in URL
+            if (hostPart.contains(":")) {
+                String[] hostPortSplit = hostPart.split(":", 2);
+                host = hostPortSplit[0];
+                try {
+                    port = Integer.parseInt(hostPortSplit[1]);
+                } catch (NumberFormatException e) {
+                    port = 5432;
+                }
+            } else {
+                host = hostPart;
+            }
+        }
+
+        // Build JDBC URL
+        StringBuilder jdbc = new StringBuilder()
+                .append("jdbc:postgresql://")
+                .append(host)
+                .append(":")
+                .append(port)
+                .append("/")
+                .append(database);
+        if (query != null && !query.isBlank()) {
+            jdbc.append("?").append(query);
+        }
+        return java.util.Optional.of(new JdbcParseResult(jdbc.toString(), username, password));
+    }
+
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         String url = environment.getProperty(DS_URL);
@@ -35,116 +146,28 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
             // Fallback to raw env var if application.yml hasn't mapped it yet
             url = environment.getProperty(ENV_DS_URL);
         }
-        if (url == null || url.isBlank()) {
+        java.util.Optional<JdbcParseResult> parsed = normalizePostgresUrl(url);
+        if (parsed.isEmpty()) {
             return;
         }
 
-        String lower = url.toLowerCase(Locale.ROOT);
-        if (!(lower.startsWith("postgres://") || lower.startsWith("postgresql://"))) {
-            return; // already JDBC or some other supported format
-        }
-
         try {
-            // Manual parsing to handle postgres:// format properly
-            // Format: postgres://username:password@host:port/database?params
-            String withoutScheme = url.substring(url.indexOf("://") + 3);
-
-            String username = null;
-            String password = null;
-            String hostPart;
-
-            // Check if credentials are present
-            if (withoutScheme.contains("@")) {
-                String[] parts = withoutScheme.split("@", 2);
-                String userInfo = parts[0];
-                hostPart = parts[1];
-
-                // Extract username and password
-                if (userInfo.contains(":")) {
-                    int colonIndex = userInfo.indexOf(":");
-                    username = userInfo.substring(0, colonIndex);
-                    password = userInfo.substring(colonIndex + 1);
-                } else {
-                    username = userInfo;
-                }
-            } else {
-                hostPart = withoutScheme;
-            }
-
-            // Parse host, port, database, and query params
-            String host;
-            int port = 5432;
-            String database = "postgres";
-            String query = null;
-
-            // Split by ? to separate query params
-            if (hostPart.contains("?")) {
-                String[] queryParts = hostPart.split("\\?", 2);
-                hostPart = queryParts[0];
-                query = queryParts[1];
-            }
-
-            // Split by / to separate database
-            if (hostPart.contains("/")) {
-                String[] dbParts = hostPart.split("/", 2);
-                String hostPortPart = dbParts[0];
-                database = dbParts[1];
-
-                // Extract host and port
-                if (hostPortPart.contains(":")) {
-                    String[] hostPortSplit = hostPortPart.split(":", 2);
-                    host = hostPortSplit[0];
-                    try {
-                        port = Integer.parseInt(hostPortSplit[1]);
-                    } catch (NumberFormatException e) {
-                        port = 5432;
-                    }
-                } else {
-                    host = hostPortPart;
-                }
-            } else {
-                // No database specified in URL
-                if (hostPart.contains(":")) {
-                    String[] hostPortSplit = hostPart.split(":", 2);
-                    host = hostPortSplit[0];
-                    try {
-                        port = Integer.parseInt(hostPortSplit[1]);
-                    } catch (NumberFormatException e) {
-                        port = 5432;
-                    }
-                } else {
-                    host = hostPart;
-                }
-            }
-
-            // Build JDBC URL
-            StringBuilder jdbc = new StringBuilder()
-                    .append("jdbc:postgresql://")
-                    .append(host)
-                    .append(":")
-                    .append(port)
-                    .append("/")
-                    .append(database);
-            if (query != null && !query.isBlank()) {
-                jdbc.append("?").append(query);
-            }
-
+            JdbcParseResult result = parsed.get();
             Map<String, Object> overrides = new HashMap<>();
-            String jdbcUrl = jdbc.toString();
-            overrides.put(DS_URL, jdbcUrl);
+            overrides.put(DS_URL, result.jdbcUrl);
             // Also set commonly used aliases so Hikari picks up the normalized URL reliably
-            overrides.put(DS_JDBC_URL, jdbcUrl);
-            overrides.put(HIKARI_JDBC_URL, jdbcUrl);
+            overrides.put(DS_JDBC_URL, result.jdbcUrl);
+            overrides.put(HIKARI_JDBC_URL, result.jdbcUrl);
             overrides.put(DS_DRIVER, "org.postgresql.Driver");
 
             // Set username and password if extracted and not already provided
             String existingUser = environment.getProperty(DS_USERNAME);
             String existingPass = environment.getProperty(DS_PASSWORD);
-            if ((existingUser == null || existingUser.isBlank()) && username != null && !username.isBlank()) {
-                overrides.put(DS_USERNAME, username);
+            if ((existingUser == null || existingUser.isBlank()) && result.username != null && !result.username.isBlank()) {
+                overrides.put(DS_USERNAME, result.username);
             }
-            if ((existingPass == null || existingPass.isBlank()) && password != null && !password.isBlank()) {
-                overrides.put(DS_PASSWORD, password);
+            if ((existingPass == null || existingPass.isBlank()) && result.password != null && !result.password.isBlank()) {
+                overrides.put(DS_PASSWORD, result.password);
             }
 
             MutablePropertySources sources = environment.getPropertySources();
@@ -161,5 +184,4 @@ public final class DatabaseUrlEnvironmentPostProcessor implements EnvironmentPos
         return Ordered.HIGHEST_PRECEDENCE;
     }
 }
-
 
