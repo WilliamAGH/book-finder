@@ -120,6 +120,7 @@
 ## Migration from Old Schema
 
 ### Deprecated Tables (DO NOT USE)
+
 - `book_contributing_sources` → Merged into `book_raw_data`
 - `book_identifiers` → Merged into `book_external_ids`
 - `categories` → Replaced by `book_collections` with type='CATEGORY'
@@ -128,6 +129,7 @@
 - `book_lists_join` → Replaced by `book_collections_join`
 
 ### Key Changes
+
 1. **books.id** is now UUIDv7 (not provider IDs)
 2. **Provider IDs** moved to `book_external_ids.external_id`
 3. **Categories and lists** unified in `book_collections`

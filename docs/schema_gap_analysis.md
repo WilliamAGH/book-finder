@@ -7,6 +7,7 @@
 **What it is**: Special qualifiers like "New York Times Bestseller" or other search-specific attributes stored as a flexible key-value map.
 
 **Current Schema Coverage**:
+
 - ✅ **PARTIALLY COVERED** by `book_collections` + `book_collections_join`
   - NYT Bestseller → `collection_type='BESTSELLER_LIST'`, `source='NYT'`
   - Awards/Accolades → Could use `collection_type='AWARD'`
@@ -15,10 +16,12 @@
   - Can store arbitrary qualifier data as JSON
 
 **Gap**:
+
 - ⚠️ Qualifiers that don't fit the "collection" paradigm need a dedicated table
 - ⚠️ No direct mapping for arbitrary key-value pairs that aren't collections
 
 **Recommendation**:
+
 ```sql
 -- Option 1: Add to existing schema
 create table if not exists book_qualifiers (
@@ -45,13 +48,16 @@ create index on book_qualifiers(qualifier_key);
 **What it is**: List of book IDs that are recommended based on this book, cached to avoid repeated API calls.
 
 **Current Schema Coverage**:
+
 - ❌ **NOT COVERED** - No table for recommendation relationships
 
 **Gap**:
+
 - No way to persist recommendation relationships between books
 - No caching of recommendation metadata (score, reason, date cached)
 
 **Recommendation**:
+
 ```sql
 -- Option 1: Dedicated recommendation cache table
 create table if not exists book_recommendations (
@@ -78,6 +84,7 @@ create index on book_recommendations(cached_at);
 ### 3. Cover Image Metadata (width, height, isHighResolution in Book.java)
 
 **What it is**:
+
 - `coverImageWidth`: Width in pixels
 - `coverImageHeight`: Height in pixels
 - `isCoverHighResolution`: Boolean flag for quality
@@ -85,17 +92,20 @@ create index on book_recommendations(cached_at);
 - `fallbackCoverSource`: Backup source
 
 **Current Schema Coverage**:
+
 - ✅ **PARTIALLY COVERED** by `book_image_links`
   - Has `url` and `image_type` (small, thumbnail, large, etc.)
   - Has `source` field for provider
 - ❌ **NOT COVERED**: No width/height/quality metadata
 
 **Gap**:
+
 - No pixel dimensions stored
 - No quality/resolution indicators
 - No preferred/fallback source logic
 
 **Recommendation**:
+
 ```sql
 -- Option 1: Extend book_image_links table
 ALTER TABLE book_image_links
@@ -143,6 +153,7 @@ create index on book_cover_metadata(book_id);
 ## Recommended Actions
 
 ### Priority 1: Add Missing Tables
+
 ```sql
 -- 1. Book Recommendations Cache (REQUIRED)
 create table if not exists book_recommendations (
@@ -169,6 +180,7 @@ create table if not exists book_qualifiers (
 ```
 
 ### Priority 2: Extend Existing Tables
+
 ```sql
 -- Extend book_image_links with metadata
 ALTER TABLE book_image_links

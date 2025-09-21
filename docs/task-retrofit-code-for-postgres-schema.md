@@ -201,6 +201,7 @@ This document tracks all code changes required to retrofit the application for t
 - [ ] If embeddings return, back them with stored vectors in Postgres instead of Google fallback.
 
 ## Next Actions
+
 1. **Extend integration coverage** – baseline unit suite now passes via `./mvnw -q -DskipITs -Pci-skip-wro test`; add integration scenarios for dedupe, edition chaining, NYT ingest, and tag persistence ahead of controller DTO rewrites.
    - [x] Added sitemap scheduler smoke test (`SitemapRefreshSchedulerIntegrationTest`) to exercise snapshot upload, external hydration, and cover warmups together (2025-09-19).
    - [x] Published reusable Postgres fixtures (`PostgresFixtures` + `book_with_collections_and_tags.json`) for consistent test data (2025-09-19).
