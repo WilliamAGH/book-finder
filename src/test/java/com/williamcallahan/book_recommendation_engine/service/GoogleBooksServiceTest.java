@@ -10,6 +10,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.image.ExternalCoverFetchHelper;
+import com.williamcallahan.book_recommendation_engine.service.image.GoogleCoverUrlEvaluator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -46,6 +48,13 @@ class GoogleBooksServiceTest {
     @Mock // Added mock for BookDataOrchestrator
     private BookDataOrchestrator bookDataOrchestratorMock;
 
+    @Mock // New dependency required by GoogleBooksService constructor
+    private ExternalCoverFetchHelper externalCoverFetchHelperMock;
+
+    @Mock // Additional dependency required by newer constructor
+    private GoogleCoverUrlEvaluator googleCoverUrlEvaluatorMock;
+
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -59,10 +68,12 @@ class GoogleBooksServiceTest {
         // Manually instantiate GoogleBooksService with new constructor
         // Old constructor: new GoogleBooksService(webClientBuilderMock, s3RetryServiceMock, objectMapper, apiRequestMonitorMock);
         googleBooksService = new GoogleBooksService(
-                objectMapper, 
+                objectMapper,
                 apiRequestMonitorMock,
                 googleApiFetcherMock,
-                bookDataOrchestratorMock // Pass the new mock
+                bookDataOrchestratorMock,
+                externalCoverFetchHelperMock,
+                googleCoverUrlEvaluatorMock
         );
 
         // @Value fields are no longer in GoogleBooksService, they are in GoogleApiFetcher

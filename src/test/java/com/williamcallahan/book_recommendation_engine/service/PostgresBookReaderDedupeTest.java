@@ -45,7 +45,7 @@ class PostgresBookReaderDedupeTest {
         var collection = Mockito.mock(BookCollectionPersistenceService.class);
         var search = createBookSearchServiceMock();
 
-        PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om);
+        PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
 
         orchestrator = new BookDataOrchestrator(
                 s3RetryService,

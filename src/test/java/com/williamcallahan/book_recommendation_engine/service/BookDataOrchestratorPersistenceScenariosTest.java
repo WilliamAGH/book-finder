@@ -75,7 +75,7 @@ class BookDataOrchestratorPersistenceScenariosTest {
     void setUp() {
         ObjectMapper om = new ObjectMapper();
         bookS3CacheService = new BookS3CacheService(s3RetryService, om);
-        postgresBookRepository = new PostgresBookRepository(jdbcTemplate, om);
+        postgresBookRepository = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
         bookLookupService = new BookLookupService(jdbcTemplate);
         canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTemplate, om, supplementalPersistenceService, bookLookupService);
 

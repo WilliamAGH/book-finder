@@ -122,12 +122,11 @@ public class BookController {
         if (ValidationUtils.isNullOrBlank(identifier)) {
             return Mono.empty();
         }
-        Mono<Book> byId = bookDataOrchestrator.getBookByIdTiered(identifier);
-        Mono<Book> bySlug = Mono.defer(() -> {
-            Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
-            return lookup == null ? Mono.empty() : lookup;
+        // DRY: delegate to central orchestrator method that handles slug/ID resolution and fallbacks
+        return Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.fetchCanonicalBookReactive(identifier);
+            return lookup != null ? lookup : Mono.empty();
         });
-        return byId.switchIfEmpty(bySlug);
     }
 
     private SearchResponse buildSearchResponse(String query,
