@@ -1858,8 +1858,15 @@ public class BookDataOrchestrator {
                     JOIN work_clusters wc ON wc.id = wcm.cluster_id
                     LEFT JOIN book_external_ids bei
                            ON bei.book_id = b.id AND bei.source = 'GOOGLE_BOOKS'
-                    LEFT JOIN book_image_links bil
-                           ON bil.book_id = b.id AND bil.is_primary = true
+                    LEFT JOIN LATERAL (
+                           SELECT s3_image_path, url, source, width, height, is_high_resolution
+                           FROM book_image_links
+                           WHERE book_id = b.id
+                           ORDER BY COALESCE(is_high_resolution, false) DESC,
+                                    COALESCE(width, 0) DESC,
+                                    created_at DESC
+                           LIMIT 1
+                    ) bil ON TRUE
                     WHERE wcm1.book_id = ?
                       AND wcm.book_id <> ?
                     ORDER BY wcm.is_primary DESC,
