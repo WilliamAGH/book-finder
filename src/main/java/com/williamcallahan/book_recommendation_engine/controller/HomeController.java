@@ -71,6 +71,7 @@ public class HomeController {
     private final DuplicateBookService duplicateBookService;
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
     private final NewYorkTimesService newYorkTimesService;
+    private final boolean googleFallbackEnabled;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -139,6 +140,7 @@ public class HomeController {
                           DuplicateBookService duplicateBookService,
                           LocalDiskCoverCacheService localDiskCoverCacheService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled,
+                          @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled,
                           NewYorkTimesService newYorkTimesService) {
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.googleBooksService = googleBooksService;
@@ -149,6 +151,7 @@ public class HomeController {
         this.duplicateBookService = duplicateBookService;
         this.localDiskCoverCacheService = localDiskCoverCacheService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
+        this.googleFallbackEnabled = googleFallbackEnabled;
         this.newYorkTimesService = newYorkTimesService;
     }
 
@@ -690,6 +693,10 @@ public class HomeController {
                 if (results != null && !results.isEmpty()) {
                     logger.debug("Homepage filler populated from Postgres for query '{}' ({} results).", query, results.size());
                     return Mono.just(results);
+                }
+                if (!googleFallbackEnabled) {
+                    logger.debug("Postgres returned no homepage filler for query '{}', Google fallback disabled.", query);
+                    return Mono.just(Collections.emptyList());
                 }
                 logger.debug("Postgres returned no homepage filler for query '{}', falling back to Google Books.", query);
                 return googleBooksService.searchBooksAsyncReactive(query, null, limit, null)

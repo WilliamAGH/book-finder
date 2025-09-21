@@ -42,7 +42,9 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoCon
     org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration.class,
     org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration.class,
     // Disable reactive security auto-configuration for WebFlux endpoints
-    org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class
+    org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class,
+    // Disable SQL initialization to prevent automatic schema.sql execution
+    org.springframework.boot.autoconfigure.sql.init.SqlInitializationAutoConfiguration.class
 })
 @EnableCaching
 @EnableAsync

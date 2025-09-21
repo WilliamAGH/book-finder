@@ -48,13 +48,11 @@ public class BookController {
                                                             @RequestParam(name = "startIndex", defaultValue = "0") int startIndex,
                                                             @RequestParam(name = "maxResults", defaultValue = "10") int maxResults) {
         String normalizedQuery = SearchQueryUtils.normalize(query);
-        int safeStartIndex = PagingUtils.atLeast(startIndex, 0);
-        int safeMaxResults = PagingUtils.clamp(maxResults, 1, 50);
-        int desiredTotalResults = Math.min(200, safeStartIndex + safeMaxResults);
+        PagingUtils.Window window = PagingUtils.window(startIndex, maxResults, 10, 1, 50, 200);
 
-        return bookDataOrchestrator.searchBooksTiered(normalizedQuery, null, desiredTotalResults, null)
+        return bookDataOrchestrator.searchBooksTiered(normalizedQuery, null, window.totalRequested(), null)
                 .defaultIfEmpty(List.of())
-                .map(results -> buildSearchResponse(normalizedQuery, safeStartIndex, safeMaxResults, results))
+                .map(results -> buildSearchResponse(normalizedQuery, window.startIndex(), window.limit(), results))
                 .map(ResponseEntity::ok)
                 .onErrorResume(ex -> {
                     logger.error("Failed to search books for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
@@ -66,7 +64,7 @@ public class BookController {
     public Mono<ResponseEntity<AuthorSearchResponse>> searchAuthors(@RequestParam String query,
                                                                     @RequestParam(name = "limit", defaultValue = "10") int limit) {
         String normalizedQuery = SearchQueryUtils.normalize(query);
-        int safeLimit = PagingUtils.clamp(limit, 1, 100);
+        int safeLimit = PagingUtils.safeLimit(limit, 10, 1, 100);
 
         return bookDataOrchestrator.searchAuthors(normalizedQuery, safeLimit)
                 .defaultIfEmpty(List.of())
@@ -93,7 +91,7 @@ public class BookController {
     @GetMapping("/{identifier}/similar")
     public Mono<ResponseEntity<List<BookDto>>> getSimilarBooks(@PathVariable String identifier,
                                                                @RequestParam(name = "limit", defaultValue = "5") int limit) {
-        int safeLimit = PagingUtils.clamp(limit, 1, 20);
+        int safeLimit = PagingUtils.safeLimit(limit, 5, 1, 20);
         return fetchBook(identifier)
                 .flatMap(book -> recommendationService.getSimilarBooks(book.getId(), safeLimit)
                         .defaultIfEmpty(List.of())
