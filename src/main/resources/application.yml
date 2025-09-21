@@ -38,6 +38,9 @@ spring:
     max-in-memory-size: 10MB # Configure global max buffer size for WebClient
 
 app:
+  features:
+    google-fallback:
+      enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:false}
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}

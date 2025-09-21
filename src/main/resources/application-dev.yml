@@ -2,7 +2,7 @@
 spring:
   sql:
     init:
-      mode: always # Run schema.sql in development environment
+      mode: never # Disabled - schema managed manually in PostgreSQL
   jpa:
     hibernate:
       ddl-auto: validate # Validate schema against entities

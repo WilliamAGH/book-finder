@@ -208,7 +208,21 @@ comment on column work_cluster_members.is_primary is 'Marks the best/primary edi
 comment on column work_cluster_members.join_reason is 'Why this book was added to this cluster';
 
 -- View to easily see book editions
-create or replace view book_work_editions as
+-- Postgres does not allow CREATE OR REPLACE VIEW to add/drop/reorder columns.
+-- To keep startup idempotent and allow schema evolution, drop then recreate.
+drop view if exists book_work_editions;
+create view book_work_editions (
+  book_id,
+  title,
+  isbn13,
+  work_title,
+  related_book_id,
+  related_title,
+  related_isbn13,
+  related_publisher,
+  confidence,
+  cluster_method
+) as
 select
   b1.id as book_id,
   b1.title,
@@ -543,12 +557,16 @@ create unique index if not exists idx_book_search_view_book_id
   on book_search_view (book_id);
 
 -- Function to refresh the search view (call after bulk updates)
+drop function if exists refresh_book_search_view();
 create or replace function refresh_book_search_view()
-returns void as $$
+returns void
+language plpgsql
+as $$
 begin
-  refresh materialized view concurrently book_search_view;
+  -- Non-concurrent so it can run inside the initializer's transaction and within a function
+  refresh materialized view book_search_view;
 end;
-$$ language plpgsql;
+$$;
 
 -- Main search function combining multiple strategies
 create or replace function search_books(
