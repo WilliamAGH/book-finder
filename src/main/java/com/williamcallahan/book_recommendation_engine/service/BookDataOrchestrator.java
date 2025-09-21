@@ -35,7 +35,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -50,14 +49,12 @@ import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import org.postgresql.util.PGobject;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import java.sql.Date;
 import java.util.UUID;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
-import java.util.Set;
 import java.util.function.ToIntBiFunction;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 
@@ -134,6 +131,26 @@ public class BookDataOrchestrator {
 
     public void refreshSearchViewImmediately() {
         triggerSearchViewRefresh(true);
+    }
+
+    /**
+     * Fetches a canonical book record directly from Postgres without engaging external fallbacks.
+     *
+     * @param bookId Canonical UUID string for the book
+     * @return Optional containing the hydrated {@link Book} when present in Postgres
+     */
+    public Optional<Book> getBookFromDatabase(String bookId) {
+        return findInDatabaseById(bookId);
+    }
+
+    /**
+     * Retrieves a canonical book from Postgres using its slug.
+     *
+     * @param slug The slug to resolve
+     * @return Optional containing the hydrated {@link Book} when present in Postgres
+     */
+    public Optional<Book> getBookFromDatabaseBySlug(String slug) {
+        return findInDatabaseBySlug(slug);
     }
 
     private Mono<Book> fetchFromApisAndAggregate(String bookId) {
@@ -463,7 +480,6 @@ public class BookDataOrchestrator {
     }
 
     private Mono<List<Book>> executePagedSearch(String query, String langCode, int desiredTotalResults, String orderBy, boolean authenticated, Map<String, Object> queryQualifiers) {
-        final int maxResultsPerPage = 40;
         final int maxTotalResultsToFetch = desiredTotalResults <= 0
             ? 40
             : PagingUtils.clamp(desiredTotalResults, 1, 200);
@@ -736,6 +752,9 @@ public class BookDataOrchestrator {
         }
 
         JsonNode rawNode = node.get("rawJsonResponse");
+        if (rawNode == null) {
+            return node;
+        }
         boolean hasVolumeInfo = node.has("volumeInfo");
         String id = node.path("id").asText(null);
         String title = node.path("title").asText(null);
@@ -853,7 +872,7 @@ public class BookDataOrchestrator {
         }
 
         AtomicInteger processed = new AtomicInteger(0);
-        int totalTargets = expectedTotal > 0 ? expectedTotal : keys.size();
+        // int totalTargets = expectedTotal > 0 ? expectedTotal : keys.size();
 
         for (String key : keys) {
             Optional<String> jsonOptional = fetchJsonFromS3Key(key);
@@ -993,23 +1012,16 @@ public class BookDataOrchestrator {
                             String isbn10 = item.path("primary_isbn10").asText(null);
                             String providerRef = item.path("amazon_product_url").asText(null);
 
-                            String canonicalId = null;
-                            if (isbn13 != null) canonicalId = findInDatabaseByIsbn13(isbn13).map(Book::getId).orElse(null);
-                            if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByIsbn10(isbn10).map(Book::getId).orElse(null);
-                            if (canonicalId == null && isbn13 != null) canonicalId = findInDatabaseByAnyExternalId(isbn13).map(Book::getId).orElse(null);
-                            if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByAnyExternalId(isbn10).map(Book::getId).orElse(null);
+                            Book minimal = new Book();
+                            minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : IdGenerator.uuidV7()));
+                            minimal.setIsbn13(isbn13);
+                            minimal.setIsbn10(isbn10);
+                            minimal.setTitle(item.path("title").asText(null));
+                            minimal.setPublisher(item.path("publisher").asText(null));
+                            minimal.setExternalImageUrl(item.path("book_image").asText(null));
 
-                            if (canonicalId == null) {
-                                Book minimal = new Book();
-                                minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : IdGenerator.uuidV7()));
-                                minimal.setIsbn13(isbn13);
-                                minimal.setIsbn10(isbn10);
-                                minimal.setTitle(item.path("title").asText(null));
-                                minimal.setPublisher(item.path("publisher").asText(null));
-                                minimal.setExternalImageUrl(item.path("book_image").asText(null));
-                                saveToDatabase(minimal, null);
-                                canonicalId = minimal.getId();
-                            }
+                            saveToDatabaseEnrichOnMatch(minimal, null);
+                            String canonicalId = minimal.getId();
 
                             collectionPersistenceService.upsertListMembership(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
                         }
@@ -1961,12 +1973,12 @@ public class BookDataOrchestrator {
                     book.setPreviewLink(rs.getString("preview_link"));
                     book.setWebReaderLink(rs.getString("web_reader_link"));
                     book.setPurchaseLink(rs.getString("purchase_link"));
-                    Double averageRating = (Double) rs.getObject("average_rating");
-                    if (averageRating != null) {
-                        book.setAverageRating(averageRating);
+                    java.math.BigDecimal avgDecimal = rs.getBigDecimal("average_rating");
+                    if (avgDecimal != null) {
+                        book.setAverageRating(avgDecimal.doubleValue());
                         book.setHasRatings(Boolean.TRUE);
                     }
-                    Integer ratingsCount = (Integer) rs.getObject("ratings_count");
+                    Integer ratingsCount = rs.getObject("ratings_count", Integer.class);
                     if (ratingsCount != null) {
                         book.setRatingsCount(ratingsCount);
                         book.setHasRatings(ratingsCount > 0);
@@ -2008,8 +2020,18 @@ public class BookDataOrchestrator {
             }
             try {
                 String json = null;
-                if (value instanceof PGobject pgObject && pgObject.getValue() != null) {
-                    json = pgObject.getValue();
+                // Avoid compile-time dependency on org.postgresql.util.PGobject
+                Class<?> clazz = value.getClass();
+                if ("org.postgresql.util.PGobject".equals(clazz.getName())) {
+                    try {
+                        java.lang.reflect.Method getValue = clazz.getMethod("getValue");
+                        Object v = getValue.invoke(value);
+                        if (v != null) {
+                            json = v.toString();
+                        }
+                    } catch (ReflectiveOperationException ignored) {
+                        // Fall back to other parsing paths
+                    }
                 } else if (value instanceof String str) {
                     json = str;
                 }
