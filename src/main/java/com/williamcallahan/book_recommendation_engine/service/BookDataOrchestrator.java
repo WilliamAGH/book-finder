@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -146,35 +147,62 @@ public class BookDataOrchestrator {
         if (!externalFallbackEnabled) {
             return Mono.empty();
         }
+        final boolean looksLikeIsbn13 = IsbnUtils.isValidIsbn13(bookId);
+        final boolean looksLikeIsbn10 = IsbnUtils.isValidIsbn10(bookId);
+        final boolean looksLikeIsbn = looksLikeIsbn13 || looksLikeIsbn10;
+
         // This will collect JsonNodes from various API sources
         Mono<List<JsonNode>> apiResponsesMono = Mono.defer(() -> {
-            Mono<JsonNode> tier4Mono = googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
-                .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 4 Google Auth HIT for {}", bookId);})
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.fetchVolumeByIdAuthenticated(" + bookId + ")"));
+            Mono<JsonNode> tier4Mono = looksLikeIsbn
+                ? Mono.empty() // volume-by-id won't work for ISBN; prefer search path below
+                : googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
+                    .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 4 Google Auth HIT for {}", bookId);})
+                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 4 Google Auth API error for {}", bookId); return Mono.<JsonNode>empty(); });
 
-            Mono<JsonNode> tier3Mono = googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId)
-                .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 3 Google Unauth HIT for {}", bookId);})
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.fetchVolumeByIdUnauthenticated(" + bookId + ")"));
+            Mono<JsonNode> tier3Mono = looksLikeIsbn
+                ? Mono.empty()
+                : googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId)
+                    .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 3 Google Unauth HIT for {}", bookId);})
+                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 3 Google Unauth API error for {}", bookId); return Mono.<JsonNode>empty(); });
 
-            Mono<JsonNode> olMono = openLibraryBookDataService.fetchBookByIsbn(bookId)
-                .flatMap(book -> {
-                    try {
-                        logger.info("BookDataOrchestrator: Tier 5 OpenLibrary HIT for {}. Title: {}", bookId, book.getTitle());
-                        return Mono.just(objectMapper.valueToTree(book));
-                    } catch (IllegalArgumentException e) {
-                        LoggingUtils.error(logger, e, "Error converting OpenLibrary Book to JsonNode for {}", bookId);
-                        return Mono.<JsonNode>empty();
-                    }
-                })
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.openLibraryFetch(" + bookId + ")"));
+            // Google Books search by ISBN for better coverage when identifier is an ISBN
+            Mono<JsonNode> googleIsbnSearchMono = looksLikeIsbn
+                ? googleApiFetcher.searchVolumesUnauthenticated("isbn:" + bookId, 0, "relevance", null)
+                    .flatMap(resp -> Mono.justOrEmpty(resp != null && resp.has("items") && resp.get("items").isArray() && resp.get("items").size() > 0
+                        ? resp.get("items").get(0)
+                        : null))
+                    .switchIfEmpty(
+                        googleApiFetcher.searchVolumesAuthenticated("isbn:" + bookId, 0, "relevance", null)
+                            .flatMap(resp -> Mono.justOrEmpty(resp != null && resp.has("items") && resp.get("items").isArray() && resp.get("items").size() > 0
+                                ? resp.get("items").get(0)
+                                : null))
+                    )
+                    .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Google ISBN search HIT for {}", bookId);})
+                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Google ISBN search error for {}", bookId); return Mono.<JsonNode>empty(); })
+                : Mono.empty();
+
+            Mono<JsonNode> olMono = looksLikeIsbn
+                ? openLibraryBookDataService.fetchBookByIsbn(bookId)
+                    .flatMap(book -> {
+                        try {
+                            logger.info("BookDataOrchestrator: Tier 5 OpenLibrary HIT for {}. Title: {}", bookId, book.getTitle());
+                            return Mono.just(objectMapper.valueToTree(book));
+                        } catch (IllegalArgumentException e) {
+                            LoggingUtils.error(logger, e, "Error converting OpenLibrary Book to JsonNode for {}", bookId);
+                            return Mono.<JsonNode>empty();
+                        }
+                    })
+                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 5 OpenLibrary API error for {}", bookId); return Mono.<JsonNode>empty(); })
+                : Mono.empty();
             
             return Mono.zip(
                     tier4Mono.defaultIfEmpty(objectMapper.createObjectNode()),
                     tier3Mono.defaultIfEmpty(objectMapper.createObjectNode()),
+                    googleIsbnSearchMono.defaultIfEmpty(objectMapper.createObjectNode()),
                     olMono.defaultIfEmpty(objectMapper.createObjectNode())
                 )
                 .map(tuple -> 
-                    java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3())
+                    java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3(), tuple.getT4())
                         .filter(jsonNode -> jsonNode != null && jsonNode.size() > 0)
                         .collect(java.util.stream.Collectors.toList())
                 );

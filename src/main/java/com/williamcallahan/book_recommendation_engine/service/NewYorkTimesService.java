@@ -13,6 +13,8 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
@@ -23,11 +25,10 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 // import java.util.ArrayList; // Unused
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
-
-import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
-import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 
 @Service
 @Slf4j
@@ -39,6 +40,7 @@ public class NewYorkTimesService {
 
     private final String nytApiKey;
     private final PostgresBookRepository postgresBookRepository;
+    private static final DateTimeFormatter API_DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
 
     public NewYorkTimesService(WebClient.Builder webClientBuilder,
                                @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
@@ -57,17 +59,24 @@ public class NewYorkTimesService {
      * @return Mono<JsonNode> representing the API response, or empty on error
      */
     public Mono<JsonNode> fetchBestsellerListOverview() {
-        String overviewUrl = "/lists/overview.json?api-key=" + nytApiKey;
-        log.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
+        return fetchBestsellerListOverview(null);
+    }
+
+    public Mono<JsonNode> fetchBestsellerListOverview(@Nullable LocalDate publishedDate) {
+        StringBuilder overviewUrl = new StringBuilder("/lists/overview.json?api-key=").append(nytApiKey);
+        if (publishedDate != null) {
+            overviewUrl.append("&published_date=").append(publishedDate.format(API_DATE_FORMAT));
+        }
+        log.info("Fetching NYT bestseller list overview from API: {}{}", nytApiBaseUrl, overviewUrl);
         return webClient.mutate()
                 .baseUrl(nytApiBaseUrl)
                 .build()
                 .get()
-                .uri(overviewUrl)
+                .uri(overviewUrl.toString())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .onErrorResume(e -> {
-                    LoggingUtils.error(log, e, "Error fetching NYT bestseller list overview from API");
+                    LoggingUtils.error(log, e, "Error fetching NYT bestseller list overview from API for date {}", publishedDate);
                     return Mono.empty();
                 });
     }

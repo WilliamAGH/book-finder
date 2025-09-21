@@ -18,19 +18,20 @@ import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
-import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.PrematureCloseException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Date;
 import java.util.Objects; // Added import
+import java.time.Duration;
 
 @Service
 @Slf4j
@@ -54,7 +55,6 @@ public class OpenLibraryBookDataService {
      */
     @RateLimiter(name = "openLibraryDataService")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "fetchBookFallback")
-    @TimeLimiter(name = "openLibraryDataService")
     public Mono<Book> fetchBookByIsbn(String isbn) {
         if (isbn == null || isbn.trim().isEmpty()) {
             log.warn("ISBN is null or empty. Cannot fetch book from OpenLibrary.");
@@ -77,6 +77,11 @@ public class OpenLibraryBookDataService {
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(5))
+                .onErrorResume(PrematureCloseException.class, e -> {
+                    log.debug("OpenLibrary connection closed early for ISBN {}: {}", isbn, e.toString());
+                    return Mono.empty();
+                })
                 .flatMap(responseNode -> {
                     JsonNode bookDataNode = responseNode.path(bibkey);
                     if (bookDataNode.isMissingNode() || bookDataNode.isEmpty()) {
@@ -127,6 +132,11 @@ public class OpenLibraryBookDataService {
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(5))
+                .onErrorResume(PrematureCloseException.class, e -> {
+                    log.debug("OpenLibrary search connection closed early for title '{}': {}", title, e.toString());
+                    return Mono.empty();
+                })
                 .flatMapMany(responseNode -> {
                     if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
                         return Flux.empty();

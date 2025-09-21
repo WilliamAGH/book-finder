@@ -25,6 +25,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
+import reactor.netty.http.client.PrematureCloseException;
 
 import java.io.IOException;
 import java.util.Optional;
@@ -127,7 +128,7 @@ public class GoogleApiFetcher {
                                 // Don't retry on 429 (rate limit) - fail fast instead
                                 return wcre.getStatusCode().is5xxServerError();
                             }
-                            return throwable instanceof IOException || throwable instanceof WebClientRequestException;
+                            return throwable instanceof IOException || throwable instanceof WebClientRequestException || throwable instanceof PrematureCloseException;
                         })
                         .doBeforeRetry(retrySignal -> {
                             if (retrySignal.failure() instanceof WebClientResponseException wcre) {
@@ -152,6 +153,12 @@ public class GoogleApiFetcher {
                     }
                 })
                 .onErrorResume(e -> {
+                    if (e instanceof PrematureCloseException) {
+                        // Treat premature close as transient/cancellation; do not trip the circuit breaker
+                        LoggingUtils.warn(log, e, "Connection prematurely closed during Google API call: {}", url);
+                        apiRequestMonitor.recordFailedRequest(endpoint, "Premature close: " + e.getMessage());
+                        return Mono.empty();
+                    }
                     if (e instanceof WebClientResponseException wcre) {
                         LoggingUtils.error(log, wcre,
                                 "Error fetching from Google API after retries: HTTP Status {}, Body: {}",
@@ -337,6 +344,14 @@ public class GoogleApiFetcher {
                     }
                 })
                 .onErrorResume(e -> {
+                    if (e instanceof PrematureCloseException) {
+                        // Treat premature close as transient/cancellation; do not trip the circuit breaker
+                        LoggingUtils.warn(log, e,
+                            "Connection prematurely closed during Google API search ({}) for query '{}' at startIndex {}",
+                            authStatus, query, startIndex);
+                        apiRequestMonitor.recordFailedRequest(endpoint, "Premature close: " + e.getMessage());
+                        return Mono.empty();
+                    }
                     if (e instanceof WebClientResponseException wcre) {
                         LoggingUtils.error(log, wcre,
                             "Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries: HTTP Status {}, Body: {}",

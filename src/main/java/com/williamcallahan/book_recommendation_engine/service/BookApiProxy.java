@@ -25,7 +25,6 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -383,11 +382,7 @@ public class BookApiProxy {
         
         try {
             // Ensure directory exists
-            Files.createDirectories(bookFile.getParent());
-
-            // Convert to JSON and save using centralized writer
-            String json = BookJsonWriter.toJsonString(book);
-            Files.writeString(bookFile, json, StandardCharsets.UTF_8);
+            BookJsonWriter.writeToFile(book, bookFile);
             log.debug("Saved book {} to local cache", bookId);
         } catch (Exception e) {
             LoggingUtils.warn(log, e, "Error saving book to local cache");
