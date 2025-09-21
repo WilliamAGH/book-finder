@@ -8,6 +8,7 @@ const { Client } = require('pg');
 const { S3Client, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 // ============================================================================
 // CONFIGURATION
@@ -1389,7 +1390,11 @@ async function migrateNytLists({ s3Client, bucket, batchSize, migrator }) {
       try {
         const getCommand = new GetObjectCommand({ Bucket: bucket, Key: key });
         const s3Object = await s3Client.send(getCommand);
-        const bodyString = await streamToString(s3Object.Body);
+        const bodyString = await streamToString(s3Object.Body, {
+          key,
+          contentEncoding: s3Object.ContentEncoding,
+          contentType: s3Object.ContentType
+        });
         const ordinal = processed + 1;
         await migrator.migrateList(key, bodyString, ordinal);
         processed += 1;
@@ -1412,12 +1417,32 @@ async function migrateNytLists({ s3Client, bucket, batchSize, migrator }) {
 // MAIN MIGRATION LOGIC
 // ============================================================================
 
-async function streamToString(stream) {
+async function streamToString(stream, options = {}) {
   const chunks = [];
   for await (const chunk of stream) {
-    chunks.push(chunk);
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString('utf-8');
+
+  let buffer = Buffer.concat(chunks);
+  const encoding = (options.contentEncoding || '').toLowerCase();
+  const contentType = (options.contentType || '').toLowerCase();
+  const key = options.key || 'unknown';
+
+  const looksCompressed =
+    encoding.includes('gzip') ||
+    encoding.includes('x-gzip') ||
+    contentType === 'application/x-gzip' ||
+    (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b);
+
+  if (looksCompressed) {
+    try {
+      buffer = zlib.gunzipSync(buffer);
+    } catch (err) {
+      throw new Error(`Unable to gunzip S3 object ${key}: ${err.message}`);
+    }
+  }
+
+  return buffer.toString('utf-8');
 }
 
 function loadEnvFile() {
@@ -1526,7 +1551,11 @@ async function migrate() {
         // Fetch from S3
         const getCommand = new GetObjectCommand({ Bucket: s3Bucket, Key: key });
         const s3Object = await s3Client.send(getCommand);
-        const bodyString = await streamToString(s3Object.Body);
+        const bodyString = await streamToString(s3Object.Body, {
+          key,
+          contentEncoding: s3Object.ContentEncoding,
+          contentType: s3Object.ContentType
+        });
 
         if (key.startsWith('books/')) {
           const recordIndex = processedBooks + 1;
