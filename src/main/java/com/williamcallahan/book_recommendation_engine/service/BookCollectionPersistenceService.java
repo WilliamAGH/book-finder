@@ -1,6 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import org.springframework.dao.DataAccessException;
@@ -31,19 +32,22 @@ public class BookCollectionPersistenceService {
         try {
             String id = jdbcTemplate.queryForObject(
                 "INSERT INTO book_collections (id, collection_type, source, display_name, normalized_name, created_at, updated_at) " +
-                "VALUES (?, 'CATEGORY', 'GOOGLE_BOOKS', ?, ?, NOW(), NOW()) " +
+                "VALUES (?, 'CATEGORY', ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (collection_type, source, normalized_name) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = NOW() RETURNING id",
                 (rs, rowNum) -> rs.getString("id"),
-                IdGenerator.generateShort(), displayName, normalized
+                IdGenerator.generateShort(),
+                ApplicationConstants.Provider.GOOGLE_BOOKS,
+                displayName,
+                normalized
             );
             return Optional.ofNullable(id);
         } catch (DataAccessException ex) {
-            String existing = JdbcUtils.optionalString(
+            return JdbcUtils.optionalString(
                 jdbcTemplate,
-                "SELECT id FROM book_collections WHERE collection_type = 'CATEGORY' AND source = 'GOOGLE_BOOKS' AND normalized_name = ?",
+                "SELECT id FROM book_collections WHERE collection_type = 'CATEGORY' AND source = ? AND normalized_name = ?",
+                ApplicationConstants.Provider.GOOGLE_BOOKS,
                 normalized
-            ).orElse(null);
-            return Optional.ofNullable(existing);
+            );
         }
     }
 
@@ -51,7 +55,8 @@ public class BookCollectionPersistenceService {
         if (jdbcTemplate == null || collectionId == null || bookId == null) {
             return;
         }
-        jdbcTemplate.update(
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
             "INSERT INTO book_collections_join (id, collection_id, book_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW()) " +
             "ON CONFLICT (collection_id, book_id) DO UPDATE SET updated_at = NOW()",
             IdGenerator.generateLong(),
@@ -111,7 +116,8 @@ public class BookCollectionPersistenceService {
             return;
         }
 
-        jdbcTemplate.update(
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
             "INSERT INTO book_collections_join (id, collection_id, book_id, position, weeks_on_list, rank_last_week, peak_position, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json, created_at, updated_at) " +
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
             "ON CONFLICT (collection_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = COALESCE(EXCLUDED.weeks_on_list, book_collections_join.weeks_on_list), rank_last_week = COALESCE(EXCLUDED.rank_last_week, book_collections_join.rank_last_week), peak_position = COALESCE(EXCLUDED.peak_position, book_collections_join.peak_position), provider_isbn13 = COALESCE(EXCLUDED.provider_isbn13, book_collections_join.provider_isbn13), provider_isbn10 = COALESCE(EXCLUDED.provider_isbn10, book_collections_join.provider_isbn10), provider_book_ref = COALESCE(EXCLUDED.provider_book_ref, book_collections_join.provider_book_ref), raw_item_json = EXCLUDED.raw_item_json, updated_at = NOW()",
@@ -144,25 +150,22 @@ public class BookCollectionPersistenceService {
         String deterministicKey = source + ":" + providerListCode + ":" + publishedDate.toString();
         String listId = UUID.nameUUIDFromBytes(deterministicKey.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
 
-        try {
-            jdbcTemplate.update(
-                "INSERT INTO book_lists (list_id, source, provider_list_id, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
-                "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, bestsellers_date = EXCLUDED.bestsellers_date, updated_frequency = EXCLUDED.updated_frequency, raw_list_json = EXCLUDED.raw_list_json, updated_at = now()",
-                listId,
-                source,
-                providerListId,
-                providerListCode,
-                displayName,
-                bestsellersDate,
-                publishedDate,
-                updatedFrequency,
-                rawListJson != null ? rawListJson.toString() : null
-            );
-            return Optional.of(listId);
-        } catch (Exception e) {
-            return Optional.of(listId);
-        }
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
+            "INSERT INTO book_lists (list_id, source, provider_list_id, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
+            "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, bestsellers_date = EXCLUDED.bestsellers_date, updated_frequency = EXCLUDED.updated_frequency, raw_list_json = EXCLUDED.raw_list_json, updated_at = now()",
+            listId,
+            source,
+            providerListId,
+            providerListCode,
+            displayName,
+            bestsellersDate,
+            publishedDate,
+            updatedFrequency,
+            rawListJson != null ? rawListJson.toString() : null
+        );
+        return Optional.of(listId);
     }
 
     public void upsertListMembership(String listId,
@@ -177,7 +180,8 @@ public class BookCollectionPersistenceService {
             return;
         }
 
-        jdbcTemplate.update(
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
             "INSERT INTO book_lists_join (list_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json) " +
             "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
             "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, provider_book_ref = EXCLUDED.provider_book_ref, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",

@@ -1,8 +1,10 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,18 +28,19 @@ public class BookSupplementalPersistenceService {
     }
 
     public void persistAuthors(String bookId, List<String> authors) {
-        if (jdbcTemplate == null || bookId == null || authors == null || authors.isEmpty()) {
+        if (jdbcTemplate == null || ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(authors)) {
             return;
         }
 
         int position = 0;
         for (String author : authors) {
-            if (author == null || author.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(author)) {
                 continue;
             }
             String normalized = author.toLowerCase().replaceAll("[^a-z0-9\\s]", "").trim();
             String authorId = upsertAuthor(author, normalized);
-            jdbcTemplate.update(
+            JdbcUtils.executeUpdate(
+                jdbcTemplate,
                 "INSERT INTO book_authors_join (id, book_id, author_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (book_id, author_id) DO UPDATE SET position = EXCLUDED.position, updated_at = NOW()",
                 IdGenerator.generateLong(),
@@ -49,12 +52,12 @@ public class BookSupplementalPersistenceService {
     }
 
     public void persistCategories(String bookId, List<String> categories) {
-        if (bookId == null || categories == null || categories.isEmpty()) {
+        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(categories)) {
             return;
         }
 
         for (String category : categories) {
-            if (category == null || category.isBlank()) {
+            if (ValidationUtils.isNullOrBlank(category)) {
                 continue;
             }
             collectionPersistenceService.upsertCategory(category)
@@ -63,15 +66,12 @@ public class BookSupplementalPersistenceService {
     }
 
     public void assignQualifierTags(String bookId, Map<String, Object> qualifiers) {
-        if (bookId == null || qualifiers == null || qualifiers.isEmpty()) {
+        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(qualifiers)) {
             return;
         }
 
         qualifiers.forEach((key, value) -> {
-            if (key == null) {
-                return;
-            }
-            if (key.trim().isEmpty()) {
+            if (ValidationUtils.isNullOrBlank(key)) {
                 return;
             }
             Double confidence = (value instanceof Boolean && (Boolean) value) ? 1.0 : null;
@@ -79,8 +79,8 @@ public class BookSupplementalPersistenceService {
                 bookId,
                 key,
                 key,
-                "QUALIFIER",
-                "QUALIFIER",
+                ApplicationConstants.Tag.QUALIFIER,
+                ApplicationConstants.Tag.QUALIFIER,
                 confidence,
                 serializeQualifierMetadata(value)
             );
@@ -93,18 +93,15 @@ public class BookSupplementalPersistenceService {
                            String source,
                            Double confidence,
                            Map<String, Object> metadata) {
-        if (bookId == null || key == null) {
-            return;
-        }
-        if (key.trim().isEmpty()) {
+        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrBlank(key)) {
             return;
         }
         String resolvedDisplayName = displayName != null ? displayName : key;
-        Map<String, Object> metadataMap = metadata != null && !metadata.isEmpty()
+        Map<String, Object> metadataMap = !ValidationUtils.isNullOrEmpty(metadata)
             ? metadata
             : Map.of("value", resolvedDisplayName);
         String metadataJson = serializeMetadata(metadataMap);
-        assignTagWithSerializedMetadata(bookId, key, resolvedDisplayName, "QUALIFIER", source, confidence, metadataJson);
+        assignTagWithSerializedMetadata(bookId, key, resolvedDisplayName, ApplicationConstants.Tag.QUALIFIER, source, confidence, metadataJson);
     }
 
     private void assignTagInternal(String bookId,
@@ -116,7 +113,8 @@ public class BookSupplementalPersistenceService {
             return;
         }
 
-        jdbcTemplate.update(
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
             "INSERT INTO book_tag_assignments (id, book_id, tag_id, source, confidence, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?::jsonb, NOW()) " +
             "ON CONFLICT (book_id, tag_id, source) DO UPDATE SET metadata = EXCLUDED.metadata, confidence = COALESCE(EXCLUDED.confidence, book_tag_assignments.confidence)",
             IdGenerator.generateLong(),
@@ -177,7 +175,7 @@ public class BookSupplementalPersistenceService {
                                                  String source,
                                                  Double confidence,
                                                  String metadataJson) {
-        if (bookId == null || key == null) {
+        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrBlank(key)) {
             return;
         }
 

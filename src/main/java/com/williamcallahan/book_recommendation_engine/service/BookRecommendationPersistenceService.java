@@ -2,8 +2,8 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -21,10 +21,10 @@ import java.util.UUID;
  * can reuse Postgres/S3 data before touching external APIs.
  */
 @Service
+@Slf4j
 public class BookRecommendationPersistenceService {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookRecommendationPersistenceService.class);
-
+    
     private static final String PIPELINE_SOURCE = "RECOMMENDATION_PIPELINE";
     private static final double SCORE_NORMALIZER = 10.0d; // keeps stored scores within 0..1 range
 
@@ -50,7 +50,7 @@ public class BookRecommendationPersistenceService {
                 .collectList()
                 .flatMap(resolved -> {
                     if (resolved.isEmpty()) {
-                        logger.debug("No canonical recommendations resolved for source {}. Skipping persistence.", sourceUuid);
+                        log.debug("No canonical recommendations resolved for source {}. Skipping persistence.", sourceUuid);
                         return Mono.empty();
                     }
                     return Mono.fromCallable(() -> {
@@ -59,17 +59,18 @@ public class BookRecommendationPersistenceService {
                             return true;
                         })
                         .subscribeOn(Schedulers.boundedElastic())
-                        .doOnSuccess(ignored -> logger.info("Persisted {} recommendation(s) for source {} via Postgres pipeline.", resolved.size(), sourceUuid))
+                        .doOnSuccess(ignored -> log.info("Persisted {} recommendation(s) for source {} via Postgres pipeline.", resolved.size(), sourceUuid))
                         .then();
                 }))
             .onErrorResume(ex -> {
-                logger.warn("Failed to persist recommendations for book {}: {}", sourceBook.getId(), ex.getMessage(), ex);
+                log.warn("Failed to persist recommendations for book {}: {}", sourceBook.getId(), ex.getMessage(), ex);
                 return Mono.empty();
             });
     }
 
     private void deleteExistingPipelineRows(UUID sourceUuid) {
-        jdbcTemplate.update(
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
             "DELETE FROM book_recommendations WHERE source_book_id = ? AND source = ?",
             sourceUuid,
             PIPELINE_SOURCE
@@ -80,7 +81,8 @@ public class BookRecommendationPersistenceService {
         double normalisedScore = Math.max(0.0d, Math.min(1.0d, candidate.record().score() / SCORE_NORMALIZER));
         String reason = formatReasons(candidate.record().reasons());
 
-        jdbcTemplate.update(
+        JdbcUtils.executeUpdate(
+            jdbcTemplate,
             "INSERT INTO book_recommendations (id, source_book_id, recommended_book_id, source, score, reason) " +
             "VALUES (?, ?, ?, ?, ?, ?) " +
             "ON CONFLICT (source_book_id, recommended_book_id, source) " +
@@ -117,12 +119,12 @@ public class BookRecommendationPersistenceService {
                     try {
                         return Mono.just(UUID.fromString(resolved.getId()));
                     } catch (IllegalArgumentException inner) {
-                        logger.debug("Resolved book {} still lacks canonical UUID: {}", identifier, resolved.getId());
+                        log.debug("Resolved book {} still lacks canonical UUID: {}", identifier, resolved.getId());
                         return Mono.empty();
                     }
                 })
                 .onErrorResume(err -> {
-                    logger.debug("Error resolving canonical book for {}: {}", identifier, err.getMessage());
+                    log.debug("Error resolving canonical book for {}: {}", identifier, err.getMessage());
                     return Mono.empty();
                 });
         }

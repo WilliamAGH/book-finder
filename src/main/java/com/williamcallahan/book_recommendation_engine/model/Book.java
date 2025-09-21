@@ -1,8 +1,6 @@
 /**
  * Core book entity model containing all book metadata and cover image information
  *
- * @author William Callahan
- *
  * Features:
  * - Represents books fetched from external sources like Google Books API
  * - Stores comprehensive book details including bibliographic data
@@ -12,15 +10,25 @@
 package com.williamcallahan.book_recommendation_engine.model;
 
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
-
-import java.util.Date;
-import java.util.List;
-import java.util.Objects;
 import java.util.ArrayList;
-import java.util.Map;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
+import lombok.AllArgsConstructor;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Getter
+@Setter
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Book {
+
+    @EqualsAndHashCode.Include
     private String id;
     private String slug;
     private String title;
@@ -28,7 +36,6 @@ public class Book {
     private String description;
     private String s3ImagePath;
     private String externalImageUrl;
-    // Replaced by s3ImagePath (internal) and externalImageUrl (original)
     private String isbn10;
     private String isbn13;
     private Date publishedDate;
@@ -44,298 +51,39 @@ public class Book {
     private String infoLink;
     private String previewLink;
     private String purchaseLink;
-
     private Double listPrice;
     private String currencyCode;
     private String webReaderLink;
-    
     private Boolean pdfAvailable;
     private Boolean epubAvailable;
-
     private Integer coverImageWidth;
     private Integer coverImageHeight;
     private Boolean isCoverHighResolution;
-
     private Double heightCm;
     private Double widthCm;
     private Double thicknessCm;
     private Double weightGrams;
-
     private CoverImages coverImages;
-
     private Integer editionNumber;
     private String editionGroupKey;
-
     private List<EditionInfo> otherEditions;
-    private String asin; // For Amazon Standard Identification Number, useful for Audible
-    
-    // Map to store special qualifiers such as "new york times bestseller" or other search-specific attributes
+    private String asin;
     private Map<String, Object> qualifiers;
-
-    // List to store IDs of recommended books, to be cached in S3 JSON
     private List<String> cachedRecommendationIds;
-
-    // Transient field to store the raw JSON response from Google Books API for provenance logging
     private transient String rawJsonResponse;
 
-    /**
-     * Represents membership of a book within a normalized collection or list.
-     * Collections cover categories, bestseller lists, or curated shelves backed by Postgres tables.
-     */
-    public static class CollectionAssignment {
-        private String collectionId;
-        private String name;
-        private String collectionType;
-        private Integer rank;
-        private String source;
-
-        public CollectionAssignment() {
-        }
-
-        public CollectionAssignment(String collectionId, String name, String collectionType, Integer rank, String source) {
-            this.collectionId = collectionId;
-            this.name = name;
-            this.collectionType = collectionType;
-            this.rank = rank;
-            this.source = source;
-        }
-
-        public String getCollectionId() {
-            return collectionId;
-        }
-
-        public void setCollectionId(String collectionId) {
-            this.collectionId = collectionId;
-        }
-
-        public String getName() {
-            return name;
-        }
-
-        public void setName(String name) {
-            this.name = name;
-        }
-
-        public String getCollectionType() {
-            return collectionType;
-        }
-
-        public void setCollectionType(String collectionType) {
-            this.collectionType = collectionType;
-        }
-
-        public Integer getRank() {
-            return rank;
-        }
-
-        public void setRank(Integer rank) {
-            this.rank = rank;
-        }
-
-        public String getSource() {
-            return source;
-        }
-
-        public void setSource(String source) {
-            this.source = source;
-        }
-    }
-
-    /**
-     * Nested class representing alternate editions of a book
-     *
-     * Features:
-     * - Contains edition-specific metadata like ISBN and publication date
-     * - Stores unique identifiers for different book formats
-     * - Tracks cover image URLs specific to each edition
-     */
-    public static class EditionInfo {
-        private String googleBooksId;
-        private String type;
-        private String identifier;
-        private String editionIsbn10;
-        private String editionIsbn13;
-        private Date publishedDate;
-        private String coverImageUrl;
-
-        /**
-         * Default constructor for EditionInfo
-         */
-        public EditionInfo() {}
-
-        /**
-         * Full constructor for EditionInfo
-         *
-         * @param googleBooksId Google Books identifier
-         * @param type Type of edition or identifier
-         * @param identifier Identifier value
-         * @param editionIsbn10 ISBN-10 for this edition
-         * @param editionIsbn13 ISBN-13 for this edition
-         * @param publishedDate Publication date
-         * @param coverImageUrl Cover image URL
-         */
-        public EditionInfo(String googleBooksId, String type, String identifier, String editionIsbn10, String editionIsbn13, Date publishedDate, String coverImageUrl) {
-            this.googleBooksId = googleBooksId;
-            this.type = type;
-            this.identifier = identifier;
-            this.editionIsbn10 = editionIsbn10;
-            this.editionIsbn13 = editionIsbn13;
-            this.publishedDate = publishedDate;
-            this.coverImageUrl = coverImageUrl;
-        }
-
-        /**
-         * Get Google Books identifier
-         *
-         * @return Google Books identifier
-         */
-        public String getGoogleBooksId() {
-            return googleBooksId;
-        }
-
-        /**
-         * Set Google Books identifier
-         *
-         * @param googleBooksId Google Books identifier
-         */
-        public void setGoogleBooksId(String googleBooksId) {
-            this.googleBooksId = googleBooksId;
-        }
-
-        /**
-         * Get edition type or identifier type
-         *
-         * @return Edition type
-         */
-        public String getType() {
-            return type;
-        }
-
-        /**
-         * Set edition type or identifier type
-         *
-         * @param type Edition type
-         */
-        public void setType(String type) {
-            this.type = type;
-        }
-
-        /**
-         * Get identifier value for this edition
-         *
-         * @return Edition identifier
-         */
-        public String getIdentifier() {
-            return identifier;
-        }
-
-        /**
-         * Set identifier value for this edition
-         *
-         * @param identifier Edition identifier
-         */
-        public void setIdentifier(String identifier) {
-            this.identifier = identifier;
-        }
-
-        /**
-         * Get specific ISBN-10 for this edition
-         * 
-         * @return Specific ISBN-10
-         */
-        public String getEditionIsbn10() {
-            return editionIsbn10;
-        }
-
-        /**
-         * Set specific ISBN-10 for this edition
-         * 
-         * @param editionIsbn10 Specific ISBN-10
-         */
-        public void setEditionIsbn10(String editionIsbn10) {
-            this.editionIsbn10 = editionIsbn10;
-        }
-
-        /**
-         * Get specific ISBN-13 for this edition
-         * 
-         * @return Specific ISBN-13
-         */
-        public String getEditionIsbn13() {
-            return editionIsbn13;
-        }
-
-        /**
-         * Set specific ISBN-13 for this edition
-         * 
-         * @param editionIsbn13 Specific ISBN-13
-         */
-        public void setEditionIsbn13(String editionIsbn13) {
-            this.editionIsbn13 = editionIsbn13;
-        }
-
-        /**
-         * Get edition-specific publication date
-         * - Different formats may have different publication dates
-         * 
-         * @return Edition publication date
-         */
-        public Date getPublishedDate() {
-            return publishedDate;
-        }
-
-        /**
-         * Set edition-specific publication date
-         * - Different formats may have different publication dates
-         * 
-         * @param publishedDate Edition publication date
-         */
-        public void setPublishedDate(Date publishedDate) {
-            this.publishedDate = publishedDate;
-        }
-
-        /**
-         * Get edition-specific cover image URL
-         * - Different editions may have different cover images
-         * 
-         * @return Edition cover image URL
-         */
-        public String getCoverImageUrl() {
-            return coverImageUrl;
-        }
-
-        /**
-         * Set edition-specific cover image URL
-         * - Different editions may have different cover images
-         * 
-         * @param coverImageUrl Edition cover image URL
-         */
-        public void setCoverImageUrl(String coverImageUrl) {
-            this.coverImageUrl = coverImageUrl;
-        }
-    }
-
-    /**
-     * Default constructor
-     * - Initializes empty otherEditions collection
-     */
     public Book() {
         this.otherEditions = new ArrayList<>();
         this.qualifiers = new HashMap<>();
         this.cachedRecommendationIds = new ArrayList<>();
     }
 
-    /**
-     * Full constructor with essential book properties
-     * 
-     * @param id Unique identifier for the book
-     * @param title Book title
-     * @param authors List of book authors
-     * @param description Book description or summary
-     * @param s3ImagePath Our S3 path or local cached path to the cover image
-     * @param externalImageUrl External original image source full URL
-     */
-    public Book(String id, String title, List<String> authors, String description, String s3ImagePath, String externalImageUrl) {
+    public Book(String id,
+                String title,
+                List<String> authors,
+                String description,
+                String s3ImagePath,
+                String externalImageUrl) {
         this.id = id;
         this.title = title;
         this.authors = authors;
@@ -347,235 +95,18 @@ public class Book {
         this.cachedRecommendationIds = new ArrayList<>();
     }
 
-    
-
-    /**
-     * Get the book's unique identifier
-     * 
-     * @return Unique book identifier
-     */
-    public String getId() {
-        return id;
-    }
-
-    /**
-     * Set the book's unique identifier
-     * 
-     * @param id Unique book identifier
-     */
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getSlug() {
-        return slug;
-    }
-
-    public void setSlug(String slug) {
-        this.slug = slug;
-    }
-
-    /**
-     * Get the book's title
-     * 
-     * @return Book title
-     */
-    public String getTitle() {
-        return title;
-    }
-
-    /**
-     * Set the book's title
-     * 
-     * @param title Book title
-     */
-    public void setTitle(String title) {
-        this.title = title;
-    }
-
-    /**
-     * Get the list of book authors
-     * 
-     * @return List of author names
-     */
-    public List<String> getAuthors() {
-        return authors;
-    }
-
-    /**
-     * Set the list of book authors
-     * - Handles null input by creating an empty list
-     * - Filters out null or empty author strings
-     * - Trims author names for consistency
-     * 
-     * @param authors List of author names (may be null)
-     */
     public void setAuthors(List<String> authors) {
         if (authors == null) {
             this.authors = new ArrayList<>();
-        } else {
-            this.authors = authors.stream()
-                    .filter(Objects::nonNull)
-                    .map(String::trim)
-                    .filter(author -> !author.isEmpty())
-                    .collect(Collectors.toList());
+            return;
         }
+        this.authors = authors.stream()
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(author -> !author.isEmpty())
+            .collect(Collectors.toList());
     }
 
-    /**
-     * Get the book description or summary
-     * 
-     * @return Book description
-     */
-    public String getDescription() {
-        return description;
-    }
-
-    /**
-     * Set the book description or summary
-     * 
-     * @param description Book description
-     */
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    /**
-     * Get the S3 path (or local cached path) to the book cover image
-     * 
-     * @return S3 path or local cached path
-     */
-    public String getS3ImagePath() {
-        return s3ImagePath;
-    }
-
-    /**
-     * Set the S3 path (or local cached path) to the book cover image
-     * 
-     * @param s3ImagePath S3 path or local cached path
-     */
-    public void setS3ImagePath(String s3ImagePath) {
-        this.s3ImagePath = s3ImagePath;
-    }
-
-    // Backward-compatible alias for existing call sites: prefer s3 path if available, otherwise external
-    public String getCoverImageUrl() {
-        return (s3ImagePath != null && !s3ImagePath.isEmpty()) ? s3ImagePath : externalImageUrl;
-    }
-
-    public void setCoverImageUrl(String coverImageUrl) {
-        // Accept either external or s3 style URLs; keep external as source of truth if looks like http(s)
-        if (coverImageUrl != null && (coverImageUrl.startsWith("http://") || coverImageUrl.startsWith("https://"))) {
-            this.externalImageUrl = coverImageUrl;
-        } else {
-            this.s3ImagePath = coverImageUrl;
-        }
-    }
-
-    /**
-     * Get external original image source full URL
-     * 
-     * @return External image URL
-     */
-    public String getExternalImageUrl() {
-        return externalImageUrl;
-    }
-
-    /**
-     * Set external original image source full URL
-     * 
-     * @param externalImageUrl External image URL
-     */
-    public void setExternalImageUrl(String externalImageUrl) {
-        this.externalImageUrl = externalImageUrl;
-    }
-
-    // Backward-compatible alias methods for existing call sites
-    public String getImageUrl() {
-        return externalImageUrl;
-    }
-
-    public void setImageUrl(String imageUrl) {
-        this.externalImageUrl = imageUrl;
-    }
-
-    /**
-     * Get ISBN-10 identifier
-     * 
-     * @return ISBN-10 value
-     */
-    public String getIsbn10() {
-        return isbn10;
-    }
-
-    /**
-     * Set ISBN-10 identifier
-     * 
-     * @param isbn10 ISBN-10 value
-     */
-    public void setIsbn10(String isbn10) {
-        this.isbn10 = isbn10;
-    }
-
-    /**
-     * Get ISBN-13 identifier
-     * 
-     * @return ISBN-13 value
-     */
-    public String getIsbn13() {
-        return isbn13;
-    }
-
-    /**
-     * Set ISBN-13 identifier
-     * 
-     * @param isbn13 ISBN-13 value
-     */
-    public void setIsbn13(String isbn13) {
-        this.isbn13 = isbn13;
-    }
-
-    /**
-     * Get book publication date
-     * 
-     * @return Publication date
-     */
-    public Date getPublishedDate() {
-        return publishedDate;
-    }
-
-    /**
-     * Set book publication date
-     * 
-     * @param publishedDate Publication date
-     */
-    public void setPublishedDate(Date publishedDate) {
-        this.publishedDate = publishedDate;
-    }
-
-    /**
-     * Get book categories or genres
-     * 
-     * @return List of book categories
-     */
-    public List<String> getCategories() {
-        return categories;
-    }
-
-    /**
-     * Set book categories or genres
-     * 
-     * @param categories List of book categories
-     */
-    public void setCategories(List<String> categories) {
-        this.categories = categories;
-    }
-
-    /**
-     * Collections (categories, curated lists, bestsellers) the book participates in.
-     *
-     * @return Immutable copy of collection assignments
-     */
     public List<CollectionAssignment> getCollections() {
         if (collections == null || collections.isEmpty()) {
             return List.of();
@@ -583,24 +114,12 @@ public class Book {
         return List.copyOf(collections);
     }
 
-    /**
-     * Replace the collection assignments for this book.
-     *
-     * @param collections New collection assignments backing the book
-     */
     public void setCollections(List<CollectionAssignment> collections) {
-        if (collections == null || collections.isEmpty()) {
-            this.collections = new ArrayList<>();
-            return;
-        }
-        this.collections = new ArrayList<>(collections);
+        this.collections = (collections == null || collections.isEmpty())
+            ? new ArrayList<>()
+            : new ArrayList<>(collections);
     }
 
-    /**
-     * Append a single collection assignment to the book, ignoring null inputs.
-     *
-     * @param assignment Collection to attach
-     */
     public void addCollection(CollectionAssignment assignment) {
         if (assignment == null) {
             return;
@@ -611,552 +130,48 @@ public class Book {
         this.collections.add(assignment);
     }
 
-    /**
-     * Get average book rating
-     * 
-     * @return Average rating value
-     */
-    public Double getAverageRating() {
-        return averageRating;
+    public String getCoverImageUrl() {
+        return (s3ImagePath != null && !s3ImagePath.isEmpty()) ? s3ImagePath : externalImageUrl;
     }
 
-    /**
-     * Set average book rating
-     * 
-     * @param averageRating Average rating value
-     */
-    public void setAverageRating(Double averageRating) {
-        this.averageRating = averageRating;
+    public void setCoverImageUrl(String coverImageUrl) {
+        if (coverImageUrl != null && (coverImageUrl.startsWith("http://") || coverImageUrl.startsWith("https://"))) {
+            this.externalImageUrl = coverImageUrl;
+        } else {
+            this.s3ImagePath = coverImageUrl;
+        }
     }
 
-    /**
-     * Get number of ratings for the book
-     * 
-     * @return Number of ratings
-     */
-    public Integer getRatingsCount() {
-        return ratingsCount;
+    public String getImageUrl() {
+        return externalImageUrl;
     }
 
-    /**
-     * Set number of ratings for the book
-     * 
-     * @param ratingsCount Number of ratings
-     */
-    public void setRatingsCount(Integer ratingsCount) {
-        this.ratingsCount = ratingsCount;
+    public void setImageUrl(String imageUrl) {
+        this.externalImageUrl = imageUrl;
     }
 
-    /**
-     * Get raw ratings data in JSON format
-     * 
-     * @return Raw ratings data string
-     */
-    public String getRawRatingsData() {
-        return rawRatingsData;
-    }
-
-    /**
-     * Set the raw ratings data for this book
-     * 
-     * @param rawRatingsData Raw ratings data string
-     */
-    public void setRawRatingsData(String rawRatingsData) {
-        this.rawRatingsData = rawRatingsData;
-    }
-
-    /**
-     * Check if book has ratings
-     * 
-     * @return True if book has ratings, false otherwise
-     */
-    public Boolean getHasRatings() {
-        return hasRatings;
-    }
-
-    /**
-     * Set whether book has ratings
-     * 
-     * @param hasRatings True if book has ratings, false otherwise
-     */
-    public void setHasRatings(Boolean hasRatings) {
-        this.hasRatings = hasRatings;
-    }
-
-    /**
-     * Get total number of pages in the book
-     * 
-     * @return Number of pages
-     */
-    public Integer getPageCount() {
-        return pageCount;
-    }
-
-    /**
-     * Set total number of pages in the book
-     * 
-     * @param pageCount Number of pages
-     */
-    public void setPageCount(Integer pageCount) {
-        this.pageCount = pageCount;
-    }
-
-    /**
-     * Get book language code
-     * 
-     * @return Language code (e.g., "en" for English)
-     */
-    public String getLanguage() {
-        return language;
-    }
-
-    /**
-     * Set book language code
-     * 
-     * @param language Language code (e.g., "en" for English)
-     */
-    public void setLanguage(String language) {
-        this.language = language;
-    }
-
-    /**
-     * Get book publisher name
-     * 
-     * @return Publisher name
-     */
-    public String getPublisher() {
-        return publisher;
-    }
-
-    /**
-     * Set book publisher name
-     * 
-     * @param publisher Publisher name
-     */
-    public void setPublisher(String publisher) {
-        this.publisher = publisher;
-    }
-
-    /**
-     * Get link to more information about the book
-     * 
-     * @return Information link URL
-     */
-    public String getInfoLink() {
-        return infoLink;
-    }
-
-    /**
-     * Set link to more information about the book
-     * 
-     * @param infoLink Information link URL
-     */
-    public void setInfoLink(String infoLink) {
-        this.infoLink = infoLink;
-    }
-
-    /**
-     * Get link to preview the book
-     * 
-     * @return Preview link URL
-     */
-    public String getPreviewLink() {
-        return previewLink;
-    }
-
-    /**
-     * Set link to preview the book
-     * 
-     * @param previewLink Preview link URL
-     */
-    public void setPreviewLink(String previewLink) {
-        this.previewLink = previewLink;
-    }
-
-    /**
-     * Get link to purchase the book
-     * 
-     * @return Purchase link URL
-     */
-    public String getPurchaseLink() {
-        return purchaseLink;
-    }
-
-    /**
-     * Set link to purchase the book
-     * 
-     * @param purchaseLink Purchase link URL
-     */
-    public void setPurchaseLink(String purchaseLink) {
-        this.purchaseLink = purchaseLink;
-    }
-
-    /**
-     * Get book list price
-     * 
-     * @return List price value
-     */
-    public Double getListPrice() {
-        return listPrice;
-    }
-
-    /**
-     * Set book list price
-     * 
-     * @param listPrice List price value
-     */
-    public void setListPrice(Double listPrice) {
-        this.listPrice = listPrice;
-    }
-
-    /**
-     * Get currency code for list price
-     * 
-     * @return Currency code (e.g., "USD")
-     */
-    public String getCurrencyCode() {
-        return currencyCode;
-    }
-
-    /**
-     * Set currency code for list price
-     * 
-     * @param currencyCode Currency code (e.g., "USD")
-     */
-    public void setCurrencyCode(String currencyCode) {
-        this.currencyCode = currencyCode;
-    }
-
-    /**
-     * Get link to web reader for the book
-     * 
-     * @return Web reader link URL
-     */
-    public String getWebReaderLink() {
-        return webReaderLink;
-    }
-
-    /**
-     * Set link to web reader for the book
-     * 
-     * @param webReaderLink Web reader link URL
-     */
-    public void setWebReaderLink(String webReaderLink) {
-        this.webReaderLink = webReaderLink;
-    }
-    
-    /**
-     * Check if PDF format is available for this book
-     * 
-     * @return True if PDF is available, false otherwise
-     */
-    public Boolean getPdfAvailable() {
-        return pdfAvailable;
-    }
-    
-    /**
-     * Set PDF availability for this book
-     * 
-     * @param pdfAvailable True if PDF is available, false otherwise
-     */
-    public void setPdfAvailable(Boolean pdfAvailable) {
-        this.pdfAvailable = pdfAvailable;
-    }
-    
-    /**
-     * Check if EPUB format is available for this book
-     * 
-     * @return True if EPUB is available, false otherwise
-     */
-    public Boolean getEpubAvailable() {
-        return epubAvailable;
-    }
-    
-    /**
-     * Set EPUB availability for this book
-     * 
-     * @param epubAvailable True if EPUB is available, false otherwise
-     */
-    public void setEpubAvailable(Boolean epubAvailable) {
-        this.epubAvailable = epubAvailable;
-    }
-
-    /**
-     * Get list of alternate editions for this book
-     * 
-     * @return List of edition information
-     */
-    public List<EditionInfo> getOtherEditions() {
-        return otherEditions;
-    }
-
-    /**
-     * Set list of alternate editions for this book
-     * 
-     * @param otherEditions List of edition information
-     */
-    public void setOtherEditions(List<EditionInfo> otherEditions) {
-        this.otherEditions = otherEditions;
-    }
-
-    /**
-     * Get cover image width in pixels
-     * 
-     * @return Cover image width
-     */
-    public Integer getCoverImageWidth() {
-        return coverImageWidth;
-    }
-
-    /**
-     * Set cover image width in pixels
-     * 
-     * @param coverImageWidth Cover image width
-     */
-    public void setCoverImageWidth(Integer coverImageWidth) {
-        this.coverImageWidth = coverImageWidth;
-    }
-
-    /**
-     * Get cover image height in pixels
-     * 
-     * @return Cover image height
-     */
-    public Integer getCoverImageHeight() {
-        return coverImageHeight;
-    }
-
-    /**
-     * Set cover image height in pixels
-     * 
-     * @param coverImageHeight Cover image height
-     */
-    public void setCoverImageHeight(Integer coverImageHeight) {
-        this.coverImageHeight = coverImageHeight;
-    }
-
-    /**
-     * Check if book cover is high resolution
-     * 
-     * @return True if cover is high resolution, false otherwise
-     */
-    public Boolean getIsCoverHighResolution() {
-        return isCoverHighResolution;
-    }
-
-    /**
-     * Set high resolution flag for book cover
-     * 
-     * @param isCoverHighResolution True if cover is high resolution, false otherwise
-     */
-    public void setIsCoverHighResolution(Boolean isCoverHighResolution) {
-        this.isCoverHighResolution = isCoverHighResolution;
-    }
-
-    public Double getHeightCm() {
-        return heightCm;
-    }
-
-    public void setHeightCm(Double heightCm) {
-        this.heightCm = heightCm;
-    }
-
-    public Double getWidthCm() {
-        return widthCm;
-    }
-
-    public void setWidthCm(Double widthCm) {
-        this.widthCm = widthCm;
-    }
-
-    public Double getThicknessCm() {
-        return thicknessCm;
-    }
-
-    public void setThicknessCm(Double thicknessCm) {
-        this.thicknessCm = thicknessCm;
-    }
-
-    public Double getWeightGrams() {
-        return weightGrams;
-    }
-
-    public void setWeightGrams(Double weightGrams) {
-        this.weightGrams = weightGrams;
-    }
-
-    /**
-     * Get cover images container with various resolution URLs
-     * 
-     * @return Cover images container
-     */
-    public CoverImages getCoverImages() {
-        return coverImages;
-    }
-
-    /**
-     * Set cover images container with various resolution URLs
-     * 
-     * @param coverImages Cover images container
-     */
-    public void setCoverImages(CoverImages coverImages) {
-        this.coverImages = coverImages;
-    }
-
-    public Integer getEditionNumber() {
-        return editionNumber;
-    }
-
-    public void setEditionNumber(Integer editionNumber) {
-        this.editionNumber = editionNumber;
-    }
-
-    public String getEditionGroupKey() {
-        return editionGroupKey;
-    }
-
-    public void setEditionGroupKey(String editionGroupKey) {
-        this.editionGroupKey = editionGroupKey;
-    }
-
-    /**
-     * Get raw JSON response from external API
-     * - Used for debugging and logging purposes
-     * - Contains original data from API response
-     * 
-     * @return Raw JSON response string
-     */
-    public String getRawJsonResponse() {
-        return rawJsonResponse;
-    }
-
-    /**
-     * Set raw JSON response from external API
-     * - Used for provenance tracking of book data
-     * - Preserves original data from API response
-     * 
-     * @param rawJsonResponse Raw JSON response string
-     */
-    public void setRawJsonResponse(String rawJsonResponse) {
-        this.rawJsonResponse = rawJsonResponse;
-    }
-
-    /**
-     * Get map of special qualifiers for this book 
-     * (e.g., "new york times bestseller", "award winner", search terms that matched)
-     * 
-     * @return Map of qualifier name to qualifier data
-     */
-    public Map<String, Object> getQualifiers() {
-        return qualifiers;
-    }
-
-    /**
-     * Set map of special qualifiers for this book
-     * 
-     * @param qualifiers Map of qualifier name to qualifier data
-     */
     public void setQualifiers(Map<String, Object> qualifiers) {
         this.qualifiers = qualifiers != null ? qualifiers : new HashMap<>();
     }
-    
-    /**
-     * Add a single qualifier to this book
-     * 
-     * @param key Qualifier name/type
-     * @param value Qualifier data/value
-     */
+
     public void addQualifier(String key, Object value) {
+        if (key == null) {
+            return;
+        }
         if (this.qualifiers == null) {
             this.qualifiers = new HashMap<>();
         }
         this.qualifiers.put(key, value);
     }
-    
-    /**
-     * Check if this book has a specific qualifier
-     * 
-     * @param key Qualifier name/type to check
-     * @return true if the book has this qualifier
-     */
+
     public boolean hasQualifier(String key) {
         return this.qualifiers != null && this.qualifiers.containsKey(key);
     }
 
-    /**
-     * Equality check based on book ID
-     * - Two books are considered equal if they have the same ID
-     * - Other properties are not considered in equality check
-     * 
-     * @param o Object to compare with
-     * @return True if the books have the same ID, false otherwise
-     */
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Book book = (Book) o;
-        return Objects.equals(id, book.id);
-    }
-
-    /**
-     * Generate hash code based on book ID
-     * 
-     * @return Hash code value
-     */
-    @Override
-    public int hashCode() {
-        return Objects.hash(id);
-    }
-
-    /**
-     * String representation of book
-     * - Includes ID, title, authors and other edition count
-     * - Used for logging and debugging
-     * 
-     * @return String representation of book
-     */
-    @Override
-    public String toString() {
-        return "Book{" +
-                "id='" + id + '\'' +
-                ", title='" + title + '\'' +
-                ", authors=" + authors +
-                ", otherEditionsCount=" + (otherEditions != null ? otherEditions.size() : 0) +
-                '}';
-    }
-
-    public String getAsin() {
-        return asin;
-    }
-
-    public void setAsin(String asin) {
-        this.asin = asin;
-    }
-
-    /**
-     * Get the list of cached recommendation IDs
-     * 
-     * @return List of cached recommendation IDs
-     */
-    public List<String> getCachedRecommendationIds() {
-        return cachedRecommendationIds;
-    }
-
-    /**
-     * Set the list of cached recommendation IDs
-     * 
-     * @param cachedRecommendationIds List of cached recommendation IDs
-     */
     public void setCachedRecommendationIds(List<String> cachedRecommendationIds) {
         this.cachedRecommendationIds = cachedRecommendationIds != null ? new ArrayList<>(cachedRecommendationIds) : new ArrayList<>();
     }
 
-    /**
-     * Adds a list of recommendation IDs to the existing cached list, ensuring uniqueness.
-     *
-     * @param newRecommendationIds List of new recommendation IDs to add.
-     */
     public void addRecommendationIds(List<String> newRecommendationIds) {
         if (newRecommendationIds == null || newRecommendationIds.isEmpty()) {
             return;
@@ -1164,10 +179,46 @@ public class Book {
         if (this.cachedRecommendationIds == null) {
             this.cachedRecommendationIds = new ArrayList<>();
         }
-        for (String id : newRecommendationIds) {
-            if (id != null && !id.isEmpty() && !this.cachedRecommendationIds.contains(id)) {
-                this.cachedRecommendationIds.add(id);
+        for (String recommendationId : newRecommendationIds) {
+            if (recommendationId != null && !recommendationId.isEmpty() && !this.cachedRecommendationIds.contains(recommendationId)) {
+                this.cachedRecommendationIds.add(recommendationId);
             }
         }
+    }
+
+    @Override
+    public String toString() {
+        return "Book{" +
+            "id='" + id + '\'' +
+            ", title='" + title + '\'' +
+            ", authors=" + authors +
+            ", otherEditionsCount=" + (otherEditions != null ? otherEditions.size() : 0) +
+            '}';
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CollectionAssignment {
+        private String collectionId;
+        private String name;
+        private String collectionType;
+        private Integer rank;
+        private String source;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EditionInfo {
+        private String googleBooksId;
+        private String type;
+        private String identifier;
+        private String editionIsbn10;
+        private String editionIsbn13;
+        private Date publishedDate;
+        private String coverImageUrl;
     }
 }
