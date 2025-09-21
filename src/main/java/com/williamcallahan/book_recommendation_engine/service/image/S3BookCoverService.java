@@ -22,6 +22,8 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ProcessedImage;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -170,11 +172,12 @@ public class S3BookCoverService implements ExternalCoverService {
             if (!s3EnabledCheck || s3Client == null) logger.debug("S3 fetchCover skipped: S3 disabled or S3Client not available.");
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        String bookKey = book.getId();
-        if (bookKey == null || bookKey.trim().isEmpty()) bookKey = book.getIsbn13();
-        if (bookKey == null || bookKey.trim().isEmpty()) bookKey = book.getIsbn10();
-        
-        if (bookKey == null || bookKey.trim().isEmpty()) {
+        String bookKey = ValidationUtils.BookValidator.getPreferredIsbn(book);
+        if (!ValidationUtils.hasText(bookKey)) {
+            bookKey = book.getId();
+        }
+
+        if (!ValidationUtils.hasText(bookKey)) {
             logger.warn("Cannot fetch S3 cover for book without a valid ID or ISBN. Title: {}", book.getTitle());
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -613,7 +616,7 @@ public class S3BookCoverService implements ExternalCoverService {
             s3Client.putObject(putProvenanceRequest, RequestBody.fromBytes(jsonDataBytes));
             logger.info("Successfully uploaded provenance data for image {} to S3. Key: {}", imageS3Key, provenanceS3Key);
         } catch (Exception e) {
-            logger.error("Failed to upload provenance data for image {} to S3 key {}: {}", imageS3Key, provenanceS3Key, e.getMessage(), e);
+            LoggingUtils.error(logger, e, "Failed to upload provenance data for image {} to S3 key {}", imageS3Key, provenanceS3Key);
         }
     }
 }

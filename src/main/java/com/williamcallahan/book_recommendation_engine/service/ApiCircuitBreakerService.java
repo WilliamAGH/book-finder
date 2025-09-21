@@ -6,8 +6,8 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -15,11 +15,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+@Slf4j
 @Service
 public class ApiCircuitBreakerService {
 
-    private static final Logger logger = LoggerFactory.getLogger(ApiCircuitBreakerService.class);
-    
     // Circuit breaker states
     private enum CircuitState {
         CLOSED,    // Normal operation
@@ -55,15 +54,15 @@ public class ApiCircuitBreakerService {
                 if (openTime != null && ChronoUnit.MINUTES.between(openTime, now) >= HALF_OPEN_TIMEOUT_MINUTES) {
                     // Try to transition to half-open
                     if (circuitState.compareAndSet(CircuitState.OPEN, CircuitState.HALF_OPEN)) {
-                        logger.info("Circuit breaker transitioning from OPEN to HALF_OPEN - allowing test API call");
+                        log.info("Circuit breaker transitioning from OPEN to HALF_OPEN - allowing test API call");
                         return true;
                     }
                 }
-                logger.debug("Circuit breaker is OPEN - blocking API call");
+                log.debug("Circuit breaker is OPEN - blocking API call");
                 return false;
                 
             case HALF_OPEN:
-                logger.debug("Circuit breaker is HALF_OPEN - allowing test API call");
+                log.debug("Circuit breaker is HALF_OPEN - allowing test API call");
                 return true;
                 
             default:
@@ -84,7 +83,7 @@ public class ApiCircuitBreakerService {
                 failureCount.set(0);
                 lastFailureTime.set(null);
                 circuitOpenTime.set(null);
-                logger.info("Circuit breaker SUCCESS in HALF_OPEN state - transitioning to CLOSED");
+                log.info("Circuit breaker SUCCESS in HALF_OPEN state - transitioning to CLOSED");
             }
         } else if (currentState == CircuitState.CLOSED) {
             // Reset failure count on success
@@ -102,7 +101,7 @@ public class ApiCircuitBreakerService {
         lastFailureTime.set(now);
         
         int currentFailures = failureCount.incrementAndGet();
-        logger.warn("Recorded rate limit failure #{} at {}", currentFailures, now);
+        log.warn("Recorded rate limit failure #{} at {}", currentFailures, now);
         
         CircuitState currentState = circuitState.get();
         
@@ -110,15 +109,17 @@ public class ApiCircuitBreakerService {
             // Failure in half-open state - immediately open circuit
             if (circuitState.compareAndSet(CircuitState.HALF_OPEN, CircuitState.OPEN)) {
                 circuitOpenTime.set(now);
-                logger.error("Circuit breaker FAILURE in HALF_OPEN state - opening circuit for {} minutes", 
-                           CIRCUIT_OPEN_DURATION_MINUTES);
+                LoggingUtils.error(log, null,
+                    "Circuit breaker FAILURE in HALF_OPEN state - opening circuit for {} minutes",
+                    CIRCUIT_OPEN_DURATION_MINUTES);
             }
         } else if (currentState == CircuitState.CLOSED && currentFailures >= FAILURE_THRESHOLD) {
             // Too many failures - open the circuit
             if (circuitState.compareAndSet(CircuitState.CLOSED, CircuitState.OPEN)) {
                 circuitOpenTime.set(now);
-                logger.error("Circuit breaker OPENED due to {} consecutive rate limit failures - blocking API calls for {} minutes", 
-                           currentFailures, CIRCUIT_OPEN_DURATION_MINUTES);
+                LoggingUtils.error(log, null,
+                    "Circuit breaker OPENED due to {} consecutive rate limit failures - blocking API calls for {} minutes",
+                    currentFailures, CIRCUIT_OPEN_DURATION_MINUTES);
             }
         }
     }
@@ -133,14 +134,14 @@ public class ApiCircuitBreakerService {
         
         // General failures count but don't immediately trigger circuit opening
         int currentFailures = failureCount.incrementAndGet();
-        logger.debug("Recorded general API failure #{} at {}", currentFailures, now);
+        log.debug("Recorded general API failure #{} at {}", currentFailures, now);
         
         // Only open circuit for general failures if we have many more failures
         CircuitState currentState = circuitState.get();
         if (currentState == CircuitState.CLOSED && currentFailures >= FAILURE_THRESHOLD * 2) {
             if (circuitState.compareAndSet(CircuitState.CLOSED, CircuitState.OPEN)) {
                 circuitOpenTime.set(now);
-                logger.warn("Circuit breaker OPENED due to {} consecutive general failures", currentFailures);
+                log.warn("Circuit breaker OPENED due to {} consecutive general failures", currentFailures);
             }
         }
     }
@@ -178,6 +179,6 @@ public class ApiCircuitBreakerService {
         failureCount.set(0);
         lastFailureTime.set(null);
         circuitOpenTime.set(null);
-        logger.info("Circuit breaker manually reset to CLOSED state");
+        log.info("Circuit breaker manually reset to CLOSED state");
     }
 }

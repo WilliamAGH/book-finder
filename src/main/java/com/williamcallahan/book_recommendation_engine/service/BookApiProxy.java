@@ -15,9 +15,9 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -36,9 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class BookApiProxy {
-    private static final Logger logger = LoggerFactory.getLogger(BookApiProxy.class);
-    
+        
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final S3StorageService s3StorageService;
@@ -55,7 +55,7 @@ public class BookApiProxy {
     private final String localCacheDirectory;
     private final boolean alwaysCheckS3First;
     private final boolean logApiCalls;
-    private final boolean googleFallbackEnabled;
+    private final boolean externalFallbackEnabled;
 
     /**
      * Constructs the BookApiProxy with necessary dependencies
@@ -73,7 +73,7 @@ public class BookApiProxy {
                        @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
                        @Value("${app.s3-cache.always-check-first:false}") boolean alwaysCheckS3First,
                        @Value("${app.api-client.log-calls:true}") boolean logApiCalls,
-                       @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled,
+                       @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
                        BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
         this.s3StorageService = s3StorageService;
@@ -83,7 +83,7 @@ public class BookApiProxy {
         this.localCacheDirectory = localCacheDirectory;
         this.alwaysCheckS3First = alwaysCheckS3First;
         this.logApiCalls = logApiCalls;
-        this.googleFallbackEnabled = googleFallbackEnabled;
+        this.externalFallbackEnabled = externalFallbackEnabled;
         this.bookDataOrchestrator = bookDataOrchestrator;
         
         // Create local cache directory if needed
@@ -92,7 +92,7 @@ public class BookApiProxy {
                 Files.createDirectories(Paths.get(this.localCacheDirectory, "books"));
                 Files.createDirectories(Paths.get(this.localCacheDirectory, "searches"));
             } catch (Exception e) {
-                logger.warn("Could not create local cache directories: {}", e.getMessage());
+                LoggingUtils.warn(log, e, "Could not create local cache directories");
             }
         }
     }
@@ -132,11 +132,11 @@ public class BookApiProxy {
         if (localCacheEnabled) {
             Book localBook = getBookFromLocalCache(bookId);
             if (localBook != null) {
-                logger.debug("Retrieved book {} from local cache", bookId);
+                log.debug("Retrieved book {} from local cache", bookId);
                 future.complete(localBook);
                 return;
             } else {
-                logger.debug("Local cache MISS for bookId: {}", bookId);
+                log.debug("Local cache MISS for bookId: {}", bookId);
             }
         }
         
@@ -144,7 +144,7 @@ public class BookApiProxy {
         if (mockService.isPresent() && mockService.get().hasMockDataForBook(bookId)) {
             Book mockBook = mockService.get().getBookById(bookId);
             if (mockBook != null) {
-                logger.debug("Retrieved book {} from mock data", bookId);
+                log.debug("Retrieved book {} from mock data", bookId);
                 future.complete(mockBook);
                 
                 // Still persist to local cache for faster future access
@@ -155,7 +155,7 @@ public class BookApiProxy {
                 return;
             }
         } else if (mockService.isPresent()) {
-            logger.debug("Mock service MISS for bookId: {} (or no mock data available)", bookId);
+            log.debug("Mock service MISS for bookId: {} (or no mock data available)", bookId);
         }
         
         java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -163,19 +163,19 @@ public class BookApiProxy {
         if (bookDataOrchestrator != null) {
             bookDataOrchestrator.getBookByIdTiered(bookId)
                 .onErrorResume(ex -> {
-                    logger.warn("BookApiProxy: Orchestrator lookup failed for {}: {}", bookId, ex.getMessage());
+                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator lookup failed for {}", bookId);
                     return Mono.empty();
                 })
                 .subscribe(book -> {
                     if (book != null && resolved.compareAndSet(false, true)) {
-                        logger.debug("BookApiProxy: Retrieved {} via orchestrator tier.", bookId);
+                        log.debug("BookApiProxy: Retrieved {} via orchestrator tier.", bookId);
                         if (localCacheEnabled) {
                             saveBookToLocalCache(bookId, book);
                         }
                         future.complete(book);
                     }
                 }, ex -> {
-                    logger.warn("BookApiProxy: Orchestrator lookup error for {}: {}", bookId, ex.getMessage());
+                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator lookup error for {}", bookId);
                     if (resolved.compareAndSet(false, true)) {
                         continueWithApiFallback(bookId, future);
                     }
@@ -196,7 +196,7 @@ public class BookApiProxy {
         }
 
         if (alwaysCheckS3First) {
-            logger.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
+            log.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
             s3StorageService.fetchJsonAsync(bookId)
                 .<Book>thenCompose(s3Result -> {
                     if (s3Result.isSuccess()) {
@@ -214,23 +214,23 @@ public class BookApiProxy {
                                     mockService.get().saveBookResponse(bookId, bookNode);
                                 }
 
-                                logger.debug("Retrieved book {} from S3 cache", bookId);
+                                log.debug("Retrieved book {} from S3 cache", bookId);
                                 return CompletableFuture.completedFuture(book);
                             } catch (Exception e) {
-                                logger.warn("BookApiProxy: Error parsing book {} from S3 cache. Proceeding to API. Message: {}", bookId, e.getMessage());
+                                LoggingUtils.warn(log, e, "BookApiProxy: Error parsing book {} from S3 cache. Proceeding to API.", bookId);
                             }
                         } else {
-                            logger.info("BookApiProxy: S3 cache miss (data absent) for bookId {}. Falling back to API.", bookId);
+                            log.info("BookApiProxy: S3 cache miss (data absent) for bookId {}. Falling back to API.", bookId);
                         }
                     } else {
-                        logger.warn("BookApiProxy: S3 cache unavailable for bookId {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
+                        log.warn("BookApiProxy: S3 cache unavailable for bookId {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
                     }
                     if (logApiCalls) {
-                        logger.info("Making REAL API call to Google Books for book ID: {}", bookId);
+                        log.info("Making REAL API call to Google Books for book ID: {}", bookId);
                     }
 
-                    if (!googleFallbackEnabled) {
-                        logger.debug("Google fallback disabled for book ID '{}'. Skipping external API call.", bookId);
+                    if (!externalFallbackEnabled) {
+                        log.debug("External fallback disabled for book ID '{}'. Skipping external API call.", bookId);
                         return CompletableFuture.completedFuture(null);
                     }
 
@@ -244,15 +244,15 @@ public class BookApiProxy {
                 })
                 .whenComplete((book, ex) -> {
                     if (ex != null) {
-                        logger.error("Error retrieving book {}: {}", bookId, ex.getMessage());
+                        LoggingUtils.error(log, ex, "Error retrieving book {}", bookId);
                         future.completeExceptionally(ex);
                     } else {
                         future.complete(book);
                     }
                 });
         } else {
-            if (!googleFallbackEnabled) {
-                logger.debug("Google fallback disabled for book ID '{}'. Returning empty result.", bookId);
+            if (!externalFallbackEnabled) {
+                log.debug("External fallback disabled for book ID '{}'. Returning empty result.", bookId);
                 future.complete(null);
                 return;
             }
@@ -267,14 +267,14 @@ public class BookApiProxy {
                             JsonNode bookNode = objectMapper.readTree(book.getRawJsonResponse());
                             mockService.get().saveBookResponse(bookId, bookNode);
                         } catch (Exception e) {
-                            logger.warn("Error saving book to mock service: {}", e.getMessage());
+                            LoggingUtils.warn(log, e, "Error saving book to mock service");
                         }
                     }
 
                     future.complete(book);
                 })
                 .exceptionally(ex -> {
-                    logger.error("Error retrieving book {}: {}", bookId, ex.getMessage());
+                    LoggingUtils.error(log, ex, "Error retrieving book {}", bookId);
                     future.completeExceptionally(ex);
                     return null;
                 });
@@ -328,7 +328,7 @@ public class BookApiProxy {
         if (localCacheEnabled) {
             List<Book> localResults = getSearchFromLocalCache(originalQuery, langCode);
             if (localResults != null && !localResults.isEmpty()) {
-                logger.debug("Retrieved search '{}' from local cache, {} results", normalizedQuery, localResults.size());
+                log.debug("Retrieved search '{}' from local cache, {} results", normalizedQuery, localResults.size());
                 future.complete(localResults);
                 return;
             }
@@ -338,7 +338,7 @@ public class BookApiProxy {
         if (mockService.isPresent() && mockService.get().hasMockDataForSearch(originalQuery)) {
             List<Book> mockResults = mockService.get().searchBooks(originalQuery);
             if (mockResults != null && !mockResults.isEmpty()) {
-                logger.debug("Retrieved search '{}' from mock data, {} results", normalizedQuery, mockResults.size());
+                log.debug("Retrieved search '{}' from mock data, {} results", normalizedQuery, mockResults.size());
                 future.complete(mockResults);
 
                 // Still persist to local cache for faster future access
@@ -354,7 +354,7 @@ public class BookApiProxy {
         if (bookDataOrchestrator != null) {
             bookDataOrchestrator.searchBooksTiered(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
                 .onErrorResume(ex -> {
-                    logger.warn("BookApiProxy: Orchestrator search failed for '{}' (lang {}): {}", normalizedQuery, langCode, ex.getMessage());
+                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator search failed for '{}' (lang {})", normalizedQuery, langCode);
                     return Mono.empty();
                 })
                 .subscribe(results -> {
@@ -366,7 +366,7 @@ public class BookApiProxy {
                         future.complete(sanitized);
                     }
                 }, ex -> {
-                    logger.warn("BookApiProxy: Orchestrator search error for '{}' (lang {}): {}", normalizedQuery, langCode, ex.getMessage());
+                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator search error for '{}' (lang {})", normalizedQuery, langCode);
                     if (resolved.compareAndSet(false, true)) {
                         continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
                     }
@@ -389,14 +389,14 @@ public class BookApiProxy {
             return;
         }
 
-        if (!googleFallbackEnabled) {
-            logger.debug("Google fallback disabled for search '{}'. Returning empty result set.", normalizedQuery);
+        if (!externalFallbackEnabled) {
+            log.debug("External fallback disabled for search '{}'. Returning empty result set.", normalizedQuery);
             future.complete(List.of());
             return;
         }
 
         if (logApiCalls) {
-            logger.info("Making REAL API call to Google Books for search: '{}'", normalizedQuery);
+            log.info("Making REAL API call to Google Books for search: '{}'", normalizedQuery);
         }
 
         googleBooksService.searchBooksAsyncReactive(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
@@ -408,7 +408,7 @@ public class BookApiProxy {
                 }
                 future.complete(results);
             }, error -> {
-                logger.error("Error searching for '{}': {}", normalizedQuery, error.getMessage());
+                LoggingUtils.error(log, error, "Error searching for '{}'", normalizedQuery);
                 future.completeExceptionally(error);
             });
     }
@@ -429,7 +429,7 @@ public class BookApiProxy {
                 JsonNode bookNode = objectMapper.readTree(bookFile.toFile());
                 return objectMapper.treeToValue(bookNode, Book.class);
             } catch (Exception e) {
-                logger.warn("Error reading book from local cache: {}", e.getMessage());
+                LoggingUtils.warn(log, e, "Error reading book from local cache");
             }
         }
         
@@ -453,9 +453,9 @@ public class BookApiProxy {
             
             // Convert to JSON and save
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(bookFile.toFile(), book);
-            logger.debug("Saved book {} to local cache", bookId);
+            log.debug("Saved book {} to local cache", bookId);
         } catch (Exception e) {
-            logger.warn("Error saving book to local cache: {}", e.getMessage());
+            LoggingUtils.warn(log, e, "Error saving book to local cache");
         }
     }
     
@@ -478,7 +478,7 @@ public class BookApiProxy {
                 return objectMapper.readValue(searchFile.toFile(), 
                         objectMapper.getTypeFactory().constructCollectionType(List.class, Book.class));
             } catch (Exception e) {
-                logger.warn("Error reading search results from local cache: {}", e.getMessage());
+                LoggingUtils.warn(log, e, "Error reading search results from local cache");
             }
         }
         
@@ -505,9 +505,9 @@ public class BookApiProxy {
             
             // Save to JSON
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(searchFile.toFile(), results);
-            logger.debug("Saved search results for '{}' ({}) to local cache", query, langCode);
+            log.debug("Saved search results for '{}' ({}) to local cache", query, langCode);
         } catch (Exception e) {
-            logger.warn("Error saving search results to local cache: {}", e.getMessage());
+            LoggingUtils.warn(log, e, "Error saving search results to local cache");
         }
     }
 

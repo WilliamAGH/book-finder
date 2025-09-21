@@ -19,6 +19,7 @@ import com.williamcallahan.book_recommendation_engine.service.s3.DryRunSummary;
 import com.williamcallahan.book_recommendation_engine.service.s3.MoveActionSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.model.S3Object;
@@ -113,12 +114,12 @@ public class S3CoverCleanupService {
                     }
 
                 } catch (Exception e) {
-                    logger.error("Error processing S3 object: {}. Error: {}", key, e.getMessage(), e);
+                    LoggingUtils.error(logger, e, "Error processing S3 object: {}", key);
                 }
             }
 
         } catch (Exception e) {
-            logger.error("Failed to list or process objects from S3 bucket: {}. Error: {}", bucketName, e.getMessage(), e);
+            LoggingUtils.error(logger, e, "Failed to list or process objects from S3 bucket: {}", bucketName);
         }
 
         logger.info("S3 Cover Cleanup DRY RUN Finished.");
@@ -234,14 +235,14 @@ public class S3CoverCleanupService {
                     }
 
                 } catch (Exception e) {
-                    logger.error("Error processing S3 object {} for move action: {}", sourceKey, e.getMessage(), e);
+                    LoggingUtils.error(logger, e, "Error processing S3 object {} for move action", sourceKey);
                     failedToMove.incrementAndGet(); // Count as failed if processing itself fails
                     failedMoveFileKeys.add(sourceKey);
                 }
             }
 
         } catch (Exception e) {
-            logger.error("Failed to list or process objects from S3 bucket {} for move action: {}", bucketName, e.getMessage(), e);
+            LoggingUtils.error(logger, e, "Failed to list or process objects from S3 bucket {} for move action", bucketName);
         }
 
         logger.info("S3 Cover Cleanup MOVE ACTION Finished.");

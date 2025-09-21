@@ -14,8 +14,8 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -31,10 +31,10 @@ import java.util.Optional;
 import java.time.Duration;
 
 @Service
+@Slf4j
 public class GoogleApiFetcher {
 
-    private static final Logger logger = LoggerFactory.getLogger(GoogleApiFetcher.class);
-
+    
     private final WebClient webClient;
     private final ApiRequestMonitor apiRequestMonitor;
     private final ApiCircuitBreakerService circuitBreakerService;
@@ -45,7 +45,7 @@ public class GoogleApiFetcher {
     @Value("${google.books.api.key:#{null}}") // Allow API key to be optional
     private String googleBooksApiKey;
 
-    @Value("${app.features.google-fallback.enabled:false}")
+    @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}")
     private boolean googleFallbackEnabled;
 
     /**
@@ -70,81 +70,7 @@ public class GoogleApiFetcher {
      * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdAuthenticated(String bookId) {
-        if (!googleFallbackEnabled) {
-            logger.debug("Google fallback disabled - skipping authenticated fetch for {}", bookId);
-            return Mono.empty();
-        }
-        // Check circuit breaker first
-        if (!circuitBreakerService.isApiCallAllowed()) {
-            logger.warn("Circuit breaker is OPEN - blocking authenticated API call for book ID: {}", bookId);
-            return Mono.empty();
-        }
-        
-        if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
-            logger.warn("Authenticated API call attempted for bookId {} without an API key. This call will likely fail or be rate-limited.", bookId);
-            // Depending on strictness, could return Mono.error or proceed without key
-        }
-        String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
-                .pathSegment("volumes", bookId)
-                .queryParamIfPresent("key", Optional.ofNullable(googleBooksApiKey).filter(key -> !key.isEmpty()))
-                .build(false) // Changed to false to allow UriComponentsBuilder to encode
-                .toUriString();
-        
-        String endpoint = "volumes/get/" + bookId + "/authenticated";
-        logger.debug("Making Authenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
-
-        return webClient.get()
-                .uri(url)
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .doOnSubscribe(s -> logger.debug("Fetching book {} from Google API (Authenticated).", bookId))
-                .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
-                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
-                        .filter(throwable -> {
-                            if (throwable instanceof WebClientResponseException wcre) {
-                                // Don't retry on 429 (rate limit) - fail fast instead
-                                return wcre.getStatusCode().is5xxServerError();
-                            }
-                            return throwable instanceof IOException || throwable instanceof WebClientRequestException;
-                        })
-                        .doBeforeRetry(retrySignal -> {
-                            String targetUrl = url; // Or a more generic endpoint description
-                            if (retrySignal.failure() instanceof WebClientResponseException wcre) {
-                                logger.warn("Retrying API call to {} after status {}. Attempt #{}. Error: {}",
-                                        targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1, wcre.getMessage());
-                            } else {
-                                logger.warn("Retrying API call to {} after error. Attempt #{}. Error: {}",
-                                        targetUrl, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage());
-                            }
-                        })
-                        .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                            logger.error("All retries failed for Authenticated API call for book {}. Final error: {}", bookId, retrySignal.failure().getMessage());
-                            apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
-                            return retrySignal.failure();
-                        }))
-                .doOnSuccess(response -> {
-                    apiRequestMonitor.recordSuccessfulRequest(endpoint);
-                    circuitBreakerService.recordSuccess();
-                })
-                .onErrorResume(e -> {
-                    // Log specific WebClientResponseException details if available
-                    if (e instanceof WebClientResponseException wcre) {
-                        logger.error("Error fetching book {} from Google API (Authenticated) after retries: HTTP Status {}, Body: {}", 
-                            bookId, wcre.getStatusCode(), wcre.getResponseBodyAsString(), wcre);
-                        
-                        // Record circuit breaker failure based on error type
-                        if (wcre.getStatusCode().value() == 429) {
-                            circuitBreakerService.recordRateLimitFailure();
-                        } else {
-                            circuitBreakerService.recordGeneralFailure();
-                        }
-                    } else {
-                        logger.error("Error fetching book {} from Google API (Authenticated) after retries: {}", bookId, e.getMessage(), e);
-                        circuitBreakerService.recordGeneralFailure();
-                    }
-                    apiRequestMonitor.recordFailedRequest(endpoint, e.getMessage());
-                    return Mono.empty();
-                });
+        return fetchVolumeByIdInternal(bookId, true);
     }
 
     /**
@@ -154,26 +80,48 @@ public class GoogleApiFetcher {
      * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdUnauthenticated(String bookId) {
+        return fetchVolumeByIdInternal(bookId, false);
+    }
+
+    private Mono<JsonNode> fetchVolumeByIdInternal(String bookId, boolean authenticated) {
         if (!googleFallbackEnabled) {
-            logger.debug("Google fallback disabled - skipping unauthenticated fetch for {}", bookId);
+            log.debug("Google fallback disabled - skipping {} fetch for {}", authenticated ? "authenticated" : "unauthenticated", bookId);
             return Mono.empty();
         }
-        String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
-                .pathSegment("volumes", bookId)
-                // No API key for unauthenticated calls
-                .build(false) // Changed to false to allow UriComponentsBuilder to encode
-                .toUriString();
+        if (authenticated) {
+            // Check circuit breaker first
+            if (!circuitBreakerService.isApiCallAllowed()) {
+                log.warn("Circuit breaker is OPEN - blocking authenticated API call for book ID: {}", bookId);
+                return Mono.empty();
+            }
+            if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
+                log.warn("Authenticated API call attempted for bookId {} without an API key. This call will likely fail or be rate-limited.", bookId);
+            }
+        }
 
-        String endpoint = "volumes/get/" + bookId + "/unauthenticated";
-        logger.debug("Making Unauthenticated Google Books API GET call for book ID: {}, endpoint: {}", bookId, endpoint);
-        
+        String url = buildVolumeUrl(bookId, authenticated);
+        String endpoint = "volumes/get/" + bookId + "/" + (authenticated ? "authenticated" : "unauthenticated");
+        log.debug("Making {} Google Books API GET call for book ID: {}, endpoint: {}", authenticated ? "Authenticated" : "Unauthenticated", bookId, endpoint);
+        return performGetJson(url, endpoint, authenticated);
+    }
+
+    private String buildVolumeUrl(String bookId, boolean authenticated) {
+        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
+                .pathSegment("volumes", bookId);
+        if (authenticated) {
+            builder.queryParamIfPresent("key", Optional.ofNullable(googleBooksApiKey).filter(key -> !key.isEmpty()));
+        }
+        return builder.build(false).toUriString();
+    }
+
+    private Mono<JsonNode> performGetJson(String url, String endpoint, boolean authenticated) {
         return webClient.get()
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .doOnSubscribe(s -> logger.debug("Fetching book {} from Google API (Unauthenticated).", bookId))
-                .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
-                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
+                .doOnSubscribe(s -> log.debug("Fetching from Google API: {}", url))
+                .timeout(Duration.ofSeconds(5))
+                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1))
                         .filter(throwable -> {
                             if (throwable instanceof WebClientResponseException wcre) {
                                 // Don't retry on 429 (rate limit) - fail fast instead
@@ -182,27 +130,44 @@ public class GoogleApiFetcher {
                             return throwable instanceof IOException || throwable instanceof WebClientRequestException;
                         })
                         .doBeforeRetry(retrySignal -> {
-                            String targetUrl = url; // Or a more generic endpoint description
                             if (retrySignal.failure() instanceof WebClientResponseException wcre) {
-                                logger.warn("Retrying API call to {} after status {}. Attempt #{}. Error: {}",
-                                        targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1, wcre.getMessage());
+                                LoggingUtils.warn(log, wcre,
+                                        "Retrying API call to {} after status {}. Attempt #{}",
+                                        url, wcre.getStatusCode(), retrySignal.totalRetries() + 1);
                             } else {
-                                logger.warn("Retrying API call to {} after error. Attempt #{}. Error: {}",
-                                        targetUrl, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage());
+                                LoggingUtils.warn(log, retrySignal.failure(),
+                                        "Retrying API call to {} after error. Attempt #{}",
+                                        url, retrySignal.totalRetries() + 1);
                             }
                         })
                         .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                            logger.error("All retries failed for Unauthenticated API call for book {}. Final error: {}", bookId, retrySignal.failure().getMessage());
+                            LoggingUtils.error(log, retrySignal.failure(), "All retries failed for API call {}", url);
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))
-                .doOnSuccess(response -> apiRequestMonitor.recordSuccessfulRequest(endpoint))
+                .doOnSuccess(response -> {
+                    apiRequestMonitor.recordSuccessfulRequest(endpoint);
+                    if (authenticated) {
+                        circuitBreakerService.recordSuccess();
+                    }
+                })
                 .onErrorResume(e -> {
                     if (e instanceof WebClientResponseException wcre) {
-                        logger.error("Error fetching book {} from Google API (Unauthenticated) after retries: HTTP Status {}, Body: {}", 
-                            bookId, wcre.getStatusCode(), wcre.getResponseBodyAsString(), wcre);
+                        LoggingUtils.error(log, wcre,
+                                "Error fetching from Google API after retries: HTTP Status {}, Body: {}",
+                                wcre.getStatusCode(), wcre.getResponseBodyAsString());
+                        if (authenticated) {
+                            if (wcre.getStatusCode().value() == 429) {
+                                circuitBreakerService.recordRateLimitFailure();
+                            } else {
+                                circuitBreakerService.recordGeneralFailure();
+                            }
+                        }
                     } else {
-                        logger.error("Error fetching book {} from Google API (Unauthenticated) after retries: {}", bookId, e.getMessage(), e);
+                        LoggingUtils.error(log, e, "Error fetching from Google API after retries");
+                        if (authenticated) {
+                            circuitBreakerService.recordGeneralFailure();
+                        }
                     }
                     apiRequestMonitor.recordFailedRequest(endpoint, e.getMessage());
                     return Mono.empty();
@@ -220,17 +185,17 @@ public class GoogleApiFetcher {
      */
     public Mono<JsonNode> searchVolumesAuthenticated(String query, int startIndex, String orderBy, String langCode) {
         if (!googleFallbackEnabled) {
-            logger.debug("Google fallback disabled - skipping authenticated search for query '{}'", query);
+            log.debug("Google fallback disabled - skipping authenticated search for query '{}'", query);
             return Mono.empty();
         }
         // Check circuit breaker first
         if (!circuitBreakerService.isApiCallAllowed()) {
-            logger.warn("Circuit breaker is OPEN - blocking authenticated search API call for query: {}", query);
+            log.warn("Circuit breaker is OPEN - blocking authenticated search API call for query: {}", query);
             return Mono.empty();
         }
         
         if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
-            logger.warn("Authenticated search API call attempted for query '{}' without an API key.", query);
+            log.warn("Authenticated search API call attempted for query '{}' without an API key.", query);
         }
         return searchVolumesInternal(query, startIndex, orderBy, langCode, true);
     }
@@ -246,7 +211,7 @@ public class GoogleApiFetcher {
      */
     public Mono<JsonNode> searchVolumesUnauthenticated(String query, int startIndex, String orderBy, String langCode) {
         if (!googleFallbackEnabled) {
-            logger.debug("Google fallback disabled - skipping unauthenticated search for query '{}'", query);
+            log.debug("Google fallback disabled - skipping unauthenticated search for query '{}'", query);
             return Mono.empty();
         }
         return searchVolumesInternal(query, startIndex, orderBy, langCode, false);
@@ -284,13 +249,14 @@ public class GoogleApiFetcher {
                         if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
                             return Flux.fromIterable(responseNode.get("items"));
                         }
-                        logger.debug("GoogleApiFetcher: {} search page for query '{}' startIndex {} returned no items.",
+                        log.debug("GoogleApiFetcher: {} search page for query '{}' startIndex {} returned no items.",
                                 authenticated ? "Authenticated" : "Unauthenticated", query, startIndex);
                         return Flux.empty();
                     })
                     .onErrorResume(e -> {
-                        logger.error("GoogleApiFetcher: Error during {} search page for query '{}' at startIndex {}: {}",
-                                authenticated ? "authenticated" : "unauthenticated", query, startIndex, e.getMessage(), e);
+                        LoggingUtils.error(log, e,
+                                "GoogleApiFetcher: Error during {} search page for query '{}' at startIndex {}",
+                                authenticated ? "authenticated" : "unauthenticated", query, startIndex);
                         return Flux.empty();
                     });
             })
@@ -328,14 +294,14 @@ public class GoogleApiFetcher {
         String authStatus = authenticated ? "authenticated" : "unauthenticated";
         String endpoint = "volumes/search/" + getQueryTypeForMonitoring(query) + "/" + authStatus;
 
-        logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}, endpoint: {}",
+        log.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}, endpoint: {}",
                 authStatus, query, startIndex, endpoint);
 
         return webClient.get()
                 .uri(url)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .doOnSubscribe(s -> logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex))
+                .doOnSubscribe(s -> log.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex))
                 .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
                 .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
                         .filter(throwable -> {
@@ -348,16 +314,19 @@ public class GoogleApiFetcher {
                         .doBeforeRetry(retrySignal -> {
                             String targetUrl = url; // Or a more generic endpoint description
                             if (retrySignal.failure() instanceof WebClientResponseException wcre) {
-                                logger.warn("Retrying API search call ({}) to {} after status {}. Attempt #{}. Error: {}",
-                                        authStatus, targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1, wcre.getMessage());
+                                LoggingUtils.warn(log, wcre,
+                                        "Retrying API search call ({}) to {} after status {}. Attempt #{}",
+                                        authStatus, targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1);
                             } else {
-                                logger.warn("Retrying API search call ({}) to {} after error. Attempt #{}. Error: {}",
-                                        authStatus, targetUrl, retrySignal.totalRetries() + 1, retrySignal.failure().getMessage());
+                                LoggingUtils.warn(log, retrySignal.failure(),
+                                        "Retrying API search call ({}) to {} after error. Attempt #{}",
+                                        authStatus, targetUrl, retrySignal.totalRetries() + 1);
                             }
                         })
                         .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                            logger.error("All retries failed for API search call ({}) for query '{}', startIndex {}. Final error: {}",
-                                    authStatus, query, startIndex, retrySignal.failure().getMessage());
+                            LoggingUtils.error(log, retrySignal.failure(),
+                                    "All retries failed for API search call ({}) for query '{}', startIndex {}",
+                                    authStatus, query, startIndex);
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))
@@ -369,8 +338,9 @@ public class GoogleApiFetcher {
                 })
                 .onErrorResume(e -> {
                     if (e instanceof WebClientResponseException wcre) {
-                        logger.error("Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries: HTTP Status {}, Body: {}",
-                            authStatus, query, startIndex, wcre.getStatusCode(), wcre.getResponseBodyAsString(), wcre);
+                        LoggingUtils.error(log, wcre,
+                            "Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries: HTTP Status {}, Body: {}",
+                            authStatus, query, startIndex, wcre.getStatusCode(), wcre.getResponseBodyAsString());
                         
                         // Record circuit breaker failure for authenticated calls
                         if (authenticated) {
@@ -381,8 +351,9 @@ public class GoogleApiFetcher {
                             }
                         }
                     } else {
-                        logger.error("Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries: {}",
-                            authStatus, query, startIndex, e.getMessage(), e);
+                        LoggingUtils.error(log, e,
+                            "Error fetching page for API search call ({}) for query '{}' at startIndex {} after retries",
+                            authStatus, query, startIndex);
                         if (authenticated) {
                             circuitBreakerService.recordGeneralFailure();
                         }

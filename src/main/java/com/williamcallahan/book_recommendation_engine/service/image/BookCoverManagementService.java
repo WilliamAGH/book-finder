@@ -13,30 +13,39 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 @Service
+@Slf4j
 public class BookCoverManagementService {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookCoverManagementService.class);
-
+    
     @Value("${app.cover-cache.enabled:true}")
     private boolean cacheEnabled = true;
     
@@ -47,6 +56,8 @@ public class BookCoverManagementService {
     @Value("${s3.public-cdn-url:${S3_PUBLIC_CDN_URL:}}")
     private String s3PublicCdnUrl;
 
+    @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}")
+    private boolean externalFallbackEnabled;
 
     private final CoverCacheManager coverCacheManager;
     private final CoverSourceFetchingService coverSourceFetchingService;
@@ -54,6 +65,7 @@ public class BookCoverManagementService {
     private final LocalDiskCoverCacheService localDiskCoverCacheService; // For placeholder path
     private final ApplicationEventPublisher eventPublisher;
     private final EnvironmentService environmentService; // For debug mode checks
+    private final DuplicateBookService duplicateBookService;
 
     /**
      * Constructs the BookCoverManagementService
@@ -70,13 +82,15 @@ public class BookCoverManagementService {
             S3BookCoverService s3BookCoverService,
             LocalDiskCoverCacheService localDiskCoverCacheService,
             ApplicationEventPublisher eventPublisher,
-            EnvironmentService environmentService) {
+            EnvironmentService environmentService,
+            DuplicateBookService duplicateBookService) {
         this.coverCacheManager = coverCacheManager;
         this.coverSourceFetchingService = coverSourceFetchingService;
         this.s3BookCoverService = s3BookCoverService;
         this.localDiskCoverCacheService = localDiskCoverCacheService;
         this.eventPublisher = eventPublisher;
         this.environmentService = environmentService;
+        this.duplicateBookService = duplicateBookService;
     }
 
     /**
@@ -91,7 +105,7 @@ public class BookCoverManagementService {
         placeholder.setPreferredUrl(localPlaceholderPath);
         placeholder.setFallbackUrl(localPlaceholderPath);
         placeholder.setSource(CoverImageSource.LOCAL_CACHE);
-        logger.warn("Returning placeholder for book ID: {}", bookIdForLog);
+        log.warn("Returning placeholder for book ID: {}", bookIdForLog);
         return placeholder;
     }
 
@@ -110,7 +124,7 @@ public class BookCoverManagementService {
             return Mono.just(createPlaceholderCoverImages(book != null ? book.getId() : "null (cache disabled)"));
         }
 
-        if (book == null || (book.getIsbn13() == null && book.getIsbn10() == null && book.getId() == null)) {
+        if (book == null || !ValidationUtils.BookValidator.hasIdentifier(book)) {
             return Mono.just(createPlaceholderCoverImages("null (book or identifiers null)"));
         }
 
@@ -119,6 +133,8 @@ public class BookCoverManagementService {
             return Mono.just(createPlaceholderCoverImages(book.getId() + " (identifierKey null)"));
         }
 
+        // Always proceed to S3/cache checks; downstream services decide based on their own enablement
+
         // 1. Check S3 (via S3BookCoverService which might have its own internal cache for S3 object existence)
         // Convert CompletableFuture to Mono
         return Mono.fromFuture(s3BookCoverService.fetchCover(book)) // This now returns CompletableFuture<Optional<ImageDetails>>
@@ -126,7 +142,7 @@ public class BookCoverManagementService {
                 if (imageDetailsOptionalFromS3.isPresent()) {
                     ImageDetails imageDetailsFromS3 = imageDetailsOptionalFromS3.get();
                     if (imageDetailsFromS3.getUrlOrPath() != null && imageDetailsFromS3.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                        logger.debug("Initial check: Found S3 cover for identifier {}: {}", identifierKey, imageDetailsFromS3.getUrlOrPath());
+                        log.debug("Initial check: Found S3 cover for identifier {}: {}", identifierKey, imageDetailsFromS3.getUrlOrPath());
                         CoverImages s3Result = new CoverImages();
                         s3Result.setPreferredUrl(imageDetailsFromS3.getUrlOrPath());
                         s3Result.setSource(CoverImageSource.S3_CACHE);
@@ -134,19 +150,109 @@ public class BookCoverManagementService {
                         coverCacheManager.putFinalImageDetails(identifierKey, imageDetailsFromS3); // Cache S3 ImageDetails
                         return Mono.just(s3Result);
                     }
-                    logger.debug("S3 check: Optional<ImageDetails> was present but content not valid S3 cache for identifier {}: {}", identifierKey, imageDetailsFromS3);
+                    log.debug("S3 check: Optional<ImageDetails> was present but content not valid S3 cache for identifier {}: {}", identifierKey, imageDetailsFromS3);
                 } else {
-                     logger.debug("S3 check: Optional<ImageDetails> was empty for identifier {}", identifierKey);
+                     log.debug("S3 check: Optional<ImageDetails> was empty for identifier {}", identifierKey);
                 }
                 // S3 miss, invalid details, or empty Optional, proceed to check other caches
                 return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
             })
             .onErrorResume(e -> { // This catches errors from s3BookCoverService.fetchCover(book) or the flatMap processing
-                logger.warn("Error during S3 fetch or processing for identifier {}: {}", identifierKey, e.getMessage());
+                log.warn("Error during S3 fetch or processing for identifier {}: {}", identifierKey, e.getMessage());
                 // Error in S3 fetch or its processing, proceed to check other caches
                 return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
             })
             .defaultIfEmpty(createPlaceholderCoverImages(book.getId() + " (all checks failed or resulted in empty)"));
+    }
+
+    /**
+     * Prepares a single book for display by fetching its cover and ensuring fallbacks.
+     */
+    public Mono<Book> prepareBookForDisplay(Book book) {
+        if (book == null) {
+            return Mono.empty();
+        }
+
+        return getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+            .map(coverImages -> {
+                book.setCoverImages(coverImages);
+                coverImagesOptional(coverImages)
+                    .filter(ValidationUtils::hasText)
+                    .ifPresentOrElse(
+                        book::setS3ImagePath,
+                        () -> {
+                            if (!ValidationUtils.hasText(book.getS3ImagePath())) {
+                                book.setS3ImagePath(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
+                            }
+                        }
+                    );
+                ensureSlug(book);
+                return book;
+            })
+            .onErrorResume(e -> {
+                log.warn("Error getting cover for book {}: {}", book.getId(), e.getMessage());
+                if (!ValidationUtils.hasText(book.getS3ImagePath())) {
+                    book.setS3ImagePath(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
+                }
+                if (book.getCoverImages() == null) {
+                    book.setCoverImages(new CoverImages(
+                        book.getS3ImagePath(),
+                        book.getS3ImagePath(),
+                        CoverImageSource.LOCAL_CACHE
+                    ));
+                }
+                ensureSlug(book);
+                return Mono.just(book);
+            });
+    }
+
+    /**
+     * Prepares a collection of books for display.
+     */
+    public Mono<List<Book>> prepareBooksForDisplay(List<Book> books) {
+        if (books == null || books.isEmpty()) {
+            return Mono.just(List.of());
+        }
+        return Flux.fromIterable(books)
+            .filter(Objects::nonNull)
+            .concatMap(this::prepareBookForDisplay)
+            .collectList()
+            .map(this::deduplicateAndFilter);
+    }
+
+    private Optional<String> coverImagesOptional(CoverImages coverImages) {
+        return Optional.ofNullable(coverImages)
+            .map(CoverImages::getPreferredUrl)
+            .filter(ValidationUtils::hasText);
+    }
+
+    private void ensureSlug(Book book) {
+        if (!ValidationUtils.hasText(book.getSlug())) {
+            book.setSlug(book.getId());
+        }
+    }
+
+    private List<Book> deduplicateAndFilter(List<Book> books) {
+        if (books == null || books.isEmpty()) {
+            return List.of();
+        }
+
+        LinkedHashMap<String, Book> ordered = new LinkedHashMap<>();
+        String placeholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
+        for (Book book : books) {
+            if (book == null) {
+                continue;
+            }
+            String key = ValidationUtils.hasText(book.getId()) ? book.getId() : book.getSlug();
+            boolean realCover = ValidationUtils.BookValidator.hasActualCover(book, placeholderPath);
+            if (ValidationUtils.hasText(key) && realCover && !ordered.containsKey(key)) {
+                ordered.put(key, book);
+            }
+        }
+
+        List<Book> result = new ArrayList<>(ordered.values());
+        result.forEach(duplicateBookService::populateDuplicateEditions);
+        return result;
     }
 
     /**
@@ -161,7 +267,7 @@ public class BookCoverManagementService {
         // Check final in-memory cache
         ImageDetails finalCachedImageDetails = coverCacheManager.getFinalImageDetails(identifierKey);
         if (finalCachedImageDetails != null && finalCachedImageDetails.getUrlOrPath() != null) {
-            logger.debug("Returning final cached ImageDetails for identifierKey {}: Path: {}, Source: {}",
+            log.debug("Returning final cached ImageDetails for identifierKey {}: Path: {}, Source: {}",
                 identifierKey, finalCachedImageDetails.getUrlOrPath(), finalCachedImageDetails.getCoverImageSource());
             CoverImages finalCacheResult = new CoverImages();
             finalCacheResult.setPreferredUrl(finalCachedImageDetails.getUrlOrPath());
@@ -251,20 +357,22 @@ public class BookCoverManagementService {
     @Async
     public void processCoverInBackground(Book book, String provisionalUrlHint) {
         if (!cacheEnabled || book == null) {
-            logger.debug("Background processing skipped: cache disabled or book is null");
+            log.debug("Background processing skipped: cache disabled or book is null");
             return;
         }
+
+        // Always attempt background processing; underlying services will no-op if disabled
 
         ImageProvenanceData provenanceData = new ImageProvenanceData();
         String identifierKey = ImageCacheUtils.getIdentifierKey(book);
         if (identifierKey == null) {
-            logger.warn("Background: Could not determine identifierKey for book with ID: {}. Aborting", book.getId());
+            log.warn("Background: Could not determine identifierKey for book with ID: {}. Aborting", book.getId());
             return;
         }
         final String bookIdForLog = book.getId() != null ? book.getId() : identifierKey;
         provenanceData.setBookId(bookIdForLog);
 
-        logger.info("Background: Starting full cover processing for identifierKey: {}, Book ID: {}, Title: {}",
+        log.info("Background: Starting full cover processing for identifierKey: {}, Book ID: {}, Title: {}",
             identifierKey, bookIdForLog, book.getTitle());
 
         coverSourceFetchingService.getBestCoverImageUrlAsync(book, provisionalUrlHint, provenanceData)
@@ -273,12 +381,14 @@ public class BookCoverManagementService {
                 if (finalImageDetails == null || finalImageDetails.getUrlOrPath() == null || 
                     finalImageDetails.getUrlOrPath().equals(localPlaceholderPath)) {
                     
-                    logger.warn("Background: Final processing for {} (BookID {}) yielded placeholder or null. Final cache updated with placeholder", identifierKey, bookIdForLog);
+                    log.warn("Background: Final processing for {} (BookID {}) yielded placeholder or null. Final cache updated with placeholder", identifierKey, bookIdForLog);
                     ImageDetails placeholderDetails = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "background-fetch-failed");
                     
                     if (placeholderDetails == null) {
                         // As per review suggestion, throw an exception instead of silently returning
-                        logger.error("CRITICAL: localDiskCoverCacheService.createPlaceholderImageDetails returned null for BookID {}. Throwing exception.", bookIdForLog);
+                        LoggingUtils.error(log, null,
+                            "CRITICAL: localDiskCoverCacheService.createPlaceholderImageDetails returned null for BookID {}. Throwing exception.",
+                            bookIdForLog);
                         if (identifierKey != null) {
                             coverCacheManager.invalidateProvisionalUrl(identifierKey); // Attempt to clean up provisional URL
                         }
@@ -291,35 +401,37 @@ public class BookCoverManagementService {
                     if (placeholderDetails.getUrlOrPath() != null && placeholderDetails.getCoverImageSource() != null) {
                         eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, placeholderDetails.getUrlOrPath(), book.getId(), placeholderDetails.getCoverImageSource()));
                     } else {
-                        logger.error("CRITICAL: placeholderDetails has null URL or Source for BookID {}. Event not published.", bookIdForLog);
+                        LoggingUtils.error(log, null,
+                            "CRITICAL: placeholderDetails has null URL or Source for BookID {}. Event not published.",
+                            bookIdForLog);
                     }
                     if (environmentService.isBookCoverDebugMode()) {
-                        logger.info("Background Provenance (Placeholder) for {}: {}", identifierKey, provenanceData.toString());
+                        log.info("Background Provenance (Placeholder) for {}: {}", identifierKey, provenanceData.toString());
                     }
                     return;
                 }
 
-                logger.info("Background: Best image found for {} (BookID {}): URL/Path: {}, Source: {}",
+                log.info("Background: Best image found for {} (BookID {}): URL/Path: {}, Source: {}",
                     identifierKey, bookIdForLog, finalImageDetails.getUrlOrPath(), finalImageDetails.getCoverImageSource());
 
                 if (finalImageDetails.getCoverImageSource() != CoverImageSource.S3_CACHE &&
                     finalImageDetails.getUrlOrPath() != null &&
                     finalImageDetails.getUrlOrPath().startsWith("/" + localDiskCoverCacheService.getCacheDirName())) {
                     
-                    logger.info("Background: Image for {} (BookID {}) is locally cached from {}. Triggering S3 upload",
+                    log.info("Background: Image for {} (BookID {}) is locally cached from {}. Triggering S3 upload",
                         identifierKey, bookIdForLog, finalImageDetails.getCoverImageSource());
                     
                     try {
                         String cacheDirString = localDiskCoverCacheService.getCacheDirString();
                         if (cacheDirString == null || cacheDirString.isBlank()) {
-                            logger.warn("Background: Cache directory unavailable for {}. Skipping S3 upload and using local details.", identifierKey);
+                            log.warn("Background: Cache directory unavailable for {}. Skipping S3 upload and using local details.", identifierKey);
                             coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                             eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                             return;
                         }
                         Path cacheDir = Paths.get(cacheDirString);
                         if (finalImageDetails.getUrlOrPath() == null) {
-                            logger.warn("Background: Image path for {} is null; skipping S3 upload.", identifierKey);
+                            log.warn("Background: Image path for {} is null; skipping S3 upload.", identifierKey);
                             coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                             eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, localPlaceholderPath, book.getId(), CoverImageSource.LOCAL_CACHE));
                             return;
@@ -328,7 +440,7 @@ public class BookCoverManagementService {
                         Path localImagePath = cacheDir.resolve(relativeImagePath);
 
                         if (!Files.exists(localImagePath)) {
-                            logger.warn("Background: Local image {} does not exist for BookID {}, cannot upload to S3. Using local details.", localImagePath, bookIdForLog);
+                            log.warn("Background: Local image {} does not exist for BookID {}, cannot upload to S3. Using local details.", localImagePath, bookIdForLog);
                             coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                             eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                         } else {
@@ -341,30 +453,29 @@ public class BookCoverManagementService {
                                 imageBytes, fileExtension, null, width, height,
                                 bookIdForLog, finalImageDetails.getSourceName(), provenanceData
                             )
-                            .doOnSuccess(s3UploadedDetails -> {
+                            .subscribe(s3UploadedDetails -> {
                                 if (s3UploadedDetails != null && s3UploadedDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-                                    logger.info("Background: Successfully uploaded to S3 for {}. New S3 URL: {}. Updating final cache.",
+                                    log.info("Background: Successfully uploaded to S3 for {}. New S3 URL: {}. Updating final cache.",
                                         identifierKey, s3UploadedDetails.getUrlOrPath());
                                     coverCacheManager.putFinalImageDetails(identifierKey, s3UploadedDetails);
                                     eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, s3UploadedDetails.getUrlOrPath(), book.getId(), CoverImageSource.S3_CACHE));
                                 } else {
-                                    logger.warn("Background: S3 upload failed or didn't return S3_CACHE for {}. Using local: {}", identifierKey, finalImageDetails.getUrlOrPath());
+                                    log.warn("Background: S3 upload failed or didn't return S3_CACHE for {}. Using local: {}", identifierKey, finalImageDetails.getUrlOrPath());
                                     coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                                     eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                                 }
-                            })
-                            .doOnError(s3Ex -> {
-                                logger.error("Background: Exception in S3 upload chain for {}: {}. Using local.", identifierKey, s3Ex.getMessage(), s3Ex);
+                            }, s3Ex -> {
+                                LoggingUtils.error(log, s3Ex, "Background: Exception in S3 upload chain for {}. Using local.", identifierKey);
                                 coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                                 eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
-                            })
-                            .subscribe(); // This makes the S3 upload non-blocking
+                            }); // non-blocking subscription with error handler
                             // The logic after this if/else will execute immediately if S3 path is taken.
                             // No explicit return here, so flow continues.
                         }
                     } catch (java.io.IOException e) {
-                        logger.error("Background: IOException for local image {} for S3 upload (BookID {}): {}", 
-                            finalImageDetails.getUrlOrPath(), bookIdForLog, e.getMessage());
+                        LoggingUtils.error(log, e,
+                            "Background: IOException for local image {} for S3 upload (BookID {})",
+                            finalImageDetails.getUrlOrPath(), bookIdForLog);
                         coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                         eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
                     }
@@ -372,7 +483,7 @@ public class BookCoverManagementService {
                     // The S3 callbacks will handle their own cache updates
                     return;
                 } else { // Not S3 cache and not a local disk cache candidate for S3 upload
-                    logger.info("Background: Image for {} (BookID {}) is not a local cache candidate for S3 upload (Source: {}, Path: {}). Using details as is.",
+                    log.info("Background: Image for {} (BookID {}) is not a local cache candidate for S3 upload (Source: {}, Path: {}). Using details as is.",
                         identifierKey, bookIdForLog, finalImageDetails.getCoverImageSource(), finalImageDetails.getUrlOrPath());
                     coverCacheManager.putFinalImageDetails(identifierKey, finalImageDetails);
                     eventPublisher.publishEvent(new BookCoverUpdatedEvent(identifierKey, finalImageDetails.getUrlOrPath(), book.getId(), finalImageDetails.getCoverImageSource()));
@@ -381,10 +492,10 @@ public class BookCoverManagementService {
                 }
             }, java.util.concurrent.ForkJoinPool.commonPool())
             .exceptionally(ex -> {
-                logger.error("Background: Top-level exception in processCoverInBackground for identifierKey='{}', BookID='{}': {}",
+                LoggingUtils.error(log, ex,
+                    "Background: Top-level exception in processCoverInBackground for identifierKey='{}', BookID='{}'",
                     identifierKey,
-                    bookIdForLog,
-                    ex.getMessage(), ex);
+                    bookIdForLog);
 
                 coverCacheManager.invalidateProvisionalUrl(identifierKey); // identifierKey should be non-null here due to earlier check
 
@@ -397,7 +508,9 @@ public class BookCoverManagementService {
                                                                       bookIdForLog,
                                                                       placeholderOnError.getCoverImageSource()));
                 } else {
-                    logger.error("Background: placeholderOnError or its properties are null for BookID {}. Event not published from exceptionally block.", bookIdForLog);
+                    LoggingUtils.error(log, null,
+                        "Background: placeholderOnError or its properties are null for BookID {}. Event not published from exceptionally block.",
+                        bookIdForLog);
                 }
                 return null;
             });

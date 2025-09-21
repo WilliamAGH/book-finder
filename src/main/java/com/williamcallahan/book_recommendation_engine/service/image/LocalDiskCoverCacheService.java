@@ -20,6 +20,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanc
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -126,7 +127,7 @@ public class LocalDiskCoverCacheService {
                     logger.warn("Google Books placeholder image not found in classpath at {}, hash-based detection disabled", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
                 }
             } catch (NoSuchAlgorithmException e) {
-                logger.error("Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.", e);
+                LoggingUtils.error(logger, e, "Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.");
             } catch (IOException e) { // Catch IO exceptions from stream operations
                 logger.warn("IOException while loading Google Books placeholder image from classpath {}: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH, e.getMessage(), e);
             } catch (Exception e) { // Catch any other unexpected exceptions
@@ -141,7 +142,7 @@ public class LocalDiskCoverCacheService {
             logger.info("Scheduled cleanup of old cached covers (older than {} days) to run with initial delay of {} day(s) and then every {} days", maxCacheAgeDays, initialDelayDays, periodDays);
 
         } catch (IOException e) { // For Files.createDirectories
-            logger.error("Failed to create or access book cover cache directory: {}. Disabling local disk caching.", cacheDirString, e);
+            LoggingUtils.error(logger, e, "Failed to create or access book cover cache directory: {}. Disabling local disk caching.", cacheDirString);
             cacheEnabled = false;
         }
         // The NoSuchAlgorithmException from computeImageHash inside the try-with-resources is handled locally.
@@ -178,7 +179,7 @@ public class LocalDiskCoverCacheService {
             destinationPath = cacheDir.resolve(ImageCacheUtils.generateFilenameFromUrl(imageUrl));
             logger.debug("Generated destination path: {}. Context: {}", destinationPath, logContext);
         } catch (NoSuchAlgorithmException e) {
-            logger.error("CRITICAL: SHA-256 algorithm not found for generating filename. Context: {}", logContext, e);
+            LoggingUtils.error(logger, e, "CRITICAL: SHA-256 algorithm not found for generating filename. Context: {}", logContext);
             return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "hash-algo-filename"));
         }
 
@@ -251,7 +252,7 @@ public class LocalDiskCoverCacheService {
                             logger.debug("Downloaded image is not the Google placeholder. Context: {}", finalLogContext);
                         }
                     } catch (NoSuchAlgorithmException e) {
-                        logger.error("NoSuchAlgorithmException (SHA-256) during hash computation for placeholder check. Context: {}", finalLogContext, e);
+                        LoggingUtils.error(logger, e, "NoSuchAlgorithmException (SHA-256) during hash computation for placeholder check. Context: {}", finalLogContext);
                         if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_PROCESSING);
                         return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "hash-algo-placeholder-check"));
                     }
@@ -288,11 +289,11 @@ public class LocalDiskCoverCacheService {
                                         CoverImageSource.LOCAL_CACHE, ImageResolutionPreference.ORIGINAL,
                                         processedImage.width(), processedImage.height());
                             } catch (IOException e) { // Handles IOException from Files.write
-                                logger.error("IOException during saving processed image. Context: {}", finalLogContext, e);
+                                LoggingUtils.error(logger, e, "IOException during saving processed image. Context: {}", finalLogContext);
                                 if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_IO);
                                 return createPlaceholderImageDetails(bookIdForLog, "io-exception-saving");
                             } catch (Exception e) { // Catch any other unexpected error from this inner block
-                                logger.error("Unexpected exception during post-processing or saving. Context: {}", finalLogContext, e);
+                                LoggingUtils.error(logger, e, "Unexpected exception during post-processing or saving. Context: {}", finalLogContext);
                                 if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_GENERIC);
                                 return createPlaceholderImageDetails(bookIdForLog, "generic-post-processing-ex");
                             }
@@ -363,7 +364,7 @@ public class LocalDiskCoverCacheService {
         try {
             cleanupOldCachedCovers();
         } catch (Throwable t) {
-            logger.error("Uncaught exception in LocalDiskCoverCacheService cleanup task. Scheduler thread might have died if not for this catch.", t);
+            LoggingUtils.error(logger, t, "Uncaught exception in LocalDiskCoverCacheService cleanup task. Scheduler thread might have died if not for this catch.");
         }
     }
 
@@ -403,7 +404,7 @@ public class LocalDiskCoverCacheService {
                     });
             logger.info("Completed cleanup of old cached book covers. Deleted {} files", deleteCount[0]);
         } catch (IOException e) {
-            logger.error("Error during cleanup of cached book covers in {}", cacheDir, e);
+            LoggingUtils.error(logger, e, "Error during cleanup of cached book covers in {}", cacheDir);
         }
     }
 

@@ -13,8 +13,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -27,12 +26,13 @@ import java.util.Collections;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 
 @Service
+@Slf4j
 public class NewYorkTimesService {
-    private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesService.class);
-
+    
     // S3 no longer used as read source for NYT bestsellers
     private final WebClient webClient;
     private final String nytApiBaseUrl;
@@ -58,7 +58,7 @@ public class NewYorkTimesService {
      */
     public Mono<JsonNode> fetchBestsellerListOverview() {
         String overviewUrl = "/lists/overview.json?api-key=" + nytApiKey;
-        logger.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
+        log.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
         return webClient.mutate()
                 .baseUrl(nytApiBaseUrl)
                 .build()
@@ -67,7 +67,7 @@ public class NewYorkTimesService {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .onErrorResume(e -> {
-                    logger.error("Error fetching NYT bestseller list overview from API: {}", e.getMessage(), e);
+                    LoggingUtils.error(log, e, "Error fetching NYT bestseller list overview from API");
                     return Mono.empty();
                 });
     }
@@ -82,7 +82,7 @@ public class NewYorkTimesService {
         final int effectiveLimit = PagingUtils.clamp(limit, 1, 100);
 
         if (jdbcTemplate == null) {
-            logger.warn("JdbcTemplate not available; returning empty bestsellers list.");
+            log.warn("JdbcTemplate not available; returning empty bestsellers list.");
             return Mono.just(Collections.emptyList());
         }
 
@@ -126,7 +126,7 @@ public class NewYorkTimesService {
         )
         .subscribeOn(Schedulers.boundedElastic())
         .onErrorResume(e -> {
-            logger.error("DB error fetching current bestsellers for list '{}': {}", listNameEncoded, e.getMessage(), e);
+            LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);
             return Mono.just(Collections.emptyList());
         });
     }

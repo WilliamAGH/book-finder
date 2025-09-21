@@ -15,8 +15,11 @@ package com.williamcallahan.book_recommendation_engine.service.image;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
-
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,6 +33,15 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
     private static final Logger logger = LoggerFactory.getLogger(OpenLibraryServiceImpl.class);
     private static final String OPEN_LIBRARY_SOURCE_NAME = "OpenLibrary";
 
+    private final CoverCacheManager coverCacheManager;
+    private final ExternalCoverFetchHelper externalCoverFetchHelper;
+
+    public OpenLibraryServiceImpl(ExternalCoverFetchHelper externalCoverFetchHelper,
+                                  CoverCacheManager coverCacheManager) {
+        this.externalCoverFetchHelper = externalCoverFetchHelper;
+        this.coverCacheManager = coverCacheManager;
+    }
+
     /**
      * Fetches book cover image from Open Library
      *
@@ -39,9 +51,9 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
     @Override
     @RateLimiter(name = "openLibraryServiceRateLimiter", fallbackMethod = "fetchCoverRateLimitFallback")
     public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
-        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
+        String isbn = BookValidator.getPreferredIsbn(book);
 
-        if (isbn == null || isbn.trim().isEmpty()) {
+        if (!ValidationUtils.hasText(isbn)) {
             logger.warn("No ISBN found for book ID: {}, cannot fetch cover from OpenLibrary.", book.getId());
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -109,6 +121,21 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
         );
         return CompletableFuture.completedFuture(Optional.of(details));
     }
+
+    public CompletableFuture<ImageDetails> fetchAndCacheCover(String isbn, String bookIdForLog, String sizeSuffix, ImageProvenanceData provenanceData) {
+        return externalCoverFetchHelper.fetchAndCache(
+            isbn,
+            coverCacheManager::isKnownBadOpenLibraryIsbn,
+            coverCacheManager::addKnownBadOpenLibraryIsbn,
+            () -> fetchOpenLibraryCoverDetails(isbn, sizeSuffix),
+            "OpenLibrary ISBN: " + isbn + ", size: " + sizeSuffix,
+            ImageSourceName.OPEN_LIBRARY,
+            "OpenLibrary-" + sizeSuffix,
+            "ol-" + sizeSuffix,
+            provenanceData,
+            bookIdForLog
+        );
+    }
     
     /**
      * Fallback method for rate limiting in fetchCover
@@ -121,7 +148,7 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
      * @return Empty Optional wrapped in CompletableFuture
      */
     public CompletableFuture<Optional<ImageDetails>> fetchCoverRateLimitFallback(Book book, Throwable t) {
-        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
+        String isbn = BookValidator.getPreferredIsbn(book);
         logger.warn("OpenLibraryService rate limit exceeded for book ID: {}, ISBN: {}. Error: {}", 
             book.getId(), isbn, t.getMessage());
         return CompletableFuture.completedFuture(Optional.empty());
