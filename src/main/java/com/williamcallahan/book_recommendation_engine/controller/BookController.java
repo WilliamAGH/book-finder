@@ -134,13 +134,11 @@ public class BookController {
                                                int maxResults,
                                                List<Book> results) {
         List<Book> safeResults = Objects.requireNonNullElse(results, List.of());
-        int total = safeResults.size();
-        int fromIndex = Math.min(startIndex, total);
-        int toIndex = Math.min(fromIndex + maxResults, total);
-        List<SearchHitDto> page = safeResults.subList(fromIndex, toIndex).stream()
+        List<Book> windowed = PagingUtils.slice(safeResults, startIndex, maxResults);
+        List<SearchHitDto> page = windowed.stream()
                 .map(this::toSearchHit)
                 .toList();
-        return new SearchResponse(query, startIndex, maxResults, total, page);
+        return new SearchResponse(query, startIndex, maxResults, safeResults.size(), page);
     }
 
     private SearchHitDto toSearchHit(Book book) {

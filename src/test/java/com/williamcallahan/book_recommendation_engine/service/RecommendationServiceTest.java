@@ -9,45 +9,32 @@ import reactor.test.StepVerifier;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class RecommendationServiceTest {
 
-    private GoogleBooksService googleBooksService;
     private BookDataOrchestrator bookDataOrchestrator;
     private BookRecommendationPersistenceService recommendationPersistenceService;
     private RecommendationService recommendationService;
 
     @BeforeEach
     void setUp() {
-        googleBooksService = mock(GoogleBooksService.class);
         bookDataOrchestrator = mock(BookDataOrchestrator.class);
         recommendationPersistenceService = mock(BookRecommendationPersistenceService.class);
         when(recommendationPersistenceService.persistPipelineRecommendations(any(), any()))
             .thenReturn(Mono.empty());
 
-        recommendationService = createService(false);
-
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of()));
-        when(googleBooksService.getBookById(anyString()))
-            .thenReturn(CompletableFuture.completedFuture(null));
-    }
-
-    private RecommendationService createService(boolean googleFallbackEnabled) {
-        return new RecommendationService(googleBooksService, bookDataOrchestrator, recommendationPersistenceService, googleFallbackEnabled);
+        recommendationService = new RecommendationService(bookDataOrchestrator, recommendationPersistenceService, true);
     }
 
     @Test
-    void getSimilarBooks_prefersPostgresSearchResults() {
+    void getSimilarBooks_prefersTieredResults() {
         Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
         Book postgresMatch = buildBook("postgres-match", "en", List.of("Author Two"), List.of("Fiction"));
 
-        when(bookDataOrchestrator.getBookByIdTiered("source")).thenReturn(Mono.just(source));
-        when(bookDataOrchestrator.getBookBySlugTiered("source")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("source")).thenReturn(Mono.just(source));
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of(postgresMatch)));
 
@@ -56,64 +43,32 @@ class RecommendationServiceTest {
             .verifyComplete();
 
         verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
-        verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
         verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
     }
 
     @Test
-    void getSimilarBooks_fallsBackToGoogleSearchWhenPostgresEmpty() {
-        recommendationService = createService(true);
-
+    void getSimilarBooks_returnsTieredFallbackResultsWhenDbMisses() {
         Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
-        Book googleMatch = buildBook("google-match", "en", List.of("Author Two"), List.of("Fiction"));
+        Book fallbackMatch = buildBook("fallback-match", "en", List.of("Author Two"), List.of("Fiction"));
 
-        when(bookDataOrchestrator.getBookByIdTiered("source")).thenReturn(Mono.just(source));
-        when(bookDataOrchestrator.getBookBySlugTiered("source")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("source")).thenReturn(Mono.just(source));
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of()));
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of(googleMatch)));
+            .thenReturn(Mono.just(List.of(fallbackMatch)));
 
         StepVerifier.create(recommendationService.getSimilarBooks("source", 3))
-            .expectNextMatches(results -> results.stream().anyMatch(book -> "google-match".equals(book.getId())))
+            .expectNextMatches(results -> results.stream().anyMatch(book -> "fallback-match".equals(book.getId())))
             .verifyComplete();
 
         verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
-        verify(googleBooksService, atLeastOnce()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
-        verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
-    }
-
-    @Test
-    void getSimilarBooks_fetchesSourceBookFromGoogleWhenOrchestratorMisses() {
-        recommendationService = createService(true);
-
-        Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
-        Book googleMatch = buildBook("google-match", "en", List.of("Author Two"), List.of("Fiction"));
-
-        when(bookDataOrchestrator.getBookByIdTiered("source")).thenReturn(Mono.empty());
-        when(bookDataOrchestrator.getBookBySlugTiered("source")).thenReturn(Mono.empty());
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of()));
-        when(googleBooksService.getBookById("source"))
-            .thenReturn(CompletableFuture.completedFuture(source));
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of(googleMatch)));
-
-        StepVerifier.create(recommendationService.getSimilarBooks("source", 3))
-            .expectNextMatches(results -> results.stream().anyMatch(book -> "google-match".equals(book.getId())))
-            .verifyComplete();
-
-        verify(googleBooksService).getBookById("source");
-        verify(googleBooksService, atLeastOnce()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
         verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
     }
 
     @Test
     void getSimilarBooks_returnsEmptyWhenFallbackDisabled() {
+        recommendationService = new RecommendationService(bookDataOrchestrator, recommendationPersistenceService, false);
         Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
 
-        when(bookDataOrchestrator.getBookByIdTiered("source")).thenReturn(Mono.just(source));
-        when(bookDataOrchestrator.getBookBySlugTiered("source")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("source")).thenReturn(Mono.just(source));
         when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of()));
 
@@ -122,11 +77,23 @@ class RecommendationServiceTest {
             .verifyComplete();
 
         verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
-        verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
+        verify(recommendationPersistenceService, never()).persistPipelineRecommendations(any(), any());
+    }
+
+    @Test
+    void getSimilarBooks_returnsEmptyWhenCanonicalNotFound() {
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("missing")).thenReturn(Mono.empty());
+
+        StepVerifier.create(recommendationService.getSimilarBooks("missing", 3))
+            .expectNext(List.of())
+            .verifyComplete();
+
+        verify(bookDataOrchestrator, never()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(recommendationPersistenceService, never()).persistPipelineRecommendations(any(), any());
     }
 
     private Book buildBook(String id, String language, List<String> authors, List<String> categories) {
-return com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+        return com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
                 .id(id)
                 .title("Title " + id)
                 .description("Description for " + id)
