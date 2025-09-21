@@ -1,7 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
@@ -12,6 +11,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+
 /**
  * Repository abstraction for persisting and aggregating recent book view activity.
  *
@@ -19,9 +20,9 @@ import java.util.Optional;
  * counters that power the homepage and other analytics surfaces.</p>
  */
 @Service
+@Slf4j
 public class RecentBookViewRepository {
 
-    private static final Logger logger = LoggerFactory.getLogger(RecentBookViewRepository.class);
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -44,7 +45,7 @@ public class RecentBookViewRepository {
      * @param source           Optional source label (e.g., "web", "api")
      */
     public void recordView(String canonicalBookId, @Nullable Instant viewedAt, @Nullable String source) {
-        if (!isEnabled() || canonicalBookId == null || canonicalBookId.isBlank()) {
+        if (!isEnabled() || ValidationUtils.isNullOrBlank(canonicalBookId)) {
             return;
         }
 
@@ -56,7 +57,7 @@ public class RecentBookViewRepository {
                     ps -> {
                         ps.setString(1, canonicalBookId);
                         ps.setTimestamp(2, Timestamp.from(effectiveInstant));
-                        if (source == null || source.isBlank()) {
+                        if (ValidationUtils.isNullOrBlank(source)) {
                             ps.setNull(3, java.sql.Types.VARCHAR);
                         } else {
                             ps.setString(3, source);
@@ -64,7 +65,7 @@ public class RecentBookViewRepository {
                     }
             );
         } catch (Exception ex) {
-            logger.debug("Failed to record recent view for book {}: {}", canonicalBookId, ex.getMessage());
+            log.debug("Failed to record recent view for book {}: {}", canonicalBookId, ex.getMessage());
         }
     }
 
@@ -72,7 +73,7 @@ public class RecentBookViewRepository {
      * Fetches aggregate view statistics for a single book over standard windows.
      */
     public Optional<ViewStats> fetchStatsForBook(String canonicalBookId) {
-        if (!isEnabled() || canonicalBookId == null || canonicalBookId.isBlank()) {
+        if (!isEnabled() || ValidationUtils.isNullOrBlank(canonicalBookId)) {
             return Optional.empty();
         }
 
@@ -104,7 +105,7 @@ public class RecentBookViewRepository {
                 ));
             });
         } catch (Exception ex) {
-            logger.debug("Failed to fetch view stats for book {}: {}", canonicalBookId, ex.getMessage());
+            log.debug("Failed to fetch view stats for book {}: {}", canonicalBookId, ex.getMessage());
             return Optional.empty();
         }
     }
@@ -151,7 +152,7 @@ public class RecentBookViewRepository {
                 );
             });
         } catch (Exception ex) {
-            logger.debug("Failed to fetch recent view aggregates: {}", ex.getMessage());
+            log.debug("Failed to fetch recent view aggregates: {}", ex.getMessage());
             return Collections.emptyList();
         }
     }

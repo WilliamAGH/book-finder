@@ -8,8 +8,7 @@ import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import jakarta.annotation.PostConstruct;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -26,10 +25,10 @@ import java.util.stream.Collectors;
  * Builds sitemap snapshots from Postgres and synchronises supporting artefacts (S3 JSON, cover probes, API warmups).
  */
 @Service
+@Slf4j
 public class BookSitemapService {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookSitemapService.class);
-
+    
     private final SitemapService sitemapService;
     private final SitemapProperties sitemapProperties;
     private final ObjectMapper objectMapper;
@@ -67,7 +66,7 @@ public class BookSitemapService {
     public SitemapSnapshot buildSnapshot() {
         int pageCount = sitemapService.getBooksXmlPageCount();
         if (pageCount == 0) {
-            logger.info("Sitemap snapshot build found no book pages to process.");
+            log.info("Sitemap snapshot build found no book pages to process.");
             return new SitemapSnapshot(Instant.now(), Collections.emptyList());
         }
 
@@ -80,32 +79,32 @@ public class BookSitemapService {
             aggregated.addAll(pageItems);
         }
 
-        logger.info("Built sitemap snapshot with {} book entries across {} XML pages.", aggregated.size(), pageCount);
+        log.info("Built sitemap snapshot with {} book entries across {} XML pages.", aggregated.size(), pageCount);
         return new SitemapSnapshot(Instant.now(), Collections.unmodifiableList(aggregated));
     }
 
     public boolean uploadSnapshot(SitemapSnapshot snapshot) {
         if (snapshot.books().isEmpty()) {
-            logger.info("Skipping sitemap snapshot upload because no books were harvested.");
+            log.info("Skipping sitemap snapshot upload because no books were harvested.");
             return false;
         }
         if (s3StorageService == null) {
-            logger.info("Skipping sitemap snapshot upload because S3 storage service is not configured.");
+            log.info("Skipping sitemap snapshot upload because S3 storage service is not configured.");
             return false;
         }
         String s3Key = sitemapProperties.getS3AccumulatedIdsKey();
         if (s3Key == null || s3Key.isBlank()) {
-            logger.warn("Sitemap snapshot upload skipped – no S3 key configured (sitemap.s3.accumulated-ids-key).");
+            log.warn("Sitemap snapshot upload skipped – no S3 key configured (sitemap.s3.accumulated-ids-key).");
             return false;
         }
 
         try {
             String payload = buildSnapshotPayload(snapshot);
             s3StorageService.uploadGenericJsonAsync(s3Key, payload, true).join();
-            logger.info("Uploaded sitemap snapshot ({} entries) to S3 key '{}'.", snapshot.books().size(), s3Key);
+            log.info("Uploaded sitemap snapshot ({} entries) to S3 key '{}'.", snapshot.books().size(), s3Key);
             return true;
         } catch (Exception e) {
-            logger.error("Failed to upload sitemap snapshot to S3 key '{}': {}", s3Key, e.getMessage(), e);
+            log.error("Failed to upload sitemap snapshot to S3 key '{}': {}", s3Key, e.getMessage(), e);
             return false;
         }
     }
@@ -115,7 +114,7 @@ public class BookSitemapService {
             return new ExternalHydrationSummary(0, 0, 0, 0);
         }
         if (bookDataOrchestrator == null) {
-            logger.debug("Skipping external hydration – BookDataOrchestrator not available.");
+            log.debug("Skipping external hydration – BookDataOrchestrator not available.");
             return new ExternalHydrationSummary(limit, 0, 0, 0);
         }
 
@@ -139,7 +138,7 @@ public class BookSitemapService {
                 }
             } catch (Exception e) {
                 failures.incrementAndGet();
-                logger.debug("Hydration attempt failed for book {}: {}", item.bookId(), e.getMessage());
+                log.debug("Hydration attempt failed for book {}: {}", item.bookId(), e.getMessage());
             }
         }
 

@@ -16,11 +16,13 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import reactor.core.publisher.Mono;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
@@ -29,7 +31,6 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -44,19 +45,19 @@ import java.util.stream.Collectors;
  * - Sorts fallback books by publication date for relevance
  */
 @Service
+@Slf4j
 public class RecentlyViewedService {
 
-    private static final Logger logger = LoggerFactory.getLogger(RecentlyViewedService.class);
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final DuplicateBookService duplicateBookService;
     private final RecentBookViewRepository recentBookViewRepository;
-    private final boolean googleFallbackEnabled;
+    private final boolean externalFallbackEnabled;
 
     // In-memory storage for recently viewed books
     private final LinkedList<Book> recentlyViewedBooks = new LinkedList<>();
-    private static final int MAX_RECENT_BOOKS = 10;
-    private static final String DEFAULT_FALLBACK_QUERY = "java programming";
+    private static final int MAX_RECENT_BOOKS = ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2;
+    private static final String DEFAULT_FALLBACK_QUERY = ApplicationConstants.Search.DEFAULT_RECENT_FALLBACK_QUERY;
 
     /**
      * Constructs a RecentlyViewedService with required dependencies
@@ -70,12 +71,12 @@ public class RecentlyViewedService {
                                  DuplicateBookService duplicateBookService,
                                  BookDataOrchestrator bookDataOrchestrator,
                                  RecentBookViewRepository recentBookViewRepository,
-                                 @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled) {
+                                 @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.googleBooksService = googleBooksService;
         this.duplicateBookService = duplicateBookService;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.recentBookViewRepository = recentBookViewRepository;
-        this.googleFallbackEnabled = googleFallbackEnabled;
+        this.externalFallbackEnabled = externalFallbackEnabled;
     }
 
     /**
@@ -91,12 +92,12 @@ public class RecentlyViewedService {
      */
     public void addToRecentlyViewed(Book book) {
         if (book == null) {
-            logger.warn("RECENT_VIEWS_DEBUG: Attempted to add a null book to recently viewed.");
+            log.warn("RECENT_VIEWS_DEBUG: Attempted to add a null book to recently viewed.");
             return;
         }
 
         String originalBookId = book.getId();
-        logger.info("RECENT_VIEWS_DEBUG: Attempting to add book. Original ID: '{}', Title: '{}'", originalBookId, book.getTitle());
+        log.info("RECENT_VIEWS_DEBUG: Attempting to add book. Original ID: '{}', Title: '{}'", originalBookId, book.getTitle());
 
         String canonicalId = originalBookId; // Default to original
 
@@ -104,16 +105,16 @@ public class RecentlyViewedService {
         Optional<Book> canonicalBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
         if (canonicalBookOpt.isPresent()) {
             Book canonicalBook = canonicalBookOpt.get();
-            if (canonicalBook.getId() != null && !canonicalBook.getId().isEmpty()) {
+            if (ValidationUtils.hasText(canonicalBook.getId())) {
                 canonicalId = canonicalBook.getId();
             }
-            logger.info("RECENT_VIEWS_DEBUG: Resolved original ID '{}' to canonical ID '{}' for book title '{}'", originalBookId, canonicalId, book.getTitle());
+            log.info("RECENT_VIEWS_DEBUG: Resolved original ID '{}' to canonical ID '{}' for book title '{}'", originalBookId, canonicalId, book.getTitle());
         } else {
-            logger.info("RECENT_VIEWS_DEBUG: No canonical book found for book ID '{}', Title '{}'. Using original ID as canonical.", originalBookId, book.getTitle());
+            log.info("RECENT_VIEWS_DEBUG: No canonical book found for book ID '{}', Title '{}'. Using original ID as canonical.", originalBookId, book.getTitle());
         }
         
-        if (canonicalId == null || canonicalId.isEmpty()) {
-            logger.warn("RECENT_VIEWS_DEBUG: Null or empty canonical ID determined for book title '{}' (original ID '{}'). Skipping add.", book.getTitle(), originalBookId);
+        if (ValidationUtils.isNullOrBlank(canonicalId)) {
+            log.warn("RECENT_VIEWS_DEBUG: Null or empty canonical ID determined for book title '{}' (original ID '{}'). Skipping add.", book.getTitle(), originalBookId);
             return;
         }
 
@@ -124,7 +125,7 @@ public class RecentlyViewedService {
         // create a new Book object (or clone) for storage in the list with the canonical ID
         // This avoids modifying the original 'book' object which might be used elsewhere
         if (!java.util.Objects.equals(originalBookId, finalCanonicalId)) {
-            logger.info("RECENT_VIEWS_DEBUG: Book ID mismatch. Original: '{}', Canonical: '{}'. Creating new Book instance for recent views.", originalBookId, finalCanonicalId);
+            log.info("RECENT_VIEWS_DEBUG: Book ID mismatch. Original: '{}', Canonical: '{}'. Creating new Book instance for recent views.", originalBookId, finalCanonicalId);
             bookToAdd = new Book();
             // Copy essential properties for display in recent views
             bookToAdd.setId(finalCanonicalId);
@@ -135,7 +136,7 @@ public class RecentlyViewedService {
             // Add other fields if they are displayed in the "Recent Views" section
         }
 
-        if (bookToAdd.getSlug() == null || bookToAdd.getSlug().isBlank()) {
+        if (ValidationUtils.isNullOrBlank(bookToAdd.getSlug())) {
             bookToAdd.setSlug(finalCanonicalId);
         }
 
@@ -146,24 +147,24 @@ public class RecentlyViewedService {
             String existingIds = recentlyViewedBooks.stream()
                                     .map(b -> b != null ? b.getId() : "null")
                                     .collect(Collectors.joining(", "));
-            logger.info("RECENT_VIEWS_DEBUG: Existing IDs in recent views before removal: [{}] for new canonical ID '{}'", existingIds, finalCanonicalId);
+            log.info("RECENT_VIEWS_DEBUG: Existing IDs in recent views before removal: [{}] for new canonical ID '{}'", existingIds, finalCanonicalId);
     
             boolean removed = recentlyViewedBooks.removeIf(b -> 
                 b != null && java.util.Objects.equals(b.getId(), finalCanonicalId)
             );
 
             if (removed) {
-                logger.info("RECENT_VIEWS_DEBUG: Found and removed existing entry for canonical ID '{}'", finalCanonicalId);
+                log.info("RECENT_VIEWS_DEBUG: Found and removed existing entry for canonical ID '{}'", finalCanonicalId);
             } else {
-                logger.info("RECENT_VIEWS_DEBUG: No existing entry found for canonical ID '{}'", finalCanonicalId);
+                log.info("RECENT_VIEWS_DEBUG: No existing entry found for canonical ID '{}'", finalCanonicalId);
             }
     
             recentlyViewedBooks.addFirst(bookToAdd); // Add the (potentially new) book instance with canonical ID
-            logger.info("RECENT_VIEWS_DEBUG: Added book with canonical ID '{}'. List size now: {}", finalCanonicalId, recentlyViewedBooks.size());
+            log.info("RECENT_VIEWS_DEBUG: Added book with canonical ID '{}'. List size now: {}", finalCanonicalId, recentlyViewedBooks.size());
     
             while (recentlyViewedBooks.size() > MAX_RECENT_BOOKS) {
                 Book removedLastBook = recentlyViewedBooks.removeLast();
-                logger.info("RECENT_VIEWS_DEBUG: Trimmed book. ID: '{}'. List size now: {}", removedLastBook.getId(), recentlyViewedBooks.size());
+                log.info("RECENT_VIEWS_DEBUG: Trimmed book. ID: '{}'. List size now: {}", removedLastBook.getId(), recentlyViewedBooks.size());
             }
         }
 
@@ -186,12 +187,12 @@ public class RecentlyViewedService {
      * Provides error handling with fallback to empty list
      */
     public Mono<List<Book>> fetchDefaultBooksAsync() {
-        logger.debug("Fetching default books reactively (Postgres-first).");
+        log.debug("Fetching default books reactively (Postgres-first).");
 
         return loadFromRepositoryMono()
             .flatMap(prepared -> {
                 if (!prepared.isEmpty()) {
-                    logger.debug("Returning {} default books from recent-view repository.", prepared.size());
+                    log.debug("Returning {} default books from recent-view repository.", prepared.size());
                     return Mono.just(prepared);
                 }
 
@@ -204,25 +205,25 @@ public class RecentlyViewedService {
                     .map(this::prepareDefaultBooks)
                     .doOnSuccess(list -> {
                         if (!list.isEmpty()) {
-                            logger.debug("Returning {} default books from Postgres tier.", list.size());
+                            log.debug("Returning {} default books from Postgres tier.", list.size());
                         }
                     })
                     .onErrorResume(ex -> {
-                        logger.warn("Postgres lookup for recently viewed defaults failed: {}", ex.getMessage());
+                        LoggingUtils.warn(log, ex, "Postgres lookup for recently viewed defaults failed");
                         return Mono.just(Collections.emptyList());
                     })
                     .flatMap(postgresPrepared -> {
-                        if (!postgresPrepared.isEmpty() || !googleFallbackEnabled) {
+                        if (!postgresPrepared.isEmpty() || !externalFallbackEnabled) {
                             return Mono.just(postgresPrepared);
                         }
 
-                        logger.debug("Postgres tier returned empty defaults; falling back to Google Books.");
+                        log.debug("Postgres tier returned empty defaults; falling back to Google Books.");
                         return googleBooksService.searchBooksAsyncReactive(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
                             .defaultIfEmpty(Collections.emptyList())
                             .map(this::prepareDefaultBooks)
-                            .doOnSuccess(list -> logger.debug("Returning {} default books from Google fallback tier.", list.size()))
+                            .doOnSuccess(list -> log.debug("Returning {} default books from Google fallback tier.", list.size()))
                             .onErrorResume(e -> {
-                                logger.error("Error fetching default books from Google fallback", e);
+                                LoggingUtils.error(log, e, "Error fetching default books from Google fallback");
                                 return Mono.just(Collections.emptyList());
                             });
                     });
@@ -244,7 +245,7 @@ public class RecentlyViewedService {
         return Mono.defer(() -> {
             synchronized (recentlyViewedBooks) {
                 if (!recentlyViewedBooks.isEmpty()) {
-                    logger.debug("Returning {} recently viewed books from cache.", recentlyViewedBooks.size());
+                    log.debug("Returning {} recently viewed books from cache.", recentlyViewedBooks.size());
                     return Mono.just(new ArrayList<>(recentlyViewedBooks));
                 }
             }
@@ -252,10 +253,10 @@ public class RecentlyViewedService {
             return fetchDefaultBooksAsync()
                 .onErrorResume(e -> {
                     if (e instanceof InterruptedException) {
-                        logger.warn("Fetching default books was interrupted.", e);
+                        LoggingUtils.warn(log, e, "Fetching default books was interrupted.");
                         Thread.currentThread().interrupt();
                     } else {
-                        logger.error("Error executing default book fetch.", e);
+                        LoggingUtils.error(log, e, "Error executing default book fetch.");
                     }
                     return Mono.just(Collections.emptyList());
                 })
@@ -305,16 +306,14 @@ public class RecentlyViewedService {
      * Used to filter out books with missing or placeholder covers in recommendations
      */
     private boolean isValidCoverImage(String imageUrl) {
-        if (imageUrl == null) {
-            return false;
-        }
-
-        // Check if it's our placeholder image
-        return !imageUrl.contains("placeholder-book-cover.svg");
+        return ValidationUtils.BookValidator.hasActualCover(
+            imageUrl,
+            ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH
+        );
     }
 
     private List<Book> prepareDefaultBooks(List<Book> books) {
-        if (books == null || books.isEmpty()) {
+        if (ValidationUtils.isNullOrEmpty(books)) {
             return Collections.emptyList();
         }
 
@@ -338,7 +337,7 @@ public class RecentlyViewedService {
 
                 List<Book> hydrated = new ArrayList<>();
                 for (RecentBookViewRepository.ViewStats stat : stats) {
-                    if (stat == null || stat.bookId() == null) {
+                    if (stat == null || ValidationUtils.isNullOrBlank(stat.bookId())) {
                         continue;
                     }
 
@@ -347,7 +346,7 @@ public class RecentlyViewedService {
                             : Optional.empty();
 
                     bookOptional.ifPresent(book -> {
-                        if (book.getSlug() == null || book.getSlug().isBlank()) {
+                        if (ValidationUtils.isNullOrBlank(book.getSlug())) {
                             book.setSlug(book.getId());
                         }
                         applyViewStats(book, stat);
@@ -359,7 +358,7 @@ public class RecentlyViewedService {
             })
             .subscribeOn(Schedulers.boundedElastic())
             .onErrorResume(ex -> {
-                logger.warn("Failed to load recent books from repository: {}", ex.getMessage());
+                log.warn("Failed to load recent books from repository: {}", ex.getMessage());
                 return Mono.just(Collections.emptyList());
             });
     }
@@ -448,7 +447,7 @@ public class RecentlyViewedService {
     public void clearRecentlyViewedBooks() {
         synchronized (recentlyViewedBooks) {
             recentlyViewedBooks.clear();
-            logger.debug("Recently viewed books cleared.");
+            log.debug("Recently viewed books cleared.");
         }
     }
 }

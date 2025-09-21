@@ -3,8 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -17,9 +16,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class BookSearchService {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookSearchService.class);
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 200;
 
@@ -34,7 +33,7 @@ public class BookSearchService {
             return List.of();
         }
         String sanitizedQuery = normaliseQuery(query);
-        int safeLimit = safeLimit(limit != null ? limit : DEFAULT_LIMIT);
+        int safeLimit = PagingUtils.safeLimit(limit != null ? limit : 0, DEFAULT_LIMIT, 1, MAX_LIMIT);
         try {
             return jdbcTemplate.query(
                     "SELECT * FROM search_books(?, ?)",
@@ -50,7 +49,7 @@ public class BookSearchService {
              .filter(result -> result.bookId() != null)
              .toList();
         } catch (DataAccessException ex) {
-            logger.debug("Postgres search failed for query '{}': {}", sanitizedQuery, ex.getMessage());
+            log.debug("Postgres search failed for query '{}': {}", sanitizedQuery, ex.getMessage());
             return Collections.emptyList();
         }
     }
@@ -80,7 +79,7 @@ public class BookSearchService {
                             : Optional.empty()
             );
         } catch (DataAccessException ex) {
-            logger.debug("Postgres ISBN search failed for '{}': {}", sanitized, ex.getMessage());
+            log.debug("Postgres ISBN search failed for '{}': {}", sanitized, ex.getMessage());
             return Optional.empty();
         }
     }
@@ -90,7 +89,7 @@ public class BookSearchService {
             return List.of();
         }
         String sanitizedQuery = normaliseQuery(query);
-        int safeLimit = safeLimit(limit != null ? limit : DEFAULT_LIMIT);
+        int safeLimit = PagingUtils.safeLimit(limit != null ? limit : 0, DEFAULT_LIMIT, 1, MAX_LIMIT);
         try {
             return jdbcTemplate.query(
                     "SELECT * FROM search_authors(?, ?)",
@@ -105,7 +104,7 @@ public class BookSearchService {
                             rs.getDouble("relevance_score"))
             );
         } catch (DataAccessException ex) {
-            logger.debug("Postgres author search failed for query '{}': {}", sanitizedQuery, ex.getMessage());
+            log.debug("Postgres author search failed for query '{}': {}", sanitizedQuery, ex.getMessage());
             return Collections.emptyList();
         }
     }
@@ -117,16 +116,12 @@ public class BookSearchService {
         try {
             jdbcTemplate.execute("SELECT refresh_book_search_view()");
         } catch (DataAccessException ex) {
-            logger.debug("Failed to refresh book_search_view: {}", ex.getMessage());
+            log.debug("Failed to refresh book_search_view: {}", ex.getMessage());
         }
     }
 
     private String normaliseQuery(String query) {
         return SearchQueryUtils.normalize(query);
-    }
-
-    private int safeLimit(int requested) {
-        return PagingUtils.clamp(requested, 1, MAX_LIMIT);
     }
 
     private String normaliseIsbn(String isbnQuery) {
