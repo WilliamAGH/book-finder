@@ -92,7 +92,14 @@ public class NewYorkTimesService {
             "FROM book_collections bc " +
             "JOIN book_collections_join bcj ON bc.id = bcj.collection_id " +
             "JOIN books b ON b.id = bcj.book_id " +
-            "LEFT JOIN book_image_links bil ON bil.book_id = b.id AND bil.is_primary = true " +
+            "LEFT JOIN LATERAL (" +
+            "    SELECT s3_image_path " +
+            "    FROM book_image_links " +
+            "    WHERE book_id = b.id " +
+            "      AND s3_image_path IS NOT NULL " +
+            "    ORDER BY COALESCE(is_high_resolution, false) DESC, COALESCE(width, 0) DESC, created_at DESC " +
+            "    LIMIT 1" +
+            ") bil ON TRUE " +
             "WHERE bc.collection_type = 'BESTSELLER_LIST' AND bc.source = 'NYT' AND bc.provider_list_code = ? " +
             "  AND bc.published_date = (SELECT max(published_date) FROM book_collections WHERE collection_type = 'BESTSELLER_LIST' AND source = 'NYT' AND provider_list_code = ?) " +
             "ORDER BY bcj.position NULLS LAST, b.title ASC " +
