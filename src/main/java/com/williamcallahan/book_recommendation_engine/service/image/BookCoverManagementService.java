@@ -23,7 +23,9 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanc
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.UrlPatternMatcher;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -138,6 +140,10 @@ public class BookCoverManagementService {
         // 1. Check S3 (via S3BookCoverService which might have its own internal cache for S3 object existence)
         // Convert CompletableFuture to Mono
         return Mono.fromFuture(s3BookCoverService.fetchCover(book)) // This now returns CompletableFuture<Optional<ImageDetails>>
+            .onErrorResume(ReactiveErrorUtils.logAndReturnDefault(
+                "BookCoverManagementService.fetchCoverFromS3(" + identifierKey + ")",
+                Optional.empty()
+            ))
             .flatMap(imageDetailsOptionalFromS3 -> { // imageDetailsOptionalFromS3 is Optional<ImageDetails>
                 if (imageDetailsOptionalFromS3.isPresent()) {
                     ImageDetails imageDetailsFromS3 = imageDetailsOptionalFromS3.get();
@@ -157,9 +163,8 @@ public class BookCoverManagementService {
                 // S3 miss, invalid details, or empty Optional, proceed to check other caches
                 return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
             })
-            .onErrorResume(e -> { // This catches errors from s3BookCoverService.fetchCover(book) or the flatMap processing
-                log.warn("Error during S3 fetch or processing for identifier {}: {}", identifierKey, e.getMessage());
-                // Error in S3 fetch or its processing, proceed to check other caches
+            .onErrorResume(e -> {
+                ReactiveErrorUtils.logError(e, "BookCoverManagementService.resolveInitialCover(" + identifierKey + ")");
                 return checkMemoryCachesAndDefaults(book, identifierKey, localPlaceholderPath);
             })
             .defaultIfEmpty(createPlaceholderCoverImages(book.getId() + " (all checks failed or resulted in empty)"));
@@ -217,7 +222,13 @@ public class BookCoverManagementService {
             .filter(Objects::nonNull)
             .concatMap(this::prepareBookForDisplay)
             .collectList()
-            .map(this::deduplicateAndFilter);
+            .map(list -> {
+                List<Book> prepared = deduplicateAndFilter(list);
+                log.debug("Prepared {} books for display (input {}), real covers kept {}",
+                    prepared.size(), list != null ? list.size() : 0,
+                    prepared.stream().filter(book -> ValidationUtils.BookValidator.hasActualCover(book, localDiskCoverCacheService.getLocalPlaceholderPath())).count());
+                return prepared;
+            });
     }
 
     private Optional<String> coverImagesOptional(CoverImages coverImages) {
@@ -237,22 +248,37 @@ public class BookCoverManagementService {
             return List.of();
         }
 
-        LinkedHashMap<String, Book> ordered = new LinkedHashMap<>();
+        LinkedHashMap<String, Book> realCoverBooks = new LinkedHashMap<>();
+        LinkedHashMap<String, Book> placeholderBooks = new LinkedHashMap<>();
         String placeholderPath = localDiskCoverCacheService.getLocalPlaceholderPath();
+
         for (Book book : books) {
             if (book == null) {
                 continue;
             }
             String key = ValidationUtils.hasText(book.getId()) ? book.getId() : book.getSlug();
-            boolean realCover = ValidationUtils.BookValidator.hasActualCover(book, placeholderPath);
-            if (ValidationUtils.hasText(key) && realCover && !ordered.containsKey(key)) {
-                ordered.put(key, book);
+            if (!ValidationUtils.hasText(key)) {
+                continue;
+            }
+
+            boolean hasRealCover = ValidationUtils.BookValidator.hasActualCover(book, placeholderPath);
+            if (hasRealCover) {
+                realCoverBooks.putIfAbsent(key, book);
+            } else {
+                placeholderBooks.putIfAbsent(key, book);
             }
         }
 
-        List<Book> result = new ArrayList<>(ordered.values());
-        result.forEach(duplicateBookService::populateDuplicateEditions);
-        return result;
+        List<Book> combined = new ArrayList<>(realCoverBooks.values());
+
+        placeholderBooks.forEach((key, book) -> {
+            if (!realCoverBooks.containsKey(key)) {
+                combined.add(book);
+            }
+        });
+
+        combined.forEach(duplicateBookService::populateDuplicateEditions);
+        return combined;
     }
 
     /**
@@ -315,11 +341,16 @@ public class BookCoverManagementService {
         if (url == null || url.isEmpty()) return CoverImageSource.UNDEFINED;
         if (url.equals(localPlaceholderPath)) return CoverImageSource.LOCAL_CACHE;
         if (url.startsWith("/" + localDiskCoverCacheService.getCacheDirName())) return CoverImageSource.LOCAL_CACHE;
-        if (url.contains("googleapis.com/books") || url.contains("books.google.com/books")) return CoverImageSource.GOOGLE_BOOKS;
-        if (url.contains("openlibrary.org")) return CoverImageSource.OPEN_LIBRARY;
-        if (url.contains("longitood.com")) return CoverImageSource.LONGITOOD;
-        if (url.contains(s3CdnUrl) || (s3PublicCdnUrl != null && !s3PublicCdnUrl.isEmpty() && url.contains(s3PublicCdnUrl))) return CoverImageSource.S3_CACHE;
-        return CoverImageSource.ANY; // Default if no specific source is identified
+        if (url.contains(s3CdnUrl) || (s3PublicCdnUrl != null && !s3PublicCdnUrl.isEmpty() && url.contains(s3PublicCdnUrl))) {
+            return CoverImageSource.S3_CACHE;
+        }
+        UrlPatternMatcher.UrlSource urlSource = UrlPatternMatcher.identifySource(url);
+        return switch (urlSource) {
+            case GOOGLE_BOOKS -> CoverImageSource.GOOGLE_BOOKS;
+            case OPEN_LIBRARY -> CoverImageSource.OPEN_LIBRARY;
+            // Amazon/Goodreads (and others) map to general external source; keep as ANY
+            default -> CoverImageSource.ANY;
+        };
     }
     
     /**

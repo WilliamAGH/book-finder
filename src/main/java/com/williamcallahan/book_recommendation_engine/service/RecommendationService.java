@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -54,23 +55,18 @@ public class RecommendationService {
     private static final String REASON_CATEGORY = "CATEGORY";
     private static final String REASON_TEXT = "TEXT";
 
-    private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final BookRecommendationPersistenceService recommendationPersistenceService;
     private final boolean externalFallbackEnabled;
 
     /**
-     * Constructs the RecommendationService with required dependencies
+     * Constructs the RecommendationService with required dependencies.
      *
-     * @param googleBooksService Service for searching books in Google Books API
-     *
-     * @implNote Uses GoogleBooksService for searches and book details
+     * @implNote Delegates all lookups to BookDataOrchestrator to avoid duplicate tier logic.
      */
-    public RecommendationService(GoogleBooksService googleBooksService,
-                                 BookDataOrchestrator bookDataOrchestrator,
+    public RecommendationService(BookDataOrchestrator bookDataOrchestrator,
                                  BookRecommendationPersistenceService recommendationPersistenceService,
                                  @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
-        this.googleBooksService = googleBooksService;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.recommendationPersistenceService = recommendationPersistenceService;
         this.externalFallbackEnabled = externalFallbackEnabled;
@@ -129,30 +125,25 @@ public class RecommendationService {
         if (!externalFallbackEnabled) {
             return Mono.just(Collections.emptyList());
         }
-        return fetchSourceBookTiered(bookId)
+        return fetchCanonicalBook(bookId)
                 .flatMap(sourceBook -> fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount))
-                .switchIfEmpty(Mono.just(Collections.<Book>emptyList()));
+                .switchIfEmpty(Mono.just(Collections.emptyList()));
     }
 
     private Mono<Book> fetchCanonicalBook(String identifier) {
         if (ValidationUtils.isNullOrBlank(identifier) || bookDataOrchestrator == null) {
             return Mono.empty();
         }
-        Mono<Book> byId = Mono.defer(() -> {
-            Mono<Book> lookup = bookDataOrchestrator.getBookByIdTiered(identifier);
-            return lookup == null ? Mono.empty() : lookup;
-        });
-        Mono<Book> bySlug = Mono.defer(() -> {
-            Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
-            return lookup == null ? Mono.empty() : lookup;
-        });
-        return byId.switchIfEmpty(bySlug);
+        Mono<Book> canonical = bookDataOrchestrator.fetchCanonicalBookReactive(identifier);
+        return canonical == null
+                ? Mono.empty()
+                : canonical.onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("RecommendationService.fetchCanonicalBook(" + identifier + ")"));
     }
 
     private Mono<Book> fetchCanonicalBookSafe(String identifier) {
         return fetchCanonicalBook(identifier)
-                .doOnError(ex -> log.debug("Postgres lookup failed for recommendation {}: {}", identifier, ex.getMessage()))
-                .onErrorResume(ex -> Mono.empty());
+                .doOnError(ex -> log.debug("Canonical lookup failed for recommendation {}: {}", identifier, ex.getMessage()))
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("RecommendationService.fetchCanonicalBookSafe(" + identifier + ")"));
     }
 
     private Mono<List<Book>> fetchCachedRecommendations(Book sourceBook, int limit) {
@@ -179,7 +170,7 @@ public class RecommendationService {
 
     private Mono<List<Book>> fetchRecommendationsFromApiAndUpdateCache(Book sourceBook, int effectiveCount) {
         // Run the recommendation strategies even when external fallbacks are disabled.
-        // Downstream searchBooksTiered() will honor externalFallbackEnabled when deciding to call Google.
+        // Downstream searchBooks() already honors externalFallbackEnabled within the orchestrator tier.
         Flux<ScoredBook> authorsFlux = findBooksByAuthorsReactive(sourceBook);
         Flux<ScoredBook> categoriesFlux = findBooksByCategoriesReactive(sourceBook);
         Flux<ScoredBook> textFlux = findBooksByTextReactive(sourceBook);
@@ -305,13 +296,10 @@ public class RecommendationService {
         String langCode = sourceBook.getLanguage(); // Get language from source book
         
         return Flux.fromIterable(sourceBook.getAuthors())
-            .flatMap(author -> searchBooksTiered("inauthor:" + author, langCode, MAX_SEARCH_RESULTS)
+            .flatMap(author -> searchBooks("inauthor:" + author, langCode, MAX_SEARCH_RESULTS)
                 .flatMapMany(Flux::fromIterable)
                 .map(book -> new ScoredBook(book, 4.0, REASON_AUTHOR))
-                .onErrorResume(e -> {
-                    LoggingUtils.warn(log, e, "Error finding books by author {}", author);
-                    return Flux.empty();
-                }));
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyFlux("RecommendationService.findBooksByAuthorsReactive author=" + author)));
     }
     
     /**
@@ -341,17 +329,14 @@ public class RecommendationService {
         String categoryQueryString = "subject:" + String.join(" OR subject:", mainCategories);
         String langCode = sourceBook.getLanguage(); // Get language from source book
         
-        return searchBooksTiered(categoryQueryString, langCode, MAX_SEARCH_RESULTS)
+        return searchBooks(categoryQueryString, langCode, MAX_SEARCH_RESULTS)
             .flatMapMany(Flux::fromIterable)
             .take(MAX_SEARCH_RESULTS)
             .map(book -> {
                 double categoryScore = calculateCategoryOverlapScore(sourceBook, book);
                 return new ScoredBook(book, categoryScore, REASON_CATEGORY);
             })
-            .onErrorResume(e -> {
-                LoggingUtils.warn(log, e, "Error finding books by categories '{}'", categoryQueryString);
-                return Flux.empty();
-            });
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyFlux("RecommendationService.findBooksByCategoriesReactive query=" + categoryQueryString));
     }
     
     /**
@@ -438,7 +423,7 @@ public class RecommendationService {
         String query = String.join(" ", keywords);
         String langCode = sourceBook.getLanguage(); // Get language from source book
 
-        return searchBooksTiered(query, langCode, MAX_SEARCH_RESULTS)
+        return searchBooks(query, langCode, MAX_SEARCH_RESULTS)
             .flatMapMany(Flux::fromIterable)
             .take(MAX_SEARCH_RESULTS)
             .flatMap(book -> {
@@ -456,59 +441,20 @@ public class RecommendationService {
                 }
                 return Mono.empty();
             })
-            .onErrorResume(e -> {
-                LoggingUtils.warn(log, e, "Error finding books by text keywords '{}'", query);
-                return Flux.empty();
-            });
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyFlux("RecommendationService.findBooksByTextReactive query=" + query));
     }
 
-    private Mono<Book> fetchSourceBookTiered(String bookId) {
-        Mono<Book> postgresMono = bookDataOrchestrator != null
-                ? bookDataOrchestrator.getBookByIdTiered(bookId)
-                : Mono.empty();
-
-        Mono<Book> googleMono = externalFallbackEnabled
-                ? Mono.fromFuture(googleBooksService.getBookById(bookId).toCompletableFuture())
-                    .flatMap(book -> book == null ? Mono.empty() : Mono.just(book))
-                : Mono.empty();
-
-        return postgresMono
-                .switchIfEmpty(googleMono)
-                .doOnNext(book -> log.debug("Source book resolved for {} via tiered lookup.", bookId));
+    private Mono<List<Book>> searchBooks(String query, String langCode, int limit) {
+        if (bookDataOrchestrator == null) {
+            return Mono.just(Collections.emptyList());
+        }
+        return Mono.defer(() -> bookDataOrchestrator.searchBooksTiered(query, langCode, limit, null))
+                .defaultIfEmpty(Collections.emptyList())
+                .map(results -> limitResults(results, limit))
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("RecommendationService.searchBooks query=" + query + " lang=" + langCode));
     }
 
-    private Mono<List<Book>> searchBooksTiered(String query, String langCode, int limit) {
-        Mono<List<Book>> primary = Mono.defer(() -> {
-            if (bookDataOrchestrator == null) {
-                return Mono.just(Collections.emptyList());
-            }
-            return bookDataOrchestrator.searchBooksTiered(query, langCode, limit, null)
-                    .defaultIfEmpty(Collections.emptyList())
-                    .onErrorResume(ex -> {
-                        log.debug("Postgres search failed for query '{}' (lang {}): {}", query, langCode, ex.getMessage());
-                        return Mono.just(Collections.emptyList());
-                    });
-        });
-
-        return primary.flatMap(results -> {
-            List<Book> trimmed = trimSearchResults(results, limit);
-            if (!trimmed.isEmpty()) {
-                log.debug("Returning {} results from Postgres tier for query '{}'", trimmed.size(), query);
-                return Mono.just(trimmed);
-            }
-            if (!externalFallbackEnabled) {
-                log.debug("Google fallback disabled for recommendation query '{}'. Returning empty list.", query);
-                return Mono.just(Collections.emptyList());
-            }
-            return googleBooksService.searchBooksAsyncReactive(query, langCode, limit, null)
-                    .defaultIfEmpty(Collections.emptyList())
-                    .map(list -> trimSearchResults(list, limit))
-                    .doOnError(ex -> LoggingUtils.warn(log, ex, "Google Books search failed for query '{}' (lang {})", query, langCode))
-                    .onErrorResume(ex -> Mono.just(Collections.emptyList()));
-        });
-    }
-
-    private List<Book> trimSearchResults(List<Book> books, int limit) {
+    private List<Book> limitResults(List<Book> books, int limit) {
         if (ValidationUtils.isNullOrEmpty(books)) {
             return Collections.emptyList();
         }

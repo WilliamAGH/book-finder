@@ -15,6 +15,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
@@ -27,11 +28,8 @@ import reactor.core.publisher.Mono;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Date;
-import java.text.SimpleDateFormat;
-import java.text.ParseException;
 import java.util.Objects; // Added import
 
 @Service
@@ -188,32 +186,9 @@ public class OpenLibraryBookDataService {
 
         String publishedDateStr = bookDataNode.path("publish_date").asText(null);
         if (publishedDateStr != null && !publishedDateStr.trim().isEmpty()) {
-            Date parsedDate = null;
-            List<SimpleDateFormat> dateFormats = Arrays.asList(
-                    new SimpleDateFormat("MMMM d, yyyy"), // "January 1, 2020"
-                    new SimpleDateFormat("dd MMMM yyyy"),  // "15 January 2020"
-                    new SimpleDateFormat("yyyy-MM-dd"),    // "2020-01-15"
-                    new SimpleDateFormat("MM/dd/yyyy"),    // "01/15/2020"
-                    new SimpleDateFormat("yyyy/MM/dd"),    // "2020/01/15"
-                    new SimpleDateFormat("MMMM yyyy"),     // "January 2020"
-                    new SimpleDateFormat("yyyy-MM"),       // "2020-01"
-                    new SimpleDateFormat("yyyy")           // "2020"
-            );
-
-            for (SimpleDateFormat sdf : dateFormats) {
-                try {
-                    sdf.setLenient(false); // Be strict about matching the format
-                    parsedDate = sdf.parse(publishedDateStr);
-                    if (parsedDate != null) {
-                        break; // Successfully parsed
-                    }
-                } catch (ParseException e) {
-                    // Try next format
-                }
-            }
-
+            Date parsedDate = DateParsingUtils.parseFlexibleDate(publishedDateStr);
             if (parsedDate == null) {
-                log.warn("Could not parse OpenLibrary publish_date '{}' for ISBN {} with any of the attempted formats.", publishedDateStr, originalIsbn);
+                log.warn("Could not parse OpenLibrary publish_date '{}' for ISBN {} via DateParsingUtils.", publishedDateStr, originalIsbn);
             }
             book.setPublishedDate(parsedDate);
         }

@@ -10,6 +10,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookLookupService;
 import com.williamcallahan.book_recommendation_engine.service.BookSupplementalPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,7 +20,6 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Locale;
@@ -41,8 +41,6 @@ import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 @Component
 @Slf4j
 public class NewYorkTimesBestsellerScheduler {
-
-        private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
 
     private final NewYorkTimesService newYorkTimesService;
     private final BookDataOrchestrator bookDataOrchestrator;
@@ -225,15 +223,12 @@ public class NewYorkTimesBestsellerScheduler {
         supplementalPersistenceService.assignTag(bookId, "nyt_list_" + listCode.replaceAll("[^a-z0-9]", "_"), "NYT List: " + listCode, "NYT", 1.0, metadata);
     }
 
-    private LocalDate parseDate(String isoDate) {
-        if (isoDate == null || isoDate.isBlank()) {
+    private LocalDate parseDate(String date) {
+        if (date == null || date.isBlank()) {
             return null;
         }
-        try {
-            return LocalDate.parse(isoDate, DATE_FORMATTER);
-        } catch (Exception e) {
-            return null;
-        }
+        LocalDate parsed = DateParsingUtils.parseBestsellerDate(date);
+        return parsed;
     }
 
 }

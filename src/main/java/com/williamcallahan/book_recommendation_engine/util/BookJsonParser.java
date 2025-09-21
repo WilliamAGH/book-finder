@@ -19,8 +19,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.text.Normalizer;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -445,26 +443,11 @@ public class BookJsonParser {
     private static Date parsePublishedDate(JsonNode volumeInfo) {
         if (volumeInfo.has("publishedDate")) {
             String dateString = volumeInfo.get("publishedDate").asText();
-            // Try yyyy-MM-dd first
-            SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
-            try {
-                return format.parse(dateString);
-            } catch (ParseException e) {
-                // Try yyyy-MM
-                format = new SimpleDateFormat("yyyy-MM");
-                try {
-                    return format.parse(dateString);
-                } catch (ParseException ex) {
-                    // Try yyyy
-                    format = new SimpleDateFormat("yyyy");
-                    try {
-                        return format.parse(dateString);
-                    } catch (ParseException exc) {
-                        logger.warn("Failed to parse published date: {} with formats yyyy-MM-dd, yyyy-MM, yyyy", dateString);
-                        return null;
-                    }
-                }
+            Date parsed = DateParsingUtils.parseFlexibleDate(dateString);
+            if (parsed == null) {
+                logger.warn("Failed to parse published date '{}' via DateParsingUtils", dateString);
             }
+            return parsed;
         }
         return null;
     }
