@@ -92,6 +92,10 @@ public class CanonicalBookPersistenceService {
         }
     }
 
+    public boolean saveMinimalBook(Book book, JsonNode sourceJson) {
+        return saveBook(book, sourceJson);
+    }
+
     boolean saveBook(Book book, JsonNode sourceJson) {
         if (jdbcTemplate == null || book == null) {
             return false;

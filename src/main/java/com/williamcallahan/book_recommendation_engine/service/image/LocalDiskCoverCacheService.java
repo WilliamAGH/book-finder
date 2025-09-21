@@ -51,7 +51,14 @@ public class LocalDiskCoverCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(LocalDiskCoverCacheService.class);
     private static final String LOCAL_PLACEHOLDER_PATH = "/images/placeholder-book-cover.svg";
-    private static final String GOOGLE_PLACEHOLDER_CLASSPATH_PATH = "/images/image-not-available.png";
+    // Try Spring Boot resource locations in order (classpath), then legacy path
+    private static final String[] GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES = new String[] {
+            "/static/images/image-not-available.png",
+            "/public/images/image-not-available.png",
+            "/resources/images/image-not-available.png",
+            "/META-INF/resources/images/image-not-available.png",
+            "/images/image-not-available.png"
+    };
 
     @Value("${app.cover-cache.enabled:true}")
     private boolean cacheEnabled;
@@ -113,25 +120,32 @@ public class LocalDiskCoverCacheService {
                 logger.info("Using existing book cover cache directory: {}", cacheDir);
             }
 
-            // Load Google placeholder image for hash comparison
-            try (InputStream placeholderStream = getClass().getResourceAsStream(GOOGLE_PLACEHOLDER_CLASSPATH_PATH)) {
-                if (placeholderStream != null) {
+            // Load Google placeholder image for hash comparison (try common Spring Boot resource locations)
+            boolean loadedPlaceholderHash = false;
+            for (String candidate : GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES) {
+                try (InputStream placeholderStream = getClass().getResourceAsStream(candidate)) {
+                    if (placeholderStream == null) {
+                        continue;
+                    }
                     byte[] placeholderBytes = placeholderStream.readAllBytes();
                     if (placeholderBytes.length > 0) {
                         googlePlaceholderHash = ImageCacheUtils.computeImageHash(placeholderBytes);
-                        logger.info("Loaded Google Books placeholder image hash from classpath: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
+                        logger.info("Loaded Google Books placeholder image hash from classpath: {}", candidate);
+                        loadedPlaceholderHash = true;
+                        break;
                     } else {
-                        logger.warn("Google Books placeholder image from classpath {} was empty, hash-based detection disabled", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
+                        logger.warn("Google Books placeholder image from classpath {} was empty; trying next candidate", candidate);
                     }
-                } else {
-                    logger.warn("Google Books placeholder image not found in classpath at {}, hash-based detection disabled", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
+                } catch (IOException e) {
+                    logger.warn("IOException while loading Google Books placeholder from {}: {}", candidate, e.getMessage());
+                } catch (NoSuchAlgorithmException e) {
+                    LoggingUtils.error(logger, e, "Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.");
+                } catch (Exception e) {
+                    logger.warn("Unexpected error loading Google Books placeholder from {}: {}", candidate, e.getMessage());
                 }
-            } catch (NoSuchAlgorithmException e) {
-                LoggingUtils.error(logger, e, "Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.");
-            } catch (IOException e) { // Catch IO exceptions from stream operations
-                logger.warn("IOException while loading Google Books placeholder image from classpath {}: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH, e.getMessage(), e);
-            } catch (Exception e) { // Catch any other unexpected exceptions
-                logger.warn("Unexpected error loading Google Books placeholder image for hash comparison from classpath {}: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH, e.getMessage(), e);
+            }
+            if (!loadedPlaceholderHash) {
+                logger.info("Google Books placeholder image not found in classpath (searched {} candidates). Hash-based detection disabled.", GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES.length);
             }
 
             // Schedule cleanup task

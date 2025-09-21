@@ -33,7 +33,8 @@ public class BookCollectionPersistenceService {
             String id = jdbcTemplate.queryForObject(
                 "INSERT INTO book_collections (id, collection_type, source, display_name, normalized_name, created_at, updated_at) " +
                 "VALUES (?, 'CATEGORY', ?, ?, ?, NOW(), NOW()) " +
-                "ON CONFLICT (collection_type, source, normalized_name) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = NOW() RETURNING id",
+                "ON CONFLICT (collection_type, source, normalized_name) WHERE collection_type = 'CATEGORY' AND normalized_name IS NOT NULL " +
+                "DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = NOW() RETURNING id",
                 (rs, rowNum) -> rs.getString("id"),
                 IdGenerator.generateShort(),
                 ApplicationConstants.Provider.GOOGLE_BOOKS,
@@ -61,7 +62,7 @@ public class BookCollectionPersistenceService {
             "ON CONFLICT (collection_id, book_id) DO UPDATE SET updated_at = NOW()",
             IdGenerator.generateLong(),
             collectionId,
-            bookId
+            UUID.fromString(bookId)
         );
     }
 
@@ -86,7 +87,8 @@ public class BookCollectionPersistenceService {
         String id = jdbcTemplate.queryForObject(
             "INSERT INTO book_collections (id, collection_type, source, provider_list_id, provider_list_code, display_name, normalized_name, description, bestsellers_date, published_date, raw_data_json, created_at, updated_at) " +
             "VALUES (?, 'BESTSELLER_LIST', 'NYT', ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
-            "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, description = EXCLUDED.description, raw_data_json = EXCLUDED.raw_data_json, updated_at = NOW() RETURNING id",
+            "ON CONFLICT (source, provider_list_code, published_date) WHERE provider_list_code IS NOT NULL AND published_date IS NOT NULL " +
+            "DO UPDATE SET display_name = EXCLUDED.display_name, description = EXCLUDED.description, raw_data_json = EXCLUDED.raw_data_json, updated_at = NOW() RETURNING id",
             (rs, rowNum) -> rs.getString("id"),
             IdGenerator.generateShort(),
             providerListId,
@@ -123,7 +125,7 @@ public class BookCollectionPersistenceService {
             "ON CONFLICT (collection_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = COALESCE(EXCLUDED.weeks_on_list, book_collections_join.weeks_on_list), rank_last_week = COALESCE(EXCLUDED.rank_last_week, book_collections_join.rank_last_week), peak_position = COALESCE(EXCLUDED.peak_position, book_collections_join.peak_position), provider_isbn13 = COALESCE(EXCLUDED.provider_isbn13, book_collections_join.provider_isbn13), provider_isbn10 = COALESCE(EXCLUDED.provider_isbn10, book_collections_join.provider_isbn10), provider_book_ref = COALESCE(EXCLUDED.provider_book_ref, book_collections_join.provider_book_ref), raw_item_json = EXCLUDED.raw_item_json, updated_at = NOW()",
             IdGenerator.generateLong(),
             collectionId,
-            bookId,
+            UUID.fromString(bookId),
             position,
             weeksOnList,
             rankLastWeek,
@@ -186,7 +188,7 @@ public class BookCollectionPersistenceService {
             "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
             "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, provider_book_ref = EXCLUDED.provider_book_ref, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
             listId,
-            bookId,
+            UUID.fromString(bookId),
             position,
             weeksOnList,
             providerIsbn13,

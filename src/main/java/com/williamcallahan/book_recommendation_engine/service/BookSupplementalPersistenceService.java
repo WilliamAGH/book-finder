@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class BookSupplementalPersistenceService {
@@ -44,7 +45,7 @@ public class BookSupplementalPersistenceService {
                 "INSERT INTO book_authors_join (id, book_id, author_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (book_id, author_id) DO UPDATE SET position = EXCLUDED.position, updated_at = NOW()",
                 IdGenerator.generateLong(),
-                bookId,
+                UUID.fromString(bookId),
                 authorId,
                 position++
             );
@@ -118,7 +119,7 @@ public class BookSupplementalPersistenceService {
             "INSERT INTO book_tag_assignments (id, book_id, tag_id, source, confidence, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?::jsonb, NOW()) " +
             "ON CONFLICT (book_id, tag_id, source) DO UPDATE SET metadata = EXCLUDED.metadata, confidence = COALESCE(EXCLUDED.confidence, book_tag_assignments.confidence)",
             IdGenerator.generateLong(),
-            bookId,
+            UUID.fromString(bookId),
             tagId,
             source,
             confidence,
