@@ -4,15 +4,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.BookCollectionPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.BookLookupService;
 import com.williamcallahan.book_recommendation_engine.service.BookSupplementalPersistenceService;
+import com.williamcallahan.book_recommendation_engine.service.CanonicalBookPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -20,9 +25,13 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
-import java.util.Map;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 
@@ -49,6 +58,7 @@ public class NewYorkTimesBestsellerScheduler {
     private final JdbcTemplate jdbcTemplate;
     private final BookCollectionPersistenceService collectionPersistenceService;
     private final BookSupplementalPersistenceService supplementalPersistenceService;
+    private final CanonicalBookPersistenceService canonicalBookPersistenceService;
 
     @Value("${app.nyt.scheduler.cron:0 0 4 * * SUN}")
     private String cronExpression;
@@ -62,7 +72,8 @@ public class NewYorkTimesBestsellerScheduler {
                                            ObjectMapper objectMapper,
                                            JdbcTemplate jdbcTemplate,
                                            BookCollectionPersistenceService collectionPersistenceService,
-                                           BookSupplementalPersistenceService supplementalPersistenceService) {
+                                           BookSupplementalPersistenceService supplementalPersistenceService,
+                                           @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService) {
         this.newYorkTimesService = newYorkTimesService;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.bookLookupService = bookLookupService;
@@ -70,11 +81,20 @@ public class NewYorkTimesBestsellerScheduler {
         this.jdbcTemplate = jdbcTemplate;
         this.collectionPersistenceService = collectionPersistenceService;
         this.supplementalPersistenceService = supplementalPersistenceService;
+        this.canonicalBookPersistenceService = canonicalBookPersistenceService;
     }
 
     @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
     public void processNewYorkTimesBestsellers() {
-        if (!schedulerEnabled) {
+        processNewYorkTimesBestsellers(null, false);
+    }
+
+    public void processNewYorkTimesBestsellers(@Nullable LocalDate requestedDate) {
+        processNewYorkTimesBestsellers(requestedDate, false);
+    }
+
+    public void processNewYorkTimesBestsellers(@Nullable LocalDate requestedDate, boolean forceExecution) {
+        if (!forceExecution && !schedulerEnabled) {
             log.info("NYT bestseller scheduler disabled via configuration.");
             return;
         }
@@ -83,8 +103,9 @@ public class NewYorkTimesBestsellerScheduler {
             return;
         }
 
-        log.info("Starting NYT bestseller ingest.");
-        JsonNode overview = newYorkTimesService.fetchBestsellerListOverview()
+        log.info("Starting NYT bestseller ingest{}.",
+            requestedDate != null ? " for " + requestedDate : "");
+        JsonNode overview = newYorkTimesService.fetchBestsellerListOverview(requestedDate)
                 .onErrorResume(e -> {
                     LoggingUtils.error(log, e, "Unable to fetch NYT bestseller overview");
                     return Mono.empty();
@@ -107,7 +128,8 @@ public class NewYorkTimesBestsellerScheduler {
         }
 
         lists.forEach(listNode -> persistList(listNode, bestsellersDate, publishedDate));
-        log.info("NYT bestseller ingest completed successfully.");
+        log.info("NYT bestseller ingest completed successfully{}.",
+            requestedDate != null ? " for " + requestedDate : "");
     }
 
     private void persistList(JsonNode listNode, LocalDate bestsellersDate, LocalDate publishedDate) {
@@ -148,9 +170,19 @@ public class NewYorkTimesBestsellerScheduler {
         String isbn13 = IsbnUtils.sanitize(bookNode.path("primary_isbn13").asText(null));
         String isbn10 = IsbnUtils.sanitize(bookNode.path("primary_isbn10").asText(null));
 
+        // Validate ISBN formats; discard non-ISBN vendor codes (e.g., X0234484)
+        if (isbn13 != null && !IsbnUtils.isValidIsbn13(isbn13)) {
+            isbn13 = null;
+        }
+        if (isbn10 != null && !IsbnUtils.isValidIsbn10(isbn10)) {
+            isbn10 = null;
+        }
+
         String canonicalId = resolveCanonicalBookId(isbn13, isbn10);
+        // IMPORTANT: For NYT ingestion, we DO NOT consult any external sources (Google/OpenLibrary) at all.
+        // If the book is not already present in Postgres, create a minimal canonical record directly from NYT data.
         if (canonicalId == null) {
-            canonicalId = hydrateAndResolve(isbn13, isbn10);
+            canonicalId = createCanonicalFromNyt(bookNode, listCode, isbn13, isbn10);
         }
 
         if (canonicalId == null) {
@@ -187,30 +219,155 @@ public class NewYorkTimesBestsellerScheduler {
         assignCoreTags(canonicalId, listCode, rank);
     }
 
-    private String hydrateAndResolve(String isbn13, String isbn10) {
-        if (bookDataOrchestrator == null) {
-            return null;
-        }
-        Book hydrated = null;
-        try {
-            if (isbn13 != null) {
-                hydrated = bookDataOrchestrator.getBookByIdTiered(isbn13)
-                        .blockOptional(Duration.ofSeconds(10))
-                        .orElse(null);
-            }
-            if (hydrated == null && isbn10 != null) {
-                hydrated = bookDataOrchestrator.getBookByIdTiered(isbn10)
-                        .blockOptional(Duration.ofSeconds(10))
-                        .orElse(null);
-            }
-        } catch (Exception e) {
-            LoggingUtils.warn(log, e, "Error hydrating book for NYT ingest (ISBN13: {}, ISBN10: {})", isbn13, isbn10);
-        }
-        return hydrated != null ? hydrated.getId() : resolveCanonicalBookId(isbn13, isbn10);
-    }
+    // Removed external hydration path to enforce NYT-only ingestion.
 
     private String resolveCanonicalBookId(String isbn13, String isbn10) {
         return bookLookupService.resolveCanonicalBookId(isbn13, isbn10);
+    }
+
+    private String firstAuthor(JsonNode bookNode) {
+        String author = bookNode.path("author").asText(null);
+        if (author != null && !author.isBlank()) {
+            return author;
+        }
+        // Some NYT feeds use 'contributor'
+        String contributor = bookNode.path("contributor").asText(null);
+        if (contributor != null && !contributor.isBlank()) {
+            return contributor;
+        }
+        return null;
+    }
+
+    private String createCanonicalFromNyt(JsonNode bookNode, String listCode, String isbn13, String isbn10) {
+        if (canonicalBookPersistenceService == null) {
+            return null;
+        }
+
+        Book stub = buildBookFromNyt(bookNode, listCode, isbn13, isbn10);
+        if (stub == null) {
+            return null;
+        }
+
+        boolean saved = canonicalBookPersistenceService.saveMinimalBook(stub, bookNode);
+        if (!saved) {
+            return null;
+        }
+        return stub.getId();
+    }
+
+    private Book buildBookFromNyt(JsonNode bookNode, String listCode, String isbn13, String isbn10) {
+        String title = firstNonEmptyText(bookNode, "book_title", "title");
+        if (!ValidationUtils.hasText(title)) {
+            return null;
+        }
+
+        Book book = new Book();
+        book.setTitle(title);
+
+        String description = firstNonEmptyText(bookNode, "description", "summary");
+        if (ValidationUtils.hasText(description)) {
+            book.setDescription(description);
+        }
+
+        String publisher = firstNonEmptyText(bookNode, "publisher");
+        if (ValidationUtils.hasText(publisher)) {
+            book.setPublisher(publisher);
+        }
+
+        if (ValidationUtils.hasText(isbn13)) {
+            book.setIsbn13(isbn13);
+        }
+        if (ValidationUtils.hasText(isbn10)) {
+            book.setIsbn10(isbn10);
+        }
+
+        Date published = parsePublishedDate(bookNode);
+        if (published != null) {
+            book.setPublishedDate(published);
+        }
+
+        List<String> authors = extractAuthors(bookNode);
+        if (!authors.isEmpty()) {
+            book.setAuthors(authors);
+        }
+
+        String imageUrl = firstNonEmptyText(bookNode, "book_image", "book_image_url");
+        if (ValidationUtils.hasText(imageUrl)) {
+            book.setExternalImageUrl(imageUrl);
+            book.setS3ImagePath(imageUrl);
+            CoverImages coverImages = new CoverImages();
+            coverImages.setPreferredUrl(imageUrl);
+            coverImages.setFallbackUrl(imageUrl);
+            coverImages.setSource(CoverImageSource.UNDEFINED);
+            book.setCoverImages(coverImages);
+        }
+
+        String purchaseUrl = firstNonEmptyText(bookNode, "amazon_product_url");
+        if (ValidationUtils.hasText(purchaseUrl)) {
+            book.setPurchaseLink(purchaseUrl);
+        }
+
+        Map<String, Object> qualifiers = new HashMap<>();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("list_code", listCode);
+        if (bookNode.has("rank") && bookNode.get("rank").canConvertToInt()) {
+            metadata.put("rank", bookNode.get("rank").asInt());
+        }
+        qualifiers.put("nytBestseller", metadata);
+        book.setQualifiers(qualifiers);
+
+        if (ValidationUtils.hasText(listCode)) {
+            List<String> categories = new ArrayList<>();
+            categories.add("NYT " + listCode.replace('-', ' '));
+            book.setCategories(categories);
+        }
+
+        return book;
+    }
+
+    private Date parsePublishedDate(JsonNode bookNode) {
+        String dateStr = firstNonEmptyText(bookNode, "published_date", "publication_dt", "created_date");
+        if (!ValidationUtils.hasText(dateStr)) {
+            return null;
+        }
+        return DateParsingUtils.parseFlexibleDate(dateStr);
+    }
+
+    private List<String> extractAuthors(JsonNode bookNode) {
+        List<String> authors = new ArrayList<>();
+        addAuthors(authors, bookNode.path("author").asText(null));
+        addAuthors(authors, bookNode.path("contributor").asText(null));
+        addAuthors(authors, bookNode.path("contributor_note").asText(null));
+        if (authors.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> deduped = new LinkedHashSet<>(authors);
+        return new ArrayList<>(deduped);
+    }
+
+    private void addAuthors(List<String> authors, @Nullable String raw) {
+        if (!ValidationUtils.hasText(raw)) {
+            return;
+        }
+        String normalized = raw.replace(" and ", ",");
+        for (String part : normalized.split("[,;&]")) {
+            String cleaned = part.trim();
+            if (ValidationUtils.hasText(cleaned)) {
+                authors.add(cleaned);
+            }
+        }
+    }
+
+    private String firstNonEmptyText(JsonNode node, String... fieldNames) {
+        for (String field : fieldNames) {
+            if (node.hasNonNull(field)) {
+                String value = node.get(field).asText(null);
+                if (ValidationUtils.hasText(value)) {
+                    return value.trim();
+                }
+            }
+        }
+        return null;
     }
 
     private void assignCoreTags(String bookId, String listCode, Integer rank) {
