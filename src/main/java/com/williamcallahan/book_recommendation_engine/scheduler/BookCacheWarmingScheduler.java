@@ -11,6 +11,7 @@ package com.williamcallahan.book_recommendation_engine.scheduler;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
@@ -25,12 +26,15 @@ import org.springframework.scheduling.annotation.Scheduled;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+
+import reactor.core.publisher.Mono;
 
 /**
  * Scheduler for book data pre-fetching (cache warming functionality disabled)
@@ -47,6 +51,7 @@ public class BookCacheWarmingScheduler {
     private static final Logger logger = LoggerFactory.getLogger(BookCacheWarmingScheduler.class);
     
     private final GoogleBooksService googleBooksService;
+    private final BookDataOrchestrator bookDataOrchestrator;
     private final RecentlyViewedService recentlyViewedService;
     private final ApplicationContext applicationContext;
     
@@ -68,10 +73,12 @@ public class BookCacheWarmingScheduler {
 
     public BookCacheWarmingScheduler(GoogleBooksService googleBooksService,
                                      RecentlyViewedService recentlyViewedService,
-                                     ApplicationContext applicationContext) {
+                                     ApplicationContext applicationContext,
+                                     BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.applicationContext = applicationContext;
+        this.bookDataOrchestrator = bookDataOrchestrator;
     }
 
     /**
@@ -139,7 +146,7 @@ public class BookCacheWarmingScheduler {
                     try {
                         // Note: Cache warming functionality has been disabled as the cache service has been removed
                         logger.info("Attempting to warm book ID: {} (cache functionality disabled)", bookId);
-                        googleBooksService.getBookById(bookId)
+                        fetchBookForWarming(bookId)
                             .thenAccept(book -> {
                                 if (book != null) {
                                     warmedCount.incrementAndGet();
@@ -178,7 +185,23 @@ public class BookCacheWarmingScheduler {
             }
         }
     }
-    
+
+    private CompletionStage<Book> fetchBookForWarming(String bookId) {
+        return bookDataOrchestrator.getBookByIdTiered(bookId)
+            .onErrorResume(ex -> {
+                logger.warn("Postgres warm lookup failed for {}: {}", bookId, ex.getMessage());
+                return Mono.empty();
+            })
+            .switchIfEmpty(Mono.defer(() -> Mono.fromCompletionStage(googleBooksService.getBookById(bookId))
+                .onErrorResume(ex -> {
+                    logger.error("Google fallback warm lookup failed for {}: {}", bookId, ex.getMessage());
+                    return Mono.empty();
+                })
+                .flatMap(book -> book == null ? Mono.empty() : Mono.just(book))
+            ))
+            .toFuture();
+    }
+
     /**
      * Get a list of book IDs to warm in the cache, based on recently viewed books.
      * This currently prioritizes recently viewed books that have not been warmed recently.

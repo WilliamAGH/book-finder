@@ -20,6 +20,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanc
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -43,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+
 @Service
 public class LocalDiskCoverCacheService {
 
@@ -132,8 +134,8 @@ public class LocalDiskCoverCacheService {
             }
 
             // Schedule cleanup task
-            long initialDelayDays = Math.max(0, Math.min(1, maxCacheAgeDays)); // Run quickly on startup, but not less than 0
-            long periodDays = Math.max(1, maxCacheAgeDays); // Ensure period is at least 1 day
+            long initialDelayDays = PagingUtils.clamp(maxCacheAgeDays, 0, 1); // Run quickly on startup, but not less than 0
+            long periodDays = PagingUtils.atLeast(maxCacheAgeDays, 1); // Ensure period is at least 1 day
 
             scheduler.scheduleAtFixedRate(this::safeCleanupOldCachedCovers, initialDelayDays, periodDays, TimeUnit.DAYS);
             logger.info("Scheduled cleanup of old cached covers (older than {} days) to run with initial delay of {} day(s) and then every {} days", maxCacheAgeDays, initialDelayDays, periodDays);
