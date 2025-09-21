@@ -179,17 +179,21 @@ class JsonParser {
       bodyString = bodyString.slice(1);
     }
 
-    // Strip null bytes and control characters if present
-    if (bodyString.includes('\x00')) {
-      console.warn(`[WARNING] File ${filename} contains null bytes, stripping them`);
-      bodyString = bodyString.replace(/\x00/g, '');
+    // Strip control characters (without embedding them literally in source)
+    let hadControlChars = false;
+    let cleanedBuilder = '';
+    for (let i = 0; i < bodyString.length; i++) {
+      const code = bodyString.charCodeAt(i);
+      // Keep tab(9), LF(10), CR(13), printable (>=32, except DEL 127)
+      if (code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)) {
+        cleanedBuilder += bodyString[i];
+      } else {
+        hadControlChars = true;
+      }
     }
-
-    // Also strip other problematic control characters except newlines, tabs, and carriage returns
-    const cleaned = bodyString.replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-    if (cleaned !== bodyString) {
+    if (hadControlChars) {
       console.warn(`[WARNING] File ${filename} contains control characters, stripping them`);
-      bodyString = cleaned;
+      bodyString = cleanedBuilder;
     }
 
     // Trim whitespace
@@ -1211,7 +1215,7 @@ class NytListMigrator {
 
   async upsertCollection({ providerListId, listCode, normalizedList, displayName, description, bestsellersDate, publishedDate, rawJson, ordinal }) {
     const insertId = generateNanoId(8);
-    let inserted = false;
+    let _inserted = false;
 
     const insertResult = await this.client.query(
       `INSERT INTO book_collections (
@@ -1229,7 +1233,7 @@ class NytListMigrator {
 
     let collectionId;
     if (insertResult.rowCount > 0) {
-      inserted = true;
+      _inserted = true;
       collectionId = insertResult.rows[0].id;
       console.log(`   ✨ [#L${ordinal}] Created bestseller collection ${displayName} (${listCode}) → ${collectionId}`);
     } else {
