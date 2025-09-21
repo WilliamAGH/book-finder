@@ -28,18 +28,23 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
 public class BookApiProxy {
     private static final Logger logger = LoggerFactory.getLogger(BookApiProxy.class);
     
     private final GoogleBooksService googleBooksService;
+    private final BookDataOrchestrator bookDataOrchestrator;
     private final S3StorageService s3StorageService;
     private final ObjectMapper objectMapper;
+    private static final int SEARCH_RESULT_LIMIT = 40;
+
     private final Optional<GoogleBooksMockService> mockService;
     
     // In-memory cache as first-level cache
@@ -66,7 +71,8 @@ public class BookApiProxy {
                        @Value("${app.local-cache.enabled:false}") boolean localCacheEnabled,
                        @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
                        @Value("${app.s3-cache.always-check-first:false}") boolean alwaysCheckS3First,
-                       @Value("${app.api-client.log-calls:true}") boolean logApiCalls) {
+                       @Value("${app.api-client.log-calls:true}") boolean logApiCalls,
+                       BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
         this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;
@@ -75,6 +81,7 @@ public class BookApiProxy {
         this.localCacheDirectory = localCacheDirectory;
         this.alwaysCheckS3First = alwaysCheckS3First;
         this.logApiCalls = logApiCalls;
+        this.bookDataOrchestrator = bookDataOrchestrator;
         
         // Create local cache directory if needed
         if (this.localCacheEnabled) {
@@ -148,10 +155,45 @@ public class BookApiProxy {
             logger.debug("Mock service MISS for bookId: {} (or no mock data available)", bookId);
         }
         
-        // Always check S3 cache first in configurations that prefer it
+        java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        if (bookDataOrchestrator != null) {
+            bookDataOrchestrator.getBookByIdTiered(bookId)
+                .onErrorResume(ex -> {
+                    logger.warn("BookApiProxy: Orchestrator lookup failed for {}: {}", bookId, ex.getMessage());
+                    return Mono.empty();
+                })
+                .subscribe(book -> {
+                    if (book != null && resolved.compareAndSet(false, true)) {
+                        logger.debug("BookApiProxy: Retrieved {} via orchestrator tier.", bookId);
+                        if (localCacheEnabled) {
+                            saveBookToLocalCache(bookId, book);
+                        }
+                        future.complete(book);
+                    }
+                }, ex -> {
+                    logger.warn("BookApiProxy: Orchestrator lookup error for {}: {}", bookId, ex.getMessage());
+                    if (resolved.compareAndSet(false, true)) {
+                        continueWithApiFallback(bookId, future);
+                    }
+                }, () -> {
+                    if (resolved.compareAndSet(false, true)) {
+                        continueWithApiFallback(bookId, future);
+                    }
+                });
+            return;
+        }
+
+        continueWithApiFallback(bookId, future);
+    }
+
+    private void continueWithApiFallback(String bookId, CompletableFuture<Book> future) {
+        if (future.isDone()) {
+            return;
+        }
+
         if (alwaysCheckS3First) {
             logger.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
-            // Try to get from S3 cache directly
             s3StorageService.fetchJsonAsync(bookId)
                 .<Book>thenCompose(s3Result -> {
                     if (s3Result.isSuccess()) {
@@ -161,12 +203,10 @@ public class BookApiProxy {
                                 JsonNode bookNode = objectMapper.readTree(jsonDataOptional.get());
                                 Book book = objectMapper.treeToValue(bookNode, Book.class);
 
-                                // Cache the S3 result locally for faster future access
                                 if (localCacheEnabled) {
                                     saveBookToLocalCache(bookId, book);
                                 }
 
-                                // Also cache in mock service for future test runs
                                 if (mockService.isPresent()) {
                                     mockService.get().saveBookResponse(bookId, bookNode);
                                 }
@@ -182,14 +222,12 @@ public class BookApiProxy {
                     } else {
                         logger.warn("BookApiProxy: S3 cache unavailable for bookId {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
                     }
-                    // If S3 fails or data is not present, fallback to the actual API
                     if (logApiCalls) {
                         logger.info("Making REAL API call to Google Books for book ID: {}", bookId);
                     }
-                    
+
                     return googleBooksService.getBookById(bookId)
                         .thenApply(book -> {
-                            // If retrieved successfully, cache the result
                             if (book != null && localCacheEnabled) {
                                 saveBookToLocalCache(bookId, book);
                             }
@@ -205,15 +243,12 @@ public class BookApiProxy {
                     }
                 });
         } else {
-            // Standard flow - use Google Books Service which already has S3 caching integrated
             googleBooksService.getBookById(bookId)
                 .thenAccept(book -> {
-                    // Cache to local file system for development
                     if (book != null && localCacheEnabled) {
                         saveBookToLocalCache(bookId, book);
                     }
-                    
-                    // Cache for mock service if this was a real API call
+
                     if (book != null && mockService.isPresent() && book.getRawJsonResponse() != null) {
                         try {
                             JsonNode bookNode = objectMapper.readTree(book.getRawJsonResponse());
@@ -222,7 +257,7 @@ public class BookApiProxy {
                             logger.warn("Error saving book to mock service: {}", e.getMessage());
                         }
                     }
-                    
+
                     future.complete(book);
                 })
                 .exceptionally(ex -> {
@@ -301,29 +336,64 @@ public class BookApiProxy {
                 return;
             }
         }
-        
-        // Fall back to the actual service (which has its own caching)
+        java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        if (bookDataOrchestrator != null) {
+            bookDataOrchestrator.searchBooksTiered(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
+                .onErrorResume(ex -> {
+                    logger.warn("BookApiProxy: Orchestrator search failed for '{}' (lang {}): {}", normalizedQuery, langCode, ex.getMessage());
+                    return Mono.empty();
+                })
+                .subscribe(results -> {
+                    List<Book> sanitized = sanitizeSearchResults(results);
+                    if (!sanitized.isEmpty() && resolved.compareAndSet(false, true)) {
+                        if (localCacheEnabled) {
+                            saveSearchToLocalCache(originalQuery, langCode, sanitized);
+                        }
+                        future.complete(sanitized);
+                    }
+                }, ex -> {
+                    logger.warn("BookApiProxy: Orchestrator search error for '{}' (lang {}): {}", normalizedQuery, langCode, ex.getMessage());
+                    if (resolved.compareAndSet(false, true)) {
+                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
+                    }
+                }, () -> {
+                    if (resolved.compareAndSet(false, true)) {
+                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
+                    }
+                });
+            return;
+        }
+
+        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
+    }
+
+    private void continueSearchWithGoogle(String normalizedQuery,
+                                          String originalQuery,
+                                          String langCode,
+                                          CompletableFuture<List<Book>> future) {
+        if (future.isDone()) {
+            return;
+        }
+
         if (logApiCalls) {
             logger.info("Making REAL API call to Google Books for search: '{}'", normalizedQuery);
         }
 
-        // This is already a Mono<List<Book>>, no need for collectList()
-        googleBooksService.searchBooksAsyncReactive(normalizedQuery, langCode)
-            .subscribe(
-                results -> {
-                    // Cache the results
-                    if (results != null && !results.isEmpty() && localCacheEnabled) {
-                        saveSearchToLocalCache(originalQuery, langCode, results);
-                    }
-                    future.complete(results);
-                },
-                error -> {
-                    logger.error("Error searching for '{}': {}", normalizedQuery, error.getMessage());
-                    future.completeExceptionally(error);
+        googleBooksService.searchBooksAsyncReactive(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
+            .defaultIfEmpty(List.of())
+            .map(this::sanitizeSearchResults)
+            .subscribe(results -> {
+                if (!results.isEmpty() && localCacheEnabled) {
+                    saveSearchToLocalCache(originalQuery, langCode, results);
                 }
-            );
+                future.complete(results);
+            }, error -> {
+                logger.error("Error searching for '{}': {}", normalizedQuery, error.getMessage());
+                future.completeExceptionally(error);
+            });
     }
-    
+
     /**
      * Gets book from local file cache
      *
@@ -420,5 +490,15 @@ public class BookApiProxy {
         } catch (Exception e) {
             logger.warn("Error saving search results to local cache: {}", e.getMessage());
         }
+    }
+
+    private List<Book> sanitizeSearchResults(List<Book> results) {
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+        return results.stream()
+            .filter(Objects::nonNull)
+            .limit(SEARCH_RESULT_LIMIT)
+            .collect(Collectors.toList());
     }
 }

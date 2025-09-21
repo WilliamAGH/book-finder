@@ -21,6 +21,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSour
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import com.williamcallahan.book_recommendation_engine.util.S3Paths;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
@@ -526,7 +527,7 @@ public class BookDataOrchestrator {
             return;
         }
 
-        final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "books/v1/";
+        final String effectivePrefix = S3Paths.ensureTrailingSlash(prefix);
         logger.info("Starting S3→DB migration: prefix='{}', max={}, skip={}", effectivePrefix, maxRecords, skipRecords);
 
         List<String> keysToProcess = prepareJsonKeysForMigration(
@@ -912,7 +913,8 @@ public class BookDataOrchestrator {
             logger.warn("S3→DB list migration skipped: S3 is not configured (S3StorageService is null).");
             return;
         }
-        final String effectivePrefix = (prefix != null && !prefix.trim().isEmpty()) ? prefix.trim() : "lists/" + (provider != null ? provider.toLowerCase(Locale.ROOT) : "") + "/";
+        String defaultPrefix = "lists/" + (provider != null ? provider.toLowerCase(Locale.ROOT) : "") + "/";
+        final String effectivePrefix = S3Paths.ensureTrailingSlash(prefix, defaultPrefix);
         logger.info("Starting S3→DB list migration: provider='{}', prefix='{}', max={}, skip={}", provider, effectivePrefix, maxRecords, skipRecords);
 
         List<String> keysToProcess = prepareJsonKeysForMigration(
@@ -1480,9 +1482,9 @@ public class BookDataOrchestrator {
         for (EditionLinkRecord record : siblings) {
             int number = record.editionNumber();
             if (record.id().equals(bookId) && editionNumber != null) {
-                number = Math.max(editionNumber, 1);
+                number = PagingUtils.atLeast(editionNumber, 1);
             }
-            normalized.add(new EditionLinkRecord(record.id(), Math.max(number, 1)));
+            normalized.add(new EditionLinkRecord(record.id(), PagingUtils.atLeast(number, 1)));
         }
 
         if (normalized.size() <= 1) {

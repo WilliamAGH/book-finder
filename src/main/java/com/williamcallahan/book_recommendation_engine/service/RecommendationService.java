@@ -31,6 +31,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import java.util.Locale;
@@ -109,14 +111,8 @@ public class RecommendationService {
     * 6. Updates the source book's cached recommendation IDs for future use
      */
     private Mono<List<Book>> fetchLegacyRecommendations(String bookId, int effectiveCount) {
-        return Mono.fromFuture(googleBooksService.getBookById(bookId).toCompletableFuture())
-                .flatMap(sourceBook -> {
-                    if (sourceBook == null) {
-                        logger.warn("Cannot get recommendations - source book with ID {} not found.", bookId);
-                        return Mono.just(Collections.<Book>emptyList());
-                    }
-                    return fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount);
-                })
+        return fetchSourceBookTiered(bookId)
+                .flatMap(sourceBook -> fetchRecommendationsFromApiAndUpdateCache(sourceBook, effectiveCount))
                 .switchIfEmpty(Mono.just(Collections.<Book>emptyList()));
     }
 
@@ -245,14 +241,13 @@ public class RecommendationService {
         String langCode = sourceBook.getLanguage(); // Get language from source book
         
         return Flux.fromIterable(sourceBook.getAuthors())
-            .flatMap(author -> googleBooksService.searchBooksByAuthor(author, langCode) // Pass langCode
+            .flatMap(author -> searchBooksTiered("inauthor:" + author, langCode, MAX_SEARCH_RESULTS)
                 .flatMapMany(Flux::fromIterable)
-                .map(book -> new ScoredBook(book, 4.0)) // Same author is a strong indicator
+                .map(book -> new ScoredBook(book, 4.0))
                 .onErrorResume(e -> {
                     logger.warn("Error finding books by author {}: {}", author, e.getMessage());
                     return Flux.empty();
-                })
-            );
+                }));
     }
     
     /**
@@ -282,9 +277,9 @@ public class RecommendationService {
         String categoryQueryString = "subject:" + String.join(" OR subject:", mainCategories);
         String langCode = sourceBook.getLanguage(); // Get language from source book
         
-        return googleBooksService.searchBooksAsyncReactive(categoryQueryString, langCode) // Pass langCode
+        return searchBooksTiered(categoryQueryString, langCode, MAX_SEARCH_RESULTS)
             .flatMapMany(Flux::fromIterable)
-            .take(MAX_SEARCH_RESULTS) // Limit results after fetching the list from Mono<List<Book>>
+            .take(MAX_SEARCH_RESULTS)
             .map(book -> {
                 double categoryScore = calculateCategoryOverlapScore(sourceBook, book);
                 return new ScoredBook(book, categoryScore);
@@ -319,8 +314,8 @@ public class RecommendationService {
         intersection.retainAll(candidateCategories);
         
         // More overlapping categories = higher score
-        double overlapRatio = (double) intersection.size() / 
-                Math.max(1, Math.min(sourceCategories.size(), candidateCategories.size()));
+        double overlapRatio = (double) intersection.size() /
+                PagingUtils.atLeast(Math.min(sourceCategories.size(), candidateCategories.size()), 1);
         
         // Scale to range 1.0 - 3.0
         return 1.0 + (overlapRatio * 2.0);
@@ -379,7 +374,7 @@ public class RecommendationService {
         String query = String.join(" ", keywords);
         String langCode = sourceBook.getLanguage(); // Get language from source book
 
-        return googleBooksService.searchBooksAsyncReactive(query, langCode) // Pass langCode
+        return searchBooksTiered(query, langCode, MAX_SEARCH_RESULTS)
             .flatMapMany(Flux::fromIterable)
             .take(MAX_SEARCH_RESULTS)
             .flatMap(book -> {
@@ -401,6 +396,55 @@ public class RecommendationService {
                 logger.warn("Error finding books by text keywords '{}': {}", query, e.getMessage());
                 return Flux.empty();
             });
+    }
+
+    private Mono<Book> fetchSourceBookTiered(String bookId) {
+        Mono<Book> postgresMono = bookDataOrchestrator != null
+                ? bookDataOrchestrator.getBookByIdTiered(bookId)
+                : Mono.empty();
+
+        return postgresMono
+                .switchIfEmpty(Mono.fromFuture(googleBooksService.getBookById(bookId).toCompletableFuture())
+                    .flatMap(book -> book == null ? Mono.empty() : Mono.just(book)))
+                .doOnNext(book -> logger.debug("Source book resolved for {} via tiered lookup.", bookId));
+    }
+
+    private Mono<List<Book>> searchBooksTiered(String query, String langCode, int limit) {
+        Mono<List<Book>> primary = Mono.defer(() -> {
+            if (bookDataOrchestrator == null) {
+                return Mono.just(Collections.emptyList());
+            }
+            return bookDataOrchestrator.searchBooksTiered(query, langCode, limit, null)
+                    .defaultIfEmpty(Collections.emptyList())
+                    .onErrorResume(ex -> {
+                        logger.debug("Postgres search failed for query '{}' (lang {}): {}", query, langCode, ex.getMessage());
+                        return Mono.just(Collections.emptyList());
+                    });
+        });
+
+        return primary.flatMap(results -> {
+            List<Book> trimmed = trimSearchResults(results, limit);
+            if (!trimmed.isEmpty()) {
+                logger.debug("Returning {} results from Postgres tier for query '{}'", trimmed.size(), query);
+                return Mono.just(trimmed);
+            }
+            return googleBooksService.searchBooksAsyncReactive(query, langCode, limit, null)
+                    .defaultIfEmpty(Collections.emptyList())
+                    .map(list -> trimSearchResults(list, limit))
+                    .doOnError(ex -> logger.warn("Google Books search failed for query '{}' (lang {}): {}", query, langCode, ex.getMessage()))
+                    .onErrorResume(ex -> Mono.just(Collections.emptyList()));
+        });
+    }
+
+    private List<Book> trimSearchResults(List<Book> books, int limit) {
+        if (books == null || books.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return books.stream()
+                .filter(Objects::nonNull)
+                .filter(book -> book.getId() != null && !book.getId().isBlank())
+                .limit(limit)
+                .collect(Collectors.toList());
     }
 
     /**

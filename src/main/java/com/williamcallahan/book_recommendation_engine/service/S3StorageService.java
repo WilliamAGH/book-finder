@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import com.williamcallahan.book_recommendation_engine.util.CompressionUtils;
+import com.williamcallahan.book_recommendation_engine.util.S3Paths;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Object;
@@ -49,7 +50,6 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 @Conditional(S3EnvironmentCondition.class)
 public class S3StorageService {
     private static final Logger logger = LoggerFactory.getLogger(S3StorageService.class);
-    private static final String GOOGLE_BOOKS_API_CACHE_DIRECTORY = "books/v1/";
 
 
     private final S3Client s3Client;
@@ -156,7 +156,7 @@ public class S3StorageService {
             logger.warn("S3Client is null. Cannot upload JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
             return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
         }
-        String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
+        String keyName = S3Paths.GOOGLE_BOOK_CACHE_PREFIX + volumeId + ".json";
         return uploadGenericJsonAsync(keyName, jsonContent, true);
     }
     
@@ -171,7 +171,7 @@ public class S3StorageService {
             logger.warn("S3Client is null. Cannot fetch JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
         }
-        String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
+        String keyName = S3Paths.GOOGLE_BOOK_CACHE_PREFIX + volumeId + ".json";
         return fetchGenericJsonAsync(keyName);
     }
 
