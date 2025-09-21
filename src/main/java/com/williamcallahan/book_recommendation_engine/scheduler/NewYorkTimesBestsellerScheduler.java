@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.BookCollectionPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.BookLookupService;
 import com.williamcallahan.book_recommendation_engine.service.BookSupplementalPersistenceService;
@@ -52,7 +51,6 @@ import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 public class NewYorkTimesBestsellerScheduler {
 
     private final NewYorkTimesService newYorkTimesService;
-    private final BookDataOrchestrator bookDataOrchestrator;
     private final BookLookupService bookLookupService;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
@@ -66,8 +64,10 @@ public class NewYorkTimesBestsellerScheduler {
     @Value("${app.nyt.scheduler.enabled:true}")
     private boolean schedulerEnabled;
 
+    @Value("${app.nyt.scheduler.nyt-only:true}")
+    private boolean nytOnly;
+
     public NewYorkTimesBestsellerScheduler(NewYorkTimesService newYorkTimesService,
-                                           BookDataOrchestrator bookDataOrchestrator,
                                            BookLookupService bookLookupService,
                                            ObjectMapper objectMapper,
                                            JdbcTemplate jdbcTemplate,
@@ -75,7 +75,6 @@ public class NewYorkTimesBestsellerScheduler {
                                            BookSupplementalPersistenceService supplementalPersistenceService,
                                            @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService) {
         this.newYorkTimesService = newYorkTimesService;
-        this.bookDataOrchestrator = bookDataOrchestrator;
         this.bookLookupService = bookLookupService;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
@@ -98,6 +97,7 @@ public class NewYorkTimesBestsellerScheduler {
             log.info("NYT bestseller scheduler disabled via configuration.");
             return;
         }
+        assertNytOnly();
         if (jdbcTemplate == null) {
             log.warn("JdbcTemplate unavailable; NYT bestseller ingest skipped.");
             return;
@@ -378,6 +378,12 @@ public class NewYorkTimesBestsellerScheduler {
         }
         supplementalPersistenceService.assignTag(bookId, "nyt_bestseller", "NYT Bestseller", "NYT", 1.0, metadata);
         supplementalPersistenceService.assignTag(bookId, "nyt_list_" + listCode.replaceAll("[^a-z0-9]", "_"), "NYT List: " + listCode, "NYT", 1.0, metadata);
+    }
+
+    private void assertNytOnly() {
+        if (!nytOnly) {
+            throw new IllegalStateException("NYT-only enforcement is active: set app.nyt.scheduler.nyt-only=true to run this job.");
+        }
     }
 
     private LocalDate parseDate(String date) {
