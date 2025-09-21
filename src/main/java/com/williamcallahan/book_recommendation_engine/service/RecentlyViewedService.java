@@ -16,15 +16,20 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import reactor.core.publisher.Mono;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.*;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -44,6 +49,7 @@ public class RecentlyViewedService {
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final DuplicateBookService duplicateBookService;
+    private final RecentBookViewRepository recentBookViewRepository;
     private final boolean googleFallbackEnabled;
 
     // In-memory storage for recently viewed books
@@ -62,10 +68,12 @@ public class RecentlyViewedService {
     public RecentlyViewedService(GoogleBooksService googleBooksService,
                                  DuplicateBookService duplicateBookService,
                                  BookDataOrchestrator bookDataOrchestrator,
+                                 RecentBookViewRepository recentBookViewRepository,
                                  @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled) {
         this.googleBooksService = googleBooksService;
         this.duplicateBookService = duplicateBookService;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.recentBookViewRepository = recentBookViewRepository;
         this.googleFallbackEnabled = googleFallbackEnabled;
     }
 
@@ -126,6 +134,12 @@ public class RecentlyViewedService {
             // Add other fields if they are displayed in the "Recent Views" section
         }
 
+        if (bookToAdd.getSlug() == null || bookToAdd.getSlug().isBlank()) {
+            bookToAdd.setSlug(finalCanonicalId);
+        }
+
+        // Use a final reference for lambda capture below
+        final Book bookRef = bookToAdd;
 
         synchronized (recentlyViewedBooks) {
             String existingIds = recentlyViewedBooks.stream()
@@ -151,6 +165,12 @@ public class RecentlyViewedService {
                 logger.info("RECENT_VIEWS_DEBUG: Trimmed book. ID: '{}'. List size now: {}", removedLastBook.getId(), recentlyViewedBooks.size());
             }
         }
+
+        if (recentBookViewRepository != null && recentBookViewRepository.isEnabled()) {
+            recentBookViewRepository.recordView(finalCanonicalId, Instant.now(), "web");
+            recentBookViewRepository.fetchStatsForBook(finalCanonicalId)
+                    .ifPresent(stats -> applyViewStats(bookRef, stats));
+        }
     }
 
     /**
@@ -168,9 +188,15 @@ public class RecentlyViewedService {
         logger.debug("Fetching default books reactively (Postgres-first).");
 
         Mono<List<Book>> postgresResults = Mono.defer(() -> {
+            List<Book> seeded = loadFromRepository();
+            if (!seeded.isEmpty()) {
+                return Mono.just(seeded);
+            }
+
             if (bookDataOrchestrator == null) {
                 return Mono.just(Collections.emptyList());
             }
+
             return bookDataOrchestrator.searchBooksTiered(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
                 .defaultIfEmpty(Collections.emptyList())
                 .onErrorResume(ex -> {
@@ -216,6 +242,8 @@ public class RecentlyViewedService {
      * Properly handles thread interruption with status restoration
      */
     public Mono<List<Book>> getRecentlyViewedBooksReactive() {
+        seedCacheFromRepositoryIfNecessary();
+
         // Optimistic check outside the lock
         if (recentlyViewedBooks.isEmpty()) {
             return fetchDefaultBooksAsync()
@@ -228,16 +256,19 @@ public class RecentlyViewedService {
                     }
                     return Mono.just(Collections.emptyList());
                 })
+                .map(defaultBooks -> defaultBooks == null ? Collections.<Book>emptyList() : defaultBooks)
                 .flatMap(defaultBooks -> {
                     synchronized (recentlyViewedBooks) {
-                        if (recentlyViewedBooks.isEmpty()) {
-                            logger.debug("Returning {} default books as recently viewed is still empty.", defaultBooks.size());
-                            return Mono.just(defaultBooks); // Return default books if still empty
+                        if (recentlyViewedBooks.isEmpty() && !defaultBooks.isEmpty()) {
+                            recentlyViewedBooks.addAll(defaultBooks);
                         }
-                        // If another thread added books while we were fetching defaults, return the actual recently viewed books
-                        logger.debug("Recently viewed was populated while fetching defaults. Returning actual list.");
-                        return Mono.just(new ArrayList<>(recentlyViewedBooks));
+                        if (!recentlyViewedBooks.isEmpty()) {
+                            logger.debug("Recently viewed cache populated (possibly from defaults). Returning cached list.");
+                            return Mono.just(new ArrayList<>(recentlyViewedBooks));
+                        }
                     }
+                    logger.debug("Recently viewed list remains empty after attempting defaults. Returning {} fallback books.", defaultBooks.size());
+                    return Mono.just(defaultBooks);
                 });
         }
 
@@ -287,17 +318,141 @@ public class RecentlyViewedService {
 
         return books.stream()
             .filter(book -> book != null && isValidCoverImage(book.getS3ImagePath()))
-            .sorted((b1, b2) -> {
-                if (b1 == null && b2 == null) return 0;
-                if (b1 == null) return 1;
-                if (b2 == null) return -1;
-                if (b1.getPublishedDate() == null && b2.getPublishedDate() == null) return 0;
-                if (b1.getPublishedDate() == null) return 1;
-                if (b2.getPublishedDate() == null) return -1;
-                return b2.getPublishedDate().compareTo(b1.getPublishedDate());
-            })
+            .sorted(this::compareByLastViewedThenPublished)
             .limit(MAX_RECENT_BOOKS)
             .collect(Collectors.toList());
+    }
+
+    private List<Book> loadFromRepository() {
+        if (recentBookViewRepository == null || !recentBookViewRepository.isEnabled()) {
+            return Collections.emptyList();
+        }
+
+        List<RecentBookViewRepository.ViewStats> stats = recentBookViewRepository.fetchMostRecentViews(MAX_RECENT_BOOKS);
+        if (stats.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Book> hydrated = new ArrayList<>();
+        for (RecentBookViewRepository.ViewStats stat : stats) {
+            if (stat == null || stat.bookId() == null) {
+                continue;
+            }
+
+            Optional<Book> bookOptional = bookDataOrchestrator != null
+                    ? bookDataOrchestrator.getBookFromDatabase(stat.bookId())
+                    : Optional.empty();
+
+            bookOptional.ifPresent(book -> {
+                if (book.getSlug() == null || book.getSlug().isBlank()) {
+                    book.setSlug(book.getId());
+                }
+                applyViewStats(book, stat);
+                hydrated.add(book);
+            });
+        }
+
+        return prepareDefaultBooks(hydrated);
+    }
+
+    private void seedCacheFromRepositoryIfNecessary() {
+        if (recentBookViewRepository == null || !recentBookViewRepository.isEnabled()) {
+            return;
+        }
+
+        boolean needsSeed;
+        synchronized (recentlyViewedBooks) {
+            needsSeed = recentlyViewedBooks.isEmpty();
+        }
+
+        if (!needsSeed) {
+            return;
+        }
+
+        List<Book> seeded = loadFromRepository();
+        if (seeded.isEmpty()) {
+            return;
+        }
+
+        synchronized (recentlyViewedBooks) {
+            if (recentlyViewedBooks.isEmpty()) {
+                recentlyViewedBooks.addAll(seeded);
+            }
+        }
+    }
+
+    private void applyViewStats(Book book, RecentBookViewRepository.ViewStats stats) {
+        if (book == null || stats == null) {
+            return;
+        }
+        book.addQualifier("recent.views.lastViewedAt", stats.lastViewedAt());
+        book.addQualifier("recent.views.24h", stats.viewsLast24h());
+        book.addQualifier("recent.views.7d", stats.viewsLast7d());
+        book.addQualifier("recent.views.30d", stats.viewsLast30d());
+    }
+
+    private int compareByLastViewedThenPublished(Book first, Book second) {
+        if (first == null && second == null) {
+            return 0;
+        }
+        if (first == null) {
+            return 1;
+        }
+        if (second == null) {
+            return -1;
+        }
+
+        Instant firstViewed = getInstantQualifier(first, "recent.views.lastViewedAt");
+        Instant secondViewed = getInstantQualifier(second, "recent.views.lastViewedAt");
+
+        if (firstViewed != null || secondViewed != null) {
+            if (firstViewed == null) {
+                return 1;
+            }
+            if (secondViewed == null) {
+                return -1;
+            }
+            int compare = secondViewed.compareTo(firstViewed);
+            if (compare != 0) {
+                return compare;
+            }
+        }
+
+        if (first.getPublishedDate() == null && second.getPublishedDate() == null) {
+            return 0;
+        }
+        if (first.getPublishedDate() == null) {
+            return 1;
+        }
+        if (second.getPublishedDate() == null) {
+            return -1;
+        }
+        return second.getPublishedDate().compareTo(first.getPublishedDate());
+    }
+
+    private Instant getInstantQualifier(Book book, String qualifierKey) {
+        if (book == null) {
+            return null;
+        }
+        Map<String, Object> qualifiers = book.getQualifiers();
+        if (qualifiers == null) {
+            return null;
+        }
+        Object value = qualifiers.get(qualifierKey);
+        if (value instanceof Instant instant) {
+            return instant;
+        }
+        if (value instanceof java.util.Date date) {
+            return date.toInstant();
+        }
+        if (value instanceof String str) {
+            try {
+                return Instant.parse(str);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
