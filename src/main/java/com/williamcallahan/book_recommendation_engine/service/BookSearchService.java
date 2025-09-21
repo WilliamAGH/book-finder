@@ -85,10 +85,6 @@ public class BookSearchService {
         }
     }
 
-    public Optional<UUID> findBookIdByIsbn(String isbnQuery) {
-        return searchByIsbn(isbnQuery).map(IsbnSearchResult::bookId);
-    }
-
     public List<AuthorResult> searchAuthors(String query, Integer limit) {
         if (jdbcTemplate == null) {
             return List.of();

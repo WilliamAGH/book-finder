@@ -87,11 +87,12 @@ public class NewYorkTimesService {
         }
 
         final String sql =
-            "SELECT b.id, b.title, b.description, b.s3_image_path, b.isbn10, b.isbn13, b.published_date, " +
+            "SELECT b.id, b.title, b.description, bil.s3_image_path, b.isbn10, b.isbn13, b.published_date, " +
             "       b.language, b.publisher, b.page_count " +
             "FROM book_collections bc " +
             "JOIN book_collections_join bcj ON bc.id = bcj.collection_id " +
             "JOIN books b ON b.id = bcj.book_id " +
+            "LEFT JOIN book_image_links bil ON bil.book_id = b.id AND bil.is_primary = true " +
             "WHERE bc.collection_type = 'BESTSELLER_LIST' AND bc.source = 'NYT' AND bc.provider_list_code = ? " +
             "  AND bc.published_date = (SELECT max(published_date) FROM book_collections WHERE collection_type = 'BESTSELLER_LIST' AND source = 'NYT' AND provider_list_code = ?) " +
             "ORDER BY bcj.position NULLS LAST, b.title ASC " +

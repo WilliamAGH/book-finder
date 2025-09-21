@@ -16,8 +16,10 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.BookRecommendationPersistenceService.RecommendationRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
@@ -28,6 +30,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -35,7 +38,6 @@ import java.util.stream.Collectors;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import java.util.Locale;
 @Service
 public class RecommendationService {
     private static final Logger logger = LoggerFactory.getLogger(RecommendationService.class);
@@ -47,8 +49,14 @@ public class RecommendationService {
             "which", "its", "into", "then", "also"
     ));
 
+    private static final String REASON_AUTHOR = "AUTHOR";
+    private static final String REASON_CATEGORY = "CATEGORY";
+    private static final String REASON_TEXT = "TEXT";
+
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
+    private final BookRecommendationPersistenceService recommendationPersistenceService;
+    private final boolean googleFallbackEnabled;
 
     /**
      * Constructs the RecommendationService with required dependencies
@@ -58,9 +66,13 @@ public class RecommendationService {
      * @implNote Uses GoogleBooksService for searches and book details
      */
     public RecommendationService(GoogleBooksService googleBooksService,
-                                 BookDataOrchestrator bookDataOrchestrator) {
+                                 BookDataOrchestrator bookDataOrchestrator,
+                                 BookRecommendationPersistenceService recommendationPersistenceService,
+                                 @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled) {
         this.googleBooksService = googleBooksService;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.recommendationPersistenceService = recommendationPersistenceService;
+        this.googleFallbackEnabled = googleFallbackEnabled;
     }
 
     /**
@@ -169,7 +181,7 @@ public class RecommendationService {
                 scoredBook -> scoredBook.getBook().getId(),
                 scoredBook -> scoredBook,
                 (sb1, sb2) -> {
-                    sb1.setScore(sb1.getScore() + sb2.getScore());
+                    sb1.mergeWith(sb2);
                     return sb1;
                 },
                 HashMap::new
@@ -178,53 +190,97 @@ public class RecommendationService {
                 String sourceLang = sourceBook.getLanguage();
                 boolean filterByLanguage = sourceLang != null && !sourceLang.isEmpty();
 
-                List<Book> recommendations = recommendationMap.values().stream()
+                List<ScoredBook> orderedCandidates = recommendationMap.values().stream()
+                    .filter(scored -> isEligibleRecommendation(sourceBook, scored.getBook(), filterByLanguage, sourceLang))
                     .sorted(Comparator.comparing(ScoredBook::getScore).reversed())
-                    .map(ScoredBook::getBook)
-                    .filter(book -> !book.getId().equals(sourceBook.getId()))
-                    .filter(recommendedBook -> {
-                        if (!filterByLanguage) return true;
-                        String recommendedLang = recommendedBook.getLanguage();
-                        return Objects.equals(sourceLang, recommendedLang);
-                    })
-                    .collect(Collectors.toList()); // Collect all potential recommendations before limiting
+                    .collect(Collectors.toList());
 
-                if (!recommendations.isEmpty()) {
-                    List<String> newRecommendationIds = recommendations.stream()
-                        .map(Book::getId)
-                        .distinct()
-                        .collect(Collectors.toList());
-                    
-                    sourceBook.addRecommendationIds(newRecommendationIds);
-                    
-                    // Proactively cache each of the newly found recommended books
-                    Mono<Void> cacheIndividualRecommendedBooksMono = Flux.fromIterable(recommendations)
-                        .flatMap(recommendedBook -> {
-                            // Ensure rawJsonResponse is set if it's available and BookCacheFacadeService uses it
-                            // This might already be handled by BookJsonParser
-                            // Skip caching - Redis removed
-                            return Mono.just(recommendedBook);
-                        })
-                        .then();
-                    
-                    // Save the updated sourceBook with new recommendation IDs, after caching individual books
-                    return cacheIndividualRecommendedBooksMono
-                        // Skip caching - Redis removed
-                        .then(Mono.fromRunnable(() -> logger.info("Updated cachedRecommendationIds for book {} with {} new IDs and cached {} individual recommended books.", sourceBook.getId(), newRecommendationIds.size(), recommendations.size())))
-                        .thenReturn(recommendations.stream().limit(effectiveCount).collect(Collectors.toList())) // Return limited list after saving
-                        .doOnSuccess(finalList -> logger.info("Fetched {} total potential recommendations for book ID {} from API, updated cache. Returning {} recommendations.", recommendations.size(), sourceBook.getId(), finalList.size()))
-                        .onErrorResume(e -> {
-                            logger.error("Error saving updated source book {} to cache after fetching recommendations: {}", sourceBook.getId(), e.getMessage());
-                            // Still return the recommendations even if caching fails for this update
-                            return Mono.just(recommendations.stream().limit(effectiveCount).collect(Collectors.toList()));
-                        });
-                } else {
-                     logger.info("No recommendations generated from API for book ID: {}", sourceBook.getId());
+                if (orderedCandidates.isEmpty()) {
+                    logger.info("No recommendations generated from API for book ID: {}", sourceBook.getId());
                     return Mono.just(Collections.<Book>emptyList());
                 }
+
+                List<Book> orderedBooks = orderedCandidates.stream()
+                    .map(ScoredBook::getBook)
+                    .collect(Collectors.toList());
+
+                List<Book> limitedRecommendations = orderedBooks.stream()
+                    .limit(effectiveCount)
+                    .collect(Collectors.toList());
+
+                List<String> newRecommendationIds = orderedBooks.stream()
+                    .map(Book::getId)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+
+                sourceBook.addRecommendationIds(newRecommendationIds);
+
+                Mono<Void> cacheIndividualRecommendedBooksMono = Flux.fromIterable(orderedBooks)
+                    .flatMap(recommendedBook -> Mono.just(recommendedBook))
+                    .then();
+
+                Set<String> limitedIds = limitedRecommendations.stream()
+                    .map(Book::getId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+
+                Mono<Void> persistenceMono = recommendationPersistenceService != null
+                    ? recommendationPersistenceService
+                        .persistPipelineRecommendations(sourceBook, buildPersistenceRecords(orderedCandidates, limitedIds))
+                        .onErrorResume(ex -> {
+                            logger.warn("Failed to persist recommendations for {}: {}", sourceBook.getId(), ex.getMessage());
+                            return Mono.empty();
+                        })
+                    : Mono.empty();
+
+                return Mono.when(cacheIndividualRecommendedBooksMono, persistenceMono)
+                    .then(Mono.fromRunnable(() -> logger.info("Updated cachedRecommendationIds for book {} with {} new IDs and cached {} individual recommended books.",
+                            sourceBook.getId(), newRecommendationIds.size(), orderedBooks.size())))
+                    .thenReturn(limitedRecommendations)
+                    .doOnSuccess(finalList -> logger.info("Fetched {} total potential recommendations for book ID {} from API, updated cache. Returning {} recommendations.", orderedBooks.size(), sourceBook.getId(), finalList.size()))
+                    .onErrorResume(e -> {
+                        logger.error("Error completing recommendation pipeline for book {}: {}", sourceBook.getId(), e.getMessage());
+                        return Mono.just(limitedRecommendations);
+                    });
             });
     }
-    
+
+    private List<RecommendationRecord> buildPersistenceRecords(List<ScoredBook> orderedCandidates, Set<String> limitedIds) {
+        if (recommendationPersistenceService == null || limitedIds.isEmpty()) {
+            return List.of();
+        }
+
+        return orderedCandidates.stream()
+            .filter(scored -> {
+                Book candidate = scored.getBook();
+                return candidate != null && candidate.getId() != null && limitedIds.contains(candidate.getId());
+            })
+            .map(scored -> new RecommendationRecord(
+                scored.getBook(),
+                scored.getScore(),
+                new ArrayList<>(scored.getReasons())))
+            .collect(Collectors.toList());
+    }
+
+    private boolean isEligibleRecommendation(Book sourceBook, Book candidate, boolean filterByLanguage, String sourceLang) {
+        if (candidate == null) {
+            return false;
+        }
+        String candidateId = candidate.getId();
+        if (candidateId == null || candidateId.isBlank()) {
+            return false;
+        }
+        String sourceId = sourceBook != null ? sourceBook.getId() : null;
+        if (sourceId != null && sourceId.equals(candidateId)) {
+            return false;
+        }
+        if (!filterByLanguage) {
+            return true;
+        }
+        return Objects.equals(sourceLang, candidate.getLanguage());
+    }
+
     /**
      * Finds books by the same authors as the source book
      * 
@@ -243,7 +299,7 @@ public class RecommendationService {
         return Flux.fromIterable(sourceBook.getAuthors())
             .flatMap(author -> searchBooksTiered("inauthor:" + author, langCode, MAX_SEARCH_RESULTS)
                 .flatMapMany(Flux::fromIterable)
-                .map(book -> new ScoredBook(book, 4.0))
+                .map(book -> new ScoredBook(book, 4.0, REASON_AUTHOR))
                 .onErrorResume(e -> {
                     logger.warn("Error finding books by author {}: {}", author, e.getMessage());
                     return Flux.empty();
@@ -282,7 +338,7 @@ public class RecommendationService {
             .take(MAX_SEARCH_RESULTS)
             .map(book -> {
                 double categoryScore = calculateCategoryOverlapScore(sourceBook, book);
-                return new ScoredBook(book, categoryScore);
+                return new ScoredBook(book, categoryScore, REASON_CATEGORY);
             })
             .onErrorResume(e -> {
                 logger.warn("Error finding books by categories '{}': {}", categoryQueryString, e.getMessage());
@@ -388,7 +444,7 @@ public class RecommendationService {
                 }
                 if (matchCount > 0) {
                     double score = 2.0 * matchCount;
-                    return Mono.just(new ScoredBook(book, score));
+                    return Mono.just(new ScoredBook(book, score, REASON_TEXT));
                 }
                 return Mono.empty();
             })
@@ -428,6 +484,10 @@ public class RecommendationService {
                 logger.debug("Returning {} results from Postgres tier for query '{}'", trimmed.size(), query);
                 return Mono.just(trimmed);
             }
+            if (!googleFallbackEnabled) {
+                logger.debug("Google fallback disabled for recommendation query '{}'. Returning empty list.", query);
+                return Mono.just(Collections.emptyList());
+            }
             return googleBooksService.searchBooksAsyncReactive(query, langCode, limit, null)
                     .defaultIfEmpty(Collections.emptyList())
                     .map(list -> trimSearchResults(list, limit))
@@ -459,43 +519,31 @@ public class RecommendationService {
     private static class ScoredBook {
         private final Book book;
         private double score;
-        
-        /**
-         * Constructs a new ScoredBook with the given book and initial score
-         * 
-         * @param book The book to be scored
-         * @param score The initial similarity score
-         */
-        public ScoredBook(Book book, double score) {
+        private final LinkedHashSet<String> reasons = new LinkedHashSet<>();
+
+        public ScoredBook(Book book, double score, String reason) {
             this.book = book;
             this.score = score;
+            if (reason != null && !reason.isBlank()) {
+                this.reasons.add(reason);
+            }
         }
-        
-        /**
-         * Gets the book object
-         * 
-         * @return The book
-         */
+
         public Book getBook() {
             return book;
         }
-        
-        /**
-         * Gets the current similarity score
-         * 
-         * @return The similarity score
-         */
+
         public double getScore() {
             return score;
         }
-        
-        /**
-         * Updates the similarity score (used when combining scores from multiple sources)
-         * 
-         * @param score The new score to set
-         */
-        public void setScore(double score) {
-            this.score = score;
+
+        public Set<String> getReasons() {
+            return Collections.unmodifiableSet(reasons);
+        }
+
+        public void mergeWith(ScoredBook other) {
+            this.score += other.score;
+            this.reasons.addAll(other.reasons);
         }
     }
 }

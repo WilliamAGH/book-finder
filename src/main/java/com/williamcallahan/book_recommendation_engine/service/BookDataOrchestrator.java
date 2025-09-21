@@ -58,6 +58,7 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.util.Set;
+import java.util.function.ToIntBiFunction;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 
 @Service
@@ -359,23 +360,18 @@ public class BookDataOrchestrator {
     
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy) {
         logger.debug("BookDataOrchestrator: Starting tiered search for query: '{}', lang: {}, total: {}, order: {}", query, langCode, desiredTotalResults, orderBy);
-        
+
+        // Check PostgreSQL first - if we have results, return immediately without creating Google API Monos
         List<Book> postgresHits = searchPostgresFirst(query, desiredTotalResults);
         if (!postgresHits.isEmpty()) {
             logger.info("BookDataOrchestrator: Postgres search satisfied query '{}' with {} results.", query, postgresHits.size());
             return Mono.just(postgresHits);
         }
 
+        // Only create Google API Monos if PostgreSQL returned no results
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
+        boolean googleFallbackEnabled = googleApiFetcher.isGoogleFallbackEnabled();
         boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable(); 
-
-        Mono<List<Book>> primarySearchMono = apiKeyAvailable ?
-            executePagedSearch(query, langCode, desiredTotalResults, orderBy, true, queryQualifiers) :
-            executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers);
-
-        Mono<List<Book>> fallbackSearchMono = apiKeyAvailable ?
-            executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers) :
-            Mono.just(Collections.emptyList());
 
         Mono<List<Book>> openLibrarySearchMono = openLibraryBookDataService.searchBooksByTitle(query)
             .collectList()
@@ -389,6 +385,19 @@ public class BookDataOrchestrator {
                 logger.error("Error during OpenLibrary search for query '{}': {}", query, e.getMessage(), e);
                 return Mono.just(Collections.emptyList());
             });
+
+        if (!googleFallbackEnabled) {
+            logger.info("BookDataOrchestrator: Google fallback disabled for query '{}'. Returning OpenLibrary results only.", query);
+            return openLibrarySearchMono;
+        }
+
+        Mono<List<Book>> primarySearchMono = apiKeyAvailable ?
+            executePagedSearch(query, langCode, desiredTotalResults, orderBy, true, queryQualifiers) :
+            executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers);
+
+        Mono<List<Book>> fallbackSearchMono = apiKeyAvailable ?
+            executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers) :
+            Mono.just(Collections.emptyList());
 
         return primarySearchMono
             .flatMap(googleResults1 -> {
@@ -463,24 +472,7 @@ public class BookDataOrchestrator {
 
         logger.debug("BookDataOrchestrator: Executing {} paged search for query: '{}', lang: {}, total_requested: {}, order: {}", authType, query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
 
-        return Flux.range(0, (maxTotalResultsToFetch + maxResultsPerPage - 1) / maxResultsPerPage)
-            .map(page -> page * maxResultsPerPage)
-            .concatMap(startIndex -> {
-                Mono<JsonNode> apiCall = authenticated ?
-                    googleApiFetcher.searchVolumesAuthenticated(query, startIndex, effectiveOrderBy, langCode) :
-                    googleApiFetcher.searchVolumesUnauthenticated(query, startIndex, effectiveOrderBy, langCode);
-
-                return apiCall.flatMapMany(responseNode -> {
-                    if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
-                        List<JsonNode> items = new ArrayList<>();
-                        responseNode.get("items").forEach(items::add);
-                        logger.debug("BookDataOrchestrator: {} search, query '{}', startIndex {}: Retrieved {} items from API.", authType, query, startIndex, items.size());
-                        return Flux.fromIterable(items);
-                    }
-                    logger.debug("BookDataOrchestrator: {} search, query '{}', startIndex {}: No items found in API response.", authType, query, startIndex);
-                    return Flux.empty();
-                });
-            })
+        return googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, authenticated)
             .flatMap(jsonItem -> { 
                 Book bookFromSearchItem = BookJsonParser.convertJsonToBook(jsonItem);
                 if (bookFromSearchItem != null && bookFromSearchItem.getId() != null) {
@@ -501,8 +493,8 @@ public class BookDataOrchestrator {
             })
             .doOnSuccess(finalList -> logger.info("BookDataOrchestrator: {} paged search for query '{}' completed. Aggregated {} books.", authType, query, finalList.size()))
             .onErrorResume(e -> {
-                 logger.error("BookDataOrchestrator: Error during {} paged search for query '{}': {}. Returning empty list.", authType, query, e.getMessage(), e);
-                 return Mono.just(Collections.emptyList());
+                logger.error("BookDataOrchestrator: Error during {} paged search for query '{}': {}. Returning empty list.", authType, query, e.getMessage(), e);
+                return Mono.just(Collections.emptyList());
             });
     }
 
@@ -543,20 +535,19 @@ public class BookDataOrchestrator {
             return;
         }
 
-        AtomicInteger processed = new AtomicInteger(0);
-        for (String key : keysToProcess) {
-            try {
-                Optional<String> jsonOptional = fetchJsonFromS3Key(key);
-                if (jsonOptional.isEmpty()) {
-                    continue;
-                }
-
-                List<JsonNode> candidates = parseBookJsonPayload(jsonOptional.get(), key);
+        processS3JsonKeys(
+            keysToProcess,
+            "S3→DB migration",
+            50,
+            -1,
+            (key, rawJson) -> {
+                List<JsonNode> candidates = parseBookJsonPayload(rawJson, key);
                 if (candidates.isEmpty()) {
                     logger.debug("S3→DB migration: No usable JSON objects extracted for key {}.", key);
-                    continue;
+                    return 0;
                 }
 
+                int processedCount = 0;
                 for (JsonNode jsonNode : candidates) {
                     Book book = BookJsonParser.convertJsonToBook(jsonNode);
                     if (book == null || book.getId() == null) {
@@ -565,17 +556,11 @@ public class BookDataOrchestrator {
                     }
 
                     saveToDatabaseEnrichOnMatch(book, jsonNode);
-                    int count = processed.incrementAndGet();
-                    if (count % 50 == 0) {
-                        logger.info("S3→DB migration progress: {} processed so far (current key: {}).", count, key);
-                    }
+                    processedCount++;
                 }
-            } catch (Exception e) {
-                logger.warn("S3→DB migration: Error processing key {}: {}", key, e.getMessage());
+                return processedCount;
             }
-        }
-
-        logger.info("S3→DB migration completed. Processed {} book fragment(s).", processed.get());
+        );
     }
     private List<String> prepareJsonKeysForMigration(String effectivePrefix,
                                                     int maxRecords,
@@ -857,40 +842,75 @@ public class BookDataOrchestrator {
         return Optional.empty();
     }
 
+    private void processS3JsonKeys(List<String> keys,
+                                   String contextLabel,
+                                   int progressInterval,
+                                   int expectedTotal,
+                                   ToIntBiFunction<String, String> handler) {
+        if (keys == null || keys.isEmpty()) {
+            logger.info("{}: No S3 objects to process.", contextLabel);
+            return;
+        }
+
+        AtomicInteger processed = new AtomicInteger(0);
+        int totalTargets = expectedTotal > 0 ? expectedTotal : keys.size();
+
+        for (String key : keys) {
+            Optional<String> jsonOptional = fetchJsonFromS3Key(key);
+            if (jsonOptional.isEmpty()) {
+                continue;
+            }
+
+            try {
+                int processedForKey = handler.applyAsInt(key, jsonOptional.get());
+                if (processedForKey <= 0) {
+                    continue;
+                }
+
+                int totalProcessed = processed.addAndGet(processedForKey);
+                if (progressInterval > 0 && (totalProcessed % progressInterval == 0 || (expectedTotal > 0 && totalProcessed >= expectedTotal))) {
+                    if (expectedTotal > 0) {
+                        logger.info("{} progress: {}/{} processed.", contextLabel, Math.min(totalProcessed, expectedTotal), expectedTotal);
+                    } else {
+                        logger.info("{} progress: {} processed so far (latest key: {}).", contextLabel, totalProcessed, key);
+                    }
+                }
+            } catch (Exception ex) {
+                logger.warn("{}: Error processing key {}: {}", contextLabel, key, ex.getMessage());
+            }
+        }
+
+        if (expectedTotal > 0) {
+            logger.info("{} completed. Processed {}/{} record(s).", contextLabel, Math.min(processed.get(), expectedTotal), expectedTotal);
+        } else {
+            logger.info("{} completed. Processed {} record(s).", contextLabel, processed.get());
+        }
+    }
+
     private void saveToDatabaseEnrichOnMatch(Book incoming, JsonNode sourceJson) {
-        if (jdbcTemplate == null || incoming == null) return;
+        if (jdbcTemplate == null || incoming == null) {
+            return;
+        }
 
         try {
-            String incomingId = incoming.getId();
-            String isbn13 = incoming.getIsbn13();
-            String isbn10 = incoming.getIsbn10();
-            String externalGoogleId = (sourceJson != null) ? sourceJson.path("id").asText(null) : null;
+            String googleId = extractGoogleId(sourceJson, incoming);
+            String sanitizedIsbn13 = IsbnUtils.sanitize(incoming.getIsbn13());
+            String sanitizedIsbn10 = IsbnUtils.sanitize(incoming.getIsbn10());
 
-            String canonicalId = null;
-            // Prefer exact id match
-            if (incomingId != null) {
-                canonicalId = findInDatabaseById(incomingId).map(Book::getId).orElse(null);
-            }
-            // Then ISBN-13
-            if (canonicalId == null && isbn13 != null) {
-                canonicalId = findInDatabaseByIsbn13(isbn13).map(Book::getId).orElse(null);
-            }
-            // Then ISBN-10
-            if (canonicalId == null && isbn10 != null) {
-                canonicalId = findInDatabaseByIsbn10(isbn10).map(Book::getId).orElse(null);
-            }
-            // Finally any external id mapping (e.g., GOOGLE_BOOKS, NYT)
-            if (canonicalId == null && externalGoogleId != null) {
-                canonicalId = findInDatabaseByAnyExternalId(externalGoogleId).map(Book::getId).orElse(null);
-            }
-
+            String canonicalId = resolveCanonicalBookId(incoming, googleId, sanitizedIsbn13, sanitizedIsbn10);
             if (canonicalId == null) {
-                // No existing record found; use incoming id if present, otherwise generate
-                canonicalId = (incomingId != null && !incomingId.isEmpty()) ? incomingId : IdGenerator.uuidV7();
+                String incomingId = incoming.getId();
+                canonicalId = (incomingId != null && !incomingId.isBlank()) ? incomingId : IdGenerator.uuidV7();
             }
 
             incoming.setId(canonicalId);
-            // Delegate to existing upsert logic (ON CONFLICT (id) DO UPDATE)
+            if (sanitizedIsbn13 != null) {
+                incoming.setIsbn13(sanitizedIsbn13);
+            }
+            if (sanitizedIsbn10 != null) {
+                incoming.setIsbn10(sanitizedIsbn10);
+            }
+
             saveToDatabase(incoming, sourceJson);
         } catch (Exception e) {
             logger.warn("DB enrich-upsert failed for incoming book {}: {}", incoming.getId(), e.getMessage());
@@ -932,79 +952,76 @@ public class BookDataOrchestrator {
 
         int totalToProcess = keysToProcess.size();
 
-        AtomicInteger processed = new AtomicInteger(0);
-        for (String key : keysToProcess) {
-            try {
-                Optional<String> jsonOptional = fetchJsonFromS3Key(key);
-                if (jsonOptional.isEmpty()) {
-                    continue;
-                }
-
-                JsonNode root = objectMapper.readTree(jsonOptional.get());
-                if (!(root instanceof com.fasterxml.jackson.databind.node.ObjectNode)) continue;
-                com.fasterxml.jackson.databind.node.ObjectNode listJson = (com.fasterxml.jackson.databind.node.ObjectNode) root;
-
-                String displayName = listJson.path("display_name").asText(null);
-                String listNameEncoded = listJson.path("list_name_encoded").asText(null);
-                String updatedFrequency = listJson.path("updated_frequency").asText(null);
-                java.time.LocalDate bestsellersDate = null;
-                java.time.LocalDate publishedDate = null;
-                try { String s = listJson.path("bestsellers_date").asText(null); if (s != null) bestsellersDate = java.time.LocalDate.parse(s); } catch (Exception ignored) {}
-                try { String s = listJson.path("published_date").asText(null); if (s != null) publishedDate = java.time.LocalDate.parse(s); } catch (Exception ignored) {}
-                if (publishedDate == null || listNameEncoded == null || provider == null) {
-                    logger.warn("Skipping list key {}: missing required fields provider/list_name_encoded/published_date.", key);
-                    continue;
-                }
-
-                String listId = collectionPersistenceService
-                    .upsertList(provider, listNameEncoded, publishedDate, displayName, bestsellersDate, updatedFrequency, null, listJson)
-                    .orElse(null);
-                if (listId == null) continue;
-
-                JsonNode booksArray = listJson.path("books");
-                if (booksArray != null && booksArray.isArray()) {
-                    for (JsonNode item : booksArray) {
-                        Integer rank = item.path("rank").isNumber() ? item.path("rank").asInt() : null;
-                        Integer weeksOnList = item.path("weeks_on_list").isNumber() ? item.path("weeks_on_list").asInt() : null;
-                        String isbn13 = item.path("primary_isbn13").asText(null);
-                        String isbn10 = item.path("primary_isbn10").asText(null);
-                        String providerRef = item.path("amazon_product_url").asText(null);
-
-                        // Resolve canonical book id (reuse DB finders)
-                        String canonicalId = null;
-                        if (isbn13 != null) canonicalId = findInDatabaseByIsbn13(isbn13).map(Book::getId).orElse(null);
-                        if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByIsbn10(isbn10).map(Book::getId).orElse(null);
-                        // Also try any mapping
-                        if (canonicalId == null && isbn13 != null) canonicalId = findInDatabaseByAnyExternalId(isbn13).map(Book::getId).orElse(null);
-                        if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByAnyExternalId(isbn10).map(Book::getId).orElse(null);
-
-                        // If still not found, try to upsert a minimal record from item if we have enough data
-                        if (canonicalId == null) {
-                            Book minimal = new Book();
-                            minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : IdGenerator.uuidV7()));
-                            minimal.setIsbn13(isbn13);
-                            minimal.setIsbn10(isbn10);
-                            minimal.setTitle(item.path("title").asText(null));
-                            minimal.setPublisher(item.path("publisher").asText(null));
-                            minimal.setExternalImageUrl(item.path("book_image").asText(null));
-                            saveToDatabase(minimal, null);
-                            canonicalId = minimal.getId();
-                        }
-
-                        collectionPersistenceService.upsertListMembership(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
+        processS3JsonKeys(
+            keysToProcess,
+            "S3→DB list migration",
+            20,
+            totalToProcess,
+            (key, rawJson) -> {
+                try {
+                    JsonNode root = objectMapper.readTree(rawJson);
+                    if (!(root instanceof com.fasterxml.jackson.databind.node.ObjectNode)) {
+                        return 0;
                     }
-                }
+                    com.fasterxml.jackson.databind.node.ObjectNode listJson = (com.fasterxml.jackson.databind.node.ObjectNode) root;
 
-                int count = processed.incrementAndGet();
-                if (count % 20 == 0 || count == totalToProcess) {
-                    logger.info("S3→DB list migration progress: {}/{} processed.", count, totalToProcess);
+                    String displayName = listJson.path("display_name").asText(null);
+                    String listNameEncoded = listJson.path("list_name_encoded").asText(null);
+                    String updatedFrequency = listJson.path("updated_frequency").asText(null);
+                    java.time.LocalDate bestsellersDate = null;
+                    java.time.LocalDate publishedDate = null;
+                    try { String s = listJson.path("bestsellers_date").asText(null); if (s != null) bestsellersDate = java.time.LocalDate.parse(s); } catch (Exception ignored) {}
+                    try { String s = listJson.path("published_date").asText(null); if (s != null) publishedDate = java.time.LocalDate.parse(s); } catch (Exception ignored) {}
+                    if (publishedDate == null || listNameEncoded == null || provider == null) {
+                        logger.warn("Skipping list key {}: missing required fields provider/list_name_encoded/published_date.", key);
+                        return 0;
+                    }
+
+                    String listId = collectionPersistenceService
+                        .upsertList(provider, listNameEncoded, publishedDate, displayName, bestsellersDate, updatedFrequency, null, listJson)
+                        .orElse(null);
+                    if (listId == null) {
+                        return 0;
+                    }
+
+                    JsonNode booksArray = listJson.path("books");
+                    if (booksArray != null && booksArray.isArray()) {
+                        for (JsonNode item : booksArray) {
+                            Integer rank = item.path("rank").isNumber() ? item.path("rank").asInt() : null;
+                            Integer weeksOnList = item.path("weeks_on_list").isNumber() ? item.path("weeks_on_list").asInt() : null;
+                            String isbn13 = item.path("primary_isbn13").asText(null);
+                            String isbn10 = item.path("primary_isbn10").asText(null);
+                            String providerRef = item.path("amazon_product_url").asText(null);
+
+                            String canonicalId = null;
+                            if (isbn13 != null) canonicalId = findInDatabaseByIsbn13(isbn13).map(Book::getId).orElse(null);
+                            if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByIsbn10(isbn10).map(Book::getId).orElse(null);
+                            if (canonicalId == null && isbn13 != null) canonicalId = findInDatabaseByAnyExternalId(isbn13).map(Book::getId).orElse(null);
+                            if (canonicalId == null && isbn10 != null) canonicalId = findInDatabaseByAnyExternalId(isbn10).map(Book::getId).orElse(null);
+
+                            if (canonicalId == null) {
+                                Book minimal = new Book();
+                                minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : IdGenerator.uuidV7()));
+                                minimal.setIsbn13(isbn13);
+                                minimal.setIsbn10(isbn10);
+                                minimal.setTitle(item.path("title").asText(null));
+                                minimal.setPublisher(item.path("publisher").asText(null));
+                                minimal.setExternalImageUrl(item.path("book_image").asText(null));
+                                saveToDatabase(minimal, null);
+                                canonicalId = minimal.getId();
+                            }
+
+                            collectionPersistenceService.upsertListMembership(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
+                        }
+                    }
+
+                    return 1;
+                } catch (Exception ex) {
+                    logger.warn("S3→DB list migration: Error processing key {}: {}", key, ex.getMessage());
+                    return 0;
                 }
-            } catch (Exception e) {
-                logger.warn("S3→DB list migration: Error processing key {}: {}", key, e.getMessage());
             }
-        }
-
-        logger.info("S3→DB list migration completed. Processed {} list file(s).", processed.get());
+        );
     }
     private Optional<Book> findInDatabaseById(String id) {
         if (postgresBookReader == null || id == null) {
@@ -1822,13 +1839,15 @@ public class BookDataOrchestrator {
                            wc.cluster_method,
                            wcm.confidence,
                            bei.external_id as google_books_id,
-                           b.s3_image_path
+                           bil.s3_image_path
                     FROM work_cluster_members wcm1
                     JOIN work_cluster_members wcm ON wcm.cluster_id = wcm1.cluster_id
                     JOIN books b ON b.id = wcm.book_id
                     JOIN work_clusters wc ON wc.id = wcm.cluster_id
                     LEFT JOIN book_external_ids bei
                            ON bei.book_id = b.id AND bei.source = 'GOOGLE_BOOKS'
+                    LEFT JOIN book_image_links bil
+                           ON bil.book_id = b.id AND bil.is_primary = true
                     WHERE wcm1.book_id = ?
                       AND wcm.book_id <> ?
                     ORDER BY wcm.is_primary DESC,

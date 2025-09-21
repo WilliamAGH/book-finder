@@ -22,6 +22,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
@@ -43,6 +44,9 @@ public class GoogleApiFetcher {
 
     @Value("${google.books.api.key:#{null}}") // Allow API key to be optional
     private String googleBooksApiKey;
+
+    @Value("${app.features.google-fallback.enabled:false}")
+    private boolean googleFallbackEnabled;
 
     /**
      * Constructs GoogleApiFetcher with required dependencies
@@ -66,6 +70,10 @@ public class GoogleApiFetcher {
      * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdAuthenticated(String bookId) {
+        if (!googleFallbackEnabled) {
+            logger.debug("Google fallback disabled - skipping authenticated fetch for {}", bookId);
+            return Mono.empty();
+        }
         // Check circuit breaker first
         if (!circuitBreakerService.isApiCallAllowed()) {
             logger.warn("Circuit breaker is OPEN - blocking authenticated API call for book ID: {}", bookId);
@@ -90,10 +98,12 @@ public class GoogleApiFetcher {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .doOnSubscribe(s -> logger.debug("Fetching book {} from Google API (Authenticated).", bookId))
-                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // Slightly increased initial backoff
+                .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
+                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
                         .filter(throwable -> {
                             if (throwable instanceof WebClientResponseException wcre) {
-                                return wcre.getStatusCode().is5xxServerError() || wcre.getStatusCode().value() == 429;
+                                // Don't retry on 429 (rate limit) - fail fast instead
+                                return wcre.getStatusCode().is5xxServerError();
                             }
                             return throwable instanceof IOException || throwable instanceof WebClientRequestException;
                         })
@@ -144,6 +154,10 @@ public class GoogleApiFetcher {
      * @return JsonNode response from API
      */
     public Mono<JsonNode> fetchVolumeByIdUnauthenticated(String bookId) {
+        if (!googleFallbackEnabled) {
+            logger.debug("Google fallback disabled - skipping unauthenticated fetch for {}", bookId);
+            return Mono.empty();
+        }
         String url = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
                 .pathSegment("volumes", bookId)
                 // No API key for unauthenticated calls
@@ -158,10 +172,12 @@ public class GoogleApiFetcher {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .doOnSubscribe(s -> logger.debug("Fetching book {} from Google API (Unauthenticated).", bookId))
-                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // Slightly increased initial backoff
+                .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
+                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
                         .filter(throwable -> {
                             if (throwable instanceof WebClientResponseException wcre) {
-                                return wcre.getStatusCode().is5xxServerError() || wcre.getStatusCode().value() == 429;
+                                // Don't retry on 429 (rate limit) - fail fast instead
+                                return wcre.getStatusCode().is5xxServerError();
                             }
                             return throwable instanceof IOException || throwable instanceof WebClientRequestException;
                         })
@@ -203,6 +219,10 @@ public class GoogleApiFetcher {
      * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesAuthenticated(String query, int startIndex, String orderBy, String langCode) {
+        if (!googleFallbackEnabled) {
+            logger.debug("Google fallback disabled - skipping authenticated search for query '{}'", query);
+            return Mono.empty();
+        }
         // Check circuit breaker first
         if (!circuitBreakerService.isApiCallAllowed()) {
             logger.warn("Circuit breaker is OPEN - blocking authenticated search API call for query: {}", query);
@@ -225,7 +245,56 @@ public class GoogleApiFetcher {
      * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesUnauthenticated(String query, int startIndex, String orderBy, String langCode) {
+        if (!googleFallbackEnabled) {
+            logger.debug("Google fallback disabled - skipping unauthenticated search for query '{}'", query);
+            return Mono.empty();
+        }
         return searchVolumesInternal(query, startIndex, orderBy, langCode, false);
+    }
+
+    /**
+     * Streams individual search result items across the requested page span using either the
+     * authenticated or unauthenticated Google Books API. Callers can focus on item-level handling
+     * without re-implementing the paging mechanics.
+     *
+     * @param query Search terms to execute
+     * @param maxResultsToFetch Maximum number of results to retrieve (<= 0 treated as 40)
+     * @param orderBy Sort order ("relevance", "newest")
+     * @param langCode Optional language restriction
+     * @param authenticated Whether to use authenticated calls
+     * @return Flux emitting each item JsonNode
+     */
+    public Flux<JsonNode> streamSearchItems(String query,
+                                            int maxResultsToFetch,
+                                            String orderBy,
+                                            String langCode,
+                                            boolean authenticated) {
+        final int maxResultsPerPage = 40;
+        final int effectiveMax = maxResultsToFetch > 0 ? maxResultsToFetch : maxResultsPerPage;
+        final int pageCount = (effectiveMax + maxResultsPerPage - 1) / maxResultsPerPage;
+
+        return Flux.range(0, pageCount)
+            .map(page -> page * maxResultsPerPage)
+            .concatMap(startIndex -> {
+                Mono<JsonNode> apiCall = authenticated
+                    ? searchVolumesAuthenticated(query, startIndex, orderBy, langCode)
+                    : searchVolumesUnauthenticated(query, startIndex, orderBy, langCode);
+
+                return apiCall.flatMapMany(responseNode -> {
+                        if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
+                            return Flux.fromIterable(responseNode.get("items"));
+                        }
+                        logger.debug("GoogleApiFetcher: {} search page for query '{}' startIndex {} returned no items.",
+                                authenticated ? "Authenticated" : "Unauthenticated", query, startIndex);
+                        return Flux.empty();
+                    })
+                    .onErrorResume(e -> {
+                        logger.error("GoogleApiFetcher: Error during {} search page for query '{}' at startIndex {}: {}",
+                                authenticated ? "authenticated" : "unauthenticated", query, startIndex, e.getMessage(), e);
+                        return Flux.empty();
+                    });
+            })
+            .take(effectiveMax);
     }
 
     /**
@@ -267,10 +336,12 @@ public class GoogleApiFetcher {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .doOnSubscribe(s -> logger.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex))
-                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // Slightly increased initial backoff
+                .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
+                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
                         .filter(throwable -> {
                             if (throwable instanceof WebClientResponseException wcre) {
-                                return wcre.getStatusCode().is5xxServerError() || wcre.getStatusCode().value() == 429;
+                                // Don't retry on 429 (rate limit) - fail fast instead
+                                return wcre.getStatusCode().is5xxServerError();
                             }
                             return throwable instanceof IOException || throwable instanceof WebClientRequestException;
                         })
@@ -341,5 +412,14 @@ public class GoogleApiFetcher {
      */
     public boolean isApiKeyAvailable() {
         return googleBooksApiKey != null && !googleBooksApiKey.isEmpty();
+    }
+
+    /**
+     * Exposes whether Google fallbacks are currently enabled
+     *
+     * @return true when Google API calls are allowed
+     */
+    public boolean isGoogleFallbackEnabled() {
+        return googleFallbackEnabled;
     }
 }

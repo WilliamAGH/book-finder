@@ -18,6 +18,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import reactor.core.publisher.Mono;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +44,7 @@ public class RecentlyViewedService {
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final DuplicateBookService duplicateBookService;
+    private final boolean googleFallbackEnabled;
 
     // In-memory storage for recently viewed books
     private final LinkedList<Book> recentlyViewedBooks = new LinkedList<>();
@@ -59,10 +61,12 @@ public class RecentlyViewedService {
      */
     public RecentlyViewedService(GoogleBooksService googleBooksService,
                                  DuplicateBookService duplicateBookService,
-                                 BookDataOrchestrator bookDataOrchestrator) {
+                                 BookDataOrchestrator bookDataOrchestrator,
+                                 @Value("${app.features.google-fallback.enabled:false}") boolean googleFallbackEnabled) {
         this.googleBooksService = googleBooksService;
         this.duplicateBookService = duplicateBookService;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.googleFallbackEnabled = googleFallbackEnabled;
     }
 
     /**
@@ -180,6 +184,11 @@ public class RecentlyViewedService {
                 if (!prepared.isEmpty()) {
                     logger.debug("Returning {} default books from Postgres tier.", prepared.size());
                     return Mono.just(prepared);
+                }
+
+                if (!googleFallbackEnabled) {
+                    logger.debug("Postgres tier returned empty defaults; Google fallback disabled. Returning empty list.");
+                    return Mono.just(Collections.emptyList());
                 }
 
                 logger.debug("Postgres tier returned empty defaults; falling back to Google Books.");
