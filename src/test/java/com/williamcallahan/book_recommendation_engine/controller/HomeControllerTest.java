@@ -23,6 +23,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.mockito.Mockito;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import java.util.List;
 import java.util.ArrayList;
@@ -146,7 +147,7 @@ class HomeControllerTest {
 
         webTestClient.get().uri("/book/isbn/" + isbn)
             .exchange()
-            .expectStatus().is3xxRedirection()
+            .expectStatus().isEqualTo(HttpStatus.SEE_OTHER)
             .expectHeader().valueEquals("Location", "/book/" + canonicalBook.getSlug());
 
         verify(googleBooksService, never()).searchBooksByISBN(anyString());
@@ -161,10 +162,18 @@ class HomeControllerTest {
 
         webTestClient.get().uri("/book/isbn/" + rawIsbn)
             .exchange()
-            .expectStatus().is3xxRedirection()
+            .expectStatus().isEqualTo(HttpStatus.SEE_OTHER)
             .expectHeader().valueEquals("Location", "/?info=bookNotFound&isbn=" + sanitizedIsbn);
 
         verify(googleBooksService, never()).searchBooksByISBN(anyString());
+    }
+
+    @Test
+    void exploreRedirectsToSearchWithEncodedQuery() {
+        webTestClient.get().uri("/explore")
+            .exchange()
+            .expectStatus().isEqualTo(HttpStatus.SEE_OTHER)
+            .expectHeader().valueMatches("Location", "/search\\?query=.*&source=explore");
     }
     /**
      * Helper method to create test Book instances
@@ -206,11 +215,7 @@ class HomeControllerTest {
         when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
             .thenReturn(Mono.just(bestsellers));
         when(recentlyViewedService.getRecentlyViewedBooks()).thenReturn(new ArrayList<>());
-        // Mock for the "additional books" call (triggered because recentlyViewed is empty and needs 8 books) - updated signature
-        // Make this mock more specific to avoid clashing with the bestsellers mock.
-        // It should match any string EXCEPT "hardcover-fiction" for the query,
-        // as "hardcover-fiction" is now used for the NYT service call.
-        when(googleBooksService.searchBooksAsyncReactive(
+        when(bookDataOrchestrator.searchBooksTiered(
                 argThat((String query) -> query != null && !query.equals("hardcover-fiction")),
                 isNull(String.class),
                 eq(8),
@@ -233,6 +238,7 @@ class HomeControllerTest {
                     throw e;
                 }
             });
+
     }
     /**
      * Tests home page with empty recommendations
@@ -240,6 +246,9 @@ class HomeControllerTest {
     @Test
     void shouldShowEmptyHomePageWhenServicesReturnEmptyLists() {
         // Default setUp mocks already return empty lists
+
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull()))
+            .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
         // Act & Assert
         webTestClient.get().uri("/")
@@ -260,6 +269,8 @@ class HomeControllerTest {
         // Arrange - updated signature
         when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
             .thenReturn(Mono.error(new RuntimeException("simulated bestseller fetch failure")));
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull()))
+            .thenReturn(Mono.just(java.util.Collections.emptyList()));
         // Act & Assert
         webTestClient.get().uri("/")
             .accept(MediaType.TEXT_HTML)

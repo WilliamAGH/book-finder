@@ -4,7 +4,9 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,9 +27,12 @@ import java.util.Map;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -36,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SuppressWarnings({"removal"})
-@WebMvcTest(BookController.class)
+@WebMvcTest({BookController.class, BookCoverController.class})
 @AutoConfigureMockMvc(addFilters = false)
 class BookControllerTest {
 
@@ -50,12 +55,22 @@ class BookControllerTest {
     @MockBean
     private RecommendationService recommendationService;
 
+    @MockBean
+    private GoogleBooksService googleBooksService;
+
+    @MockBean
+    private BookImageOrchestrationService bookImageOrchestrationService;
+
     private Book fixtureBook;
 
     @BeforeEach
     void setUp() {
         fixtureBook = buildBook("11111111-1111-4111-8111-111111111111", "Fixture Title");
         when(bookDataOrchestrator.getBookBySlugTiered(anyString())).thenReturn(Mono.empty());
+
+        when(googleBooksService.getBookById(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+        when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class)))
+            .thenAnswer(invocation -> java.util.concurrent.CompletableFuture.completedFuture(invocation.getArgument(0)));
     }
 
     @Test
@@ -129,6 +144,40 @@ class BookControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].id", equalTo(similar.getId())));
+    }
+
+    @Test
+    @DisplayName("GET /api/covers/{id} hydrates via orchestrator before Google fallback")
+    void getBookCover_usesOrchestratorFirst() throws Exception {
+        Book hydrated = buildBook("orchestrator-id", "Hydrated Title");
+        when(bookDataOrchestrator.getBookByIdTiered("orchestrator-id")).thenReturn(Mono.just(hydrated));
+        when(bookImageOrchestrationService.getBestCoverUrlAsync(eq(hydrated), eq(CoverImageSource.ANY)))
+            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(hydrated));
+
+        performAsync(get("/api/covers/orchestrator-id"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bookId", equalTo("orchestrator-id")))
+                .andExpect(jsonPath("$.coverUrl", equalTo(hydrated.getS3ImagePath())));
+
+        verify(googleBooksService, never()).getBookById("orchestrator-id");
+    }
+
+    @Test
+    @DisplayName("GET /api/covers/{id} falls back to Google when orchestrator returns empty")
+    void getBookCover_fallsBackToGoogle() throws Exception {
+        Book fallback = buildBook("fallback-id", "Fallback Title");
+        when(bookDataOrchestrator.getBookByIdTiered("fallback-id")).thenReturn(Mono.empty());
+        when(googleBooksService.getBookById("fallback-id"))
+            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(fallback));
+        when(bookImageOrchestrationService.getBestCoverUrlAsync(eq(fallback), eq(CoverImageSource.ANY)))
+            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(fallback));
+
+        performAsync(get("/api/covers/fallback-id"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bookId", equalTo("fallback-id")))
+                .andExpect(jsonPath("$.coverUrl", equalTo(fallback.getS3ImagePath())));
+
+        verify(googleBooksService).getBookById("fallback-id");
     }
 
     private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {

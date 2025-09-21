@@ -24,10 +24,4 @@ public final class PagingUtils {
         return value < min ? min : value;
     }
 
-    /**
-     * Ensure a positive (>=1) value with an inclusive upper bound.
-     */
-    public static int positiveClamp(int value, int max) {
-        return clamp(value, 1, max);
-    }
 }

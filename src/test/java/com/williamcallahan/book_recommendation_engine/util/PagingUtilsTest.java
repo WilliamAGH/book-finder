@@ -21,12 +21,4 @@ class PagingUtilsTest {
         assertThat(PagingUtils.atLeast(-1, 0)).isEqualTo(0);
         assertThat(PagingUtils.atLeast(5, 1)).isEqualTo(5);
     }
-
-    @Test
-    @DisplayName("positiveClamp enforces minimum of one and upper bound")
-    void positiveClampEnforcesBounds() {
-        assertThat(PagingUtils.positiveClamp(0, 50)).isEqualTo(1);
-        assertThat(PagingUtils.positiveClamp(25, 50)).isEqualTo(25);
-        assertThat(PagingUtils.positiveClamp(100, 50)).isEqualTo(50);
-    }
 }
