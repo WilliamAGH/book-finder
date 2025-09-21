@@ -1,6 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.service.BookRecommendationPersistenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -18,18 +19,27 @@ class RecommendationServiceTest {
 
     private GoogleBooksService googleBooksService;
     private BookDataOrchestrator bookDataOrchestrator;
+    private BookRecommendationPersistenceService recommendationPersistenceService;
     private RecommendationService recommendationService;
 
     @BeforeEach
     void setUp() {
         googleBooksService = mock(GoogleBooksService.class);
         bookDataOrchestrator = mock(BookDataOrchestrator.class);
-        recommendationService = new RecommendationService(googleBooksService, bookDataOrchestrator);
+        recommendationPersistenceService = mock(BookRecommendationPersistenceService.class);
+        when(recommendationPersistenceService.persistPipelineRecommendations(any(), any()))
+            .thenReturn(Mono.empty());
+
+        recommendationService = createService(false);
 
         when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
             .thenReturn(Mono.just(List.of()));
         when(googleBooksService.getBookById(anyString()))
             .thenReturn(CompletableFuture.completedFuture(null));
+    }
+
+    private RecommendationService createService(boolean googleFallbackEnabled) {
+        return new RecommendationService(googleBooksService, bookDataOrchestrator, recommendationPersistenceService, googleFallbackEnabled);
     }
 
     @Test
@@ -48,10 +58,13 @@ class RecommendationServiceTest {
 
         verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
+        verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
     }
 
     @Test
     void getSimilarBooks_fallsBackToGoogleSearchWhenPostgresEmpty() {
+        recommendationService = createService(true);
+
         Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
         Book googleMatch = buildBook("google-match", "en", List.of("Author Two"), List.of("Fiction"));
 
@@ -68,10 +81,13 @@ class RecommendationServiceTest {
 
         verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
         verify(googleBooksService, atLeastOnce()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
+        verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
     }
 
     @Test
     void getSimilarBooks_fetchesSourceBookFromGoogleWhenOrchestratorMisses() {
+        recommendationService = createService(true);
+
         Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
         Book googleMatch = buildBook("google-match", "en", List.of("Author Two"), List.of("Fiction"));
 
@@ -90,6 +106,24 @@ class RecommendationServiceTest {
 
         verify(googleBooksService).getBookById("source");
         verify(googleBooksService, atLeastOnce()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
+        verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
+    }
+
+    @Test
+    void getSimilarBooks_returnsEmptyWhenFallbackDisabled() {
+        Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
+
+        when(bookDataOrchestrator.getBookByIdTiered("source")).thenReturn(Mono.just(source));
+        when(bookDataOrchestrator.getBookBySlugTiered("source")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+            .thenReturn(Mono.just(List.of()));
+
+        StepVerifier.create(recommendationService.getSimilarBooks("source", 3))
+            .expectNext(List.of())
+            .verifyComplete();
+
+        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
     }
 
     private Book buildBook(String id, String language, List<String> authors, List<String> categories) {
