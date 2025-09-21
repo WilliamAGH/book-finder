@@ -1,12 +1,15 @@
 package com.williamcallahan.book_recommendation_engine.util;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 
+import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.Map;
 
@@ -37,6 +40,18 @@ public final class BookJsonWriter {
         return writeNode(toObjectNode(book));
     }
 
+    public static void writeToFile(Book book, Path file) {
+        if (file == null) {
+            throw new IllegalArgumentException("Target file path must not be null");
+        }
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, toJsonString(book), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to write book JSON to " + file, e);
+        }
+    }
+
     public static ObjectNode readObjectNode(String json) {
         if (json == null || json.isBlank()) {
             return null;
@@ -44,7 +59,7 @@ public final class BookJsonWriter {
         try {
             JsonNode node = OBJECT_MAPPER.readTree(json);
             return node instanceof ObjectNode objectNode ? objectNode : null;
-        } catch (JsonProcessingException e) {
+        } catch (IOException e) {
             throw new UncheckedIOException("Failed to read book JSON payload", e);
         }
     }
@@ -87,9 +102,8 @@ public final class BookJsonWriter {
     private static String writeNode(ObjectNode node) {
         try {
             return OBJECT_MAPPER.writeValueAsString(node);
-        } catch (JsonProcessingException e) {
+        } catch (IOException e) {
             throw new UncheckedIOException("Failed to serialise book JSON payload", e);
         }
     }
 }
-
