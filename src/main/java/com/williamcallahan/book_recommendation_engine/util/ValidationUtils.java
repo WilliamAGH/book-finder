@@ -154,7 +154,19 @@ public final class ValidationUtils {
             if (book == null) {
                 return false;
             }
-            return hasActualCover(book.getS3ImagePath(), placeholderPath);
+            if (hasActualCover(book.getS3ImagePath(), placeholderPath)) {
+                return true;
+            }
+
+            String preferredUrl = null;
+            if (book.getCoverImages() != null) {
+                preferredUrl = book.getCoverImages().getPreferredUrl();
+            }
+            if (hasActualCover(preferredUrl, placeholderPath)) {
+                return true;
+            }
+
+            return hasActualCover(book.getExternalImageUrl(), placeholderPath);
         }
 
         /**

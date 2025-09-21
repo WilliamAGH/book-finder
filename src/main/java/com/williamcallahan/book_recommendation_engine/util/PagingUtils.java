@@ -55,6 +55,23 @@ public final class PagingUtils {
     }
 
     /**
+     * Produce a defensive slice of {@code items} using the provided {@code startIndex} and {@code limit}.
+     * Always returns a new list, never throws on bounds issues, and gracefully handles null/empty inputs.
+     */
+    public static <T> java.util.List<T> slice(java.util.List<T> items, int startIndex, int limit) {
+        if (items == null || items.isEmpty() || limit <= 0) {
+            return java.util.List.of();
+        }
+        int safeStart = Math.max(0, startIndex);
+        int boundedStart = Math.min(safeStart, items.size());
+        int boundedEnd = Math.min(boundedStart + limit, items.size());
+        if (boundedStart >= boundedEnd) {
+            return java.util.List.of();
+        }
+        return java.util.List.copyOf(items.subList(boundedStart, boundedEnd));
+    }
+
+    /**
      * Immutable descriptor for a paging request.
      */
     public record Window(int startIndex, int limit, int totalRequested) {}

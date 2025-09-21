@@ -83,7 +83,6 @@ public class ExternalCoverFetchHelper {
                 bookIdForLog,
                 validationHooks
             ))
-            ))
             .exceptionally(ex -> {
                 log.error("Exception retrieving cover for {} ({}): {}", attemptDescriptor, bookIdForLog, ex.getMessage());
                 if (cacheKey != null && markKnownBad != null) {
@@ -111,7 +110,6 @@ public class ExternalCoverFetchHelper {
             String placeholderReasonPrefix,
             ImageProvenanceData provenanceData,
             String bookIdForLog,
-            ValidationHooks validationHooks) {
             ValidationHooks hooks) {
 
         if (optionalDetails.isEmpty()) {
