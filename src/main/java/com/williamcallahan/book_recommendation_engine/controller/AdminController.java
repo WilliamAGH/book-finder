@@ -13,6 +13,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.controller.support.ErrorResponseUtils;
 import com.williamcallahan.book_recommendation_engine.scheduler.BookCacheWarmingScheduler;
 import com.williamcallahan.book_recommendation_engine.scheduler.NewYorkTimesBestsellerScheduler;
 import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerService;
@@ -148,7 +149,7 @@ public class AdminController {
         if (s3CoverCleanupService == null) {
             String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
             logger.warn(errorMessage);
-            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMessage + "\"}");
+            return ResponseEntity.badRequest().body(ErrorResponseUtils.errorBody(errorMessage));
         }
 
         String sourcePrefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
@@ -161,7 +162,7 @@ public class AdminController {
         if (quarantinePrefixToUse.isEmpty() || quarantinePrefixToUse.equals(sourcePrefixToUse)) {
             String errorMsg = "Invalid quarantine prefix: cannot be empty or same as source prefix.";
             logger.error(errorMsg + " Source: '{}', Quarantine: '{}'", sourcePrefixToUse, quarantinePrefixToUse);
-            return ResponseEntity.badRequest().body("{\"error\": \"" + errorMsg + "\"}");
+            return ResponseEntity.badRequest().body(ErrorResponseUtils.errorBody(errorMsg));
         }
         
         logger.info("Admin endpoint /admin/s3-cleanup/move-flagged invoked. " +
@@ -176,11 +177,13 @@ public class AdminController {
             return ResponseEntity.ok(summary);
         } catch (Exception e) {
             String errorMessage = String.format(
-                "Failed to complete S3 Cover Cleanup Move Action. Source Prefix: '%s', Limit: %d, Quarantine Prefix: '%s'. Error: %s",
-                sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse, e.getMessage()
+                "Failed to complete S3 Cover Cleanup Move Action. Source Prefix: '%s', Limit: %d, Quarantine Prefix: '%s'.",
+                sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse
             );
             logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body("{\"error\": \"" + errorMessage.replace("\"", "\\\"") + "\"}");
+            return ResponseEntity.internalServerError().body(
+                ErrorResponseUtils.errorBody("Move action failed", errorMessage + " Error: " + e.getMessage())
+            );
         }
     }
 

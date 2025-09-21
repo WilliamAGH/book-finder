@@ -29,16 +29,18 @@ import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCov
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.servlet.view.RedirectView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
@@ -196,26 +198,23 @@ public class HomeController {
         List<Book> trimmedRecentBooks = initialRecentBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
 
         if (trimmedRecentBooks.size() < MAX_RECENT_BOOKS) {
-            // If fewer than MAX_RECENT_BOOKS are viewed, fetch more to fill up to MAX_RECENT_BOOKS
             int needed = MAX_RECENT_BOOKS - trimmedRecentBooks.size();
             String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
             logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
-            
-            recentBooksMono = googleBooksService.searchBooksAsyncReactive(randomQuery, null, needed, null)
+
+            recentBooksMono = fetchAdditionalHomepageBooks(randomQuery, needed)
                 .map(defaultBooks -> {
                     List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
                     List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
                     for (Book defaultBook : booksToAdd) {
                         if (combinedBooks.size() >= MAX_RECENT_BOOKS) break;
-                        // Ensure no duplicates by ID from already present recent books
-                        if (trimmedRecentBooks.stream().noneMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
+                        if (defaultBook != null && defaultBook.getId() != null &&
+                                trimmedRecentBooks.stream().noneMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
                             combinedBooks.add(defaultBook);
                         }
                     }
-                    // If still not enough, just return what we have combined
                     return combinedBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
-                })
-                .defaultIfEmpty(trimmedRecentBooks); // If google books call fails or empty, use original recentBooks
+                });
         } else {
             recentBooksMono = Mono.just(trimmedRecentBooks);
         }
@@ -373,7 +372,7 @@ public class HomeController {
                         String redirectUrl = "/search?query=" + URLEncoder.encode(processedQueryWithoutYear, StandardCharsets.UTF_8) 
                                           + "&year=" + extractedYear;
                         
-                        return new RedirectView(redirectUrl);
+                        return redirectTo(redirectUrl);
                     } catch (Exception e) {
                         logger.warn("Failed to extract year from query: {}", e.getMessage());
                         // Continue with normal rendering if year extraction fails, effectiveYear remains as initially set
@@ -679,6 +678,28 @@ public class HomeController {
                 .limit(15) // Limit number of keywords
                 .collect(Collectors.joining(", "));
     }
+
+    private Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit) {
+        return bookDataOrchestrator.searchBooksTiered(query, null, limit, null)
+            .defaultIfEmpty(Collections.emptyList())
+            .onErrorResume(ex -> {
+                logger.warn("Postgres-first homepage filler lookup failed for query '{}': {}", query, ex.getMessage());
+                return Mono.just(Collections.emptyList());
+            })
+            .flatMap(results -> {
+                if (results != null && !results.isEmpty()) {
+                    logger.debug("Homepage filler populated from Postgres for query '{}' ({} results).", query, results.size());
+                    return Mono.just(results);
+                }
+                logger.debug("Postgres returned no homepage filler for query '{}', falling back to Google Books.", query);
+                return googleBooksService.searchBooksAsyncReactive(query, null, limit, null)
+                    .defaultIfEmpty(Collections.emptyList())
+                    .onErrorResume(fallbackEx -> {
+                        logger.error("Google fallback for homepage filler failed for query '{}': {}", query, fallbackEx.getMessage());
+                        return Mono.just(Collections.emptyList());
+                    });
+            });
+    }
     
     /**
      * Handle book lookup by ISBN (works with both ISBN-10 and ISBN-13 formats),
@@ -688,7 +709,7 @@ public class HomeController {
      * @return redirect to canonical book URL or homepage if not found
      */
     @GetMapping("/book/isbn/{isbn}")
-    public Mono<RedirectView> bookDetailByIsbn(@PathVariable String isbn) {
+    public Mono<ResponseEntity<Void>> bookDetailByIsbn(@PathVariable String isbn) {
         // Sanitize input by removing non-ISBN characters
         String sanitized = IsbnUtils.sanitize(isbn);
         final String sanitizedIsbn = sanitized != null ? sanitized : "";
@@ -696,13 +717,13 @@ public class HomeController {
         // Validate ISBN format
         if (!isValidIsbn(sanitizedIsbn)) {
             logger.warn("Invalid ISBN format: {}", isbn);
-            return Mono.just(new RedirectView("/?error=invalidIsbn&originalIsbn=" + isbn));
+            return Mono.just(redirectTo("/?error=invalidIsbn&originalIsbn=" + isbn));
         }
         
         return bookDataOrchestrator.getBookByIdTiered(sanitizedIsbn)
             .map(book -> {
                 if (book == null) {
-                    return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
+                    return redirectTo("/?info=bookNotFound&isbn=" + sanitizedIsbn);
                 }
 
                 String redirectTarget = book.getSlug();
@@ -712,19 +733,19 @@ public class HomeController {
 
                 if (redirectTarget != null && !redirectTarget.isBlank()) {
                     logger.info("Redirecting ISBN {} to canonical identifier: {}", sanitizedIsbn, redirectTarget);
-                    return new RedirectView("/book/" + redirectTarget);
+                    return redirectTo("/book/" + redirectTarget);
                 }
 
                 logger.warn("Book fetched for ISBN {} but no canonical identifier available. Redirecting to homepage.", sanitizedIsbn);
-                return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
+                return redirectTo("/?info=bookNotFound&isbn=" + sanitizedIsbn);
             })
             .switchIfEmpty(Mono.fromSupplier(() -> {
                 logger.warn("No book found for ISBN: {} (sanitized: {}), redirecting to homepage with notification.", isbn, sanitizedIsbn);
-                return new RedirectView("/?info=bookNotFound&isbn=" + sanitizedIsbn);
+                return redirectTo("/?info=bookNotFound&isbn=" + sanitizedIsbn);
             }))
             .onErrorResume(e -> {
                 logger.error("Error during ISBN lookup for {}: {}", isbn, e.getMessage(), e);
-                return Mono.just(new RedirectView("/?error=lookupError&isbn=" + sanitizedIsbn));
+                return Mono.just(redirectTo("/?error=lookupError&isbn=" + sanitizedIsbn));
             });
     }
     
@@ -740,6 +761,12 @@ public class HomeController {
         }
         return ISBN_ANY_PATTERN.matcher(isbn).matches();
     }
+
+    private ResponseEntity<Void> redirectTo(String path) {
+        return ResponseEntity.status(HttpStatus.SEE_OTHER)
+            .location(URI.create(path))
+            .build();
+    }
     
     /**
      * Handle book lookup by ISBN-13, then redirect to the canonical URL with Google Book ID.
@@ -749,7 +776,7 @@ public class HomeController {
      * @return redirect to canonical book URL or homepage if not found
      */
     @GetMapping("/book/isbn13/{isbn13}")
-    public Mono<RedirectView> bookDetailByIsbn13(@PathVariable String isbn13) {
+    public Mono<ResponseEntity<Void>> bookDetailByIsbn13(@PathVariable String isbn13) {
         // Sanitize input
         String sanitized = IsbnUtils.sanitize(isbn13);
         final String sanitizedIsbn = sanitized != null ? sanitized : "";
@@ -757,7 +784,7 @@ public class HomeController {
         // Validate ISBN-13 format specifically
         if (!ISBN13_PATTERN.matcher(sanitizedIsbn).matches()) {
             logger.warn("Invalid ISBN-13 format: {}", isbn13);
-            return Mono.just(new RedirectView("/?error=invalidIsbn13&originalIsbn=" + isbn13));
+            return Mono.just(redirectTo("/?error=invalidIsbn13&originalIsbn=" + isbn13));
         }
         
         // Forward to the common ISBN handler
@@ -772,7 +799,7 @@ public class HomeController {
      * @return redirect to canonical book URL or homepage if not found
      */
     @GetMapping("/book/isbn10/{isbn10}")
-    public Mono<RedirectView> bookDetailByIsbn10(@PathVariable String isbn10) {
+    public Mono<ResponseEntity<Void>> bookDetailByIsbn10(@PathVariable String isbn10) {
         // Sanitize input
         String sanitized = IsbnUtils.sanitize(isbn10);
         final String sanitizedIsbn = sanitized != null ? sanitized : "";
@@ -780,7 +807,7 @@ public class HomeController {
         // Validate ISBN-10 format specifically
         if (!ISBN10_PATTERN.matcher(sanitizedIsbn).matches()) {
             logger.warn("Invalid ISBN-10 format: {}", isbn10);
-            return Mono.just(new RedirectView("/?error=invalidIsbn10&originalIsbn=" + isbn10));
+            return Mono.just(redirectTo("/?error=invalidIsbn10&originalIsbn=" + isbn10));
         }
         
         // Forward to the common ISBN handler
@@ -788,18 +815,16 @@ public class HomeController {
     }
 
     @GetMapping("/explore")
-    public RedirectView explore() {
+    public ResponseEntity<Void> explore() {
         String selectedQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
         logger.info("Explore page requested, redirecting to search with query: '{}'", selectedQuery);
         try {
             String encodedQuery = URLEncoder.encode(selectedQuery, StandardCharsets.UTF_8.toString());
-            // Redirect to the search page with the selected query and a source indicator
-            RedirectView redirectView = new RedirectView("/search?query=" + encodedQuery + "&source=explore");
-            return redirectView;
+            return redirectTo("/search?query=" + encodedQuery + "&source=explore");
         } catch (java.io.UnsupportedEncodingException e) {
             logger.error("Error encoding query parameter for explore redirect: {}", selectedQuery, e);
             // Fallback to redirect without query or to an error page if critical
-            return new RedirectView("/search?source=explore&error=queryEncoding");
+            return redirectTo("/search?source=explore&error=queryEncoding");
         }
     }
 }
