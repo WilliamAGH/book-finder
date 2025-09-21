@@ -58,6 +58,7 @@ import java.util.function.Predicate;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Locale;
+import java.util.Objects;
 
 @Controller
 public class HomeController {
@@ -196,32 +197,48 @@ public class HomeController {
             .onErrorReturn(Collections.emptyList());
 
         // Add recently viewed books to the model
-        List<Book> initialRecentBooks = recentlyViewedService.getRecentlyViewedBooks(); // This is synchronous
-        
-        Mono<List<Book>> recentBooksMono;
-        List<Book> trimmedRecentBooks = initialRecentBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
+        Mono<List<Book>> recentBooksMono = recentlyViewedService.getRecentlyViewedBooksReactive()
+            .map(list -> list != null ? list : Collections.<Book>emptyList())
+            .defaultIfEmpty(Collections.emptyList())
+            .flatMap(initialRecentBooks -> {
+                List<Book> trimmedRecentBooks = initialRecentBooks.stream()
+                    .filter(Objects::nonNull)
+                    .limit(MAX_RECENT_BOOKS)
+                    .collect(Collectors.toList());
 
-        if (trimmedRecentBooks.size() < MAX_RECENT_BOOKS) {
-            int needed = MAX_RECENT_BOOKS - trimmedRecentBooks.size();
-            String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
-            logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
+                if (trimmedRecentBooks.size() >= MAX_RECENT_BOOKS) {
+                    return Mono.just(trimmedRecentBooks);
+                }
 
-            recentBooksMono = fetchAdditionalHomepageBooks(randomQuery, needed)
-                .map(defaultBooks -> {
-                    List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
-                    List<Book> booksToAdd = (defaultBooks == null) ? Collections.emptyList() : defaultBooks;
-                    for (Book defaultBook : booksToAdd) {
-                        if (combinedBooks.size() >= MAX_RECENT_BOOKS) break;
-                        if (defaultBook != null && defaultBook.getId() != null &&
-                                trimmedRecentBooks.stream().noneMatch(rb -> rb.getId().equals(defaultBook.getId()))) {
-                            combinedBooks.add(defaultBook);
+                int needed = MAX_RECENT_BOOKS - trimmedRecentBooks.size();
+                String randomQuery = EXPLORE_QUERIES.get(RANDOM.nextInt(EXPLORE_QUERIES.size()));
+                logger.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
+
+                return fetchAdditionalHomepageBooks(randomQuery, needed)
+                    .map(defaultBooks -> {
+                        List<Book> combinedBooks = new ArrayList<>(trimmedRecentBooks);
+                        List<Book> booksToAdd = defaultBooks == null ? Collections.emptyList() : defaultBooks;
+                        for (Book defaultBook : booksToAdd) {
+                            if (defaultBook == null || defaultBook.getId() == null) {
+                                continue;
+                            }
+                            if (combinedBooks.size() >= MAX_RECENT_BOOKS) {
+                                break;
+                            }
+                            boolean alreadyPresent = combinedBooks.stream()
+                                .filter(Objects::nonNull)
+                                .anyMatch(existing -> defaultBook.getId().equals(existing.getId()));
+                            if (!alreadyPresent) {
+                                combinedBooks.add(defaultBook);
+                            }
                         }
-                    }
-                    return combinedBooks.stream().limit(MAX_RECENT_BOOKS).collect(Collectors.toList());
-                });
-        } else {
-            recentBooksMono = Mono.just(trimmedRecentBooks);
-        }
+                        return combinedBooks.stream()
+                                .filter(Objects::nonNull)
+                                .limit(MAX_RECENT_BOOKS)
+                                .collect(Collectors.toList());
+                    })
+                    .defaultIfEmpty(trimmedRecentBooks);
+            });
 
         Mono<List<Book>> processedRecentBooksMono = recentBooksMono
             .flatMap(this::processBooksCovers)
@@ -733,6 +750,7 @@ public class HomeController {
         }
 
         Mono<Book> dbBySlug = Mono.justOrEmpty(bookDataOrchestrator.getBookFromDatabaseBySlug(identifier));
+
         Mono<Book> tieredBySlug = Mono.defer(() -> {
             Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
             return lookup == null ? Mono.empty() : lookup;

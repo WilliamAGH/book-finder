@@ -21,6 +21,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -187,47 +188,45 @@ public class RecentlyViewedService {
     public Mono<List<Book>> fetchDefaultBooksAsync() {
         logger.debug("Fetching default books reactively (Postgres-first).");
 
-        Mono<List<Book>> postgresResults = Mono.defer(() -> {
-            List<Book> seeded = loadFromRepository();
-            if (!seeded.isEmpty()) {
-                return Mono.just(seeded);
-            }
-
-            if (bookDataOrchestrator == null) {
-                return Mono.just(Collections.emptyList());
-            }
-
-            return bookDataOrchestrator.searchBooksTiered(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
-                .defaultIfEmpty(Collections.emptyList())
-                .onErrorResume(ex -> {
-                    logger.warn("Postgres lookup for recently viewed defaults failed: {}", ex.getMessage());
-                    return Mono.just(Collections.emptyList());
-                });
-        });
-
-        return postgresResults.flatMap(results -> {
-                List<Book> prepared = prepareDefaultBooks(results);
+        return loadFromRepositoryMono()
+            .flatMap(prepared -> {
                 if (!prepared.isEmpty()) {
-                    logger.debug("Returning {} default books from Postgres tier.", prepared.size());
+                    logger.debug("Returning {} default books from recent-view repository.", prepared.size());
                     return Mono.just(prepared);
                 }
 
-                if (!googleFallbackEnabled) {
-                    logger.debug("Postgres tier returned empty defaults; Google fallback disabled. Returning empty list.");
+                if (bookDataOrchestrator == null) {
                     return Mono.just(Collections.emptyList());
                 }
 
-                logger.debug("Postgres tier returned empty defaults; falling back to Google Books.");
-                return googleBooksService.searchBooksAsyncReactive(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
+                return bookDataOrchestrator.searchBooksTiered(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
                     .defaultIfEmpty(Collections.emptyList())
                     .map(this::prepareDefaultBooks)
-                    .doOnSuccess(list -> logger.debug("Returning {} default books from Google fallback tier.", list.size()))
-                    .onErrorResume(e -> {
-                        logger.error("Error fetching default books from Google fallback", e);
+                    .doOnSuccess(list -> {
+                        if (!list.isEmpty()) {
+                            logger.debug("Returning {} default books from Postgres tier.", list.size());
+                        }
+                    })
+                    .onErrorResume(ex -> {
+                        logger.warn("Postgres lookup for recently viewed defaults failed: {}", ex.getMessage());
                         return Mono.just(Collections.emptyList());
+                    })
+                    .flatMap(postgresPrepared -> {
+                        if (!postgresPrepared.isEmpty() || !googleFallbackEnabled) {
+                            return Mono.just(postgresPrepared);
+                        }
+
+                        logger.debug("Postgres tier returned empty defaults; falling back to Google Books.");
+                        return googleBooksService.searchBooksAsyncReactive(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
+                            .defaultIfEmpty(Collections.emptyList())
+                            .map(this::prepareDefaultBooks)
+                            .doOnSuccess(list -> logger.debug("Returning {} default books from Google fallback tier.", list.size()))
+                            .onErrorResume(e -> {
+                                logger.error("Error fetching default books from Google fallback", e);
+                                return Mono.just(Collections.emptyList());
+                            });
                     });
-            }
-        );
+            });
     }
     
     /**
@@ -242,41 +241,44 @@ public class RecentlyViewedService {
      * Properly handles thread interruption with status restoration
      */
     public Mono<List<Book>> getRecentlyViewedBooksReactive() {
-        seedCacheFromRepositoryIfNecessary();
+        return Mono.defer(() -> {
+            synchronized (recentlyViewedBooks) {
+                if (!recentlyViewedBooks.isEmpty()) {
+                    logger.debug("Returning {} recently viewed books from cache.", recentlyViewedBooks.size());
+                    return Mono.just(new ArrayList<>(recentlyViewedBooks));
+                }
+            }
 
-        // Optimistic check outside the lock
-        if (recentlyViewedBooks.isEmpty()) {
             return fetchDefaultBooksAsync()
                 .onErrorResume(e -> {
                     if (e instanceof InterruptedException) {
                         logger.warn("Fetching default books was interrupted.", e);
-                        Thread.currentThread().interrupt(); // Restore interruption status
+                        Thread.currentThread().interrupt();
                     } else {
                         logger.error("Error executing default book fetch.", e);
                     }
                     return Mono.just(Collections.emptyList());
                 })
                 .map(defaultBooks -> defaultBooks == null ? Collections.<Book>emptyList() : defaultBooks)
-                .flatMap(defaultBooks -> {
+                .doOnNext(defaultBooks -> {
+                    if (defaultBooks.isEmpty()) {
+                        return;
+                    }
                     synchronized (recentlyViewedBooks) {
-                        if (recentlyViewedBooks.isEmpty() && !defaultBooks.isEmpty()) {
+                        if (recentlyViewedBooks.isEmpty()) {
                             recentlyViewedBooks.addAll(defaultBooks);
                         }
+                    }
+                })
+                .map(defaultBooks -> {
+                    synchronized (recentlyViewedBooks) {
                         if (!recentlyViewedBooks.isEmpty()) {
-                            logger.debug("Recently viewed cache populated (possibly from defaults). Returning cached list.");
-                            return Mono.just(new ArrayList<>(recentlyViewedBooks));
+                            return new ArrayList<>(recentlyViewedBooks);
                         }
                     }
-                    logger.debug("Recently viewed list remains empty after attempting defaults. Returning {} fallback books.", defaultBooks.size());
-                    return Mono.just(defaultBooks);
+                    return defaultBooks;
                 });
-        }
-
-        // If not empty initially, return a copy under lock
-        synchronized (recentlyViewedBooks) {
-            logger.debug("Returning {} recently viewed books.", recentlyViewedBooks.size());
-            return Mono.just(new ArrayList<>(recentlyViewedBooks));
-        }
+        });
     }
 
     /**
@@ -323,62 +325,43 @@ public class RecentlyViewedService {
             .collect(Collectors.toList());
     }
 
-    private List<Book> loadFromRepository() {
+    private Mono<List<Book>> loadFromRepositoryMono() {
         if (recentBookViewRepository == null || !recentBookViewRepository.isEnabled()) {
-            return Collections.emptyList();
+            return Mono.just(Collections.emptyList());
         }
 
-        List<RecentBookViewRepository.ViewStats> stats = recentBookViewRepository.fetchMostRecentViews(MAX_RECENT_BOOKS);
-        if (stats.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<Book> hydrated = new ArrayList<>();
-        for (RecentBookViewRepository.ViewStats stat : stats) {
-            if (stat == null || stat.bookId() == null) {
-                continue;
-            }
-
-            Optional<Book> bookOptional = bookDataOrchestrator != null
-                    ? bookDataOrchestrator.getBookFromDatabase(stat.bookId())
-                    : Optional.empty();
-
-            bookOptional.ifPresent(book -> {
-                if (book.getSlug() == null || book.getSlug().isBlank()) {
-                    book.setSlug(book.getId());
+        return Mono.fromCallable(() -> {
+                List<RecentBookViewRepository.ViewStats> stats = recentBookViewRepository.fetchMostRecentViews(MAX_RECENT_BOOKS);
+                if (stats.isEmpty()) {
+                    return Collections.<Book>emptyList();
                 }
-                applyViewStats(book, stat);
-                hydrated.add(book);
+
+                List<Book> hydrated = new ArrayList<>();
+                for (RecentBookViewRepository.ViewStats stat : stats) {
+                    if (stat == null || stat.bookId() == null) {
+                        continue;
+                    }
+
+                    Optional<Book> bookOptional = bookDataOrchestrator != null
+                            ? bookDataOrchestrator.getBookFromDatabase(stat.bookId())
+                            : Optional.empty();
+
+                    bookOptional.ifPresent(book -> {
+                        if (book.getSlug() == null || book.getSlug().isBlank()) {
+                            book.setSlug(book.getId());
+                        }
+                        applyViewStats(book, stat);
+                        hydrated.add(book);
+                    });
+                }
+
+                return prepareDefaultBooks(hydrated);
+            })
+            .subscribeOn(Schedulers.boundedElastic())
+            .onErrorResume(ex -> {
+                logger.warn("Failed to load recent books from repository: {}", ex.getMessage());
+                return Mono.just(Collections.emptyList());
             });
-        }
-
-        return prepareDefaultBooks(hydrated);
-    }
-
-    private void seedCacheFromRepositoryIfNecessary() {
-        if (recentBookViewRepository == null || !recentBookViewRepository.isEnabled()) {
-            return;
-        }
-
-        boolean needsSeed;
-        synchronized (recentlyViewedBooks) {
-            needsSeed = recentlyViewedBooks.isEmpty();
-        }
-
-        if (!needsSeed) {
-            return;
-        }
-
-        List<Book> seeded = loadFromRepository();
-        if (seeded.isEmpty()) {
-            return;
-        }
-
-        synchronized (recentlyViewedBooks) {
-            if (recentlyViewedBooks.isEmpty()) {
-                recentlyViewedBooks.addAll(seeded);
-            }
-        }
     }
 
     private void applyViewStats(Book book, RecentBookViewRepository.ViewStats stats) {
