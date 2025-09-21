@@ -16,6 +16,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
@@ -24,7 +25,6 @@ import reactor.core.scheduler.Schedulers;
 // import java.util.ArrayList; // Unused
 import java.util.Collections;
 import java.util.List;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
@@ -38,16 +38,16 @@ public class NewYorkTimesService {
     private final String nytApiBaseUrl;
 
     private final String nytApiKey;
-    private final JdbcTemplate jdbcTemplate;
+    private final PostgresBookRepository postgresBookRepository;
 
     public NewYorkTimesService(WebClient.Builder webClientBuilder,
                                @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
                                @Value("${nyt.api.key}") String nytApiKey,
-                               JdbcTemplate jdbcTemplate) {
+                               @Nullable PostgresBookRepository postgresBookRepository) {
         this.nytApiBaseUrl = nytApiBaseUrl;
         this.nytApiKey = nytApiKey;
         this.webClient = webClientBuilder.baseUrl(nytApiBaseUrl).build();
-        this.jdbcTemplate = jdbcTemplate;
+        this.postgresBookRepository = postgresBookRepository;
     }
 
     /**
@@ -81,48 +81,13 @@ public class NewYorkTimesService {
         // Validate and clamp limit to reasonable range
         final int effectiveLimit = PagingUtils.clamp(limit, 1, 100);
 
-        if (jdbcTemplate == null) {
-            log.warn("JdbcTemplate not available; returning empty bestsellers list.");
+        if (postgresBookRepository == null) {
+            log.warn("PostgresBookRepository not available; returning empty bestsellers list.");
             return Mono.just(Collections.emptyList());
         }
 
-        final String sql =
-            "SELECT b.id, b.title, b.description, bil.s3_image_path, b.isbn10, b.isbn13, b.published_date, " +
-            "       b.language, b.publisher, b.page_count " +
-            "FROM book_collections bc " +
-            "JOIN book_collections_join bcj ON bc.id = bcj.collection_id " +
-            "JOIN books b ON b.id = bcj.book_id " +
-            "LEFT JOIN LATERAL (" +
-            "    SELECT s3_image_path " +
-            "    FROM book_image_links " +
-            "    WHERE book_id = b.id " +
-            "      AND s3_image_path IS NOT NULL " +
-            "    ORDER BY COALESCE(is_high_resolution, false) DESC, COALESCE(width, 0) DESC, created_at DESC " +
-            "    LIMIT 1" +
-            ") bil ON TRUE " +
-            "WHERE bc.collection_type = 'BESTSELLER_LIST' AND bc.source = 'NYT' AND bc.provider_list_code = ? " +
-            "  AND bc.published_date = (SELECT max(published_date) FROM book_collections WHERE collection_type = 'BESTSELLER_LIST' AND source = 'NYT' AND provider_list_code = ?) " +
-            "ORDER BY bcj.position NULLS LAST, b.title ASC " +
-            "LIMIT ?";
-
         return Mono.fromCallable(() ->
-            jdbcTemplate.query(sql, (rs, rowNum) -> {
-                Book b = new Book();
-                b.setId(rs.getString("id"));
-                b.setTitle(rs.getString("title"));
-                b.setDescription(rs.getString("description"));
-                b.setS3ImagePath(rs.getString("s3_image_path"));
-                b.setIsbn10(rs.getString("isbn10"));
-                b.setIsbn13(rs.getString("isbn13"));
-                java.sql.Date published = rs.getDate("published_date");
-                if (published != null) {
-                    b.setPublishedDate(new java.util.Date(published.getTime()));
-                }
-                b.setLanguage(rs.getString("language"));
-                b.setPublisher(rs.getString("publisher"));
-                b.setPageCount((Integer) rs.getObject("page_count"));
-                return b;
-            }, listNameEncoded, listNameEncoded, effectiveLimit)
+            postgresBookRepository.fetchLatestBestsellerBooks(listNameEncoded, effectiveLimit)
         )
         .subscribeOn(Schedulers.boundedElastic())
         .onErrorResume(e -> {

@@ -19,15 +19,17 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.service.image.GoogleCoverUrlEvaluator;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.service.image.ExternalCoverFetchHelper;
+import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +63,8 @@ public class GoogleBooksService {
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
     private final BookDataOrchestrator bookDataOrchestrator; // Added for fetchMultipleBooksByIds
+    private final ExternalCoverFetchHelper externalCoverFetchHelper;
+    private final GoogleCoverUrlEvaluator googleCoverUrlEvaluator;
 
     private static final int ISBN_BATCH_QUERY_SIZE = 5; // Reduced batch size for ISBN OR queries
     
@@ -78,11 +82,15 @@ public class GoogleBooksService {
             ObjectMapper objectMapper,
             ApiRequestMonitor apiRequestMonitor,
             GoogleApiFetcher googleApiFetcher,
-            BookDataOrchestrator bookDataOrchestrator) {
+            BookDataOrchestrator bookDataOrchestrator,
+            ExternalCoverFetchHelper externalCoverFetchHelper,
+            GoogleCoverUrlEvaluator googleCoverUrlEvaluator) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.externalCoverFetchHelper = externalCoverFetchHelper;
+        this.googleCoverUrlEvaluator = googleCoverUrlEvaluator;
     }
 
     /**
@@ -483,84 +491,44 @@ public class GoogleBooksService {
 
         log.debug("Attempting Google Books API by ISBN {} (book log id: {})", isbn, bookIdForLog);
 
-        return searchBooksByISBN(isbn)
-            .toFuture()
-            .thenComposeAsync(books -> {
-                if (books != null && !books.isEmpty()) {
+        return externalCoverFetchHelper.fetchAndCache(
+            isbn,
+            coverCacheManager::isKnownBadImageUrl,
+            url -> coverCacheManager.addKnownBadImageUrl(url),
+            () -> searchBooksByISBN(isbn)
+                .toFuture()
+                .thenApply(books -> {
+                    if (books == null || books.isEmpty()) {
+                        return Optional.empty();
+                    }
                     Book googleBook = books.get(0);
-
                     if (googleBook != null && googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                         provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
                     }
-
                     String googleUrl = googleBook != null ? googleBook.getExternalImageUrl() : null;
-                    log.info("Book ID {}: Google API (ISBN) returned book. Raw coverImageUrl: '{}'", bookIdForLog, googleUrl);
-
-                    if (googleBook != null && googleBook.getRawJsonResponse() != null) {
-                        log.debug("Book ID {}: Google API (ISBN) raw JSON response: {}", bookIdForLog, googleBook.getRawJsonResponse());
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
+                        return Optional.empty();
                     }
-
-                if (ValidationUtils.hasText(googleUrl)
-                        && !coverCacheManager.isKnownBadImageUrl(googleUrl)
-                        && (googleUrl == null || !googleUrl.contains("image-not-available.png"))) {
-
-                        log.debug("Book ID {}: Google API (ISBN) URL '{}' passed preliminary checks.", bookIdForLog, googleUrl);
-                        String enhancedGoogleUrl = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
-                        boolean isLikely = ImageCacheUtils.isLikelyGoogleCoverUrl(enhancedGoogleUrl);
-                        log.info("Book ID {}: Enhanced Google ISBN URL '{}' likely result: {}", bookIdForLog, enhancedGoogleUrl, isLikely);
-
-                    if (isLikely || enhancedGoogleUrl.contains("googleusercontent.com")) {
-                        if (ImageCacheUtils.hasGoogleFrontCoverHint(enhancedGoogleUrl)) {
-                            log.debug("Book ID {}: Enhanced Google ISBN URL '{}' has frontcover hint.", bookIdForLog, enhancedGoogleUrl);
-                        }
-                        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(
-                            enhancedGoogleUrl,
-                            bookIdForLog,
-                            provenanceData,
-                            "GoogleBooksAPI-ISBN");
-                    }
-
-                        log.warn("Book ID {}: Google ISBN URL '{}' deemed unlikely to be a cover after heuristics.", bookIdForLog, enhancedGoogleUrl);
-                        ImageCacheUtils.addAttemptToProvenance(
-                            provenanceData,
-                            ImageSourceName.GOOGLE_BOOKS,
-                            enhancedGoogleUrl,
-                            ImageAttemptStatus.FAILURE_INVALID_DETAILS,
-                            "URL deemed not a cover by heuristics",
-                            null
-                        );
-                    } else {
-                        log.warn("Book ID {}: Google ISBN URL '{}' failed preliminary checks (known bad or unavailable).", bookIdForLog, googleUrl);
-                    }
-                } else {
-                    log.warn("Book ID {}: Google ISBN search for '{}' returned no results.", bookIdForLog, isbn);
-                }
-
-                String urlAttempted = "Google ISBN: " + isbn;
-                ImageCacheUtils.addAttemptToProvenance(
-                    provenanceData,
-                    ImageSourceName.GOOGLE_BOOKS,
-                    urlAttempted,
-                    ImageAttemptStatus.FAILURE_NOT_FOUND,
-                    "No usable image from Google/ISBN search",
-                    null
-                );
-                return CompletableFuture.completedFuture(
-                    localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-isbn-no-image"));
-            })
-            .exceptionally(ex -> {
-                String urlAttempted = "Google ISBN: " + isbn;
-                log.error("Exception trying Google Books API for {}: {}", urlAttempted, ex.getMessage(), ex);
-                ImageCacheUtils.addAttemptToProvenance(
-                    provenanceData,
-                    ImageSourceName.GOOGLE_BOOKS,
-                    urlAttempted,
-                    ImageAttemptStatus.FAILURE_GENERIC,
-                    ex.getMessage(),
-                    null
-                );
-                return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-isbn-exception");
-            });
+                    String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
+                    return Optional.of(new ImageDetails(
+                        enhanced,
+                        "GOOGLE_BOOKS",
+                        googleBook.getId(),
+                        com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS,
+                        ImageResolutionPreference.ORIGINAL
+                    ));
+                }),
+            "Google ISBN: " + isbn,
+            ImageSourceName.GOOGLE_BOOKS,
+            "GoogleBooksAPI-ISBN",
+            "google-isbn",
+            provenanceData,
+            bookIdForLog,
+            new ExternalCoverFetchHelper.ValidationHooks(
+                url -> ImageCacheUtils.isLikelyGoogleCoverUrl(url),
+                details -> ImageCacheUtils.isLikelyGoogleCoverUrl(details.getUrlOrPath())
+            )
+        );
     }
 
     public CompletableFuture<ImageDetails> fetchCoverByVolumeId(
@@ -572,78 +540,40 @@ public class GoogleBooksService {
 
         log.debug("Attempting Google Books API by Volume ID {} (book log id: {})", googleVolumeId, bookIdForLog);
 
-        return getBookById(googleVolumeId)
-            .toCompletableFuture()
-            .thenComposeAsync(googleBook -> {
-                if (googleBook != null && googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
-                    provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
-                }
-
-                String googleUrl = googleBook != null ? googleBook.getExternalImageUrl() : null;
-                log.info("Book ID {}: Google API (VolumeID) returned book. Raw coverImageUrl: '{}'", bookIdForLog, googleUrl);
-
-                if (googleBook != null && googleBook.getRawJsonResponse() != null) {
-                    log.debug("Book ID {}: Google API (VolumeID) raw JSON response: {}", bookIdForLog, googleBook.getRawJsonResponse());
-                }
-
-                if (ValidationUtils.hasText(googleUrl)
-                    && !coverCacheManager.isKnownBadImageUrl(googleUrl)
-                    && (googleUrl == null || !googleUrl.contains("image-not-available.png"))) {
-
-                    log.debug("Book ID {}: Google API (VolumeID) URL '{}' passed preliminary checks.", bookIdForLog, googleUrl);
-                    String enhancedGoogleUrl = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
-                    boolean isLikely = ImageCacheUtils.isLikelyGoogleCoverUrl(enhancedGoogleUrl);
-                    log.info("Book ID {}: Enhanced Google Volume URL '{}' likely result: {}", bookIdForLog, enhancedGoogleUrl, isLikely);
-
-                    if (isLikely || enhancedGoogleUrl.contains("googleusercontent.com")) {
-                        if (ImageCacheUtils.hasGoogleFrontCoverHint(enhancedGoogleUrl)) {
-                            log.debug("Book ID {}: Enhanced Google Volume URL '{}' has frontcover hint.", bookIdForLog, enhancedGoogleUrl);
-                        }
-                        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(
-                            enhancedGoogleUrl,
-                            bookIdForLog,
-                            provenanceData,
-                            "GoogleBooksAPI-VolumeID");
+        return externalCoverFetchHelper.fetchAndCache(
+            googleVolumeId,
+            coverCacheManager::isKnownBadImageUrl,
+            url -> coverCacheManager.addKnownBadImageUrl(url),
+            () -> getBookById(googleVolumeId)
+                .toCompletableFuture()
+                .thenApply(googleBook -> {
+                    if (googleBook != null && googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
+                        provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
                     }
-
-                    log.warn("Book ID {}: Google Volume URL '{}' deemed unlikely to be a cover after heuristics.", bookIdForLog, enhancedGoogleUrl);
-                    ImageCacheUtils.addAttemptToProvenance(
-                        provenanceData,
-                        ImageSourceName.GOOGLE_BOOKS,
-                        enhancedGoogleUrl,
-                        ImageAttemptStatus.FAILURE_INVALID_DETAILS,
-                        "URL deemed not a cover by heuristics",
-                        null
-                    );
-                } else {
-                    log.warn("Book ID {}: Google Volume URL '{}' failed preliminary checks (known bad or unavailable).", bookIdForLog, googleUrl);
-                }
-
-                String urlAttempted = "Google VolumeID: " + googleVolumeId;
-                ImageCacheUtils.addAttemptToProvenance(
-                    provenanceData,
-                    ImageSourceName.GOOGLE_BOOKS,
-                    urlAttempted,
-                    ImageAttemptStatus.FAILURE_NOT_FOUND,
-                    "No usable image from Google/VolumeID search",
-                    null
-                );
-                return CompletableFuture.completedFuture(
-                    localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-volume-no-image"));
-            })
-            .exceptionally(ex -> {
-                String urlAttempted = "Google VolumeID: " + googleVolumeId;
-                log.error("Exception trying Google Books API for {}: {}", urlAttempted, ex.getMessage(), ex);
-                ImageCacheUtils.addAttemptToProvenance(
-                    provenanceData,
-                    ImageSourceName.GOOGLE_BOOKS,
-                    urlAttempted,
-                    ImageAttemptStatus.FAILURE_GENERIC,
-                    ex.getMessage(),
-                    null
-                );
-                return localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, "google-volume-exception");
-            });
+                    String googleUrl = googleBook != null ? googleBook.getExternalImageUrl() : null;
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
+                        return Optional.empty();
+                    }
+                    String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
+                    return Optional.of(new ImageDetails(
+                        enhanced,
+                        "GOOGLE_BOOKS",
+                        googleBook != null ? googleBook.getId() : null,
+                        com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS,
+                        ImageResolutionPreference.ORIGINAL
+                    ));
+                }),
+            "Google VolumeID: " + googleVolumeId,
+            ImageSourceName.GOOGLE_BOOKS,
+            "GoogleBooksAPI-VolumeID",
+            "google-volume",
+            provenanceData,
+            bookIdForLog,
+            new ExternalCoverFetchHelper.ValidationHooks(
+                url -> ImageCacheUtils.isLikelyGoogleCoverUrl(url),
+                details -> ImageCacheUtils.isLikelyGoogleCoverUrl(details.getUrlOrPath())
+            )
+        );
     }
 
     /**
