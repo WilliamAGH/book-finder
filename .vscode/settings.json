@@ -1,0 +1,20 @@
+{
+    "java.configuration.updateBuildConfiguration": "automatic",
+    "java.compile.nullAnalysis.mode": "automatic",
+    "yaml.schemas": {
+      "file://${workspaceFolder}/target/classes/META-INF/spring-configuration-metadata.json": [
+        "application.{yml,yaml}",
+        "application-*.{yml,yaml}"
+      ]
+    },
+    "yaml.customTags": [
+      "!reference sequence"
+    ],
+    "yaml.validate": true,
+    "spring-boot.ls.problem.YAML_UNKNOWN_PROPERTY": {
+      "severity": "ignore"
+    },
+    "markdownlint.config": {
+      "MD024": false
+    }
+}
