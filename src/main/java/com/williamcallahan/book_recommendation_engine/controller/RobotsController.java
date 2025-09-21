@@ -3,8 +3,7 @@ package com.williamcallahan.book_recommendation_engine.controller;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 
 /**
@@ -20,9 +19,9 @@ import org.springframework.beans.factory.annotation.Value;
  * - Logs environment detection information for debugging
  */
 @Controller
+@Slf4j
 public class RobotsController {
 
-    private static final Logger logger = LoggerFactory.getLogger(RobotsController.class);
 
     @Value("${coolify.url:}")
     private String coolifyUrlProp;
@@ -60,16 +59,16 @@ public class RobotsController {
         String coolifyUrl = this.coolifyUrlProp;
         String coolifyBranch = this.coolifyBranchProp;
 
-        logger.info("Generating robots.txt. coolify.url: '{}', coolify.branch: '{}'", coolifyUrl, coolifyBranch);
+        log.info("Generating robots.txt. coolify.url: '{}', coolify.branch: '{}'", coolifyUrl, coolifyBranch);
 
         boolean isProductionDomain = coolifyUrl != null && coolifyUrl.contains(FINDMYBOOK_NET_URL);
         boolean isMainBranch = MAIN_BRANCH.equalsIgnoreCase(coolifyBranch);
 
         if (isProductionDomain && isMainBranch) {
-            logger.info("Serving PERMISSIVE robots.txt for production domain and main branch.");
+            log.info("Serving PERMISSIVE robots.txt for production domain and main branch.");
             return PERMISSIVE_ROBOTS_TXT;
         } else {
-            logger.warn("Serving RESTRICTIVE robots.txt. Production domain: {}, Main branch: {}", isProductionDomain, isMainBranch);
+            log.warn("Serving RESTRICTIVE robots.txt. Production domain: {}, Main branch: {}", isProductionDomain, isMainBranch);
             return RESTRICTIVE_ROBOTS_TXT;
         }
     }

@@ -8,6 +8,7 @@ import com.williamcallahan.book_recommendation_engine.service.SitemapService.Boo
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.PagedResult;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.SitemapOverview;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -165,7 +166,7 @@ public class SitemapController {
     }
 
     private String normalizeView(String view) {
-        if (view == null || view.isBlank()) {
+        if (ValidationUtils.isNullOrBlank(view)) {
             return "authors";
         }
         String candidate = view.trim().toLowerCase(Locale.ROOT);

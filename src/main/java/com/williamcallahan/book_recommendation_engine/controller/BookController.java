@@ -10,10 +10,12 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveControllerUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,9 +32,9 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/books")
+@Slf4j
 public class BookController {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookController.class);
 
     private final BookDataOrchestrator bookDataOrchestrator;
     private final RecommendationService recommendationService;
@@ -48,14 +50,21 @@ public class BookController {
                                                             @RequestParam(name = "startIndex", defaultValue = "0") int startIndex,
                                                             @RequestParam(name = "maxResults", defaultValue = "10") int maxResults) {
         String normalizedQuery = SearchQueryUtils.normalize(query);
-        PagingUtils.Window window = PagingUtils.window(startIndex, maxResults, 10, 1, 50, 200);
+        PagingUtils.Window window = PagingUtils.window(
+            startIndex,
+            maxResults,
+            ApplicationConstants.Paging.DEFAULT_SEARCH_LIMIT,
+            ApplicationConstants.Paging.MIN_SEARCH_LIMIT,
+            ApplicationConstants.Paging.MAX_SEARCH_LIMIT,
+            ApplicationConstants.Paging.MAX_TIERED_LIMIT
+        );
 
         return bookDataOrchestrator.searchBooksTiered(normalizedQuery, null, window.totalRequested(), null)
                 .defaultIfEmpty(List.of())
                 .map(results -> buildSearchResponse(normalizedQuery, window.startIndex(), window.limit(), results))
                 .map(ResponseEntity::ok)
                 .onErrorResume(ex -> {
-                    logger.error("Failed to search books for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
+                    log.error("Failed to search books for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
                 });
     }
@@ -64,48 +73,53 @@ public class BookController {
     public Mono<ResponseEntity<AuthorSearchResponse>> searchAuthors(@RequestParam String query,
                                                                     @RequestParam(name = "limit", defaultValue = "10") int limit) {
         String normalizedQuery = SearchQueryUtils.normalize(query);
-        int safeLimit = PagingUtils.safeLimit(limit, 10, 1, 100);
+        int safeLimit = PagingUtils.safeLimit(
+            limit,
+            ApplicationConstants.Paging.DEFAULT_AUTHOR_LIMIT,
+            ApplicationConstants.Paging.MIN_AUTHOR_LIMIT,
+            ApplicationConstants.Paging.MAX_AUTHOR_LIMIT
+        );
 
         return bookDataOrchestrator.searchAuthors(normalizedQuery, safeLimit)
                 .defaultIfEmpty(List.of())
                 .map(results -> buildAuthorResponse(normalizedQuery, safeLimit, results))
                 .map(ResponseEntity::ok)
                 .onErrorResume(ex -> {
-                    logger.error("Failed to search authors for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
+                    log.error("Failed to search authors for query '{}': {}", normalizedQuery, ex.getMessage(), ex);
                     return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
                 });
     }
 
     @GetMapping("/{identifier}")
     public Mono<ResponseEntity<BookDto>> getBookByIdentifier(@PathVariable String identifier) {
-        return fetchBook(identifier)
-                .map(BookDtoMapper::toDto)
-                .map(ResponseEntity::ok)
-                .switchIfEmpty(Mono.just(ResponseEntity.notFound().build()))
-                .onErrorResume(ex -> {
-                    logger.error("Failed to fetch book '{}': {}", identifier, ex.getMessage(), ex);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
-                });
+        return ReactiveControllerUtils.withErrorHandling(
+            fetchBook(identifier).map(BookDtoMapper::toDto),
+            String.format("Failed to fetch book '%s'", identifier)
+        );
     }
 
     @GetMapping("/{identifier}/similar")
     public Mono<ResponseEntity<List<BookDto>>> getSimilarBooks(@PathVariable String identifier,
                                                                @RequestParam(name = "limit", defaultValue = "5") int limit) {
-        int safeLimit = PagingUtils.safeLimit(limit, 5, 1, 20);
-        return fetchBook(identifier)
-                .flatMap(book -> recommendationService.getSimilarBooks(book.getId(), safeLimit)
-                        .defaultIfEmpty(List.of())
-                        .map(similar -> similar.stream().map(BookDtoMapper::toDto).toList())
-                        .map(ResponseEntity::ok))
-                .switchIfEmpty(Mono.just(ResponseEntity.notFound().build()))
-                .onErrorResume(ex -> {
-                    logger.error("Failed to load similar books for '{}': {}", identifier, ex.getMessage(), ex);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build());
-                });
+        int safeLimit = PagingUtils.safeLimit(
+            limit,
+            ApplicationConstants.Paging.DEFAULT_SIMILAR_LIMIT,
+            ApplicationConstants.Paging.MIN_AUTHOR_LIMIT,
+            ApplicationConstants.Paging.MAX_SIMILAR_LIMIT
+        );
+        Mono<List<BookDto>> similarBooks = fetchBook(identifier)
+            .flatMap(book -> recommendationService.getSimilarBooks(book.getId(), safeLimit)
+                .defaultIfEmpty(List.of())
+                .map(similar -> similar.stream().map(BookDtoMapper::toDto).toList()));
+
+        return ReactiveControllerUtils.withErrorHandling(
+            similarBooks,
+            String.format("Failed to load similar books for '%s'", identifier)
+        );
     }
 
     private Mono<Book> fetchBook(String identifier) {
-        if (identifier == null || identifier.isBlank()) {
+        if (ValidationUtils.isNullOrBlank(identifier)) {
             return Mono.empty();
         }
         Mono<Book> byId = bookDataOrchestrator.getBookByIdTiered(identifier);

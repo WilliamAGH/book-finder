@@ -20,8 +20,7 @@ import com.williamcallahan.book_recommendation_engine.service.ApiCircuitBreakerS
 import com.williamcallahan.book_recommendation_engine.service.S3CoverCleanupService;
 import com.williamcallahan.book_recommendation_engine.service.s3.DryRunSummary;
 import com.williamcallahan.book_recommendation_engine.service.s3.MoveActionSummary;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
@@ -34,9 +33,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/admin")
+@Slf4j
 public class AdminController {
 
-    private static final Logger logger = LoggerFactory.getLogger(AdminController.class);
 
     private final S3CoverCleanupService s3CoverCleanupService;
     private final String configuredS3Prefix;
@@ -80,7 +79,7 @@ public class AdminController {
         
         if (s3CoverCleanupService == null) {
             String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
-            logger.warn(errorMessage);
+            log.warn(errorMessage);
             return ResponseEntity.badRequest().body(errorMessage);
         }
         
@@ -92,10 +91,10 @@ public class AdminController {
             // or stick to a sane default if that's preferred
             // The S3CoverCleanupService currently handles batchLimit > 0
             // If batchLimit is 0 or negative, it processes all
-            logger.warn("Batch limit {} requested; treating as unlimited.", requestedLimit);
+            log.warn("Batch limit {} requested; treating as unlimited.", requestedLimit);
         }
         
-        logger.info("Admin endpoint /admin/s3-cleanup/dry-run invoked. Triggering S3 Cover Cleanup Dry Run with prefix: '{}', limit: {}", prefixToUse, batchLimitToUse);
+        log.info("Admin endpoint /admin/s3-cleanup/dry-run invoked. Triggering S3 Cover Cleanup Dry Run with prefix: '{}', limit: {}", prefixToUse, batchLimitToUse);
 
         // Note: This is a synchronous call. For very long operations,
         // consider making performDryRun @Async or wrapping this call
@@ -122,12 +121,12 @@ public class AdminController {
             }
             
             String responseBody = responseBuilder.toString();
-            logger.info("S3 Cover Cleanup Dry Run response prepared for prefix: '{}', limit: {}. Summary: {} flagged out of {} scanned.", 
+            log.info("S3 Cover Cleanup Dry Run response prepared for prefix: '{}', limit: {}. Summary: {} flagged out of {} scanned.", 
                         prefixToUse, batchLimitToUse, summary.getTotalFlagged(), summary.getTotalScanned());
             return ResponseEntity.ok(responseBody);
         } catch (Exception e) {
             String errorMessage = String.format("Failed to complete S3 Cover Cleanup Dry Run with prefix: '%s', limit: %d. Error: %s", prefixToUse, batchLimitToUse, e.getMessage());
-            logger.error(errorMessage, e);
+            log.error(errorMessage, e);
             return ResponseEntity.internalServerError().body("Error during S3 Cover Cleanup Dry Run: " + e.getMessage());
         }
     }
@@ -148,8 +147,8 @@ public class AdminController {
 
         if (s3CoverCleanupService == null) {
             String errorMessage = "S3 Cover Cleanup Service is not available. S3 integration may be disabled.";
-            logger.warn(errorMessage);
-            return ResponseEntity.badRequest().body(ErrorResponseUtils.errorBody(errorMessage));
+            log.warn(errorMessage);
+            return ErrorResponseUtils.badRequest(errorMessage, null);
         }
 
         String sourcePrefixToUse = prefixOptional != null ? prefixOptional : configuredS3Prefix;
@@ -157,15 +156,15 @@ public class AdminController {
         String quarantinePrefixToUse = quarantinePrefixOptional != null ? quarantinePrefixOptional : configuredQuarantinePrefix;
 
         if (batchLimitToUse <= 0) {
-            logger.warn("Batch limit for move action specified as {} (or defaulted to it), processing all found items.", batchLimitToUse);
+            log.warn("Batch limit for move action specified as {} (or defaulted to it), processing all found items.", batchLimitToUse);
         }
         if (quarantinePrefixToUse.isEmpty() || quarantinePrefixToUse.equals(sourcePrefixToUse)) {
             String errorMsg = "Invalid quarantine prefix: cannot be empty or same as source prefix.";
-            logger.error(errorMsg + " Source: '{}', Quarantine: '{}'", sourcePrefixToUse, quarantinePrefixToUse);
-            return ResponseEntity.badRequest().body(ErrorResponseUtils.errorBody(errorMsg));
+            log.error(errorMsg + " Source: '{}', Quarantine: '{}'", sourcePrefixToUse, quarantinePrefixToUse);
+            return ErrorResponseUtils.badRequest(errorMsg, null);
         }
         
-        logger.info("Admin endpoint /admin/s3-cleanup/move-flagged invoked. " +
+        log.info("Admin endpoint /admin/s3-cleanup/move-flagged invoked. " +
                         "Source Prefix: '{}', Limit: {}, Quarantine Prefix: '{}'",
                 sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse);
 
@@ -173,16 +172,17 @@ public class AdminController {
             MoveActionSummary summary = 
                 s3CoverCleanupService.performMoveAction(sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse);
             
-            logger.info("S3 Cover Cleanup Move Action completed. Summary: {}", summary.toString());
+            log.info("S3 Cover Cleanup Move Action completed. Summary: {}", summary.toString());
             return ResponseEntity.ok(summary);
         } catch (Exception e) {
             String errorMessage = String.format(
                 "Failed to complete S3 Cover Cleanup Move Action. Source Prefix: '%s', Limit: %d, Quarantine Prefix: '%s'.",
                 sourcePrefixToUse, batchLimitToUse, quarantinePrefixToUse
             );
-            logger.error(errorMessage, e);
-            return ResponseEntity.internalServerError().body(
-                ErrorResponseUtils.errorBody("Move action failed", errorMessage + " Error: " + e.getMessage())
+            log.error(errorMessage, e);
+            return ErrorResponseUtils.internalServerError(
+                "Move action failed",
+                errorMessage + " Error: " + e.getMessage()
             );
         }
     }
@@ -194,11 +194,11 @@ public class AdminController {
      */
     @PostMapping(value = "/trigger-nyt-bestsellers", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> triggerNytBestsellerProcessing() {
-        logger.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
+        log.info("Admin endpoint /admin/trigger-nyt-bestsellers invoked.");
         
         if (newYorkTimesBestsellerScheduler == null) {
             String errorMessage = "New York Times Bestseller Scheduler is not available. S3 integration may be disabled.";
-            logger.warn(errorMessage);
+            log.warn(errorMessage);
             return ResponseEntity.badRequest().body(errorMessage);
         }
         
@@ -208,11 +208,11 @@ public class AdminController {
             // If processNewYorkTimesBestsellers is very long, consider wrapping in an async task.
             newYorkTimesBestsellerScheduler.processNewYorkTimesBestsellers();
             String successMessage = "Successfully triggered New York Times Bestseller processing job.";
-            logger.info(successMessage);
+            log.info(successMessage);
             return ResponseEntity.ok(successMessage);
         } catch (Exception e) {
             String errorMessage = "Failed to trigger New York Times Bestseller processing job: " + e.getMessage();
-            logger.error(errorMessage, e);
+            log.error(errorMessage, e);
             return ResponseEntity.internalServerError().body(errorMessage);
         }
     }
@@ -224,15 +224,15 @@ public class AdminController {
      */
     @PostMapping(value = "/trigger-cache-warming", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> triggerCacheWarming() {
-        logger.info("Admin endpoint /admin/trigger-cache-warming invoked.");
+        log.info("Admin endpoint /admin/trigger-cache-warming invoked.");
         try {
             bookCacheWarmingScheduler.warmPopularBookCaches();
             String successMessage = "Successfully triggered book cache warming job.";
-            logger.info(successMessage);
+            log.info(successMessage);
             return ResponseEntity.ok(successMessage);
         } catch (Exception e) {
             String errorMessage = "Failed to trigger book cache warming job: " + e.getMessage();
-            logger.error(errorMessage, e);
+            log.error(errorMessage, e);
             return ResponseEntity.internalServerError().body(errorMessage);
         }
     }
@@ -244,14 +244,14 @@ public class AdminController {
      */
     @GetMapping(value = "/circuit-breaker/status", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> getCircuitBreakerStatus() {
-        logger.info("Admin endpoint /admin/circuit-breaker/status invoked.");
+        log.info("Admin endpoint /admin/circuit-breaker/status invoked.");
         try {
             String status = apiCircuitBreakerService.getCircuitStatus();
-            logger.info("Circuit breaker status retrieved: {}", status);
+            log.info("Circuit breaker status retrieved: {}", status);
             return ResponseEntity.ok(status);
         } catch (Exception e) {
             String errorMessage = "Failed to get circuit breaker status: " + e.getMessage();
-            logger.error(errorMessage, e);
+            log.error(errorMessage, e);
             return ResponseEntity.internalServerError().body(errorMessage);
         }
     }
@@ -263,15 +263,15 @@ public class AdminController {
      */
     @PostMapping(value = "/circuit-breaker/reset", produces = MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> resetCircuitBreaker() {
-        logger.info("Admin endpoint /admin/circuit-breaker/reset invoked.");
+        log.info("Admin endpoint /admin/circuit-breaker/reset invoked.");
         try {
             apiCircuitBreakerService.reset();
             String successMessage = "Successfully reset API circuit breaker to CLOSED state.";
-            logger.info(successMessage);
+            log.info(successMessage);
             return ResponseEntity.ok(successMessage);
         } catch (Exception e) {
             String errorMessage = "Failed to reset circuit breaker: " + e.getMessage();
-            logger.error(errorMessage, e);
+            log.error(errorMessage, e);
             return ResponseEntity.internalServerError().body(errorMessage);
         }
     }
