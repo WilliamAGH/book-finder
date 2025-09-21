@@ -41,6 +41,22 @@ public class ExternalCoverFetchHelper {
             String placeholderReasonPrefix,
             ImageProvenanceData provenanceData,
             String bookIdForLog) {
+        return fetchAndCache(cacheKey, isKnownBad, markKnownBad, remoteSupplier, attemptDescriptor,
+            sourceName, downloadLabel, placeholderReasonPrefix, provenanceData, bookIdForLog, null);
+    }
+
+    public CompletableFuture<ImageDetails> fetchAndCache(
+            String cacheKey,
+            Predicate<String> isKnownBad,
+            Consumer<String> markKnownBad,
+            Supplier<CompletableFuture<Optional<ImageDetails>>> remoteSupplier,
+            String attemptDescriptor,
+            ImageSourceName sourceName,
+            String downloadLabel,
+            String placeholderReasonPrefix,
+            ImageProvenanceData provenanceData,
+            String bookIdForLog,
+            ValidationHooks validationHooks) {
 
         if (cacheKey != null && isKnownBad != null && isKnownBad.test(cacheKey)) {
             ImageCacheUtils.addAttemptToProvenance(
@@ -64,7 +80,9 @@ public class ExternalCoverFetchHelper {
                 downloadLabel,
                 placeholderReasonPrefix,
                 provenanceData,
-                bookIdForLog
+                bookIdForLog,
+                validationHooks
+            ))
             ))
             .exceptionally(ex -> {
                 log.error("Exception retrieving cover for {} ({}): {}", attemptDescriptor, bookIdForLog, ex.getMessage());
@@ -92,7 +110,9 @@ public class ExternalCoverFetchHelper {
             String downloadLabel,
             String placeholderReasonPrefix,
             ImageProvenanceData provenanceData,
-            String bookIdForLog) {
+            String bookIdForLog,
+            ValidationHooks validationHooks) {
+            ValidationHooks hooks) {
 
         if (optionalDetails.isEmpty()) {
             if (cacheKey != null && markKnownBad != null) {
@@ -125,8 +145,24 @@ public class ExternalCoverFetchHelper {
             return CompletableFuture.completedFuture(createPlaceholder(bookIdForLog, placeholderReasonPrefix + "-no-url"));
         }
 
+        String url = remoteDetails.getUrlOrPath();
+        if (hooks != null && hooks.urlValidator() != null && !hooks.urlValidator().test(url)) {
+            if (cacheKey != null && markKnownBad != null) {
+                markKnownBad.accept(cacheKey);
+            }
+            ImageCacheUtils.addAttemptToProvenance(
+                provenanceData,
+                sourceName,
+                attemptDescriptor,
+                ImageAttemptStatus.FAILURE_INVALID_DETAILS,
+                "URL rejected by validator",
+                remoteDetails
+            );
+            return CompletableFuture.completedFuture(createPlaceholder(bookIdForLog, placeholderReasonPrefix + "-invalid-url"));
+        }
+
         return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(
-                remoteDetails.getUrlOrPath(),
+                url,
                 bookIdForLog,
                 provenanceData,
                 downloadLabel)
@@ -137,6 +173,18 @@ public class ExternalCoverFetchHelper {
 
                 if (cacheKey != null && markKnownBad != null) {
                     markKnownBad.accept(cacheKey);
+                }
+                if (hooks != null && hooks.postDownloadValidator() != null
+                        && !hooks.postDownloadValidator().test(cachedDetails)) {
+                    ImageCacheUtils.addAttemptToProvenance(
+                        provenanceData,
+                        sourceName,
+                        attemptDescriptor,
+                        ImageAttemptStatus.FAILURE_INVALID_DETAILS,
+                        "Downloaded image failed custom validator",
+                        cachedDetails
+                    );
+                    return createPlaceholder(bookIdForLog, placeholderReasonPrefix + "-custom-invalid");
                 }
                 ImageCacheUtils.addAttemptToProvenance(
                     provenanceData,
@@ -157,5 +205,23 @@ public class ExternalCoverFetchHelper {
             return new ImageDetails(localDiskCoverCacheService.getLocalPlaceholderPath(), "LOCAL", null, null, null, 0, 0);
         }
         return placeholder;
+    }
+
+    public static final class ValidationHooks {
+        private final Predicate<String> urlValidator;
+        private final Predicate<ImageDetails> postDownloadValidator;
+
+        public ValidationHooks(Predicate<String> urlValidator, Predicate<ImageDetails> postDownloadValidator) {
+            this.urlValidator = urlValidator;
+            this.postDownloadValidator = postDownloadValidator;
+        }
+
+        public Predicate<String> urlValidator() {
+            return urlValidator;
+        }
+
+        public Predicate<ImageDetails> postDownloadValidator() {
+            return postDownloadValidator;
+        }
     }
 }

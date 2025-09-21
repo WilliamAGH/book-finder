@@ -112,4 +112,132 @@ public final class JdbcUtils {
     public static boolean executeUpdate(JdbcTemplate jdbc, String sql, Object... params) {
         return jdbc.update(sql, params) > 0;
     }
+
+    /**
+     * Builds a COALESCE expression for upsert operations.
+     * Useful for ON CONFLICT DO UPDATE SET clauses where you want to preserve existing non-null values.
+     *
+     * @param column the column name
+     * @param useExcluded true to use EXCLUDED.column as the new value, false to keep existing
+     * @return the COALESCE expression
+     */
+    public static String buildCoalesceExpression(String column, boolean useExcluded) {
+        if (useExcluded) {
+            return String.format("COALESCE(EXCLUDED.%s, %s.%s)", column, getTableAlias(column), column);
+        } else {
+            return String.format("%s.%s", getTableAlias(column), column);
+        }
+    }
+
+    /**
+     * Builds a COALESCE upsert SET clause for multiple columns.
+     * Each column will use COALESCE(EXCLUDED.column, table.column) pattern.
+     *
+     * @param tableName the table name for the existing values reference
+     * @param columns the columns to include in the SET clause
+     * @return the complete SET clause
+     */
+    public static String buildCoalesceSetClause(String tableName, String... columns) {
+        if (columns == null || columns.length == 0) {
+            return "";
+        }
+
+        StringBuilder setClause = new StringBuilder();
+        for (int i = 0; i < columns.length; i++) {
+            if (i > 0) {
+                setClause.append(", ");
+            }
+            String column = columns[i];
+            setClause.append(column)
+                    .append(" = COALESCE(EXCLUDED.")
+                    .append(column)
+                    .append(", ")
+                    .append(tableName)
+                    .append(".")
+                    .append(column)
+                    .append(")");
+        }
+        return setClause.toString();
+    }
+
+    /**
+     * Builds an upsert query with COALESCE pattern for preserving existing values.
+     * This is a template method for common upsert patterns.
+     *
+     * @param tableName the target table
+     * @param insertColumns columns for the INSERT part
+     * @param conflictColumns columns for the ON CONFLICT part
+     * @param updateColumns columns to update with COALESCE pattern
+     * @return the complete upsert SQL statement
+     */
+    public static String buildUpsertQuery(String tableName,
+                                          String[] insertColumns,
+                                          String[] conflictColumns,
+                                          String[] updateColumns) {
+        StringBuilder sql = new StringBuilder();
+
+        // INSERT INTO table (columns...)
+        sql.append("INSERT INTO ").append(tableName).append(" (");
+        sql.append(String.join(", ", insertColumns));
+        sql.append(") VALUES (");
+
+        // Add parameter placeholders
+        for (int i = 0; i < insertColumns.length; i++) {
+            if (i > 0) sql.append(", ");
+            sql.append("?");
+        }
+        sql.append(") ");
+
+        // ON CONFLICT (columns...)
+        sql.append("ON CONFLICT (");
+        sql.append(String.join(", ", conflictColumns));
+        sql.append(") DO UPDATE SET ");
+
+        // Build COALESCE updates
+        sql.append(buildCoalesceSetClause(tableName, updateColumns));
+
+        // Add updated_at if not already included
+        boolean hasUpdatedAt = false;
+        for (String col : updateColumns) {
+            if ("updated_at".equalsIgnoreCase(col)) {
+                hasUpdatedAt = true;
+                break;
+            }
+        }
+        if (!hasUpdatedAt) {
+            sql.append(", updated_at = NOW()");
+        }
+
+        return sql.toString();
+    }
+
+    /**
+     * Helper to get table alias from column name (used internally).
+     */
+    private static String getTableAlias(String column) {
+        // For most cases, we'll use the table name from context
+        // This is a simplified version - in practice would be passed in
+        return column.contains(".") ? column.substring(0, column.indexOf(".")) : "t";
+    }
+
+    /**
+     * Executes an upsert with automatic COALESCE pattern.
+     *
+     * @param jdbc the JdbcTemplate
+     * @param tableName the target table
+     * @param insertColumns columns for INSERT
+     * @param conflictColumns columns for ON CONFLICT
+     * @param updateColumns columns to update with COALESCE
+     * @param values the values to insert/update
+     * @return true if rows were affected
+     */
+    public static boolean executeUpsert(JdbcTemplate jdbc,
+                                        String tableName,
+                                        String[] insertColumns,
+                                        String[] conflictColumns,
+                                        String[] updateColumns,
+                                        Object... values) {
+        String sql = buildUpsertQuery(tableName, insertColumns, conflictColumns, updateColumns);
+        return executeUpdate(jdbc, sql, values);
+    }
 }

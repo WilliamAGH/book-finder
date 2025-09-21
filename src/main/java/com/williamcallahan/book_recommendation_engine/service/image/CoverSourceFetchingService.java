@@ -248,7 +248,7 @@ public class CoverSourceFetchingService {
                 return Mono.just(Optional.empty());
             })
             .defaultIfEmpty(Optional.empty())
-            .map(opt -> opt.orElse(null))
+            .flatMap(opt -> opt.map(Mono::just).orElseGet(Mono::empty))
             .toFuture();
     }
 
