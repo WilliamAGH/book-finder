@@ -502,14 +502,14 @@ public class GoogleBooksService {
                         return Optional.empty();
                     }
                     Book googleBook = books.get(0);
-                    if (googleBook != null && googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
-                        provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
-                    }
-                    String googleUrl = googleBook != null ? googleBook.getExternalImageUrl() : null;
-                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
+                    if (googleBook == null) {
                         return Optional.empty();
                     }
-                    if (googleBook == null) {
+                    if (googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
+                        provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
+                    }
+                    String googleUrl = googleBook.getExternalImageUrl();
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
                         return Optional.empty();
                     }
                     String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
@@ -553,8 +553,11 @@ public class GoogleBooksService {
                     if (googleBook != null && googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
                         provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
                     }
-                    String googleUrl = googleBook != null ? googleBook.getExternalImageUrl() : null;
-                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png") || googleBook == null) {
+                    if (googleBook == null) {
+                        return Optional.empty();
+                    }
+                    String googleUrl = googleBook.getExternalImageUrl();
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
                         return Optional.empty();
                     }
                     String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");

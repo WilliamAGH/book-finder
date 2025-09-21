@@ -5,7 +5,6 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookApiProxy;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksMockService;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import org.junit.jupiter.api.Test;
@@ -28,13 +27,11 @@ class BookApiProxyCacheKeyTest {
     @Test
     void saveSearchUsesSearchQueryUtilsCacheKey() {
 GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
-        S3StorageService s3StorageService = mock(S3StorageService.class);
         Optional<GoogleBooksMockService> mockService = Optional.empty();
         BookDataOrchestrator bookDataOrchestrator = mock(BookDataOrchestrator.class);
 
         BookApiProxy proxy = BookApiProxyFixtures.newProxy(
                 googleBooksService,
-                s3StorageService,
                 mockService,
                 bookDataOrchestrator,
                 tempDir,
@@ -56,13 +53,11 @@ GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
     @Test
     void getSearchRespectsCacheKeyFormat() {
 GoogleBooksService googleBooksService = mock(GoogleBooksService.class);
-        S3StorageService s3StorageService = mock(S3StorageService.class);
         Optional<GoogleBooksMockService> mockService = Optional.empty();
         BookDataOrchestrator bookDataOrchestrator = mock(BookDataOrchestrator.class);
 
         BookApiProxy proxy = BookApiProxyFixtures.newProxy(
                 googleBooksService,
-                s3StorageService,
                 mockService,
                 bookDataOrchestrator,
                 tempDir,

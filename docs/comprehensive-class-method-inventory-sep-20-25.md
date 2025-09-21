@@ -1611,6 +1611,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 **Central Authority:** `BookJsonParser` & `BookJsonWriter`
 - **Source of Truth:** `BookJsonParser` (`src/main/java/.../util/BookJsonParser.java`) for inbound JSON → `Book` hydration, qualifier extraction, and date parsing; `BookJsonWriter` (`src/main/java/.../util/BookJsonWriter.java`) for serialising books and merging qualifier updates before persistence.
 - **Followers:** `S3BookMigrationService`, `S3StorageService`, `NewYorkTimesBestsellerScheduler`, `BookCollectionPersistenceService`, `S3RetryService`, `BookApiProxy` caching.
+- **Tests:** `BookApiProxyFixtures` and cache-key specifications should instantiate proxies through the shared helper so writer/parser coverage remains aligned.
 - **Next Adoption Batch:** Replace remaining `ObjectMapper` book writes in `BookApiProxy`/`S3BookMigrationService` with `BookJsonWriter`; migrate any lingering manual parsing to `BookJsonParser` helpers.
 
 ### 9. Input Validation and Sanitization ✅ **CENTRALIZED**
