@@ -14,9 +14,9 @@ import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Configuration;
@@ -46,10 +46,10 @@ import reactor.core.publisher.Mono;
  */
 @Configuration
 @EnableScheduling
+@Slf4j
 public class BookCacheWarmingScheduler {
 
-    private static final Logger logger = LoggerFactory.getLogger(BookCacheWarmingScheduler.class);
-    
+        
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
     private final RecentlyViewedService recentlyViewedService;
@@ -88,11 +88,11 @@ public class BookCacheWarmingScheduler {
     @Scheduled(cron = "${app.cache.warming.cron:0 0 3 * * ?}")
     public void warmPopularBookCaches() {
         if (!cacheWarmingEnabled) {
-            logger.debug("Book cache warming is disabled");
+            log.debug("Book cache warming is disabled");
             return;
         }
 
-        logger.info("Starting scheduled book cache warming");
+        log.info("Starting scheduled book cache warming");
         
         // Get books to warm (recently viewed, popular, etc.)
         List<String> bookIdsToWarm = getBookIdsToWarm();
@@ -104,7 +104,7 @@ public class BookCacheWarmingScheduler {
         
         // If no books to warm, we're done
         if (bookIdsToWarm.isEmpty()) {
-            logger.info("No books to warm in cache");
+            log.info("No books to warm in cache");
             return;
         }
         
@@ -124,9 +124,9 @@ public class BookCacheWarmingScheduler {
             try {
                 ApiRequestMonitor apiRequestMonitor = applicationContext.getBean(ApiRequestMonitor.class);
                 currentHourlyRequests = apiRequestMonitor.getCurrentHourlyRequests();
-                logger.info("Current hourly API request count: {}. Will adjust cache warming accordingly.", currentHourlyRequests);
+                log.info("Current hourly API request count: {}. Will adjust cache warming accordingly.", currentHourlyRequests);
             } catch (Exception e) {
-                logger.warn("Could not get ApiRequestMonitor metrics: {}", e.getMessage());
+                log.warn("Could not get ApiRequestMonitor metrics: {}", e.getMessage());
             }
             
             // Calculate how many books we can warm based on current API usage
@@ -135,7 +135,7 @@ public class BookCacheWarmingScheduler {
             int requestBudget = PagingUtils.atLeast(hourlyLimit / 2 - currentHourlyRequests, 0); // Use at most half the remaining budget
             int booksToWarm = Math.min(Math.min(bookIdsToWarm.size(), maxBooksPerRun), requestBudget);
             
-            logger.info("Warming {} books based on rate limit {} per minute and current API usage", 
+            log.info("Warming {} books based on rate limit {} per minute and current API usage", 
                     booksToWarm, rateLimit);
             
             for (int i = 0; i < booksToWarm; i++) {
@@ -145,26 +145,26 @@ public class BookCacheWarmingScheduler {
                 executor.schedule(() -> {
                     try {
                         // Note: Cache warming functionality has been disabled as the cache service has been removed
-                        logger.info("Attempting to warm book ID: {} (cache functionality disabled)", bookId);
+                        log.info("Attempting to warm book ID: {} (cache functionality disabled)", bookId);
                         fetchBookForWarming(bookId)
                             .thenAccept(book -> {
                                 if (book != null) {
                                     warmedCount.incrementAndGet();
-                                    logger.info("Successfully fetched book for warming: {}",
+                                    log.info("Successfully fetched book for warming: {}",
                                             book.getTitle() != null ? book.getTitle() : bookId);
                                 } else {
-                                    logger.debug("No book found for ID: {}", bookId);
+                                    log.debug("No book found for ID: {}", bookId);
                                 }
                             })
                             .exceptionally(ex -> {
-                                logger.error("Error fetching book {}: {}", bookId, ex.getMessage());
+                                LoggingUtils.error(log, ex, "Error fetching book {}", bookId);
                                 return null;
                             });
 
                         // Track that we've processed this book
                         recentlyWarmedBooks.add(bookId);
                     } catch (Exception e) {
-                        logger.error("Error in cache warming task for book {}: {}", bookId, e.getMessage());
+                        LoggingUtils.error(log, e, "Error in cache warming task for book {}", bookId);
                     }
                 }, i * delayMillis, TimeUnit.MILLISECONDS);
             }
@@ -173,12 +173,12 @@ public class BookCacheWarmingScheduler {
             executor.shutdown();
             executor.awaitTermination(maxBooksPerRun * delayMillis + 10000, TimeUnit.MILLISECONDS);
             
-            logger.info("Book cache warming completed. Warmed: {}, Already in cache: {}, Total: {}", 
+            log.info("Book cache warming completed. Warmed: {}, Already in cache: {}, Total: {}", 
                     warmedCount.get(), existingCount.get(), 
                     warmedCount.get() + existingCount.get());
             
         } catch (Exception e) {
-            logger.error("Error during book cache warming: {}", e.getMessage());
+            LoggingUtils.error(log, e, "Error during book cache warming");
         } finally {
             if (!executor.isTerminated()) {
                 executor.shutdownNow();
@@ -189,12 +189,12 @@ public class BookCacheWarmingScheduler {
     private CompletionStage<Book> fetchBookForWarming(String bookId) {
         return bookDataOrchestrator.getBookByIdTiered(bookId)
             .onErrorResume(ex -> {
-                logger.warn("Postgres warm lookup failed for {}: {}", bookId, ex.getMessage());
+                LoggingUtils.warn(log, ex, "Postgres warm lookup failed for {}", bookId);
                 return Mono.empty();
             })
             .switchIfEmpty(Mono.defer(() -> Mono.fromCompletionStage(googleBooksService.getBookById(bookId))
                 .onErrorResume(ex -> {
-                    logger.error("Google fallback warm lookup failed for {}: {}", bookId, ex.getMessage());
+                    LoggingUtils.error(log, ex, "Google fallback warm lookup failed for {}", bookId);
                     return Mono.empty();
                 })
                 .flatMap(book -> book == null ? Mono.empty() : Mono.just(book))

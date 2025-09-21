@@ -30,4 +30,26 @@ public final class IsbnUtils {
         }
         return cleaned.toUpperCase(Locale.ROOT);
     }
+
+    /**
+     * Validate if a string is a valid ISBN-13.
+     */
+    public static boolean isValidIsbn13(String isbn) {
+        if (isbn == null) {
+            return false;
+        }
+        String cleaned = sanitize(isbn);
+        return cleaned != null && cleaned.length() == 13 && cleaned.matches("\\d{13}");
+    }
+
+    /**
+     * Validate if a string is a valid ISBN-10.
+     */
+    public static boolean isValidIsbn10(String isbn) {
+        if (isbn == null) {
+            return false;
+        }
+        String cleaned = sanitize(isbn);
+        return cleaned != null && cleaned.length() == 10 && cleaned.matches("\\d{9}[\\dX]");
+    }
 }

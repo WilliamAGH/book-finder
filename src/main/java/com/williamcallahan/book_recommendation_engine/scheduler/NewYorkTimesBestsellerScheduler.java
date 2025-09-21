@@ -6,10 +6,11 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.BookCollectionPersistenceService;
+import com.williamcallahan.book_recommendation_engine.service.BookLookupService;
 import com.williamcallahan.book_recommendation_engine.service.BookSupplementalPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,7 +25,6 @@ import java.util.Map;
 import java.util.Locale;
 
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
-import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 
 /**
  * Scheduler that ingests New York Times bestseller data directly into Postgres.
@@ -39,13 +39,14 @@ import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
  * </ul>
  */
 @Component
+@Slf4j
 public class NewYorkTimesBestsellerScheduler {
 
-    private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesBestsellerScheduler.class);
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
+        private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
 
     private final NewYorkTimesService newYorkTimesService;
     private final BookDataOrchestrator bookDataOrchestrator;
+    private final BookLookupService bookLookupService;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
     private final BookCollectionPersistenceService collectionPersistenceService;
@@ -59,12 +60,14 @@ public class NewYorkTimesBestsellerScheduler {
 
     public NewYorkTimesBestsellerScheduler(NewYorkTimesService newYorkTimesService,
                                            BookDataOrchestrator bookDataOrchestrator,
+                                           BookLookupService bookLookupService,
                                            ObjectMapper objectMapper,
                                            JdbcTemplate jdbcTemplate,
                                            BookCollectionPersistenceService collectionPersistenceService,
                                            BookSupplementalPersistenceService supplementalPersistenceService) {
         this.newYorkTimesService = newYorkTimesService;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.bookLookupService = bookLookupService;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
         this.collectionPersistenceService = collectionPersistenceService;
@@ -74,24 +77,24 @@ public class NewYorkTimesBestsellerScheduler {
     @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
     public void processNewYorkTimesBestsellers() {
         if (!schedulerEnabled) {
-            logger.info("NYT bestseller scheduler disabled via configuration.");
+            log.info("NYT bestseller scheduler disabled via configuration.");
             return;
         }
         if (jdbcTemplate == null) {
-            logger.warn("JdbcTemplate unavailable; NYT bestseller ingest skipped.");
+            log.warn("JdbcTemplate unavailable; NYT bestseller ingest skipped.");
             return;
         }
 
-        logger.info("Starting NYT bestseller ingest.");
+        log.info("Starting NYT bestseller ingest.");
         JsonNode overview = newYorkTimesService.fetchBestsellerListOverview()
                 .onErrorResume(e -> {
-                    logger.error("Unable to fetch NYT bestseller overview: {}", e.getMessage(), e);
+                    LoggingUtils.error(log, e, "Unable to fetch NYT bestseller overview");
                     return Mono.empty();
                 })
                 .block(Duration.ofMinutes(2));
 
         if (overview == null || overview.isEmpty()) {
-            logger.info("NYT overview returned no data. Job complete.");
+            log.info("NYT overview returned no data. Job complete.");
             return;
         }
 
@@ -101,19 +104,19 @@ public class NewYorkTimesBestsellerScheduler {
         ArrayNode lists = results.has("lists") && results.get("lists").isArray() ? (ArrayNode) results.get("lists") : null;
 
         if (lists == null || lists.isEmpty()) {
-            logger.info("NYT overview contained no lists. Job complete.");
+            log.info("NYT overview contained no lists. Job complete.");
             return;
         }
 
         lists.forEach(listNode -> persistList(listNode, bestsellersDate, publishedDate));
-        logger.info("NYT bestseller ingest completed successfully.");
+        log.info("NYT bestseller ingest completed successfully.");
     }
 
     private void persistList(JsonNode listNode, LocalDate bestsellersDate, LocalDate publishedDate) {
         String displayName = listNode.path("display_name").asText(null);
         String listCode = listNode.path("list_name_encoded").asText(null);
         if (listCode == null || listCode.isBlank()) {
-            logger.warn("Skipping NYT list without list_name_encoded.");
+            log.warn("Skipping NYT list without list_name_encoded.");
             return;
         }
 
@@ -130,13 +133,13 @@ public class NewYorkTimesBestsellerScheduler {
             .orElse(null);
 
         if (collectionId == null) {
-            logger.warn("Failed to upsert NYT collection for list code {}", listCode);
+            log.warn("Failed to upsert NYT collection for list code {}", listCode);
             return;
         }
 
         ArrayNode booksNode = listNode.has("books") && listNode.get("books").isArray() ? (ArrayNode) listNode.get("books") : null;
         if (booksNode == null || booksNode.isEmpty()) {
-            logger.info("NYT list '{}' contained no books.", listCode);
+            log.info("NYT list '{}' contained no books.", listCode);
             return;
         }
 
@@ -153,7 +156,7 @@ public class NewYorkTimesBestsellerScheduler {
         }
 
         if (canonicalId == null) {
-            logger.warn("Unable to locate or create canonical book for NYT list entry (ISBN13: {}, ISBN10: {}).", isbn13, isbn10);
+            log.warn("Unable to locate or create canonical book for NYT list entry (ISBN13: {}, ISBN10: {}).", isbn13, isbn10);
             return;
         }
 
@@ -203,36 +206,13 @@ public class NewYorkTimesBestsellerScheduler {
                         .orElse(null);
             }
         } catch (Exception e) {
-            logger.warn("Error hydrating book for NYT ingest (ISBN13: {}, ISBN10: {}): {}", isbn13, isbn10, e.getMessage());
+            LoggingUtils.warn(log, e, "Error hydrating book for NYT ingest (ISBN13: {}, ISBN10: {})", isbn13, isbn10);
         }
         return hydrated != null ? hydrated.getId() : resolveCanonicalBookId(isbn13, isbn10);
     }
 
     private String resolveCanonicalBookId(String isbn13, String isbn10) {
-        String id = null;
-        if (isbn13 != null) {
-            id = queryForId("SELECT id FROM books WHERE isbn13 = ? LIMIT 1", isbn13);
-            if (id == null) {
-                id = queryForId("SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1", isbn13);
-            }
-            if (id != null) {
-                return id;
-            }
-        }
-        if (isbn10 != null) {
-            id = queryForId("SELECT id FROM books WHERE isbn10 = ? LIMIT 1", isbn10);
-            if (id == null) {
-                id = queryForId("SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1", isbn10);
-            }
-        }
-        return id;
-    }
-
-    private String queryForId(String sql, String value) {
-        if (value == null) {
-            return null;
-        }
-        return JdbcUtils.optionalString(jdbcTemplate, sql, value).orElse(null);
+        return bookLookupService.resolveCanonicalBookId(isbn13, isbn10);
     }
 
     private void assignCoreTags(String bookId, String listCode, Integer rank) {

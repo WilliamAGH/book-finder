@@ -17,13 +17,24 @@ package com.williamcallahan.book_recommendation_engine.util;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
+
+import org.slf4j.Logger;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Base64;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Utility class for image caching operations
@@ -31,6 +42,10 @@ import java.util.Base64;
  *
  */
 public final class ImageCacheUtils {
+
+    private static final Pattern GOOGLE_PG_PATTERN = Pattern.compile("[?&]pg=([A-Z]+[0-9]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern GOOGLE_PRINTSEC_FRONTCOVER_PATTERN = Pattern.compile("[?&](printsec=frontcover|pt=frontcover)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern GOOGLE_EDGE_CURL_PATTERN = Pattern.compile("[?&]edge=curl", Pattern.CASE_INSENSITIVE);
 
     /**
      * Private constructor to prevent instantiation of utility class
@@ -140,17 +155,11 @@ public final class ImageCacheUtils {
         if (book == null) {
             return null;
         }
-        if (book.getIsbn13() != null && !book.getIsbn13().isEmpty()) {
-            return book.getIsbn13();
+        String preferredIsbn = ValidationUtils.BookValidator.getPreferredIsbn(book);
+        if (ValidationUtils.hasText(preferredIsbn)) {
+            return preferredIsbn;
         }
-        if (book.getIsbn10() != null && !book.getIsbn10().isEmpty()) {
-            return book.getIsbn10();
-        }
-        // Assuming 'id' field in Book maps to Google Volume ID if ISBNs are not present
-        if (book.getId() != null && !book.getId().isEmpty()) {
-            return book.getId();
-        }
-        return null;
+        return ValidationUtils.hasText(book.getId()) ? book.getId() : null;
     }
 
     /**
@@ -215,6 +224,276 @@ public final class ImageCacheUtils {
                 case UNDEFINED: // Fall-through
                 default: return ImageSourceName.UNKNOWN;
             }
+        }
+    }
+
+    public static String enhanceGoogleCoverUrl(String baseUrl, String zoomParam) {
+        if (baseUrl == null) {
+            return null;
+        }
+
+        String enhancedUrl = baseUrl;
+
+        if (enhancedUrl.startsWith("http://")) {
+            enhancedUrl = "https://" + enhancedUrl.substring(7);
+        }
+
+        if (enhancedUrl.contains("&fife=")) {
+            enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+(-h\\d+)?", "");
+        } else if (enhancedUrl.contains("?fife=")) {
+            enhancedUrl = enhancedUrl.replaceAll("\\?fife=w\\d+(-h\\d+)?", "?");
+            if (enhancedUrl.endsWith("?")) {
+                enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+            }
+        }
+
+        enhancedUrl = enhancedUrl.replaceAll("[?&]edge=curl", "");
+
+        if (enhancedUrl.endsWith("&")) {
+            enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+        }
+        if (enhancedUrl.endsWith("?")) {
+            enhancedUrl = enhancedUrl.substring(0, enhancedUrl.length() - 1);
+        }
+
+        if (zoomParam != null && !zoomParam.isEmpty()) {
+            if (enhancedUrl.contains("zoom=")) {
+                enhancedUrl = enhancedUrl.replaceAll("zoom=\\d+", zoomParam);
+            } else {
+                enhancedUrl += enhancedUrl.contains("?") ? "&" + zoomParam : "?" + zoomParam;
+            }
+        }
+
+        return enhancedUrl;
+    }
+
+    public static boolean isLikelyGoogleCoverUrl(String url) {
+        if (url == null || url.isEmpty()) {
+            return false;
+        }
+        if (GOOGLE_PG_PATTERN.matcher(url).find()) {
+            return false;
+        }
+        if (GOOGLE_EDGE_CURL_PATTERN.matcher(url).find()) {
+            return false;
+        }
+        return true; // default optimistic assumption when no negative indicators are present
+    }
+
+    public static boolean hasGoogleFrontCoverHint(String url) {
+        if (url == null || url.isEmpty()) {
+            return false;
+        }
+        return GOOGLE_PRINTSEC_FRONTCOVER_PATTERN.matcher(url).find();
+    }
+
+    public static Integer normalizeImageDimension(Integer value) {
+        if (value == null || value <= 1) {
+            return 512;
+        }
+        return value;
+    }
+
+    public static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    public static boolean isValidImageDetails(ImageDetails imageDetails, String placeholderPath) {
+        return imageDetails != null
+            && imageDetails.getUrlOrPath() != null
+            && !Objects.equals(imageDetails.getUrlOrPath(), placeholderPath)
+            && imageDetails.getWidth() != null && imageDetails.getWidth() > 1
+            && imageDetails.getHeight() != null && imageDetails.getHeight() > 1;
+    }
+
+    public static ImageSelectionResult selectBestImageDetails(
+        List<ImageDetails> candidates,
+        String placeholderPath,
+        String cacheDirName,
+        String bookIdForLog,
+        Logger logger) {
+
+        if (candidates == null || candidates.isEmpty()) {
+            if (logger != null) {
+                logger.warn("Book ID {}: selectBestImageDetails called with no candidates.", bookIdForLog);
+            }
+            return new ImageSelectionResult(null, "no-candidates-for-selection");
+        }
+
+        List<ImageDetails> validCandidates = candidates.stream()
+            .filter(candidate -> isValidImageDetails(candidate, placeholderPath))
+            .collect(Collectors.toList());
+
+        if (validCandidates.isEmpty()) {
+            if (logger != null) {
+                logger.warn("Book ID {}: No valid candidates after filtering for selection.", bookIdForLog);
+            }
+            return new ImageSelectionResult(null, "no-valid-candidates-for-selection");
+        }
+
+        Comparator<ImageDetails> comparator = Comparator
+            .<ImageDetails>comparingInt(details -> {
+                if (details.getCoverImageSource() == CoverImageSource.S3_CACHE
+                    && details.getWidth() != null && details.getWidth() > 150
+                    && details.getHeight() != null && details.getHeight() > 150) {
+                    return 0;
+                }
+                return 1;
+            })
+            .thenComparing(Comparator.<ImageDetails>comparingLong(details -> {
+                if (details.getWidth() == null || details.getHeight() == null) {
+                    return 0L;
+                }
+                return (long) details.getWidth() * details.getHeight();
+            }).reversed())
+            .thenComparingInt(details -> {
+                CoverImageSource src = details.getCoverImageSource();
+                if (src == CoverImageSource.S3_CACHE) return 0;
+                if (src == CoverImageSource.GOOGLE_BOOKS) return 1;
+                if (src == CoverImageSource.OPEN_LIBRARY) return 2;
+                if (src == CoverImageSource.LONGITOOD) return 3;
+                if (src == CoverImageSource.LOCAL_CACHE
+                    && details.getUrlOrPath() != null
+                    && !details.getUrlOrPath().equals(placeholderPath)) {
+                    return 4;
+                }
+                return 5;
+            });
+
+        ImageDetails bestImage = java.util.Collections.min(validCandidates, comparator);
+
+        if (logger != null) {
+            logger.info("Book ID {}: Selected best image from {} candidates. URL/Path: {}, Source: {}, Dimensions: {}x{}",
+                bookIdForLog,
+                validCandidates.size(),
+                bestImage.getUrlOrPath(),
+                bestImage.getCoverImageSource(),
+                bestImage.getWidth(),
+                bestImage.getHeight());
+
+            if (logger.isDebugEnabled()) {
+                validCandidates.forEach(candidate ->
+                    logger.debug("Book ID {}: Candidate - URL/Path: {}, Source: {}, Dimensions: {}x{}",
+                        bookIdForLog,
+                        candidate.getUrlOrPath(),
+                        candidate.getCoverImageSource(),
+                        candidate.getWidth(),
+                        candidate.getHeight())
+                );
+            }
+        }
+
+        return new ImageSelectionResult(bestImage, null);
+    }
+
+    public static void updateSelectedImageInfo(
+        ImageProvenanceData provenanceData,
+        ImageSourceName sourceName,
+        ImageDetails imageDetails,
+        String selectionReason,
+        String cacheDirName,
+        Logger logger) {
+
+        if (provenanceData == null || imageDetails == null || cacheDirName == null) {
+            return;
+        }
+
+        ImageProvenanceData.SelectedImageInfo selectedInfo = new ImageProvenanceData.SelectedImageInfo();
+        selectedInfo.setSourceName(sourceName);
+        selectedInfo.setFinalUrl(imageDetails.getUrlOrPath());
+        selectedInfo.setResolution(imageDetails.getResolutionPreference() != null
+            ? imageDetails.getResolutionPreference().name()
+            : "ORIGINAL");
+        selectedInfo.setDimensions((imageDetails.getWidth() != null ? imageDetails.getWidth() : "N/A")
+            + "x"
+            + (imageDetails.getHeight() != null ? imageDetails.getHeight() : "N/A"));
+        selectedInfo.setSelectionReason(selectionReason);
+
+        if (imageDetails.getUrlOrPath() != null
+            && imageDetails.getUrlOrPath().startsWith("/" + cacheDirName)) {
+            selectedInfo.setStorageLocation("LocalCache");
+        } else if (imageDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
+            selectedInfo.setStorageLocation("S3");
+            selectedInfo.setS3Key(imageDetails.getSourceSystemId());
+        } else {
+            selectedInfo.setStorageLocation("Remote");
+        }
+
+        provenanceData.setSelectedImageInfo(selectedInfo);
+
+        if (logger != null && logger.isDebugEnabled()) {
+            logger.debug("Provenance updated: Selected image from {} ({}), URL: {}, Dimensions: {}x{}, Reason: {}",
+                sourceName,
+                selectedInfo.getStorageLocation(),
+                selectedInfo.getFinalUrl(),
+                imageDetails.getWidth(),
+                imageDetails.getHeight(),
+                selectionReason);
+        }
+    }
+
+    public static void addAttemptToProvenance(
+        ImageProvenanceData provenanceData,
+        ImageSourceName sourceName,
+        String urlAttempted,
+        ImageAttemptStatus status,
+        String failureReason,
+        ImageDetails detailsIfSuccess) {
+
+        if (provenanceData == null) {
+            return;
+        }
+
+        if (provenanceData.getAttemptedImageSources() == null) {
+            provenanceData.setAttemptedImageSources(
+                java.util.Collections.synchronizedList(new ArrayList<>())
+            );
+        }
+
+        ImageProvenanceData.AttemptedSourceInfo attemptInfo =
+            new ImageProvenanceData.AttemptedSourceInfo(sourceName, urlAttempted, status);
+
+        if (failureReason != null) {
+            attemptInfo.setFailureReason(failureReason);
+        }
+
+        if (detailsIfSuccess != null && status == ImageAttemptStatus.SUCCESS) {
+            attemptInfo.setFetchedUrl(detailsIfSuccess.getUrlOrPath());
+            attemptInfo.setDimensions((detailsIfSuccess.getWidth() != null ? detailsIfSuccess.getWidth() : "N/A")
+                + "x"
+                + (detailsIfSuccess.getHeight() != null ? detailsIfSuccess.getHeight() : "N/A"));
+        }
+
+        provenanceData.getAttemptedImageSources().add(attemptInfo);
+    }
+
+    public static final class ImageSelectionResult {
+        private final ImageDetails bestImage;
+        private final String fallbackReason;
+
+        public ImageSelectionResult(ImageDetails bestImage, String fallbackReason) {
+            this.bestImage = bestImage;
+            this.fallbackReason = fallbackReason;
+        }
+
+        public ImageDetails bestImage() {
+            return bestImage;
+        }
+
+        public String fallbackReason() {
+            return fallbackReason;
+        }
+
+        public boolean hasSelection() {
+            return bestImage != null;
         }
     }
 

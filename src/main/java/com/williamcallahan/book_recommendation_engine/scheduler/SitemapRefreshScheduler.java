@@ -6,9 +6,9 @@ import com.williamcallahan.book_recommendation_engine.service.BookSitemapService
 import com.williamcallahan.book_recommendation_engine.service.SitemapService;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.BookSitemapItem;
 import com.williamcallahan.book_recommendation_engine.service.image.S3BookCoverService;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -22,10 +22,10 @@ import java.util.Optional;
  * Consolidated sitemap refresh job that warms Postgres queries, persists S3 artefacts, and hydrates external data.
  */
 @Component
+@Slf4j
 public class SitemapRefreshScheduler {
 
-    private static final Logger logger = LoggerFactory.getLogger(SitemapRefreshScheduler.class);
-
+    
     private final SitemapProperties sitemapProperties;
     private final BookSitemapService bookSitemapService;
     private final SitemapService sitemapService;
@@ -44,19 +44,19 @@ public class SitemapRefreshScheduler {
     @Scheduled(cron = "${sitemap.scheduler-cron:0 15 * * * *}")
     public void refreshSitemapArtifacts() {
         if (!sitemapProperties.isSchedulerEnabled()) {
-            logger.debug("Sitemap refresh scheduler skipped – disabled via configuration.");
+            log.debug("Sitemap refresh scheduler skipped – disabled via configuration.");
             return;
         }
 
         Instant start = Instant.now();
-        logger.info("Sitemap refresh scheduler started.");
+        log.info("Sitemap refresh scheduler started.");
 
         try {
             sitemapService.getOverview();
             sitemapService.getAuthorsByLetter("A", 1);
             sitemapService.getBooksByLetter("A", 1);
         } catch (Exception e) {
-            logger.warn("Sitemap warmup queries encountered an error: {}", e.getMessage(), e);
+            LoggingUtils.warn(log, e, "Sitemap warmup queries encountered an error");
         }
 
         BookSitemapService.SnapshotSyncResult snapshotResult = bookSitemapService.synchronizeSnapshot();
@@ -70,7 +70,7 @@ public class SitemapRefreshScheduler {
         int coverWarmups = warmCoverAssets(books, coverSampleSize);
 
         Duration elapsed = Duration.between(start, Instant.now());
-        logger.info("Sitemap refresh scheduler finished in {}s (books={}, s3Upload={}, hydration={{attempted:{}, success:{}}}, coverWarmups={}).",
+        log.info("Sitemap refresh scheduler finished in {}s (books={}, s3Upload={}, hydration={{attempted:{}, success:{}}}, coverWarmups={}).",
                 elapsed.toSeconds(),
                 books.size(),
                 snapshotResult.uploaded(),
@@ -85,7 +85,7 @@ public class SitemapRefreshScheduler {
         }
         S3BookCoverService coverService = coverServiceProvider.getIfAvailable();
         if (coverService == null) {
-            logger.debug("Skipping cover warmup – S3BookCoverService not available.");
+            log.debug("Skipping cover warmup – S3BookCoverService not available.");
             return 0;
         }
 
@@ -97,12 +97,12 @@ public class SitemapRefreshScheduler {
             book.setTitle(item.title());
             try {
                 coverService.fetchCover(book).exceptionally(ex -> {
-                    logger.debug("Cover warmup failed for {}: {}", item.bookId(), ex.getMessage());
+                    log.debug("Cover warmup failed for {}: {}", item.bookId(), ex.getMessage());
                     return Optional.empty();
                 }).join();
                 successes++;
             } catch (Exception e) {
-                logger.debug("Cover warmup encountered error for {}: {}", item.bookId(), e.getMessage());
+                log.debug("Cover warmup encountered error for {}: {}", item.bookId(), e.getMessage());
             }
         }
         return successes;
