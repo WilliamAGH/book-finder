@@ -3,6 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -71,10 +72,7 @@ public class TieredBookSearchService {
                 }
                 return olBooks;
             })
-            .onErrorResume(e -> {
-                LOGGER.error("TieredBookSearch: Error during OpenLibrary search for query '{}': {}", query, e.getMessage(), e);
-                return Mono.just(Collections.emptyList());
-            });
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.openLibrarySearch(" + query + ")"));
 
         if (!googleFallbackEnabled) {
             LOGGER.info("TieredBookSearch: Google fallback disabled for query '{}'. Returning OpenLibrary results only.", query);
@@ -112,10 +110,7 @@ public class TieredBookSearchService {
                     LOGGER.info("TieredBookSearch: Search for query '{}' yielded no results from any tier.", query);
                 }
             })
-            .onErrorResume(e -> {
-                LOGGER.error("TieredBookSearch: Error during tiered search for query '{}': {}", query, e.getMessage(), e);
-                return Mono.just(Collections.emptyList());
-            });
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.searchBooks(" + query + ")"));
     }
 
     Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
@@ -125,10 +120,7 @@ public class TieredBookSearchService {
         int safeLimit = desiredTotalResults <= 0 ? 20 : PagingUtils.clamp(desiredTotalResults, 1, 100);
         return Mono.fromCallable(() -> bookSearchService.searchAuthors(query, safeLimit))
                 .subscribeOn(Schedulers.boundedElastic())
-                .onErrorResume(ex -> {
-                    LOGGER.error("TieredBookSearch: Author search failed for '{}': {}", query, ex.getMessage(), ex);
-                    return Mono.just(List.of());
-                });
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.searchAuthors(" + query + ")"));
     }
 
     private List<Book> searchPostgresFirst(String query, int desiredTotalResults) {
@@ -181,9 +173,6 @@ public class TieredBookSearchService {
             .collectList()
             .map(books -> books.size() > maxTotalResultsToFetch ? books.subList(0, maxTotalResultsToFetch) : books)
             .doOnSuccess(finalList -> LOGGER.info("TieredBookSearch: {} paged search for query '{}' completed. Aggregated {} books.", authType, query, finalList.size()))
-            .onErrorResume(e -> {
-                LOGGER.error("TieredBookSearch: Error during {} paged search for query '{}': {}. Returning empty list.", authType, query, e.getMessage(), e);
-                return Mono.just(Collections.emptyList());
-            });
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.executePagedSearch auth=" + authType + " query=" + query));
     }
 }

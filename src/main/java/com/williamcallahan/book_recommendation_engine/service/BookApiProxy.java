@@ -15,7 +15,9 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.BookJsonWriter;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,6 +25,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -41,7 +44,6 @@ public class BookApiProxy {
         
     private final GoogleBooksService googleBooksService;
     private final BookDataOrchestrator bookDataOrchestrator;
-    private final S3StorageService s3StorageService;
     private final ObjectMapper objectMapper;
     private static final int SEARCH_RESULT_LIMIT = 40;
 
@@ -53,7 +55,6 @@ public class BookApiProxy {
     
     private final boolean localCacheEnabled;
     private final String localCacheDirectory;
-    private final boolean alwaysCheckS3First;
     private final boolean logApiCalls;
     private final boolean externalFallbackEnabled;
 
@@ -61,27 +62,22 @@ public class BookApiProxy {
      * Constructs the BookApiProxy with necessary dependencies
      *
      * @param googleBooksService Service for interacting with Google Books API
-     * @param s3StorageService Service for interacting with S3
      * @param objectMapper ObjectMapper for JSON processing
      * @param mockService Optional mock service for testing
      */
     public BookApiProxy(GoogleBooksService googleBooksService, 
-                       S3StorageService s3StorageService, 
                        ObjectMapper objectMapper,
                        Optional<GoogleBooksMockService> mockService,
                        @Value("${app.local-cache.enabled:false}") boolean localCacheEnabled,
                        @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
-                       @Value("${app.s3-cache.always-check-first:false}") boolean alwaysCheckS3First,
                        @Value("${app.api-client.log-calls:true}") boolean logApiCalls,
                        @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
                        BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
-        this.s3StorageService = s3StorageService;
         this.objectMapper = objectMapper;
         this.mockService = mockService;
         this.localCacheEnabled = localCacheEnabled;
         this.localCacheDirectory = localCacheDirectory;
-        this.alwaysCheckS3First = alwaysCheckS3First;
         this.logApiCalls = logApiCalls;
         this.externalFallbackEnabled = externalFallbackEnabled;
         this.bookDataOrchestrator = bookDataOrchestrator;
@@ -162,10 +158,7 @@ public class BookApiProxy {
 
         if (bookDataOrchestrator != null) {
             bookDataOrchestrator.getBookByIdTiered(bookId)
-                .onErrorResume(ex -> {
-                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator lookup failed for {}", bookId);
-                    return Mono.empty();
-                })
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.getBookByIdTiered(" + bookId + ")"))
                 .subscribe(book -> {
                     if (book != null && resolved.compareAndSet(false, true)) {
                         log.debug("BookApiProxy: Retrieved {} via orchestrator tier.", bookId);
@@ -177,108 +170,52 @@ public class BookApiProxy {
                 }, ex -> {
                     LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator lookup error for {}", bookId);
                     if (resolved.compareAndSet(false, true)) {
-                        continueWithApiFallback(bookId, future);
+                        future.complete(null);
                     }
                 }, () -> {
                     if (resolved.compareAndSet(false, true)) {
-                        continueWithApiFallback(bookId, future);
+                        future.complete(null);
                     }
                 });
             return;
         }
 
-        continueWithApiFallback(bookId, future);
+        resolveViaExternalFallback(bookId, future);
     }
 
-    private void continueWithApiFallback(String bookId, CompletableFuture<Book> future) {
+    private void resolveViaExternalFallback(String bookId, CompletableFuture<Book> future) {
         if (future.isDone()) {
             return;
         }
 
-        if (alwaysCheckS3First) {
-            log.debug("Checking S3 cache for bookId: {} (alwaysCheckS3First=true)", bookId);
-            s3StorageService.fetchJsonAsync(bookId)
-                .<Book>thenCompose(s3Result -> {
-                    if (s3Result.isSuccess()) {
-                        Optional<String> jsonDataOptional = s3Result.getData();
-                        if (jsonDataOptional.isPresent()) {
-                            try {
-                                JsonNode bookNode = objectMapper.readTree(jsonDataOptional.get());
-                                Book book = objectMapper.treeToValue(bookNode, Book.class);
-
-                                if (localCacheEnabled) {
-                                    saveBookToLocalCache(bookId, book);
-                                }
-
-                                if (mockService.isPresent()) {
-                                    mockService.get().saveBookResponse(bookId, bookNode);
-                                }
-
-                                log.debug("Retrieved book {} from S3 cache", bookId);
-                                return CompletableFuture.completedFuture(book);
-                            } catch (Exception e) {
-                                LoggingUtils.warn(log, e, "BookApiProxy: Error parsing book {} from S3 cache. Proceeding to API.", bookId);
-                            }
-                        } else {
-                            log.info("BookApiProxy: S3 cache miss (data absent) for bookId {}. Falling back to API.", bookId);
-                        }
-                    } else {
-                        log.warn("BookApiProxy: S3 cache unavailable for bookId {}. Reason: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 error"));
-                    }
-                    if (logApiCalls) {
-                        log.info("Making REAL API call to Google Books for book ID: {}", bookId);
-                    }
-
-                    if (!externalFallbackEnabled) {
-                        log.debug("External fallback disabled for book ID '{}'. Skipping external API call.", bookId);
-                        return CompletableFuture.completedFuture(null);
-                    }
-
-                    return googleBooksService.getBookById(bookId)
-                        .thenApply(book -> {
-                            if (book != null && localCacheEnabled) {
-                                saveBookToLocalCache(bookId, book);
-                            }
-                            return book;
-                        });
-                })
-                .whenComplete((book, ex) -> {
-                    if (ex != null) {
-                        LoggingUtils.error(log, ex, "Error retrieving book {}", bookId);
-                        future.completeExceptionally(ex);
-                    } else {
-                        future.complete(book);
-                    }
-                });
-        } else {
-            if (!externalFallbackEnabled) {
-                log.debug("External fallback disabled for book ID '{}'. Returning empty result.", bookId);
-                future.complete(null);
-                return;
-            }
-            googleBooksService.getBookById(bookId)
-                .thenAccept(book -> {
-                    if (book != null && localCacheEnabled) {
-                        saveBookToLocalCache(bookId, book);
-                    }
-
-                    if (book != null && mockService.isPresent() && book.getRawJsonResponse() != null) {
-                        try {
-                            JsonNode bookNode = objectMapper.readTree(book.getRawJsonResponse());
-                            mockService.get().saveBookResponse(bookId, bookNode);
-                        } catch (Exception e) {
-                            LoggingUtils.warn(log, e, "Error saving book to mock service");
-                        }
-                    }
-
-                    future.complete(book);
-                })
-                .exceptionally(ex -> {
-                    LoggingUtils.error(log, ex, "Error retrieving book {}", bookId);
-                    future.completeExceptionally(ex);
-                    return null;
-                });
+        if (!externalFallbackEnabled) {
+            log.debug("External fallback disabled for book ID '{}'. Returning empty result.", bookId);
+            future.complete(null);
+            return;
         }
+
+        googleBooksService.getBookById(bookId)
+            .thenAccept(book -> {
+                if (book != null && localCacheEnabled) {
+                    saveBookToLocalCache(bookId, book);
+                }
+
+                if (book != null && mockService.isPresent() && book.getRawJsonResponse() != null) {
+                    try {
+                        JsonNode bookNode = objectMapper.readTree(book.getRawJsonResponse());
+                        mockService.get().saveBookResponse(bookId, bookNode);
+                    } catch (Exception e) {
+                        LoggingUtils.warn(log, e, "Error saving book to mock service");
+                    }
+                }
+
+                future.complete(book);
+            })
+            .exceptionally(ex -> {
+                LoggingUtils.error(log, ex, "Error retrieving book {}", bookId);
+                future.completeExceptionally(ex);
+                return null;
+            });
     }
     
     /**
@@ -353,10 +290,7 @@ public class BookApiProxy {
 
         if (bookDataOrchestrator != null) {
             bookDataOrchestrator.searchBooksTiered(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
-                .onErrorResume(ex -> {
-                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator search failed for '{}' (lang {})", normalizedQuery, langCode);
-                    return Mono.empty();
-                })
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.searchBooksTiered(" + normalizedQuery + "," + langCode + ")"))
                 .subscribe(results -> {
                     List<Book> sanitized = sanitizeSearchResults(results);
                     if (!sanitized.isEmpty() && resolved.compareAndSet(false, true)) {
@@ -368,11 +302,11 @@ public class BookApiProxy {
                 }, ex -> {
                     LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator search error for '{}' (lang {})", normalizedQuery, langCode);
                     if (resolved.compareAndSet(false, true)) {
-                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
+                        future.complete(List.of());
                     }
                 }, () -> {
                     if (resolved.compareAndSet(false, true)) {
-                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
+                        future.complete(List.of());
                     }
                 });
             return;
@@ -450,9 +384,10 @@ public class BookApiProxy {
         try {
             // Ensure directory exists
             Files.createDirectories(bookFile.getParent());
-            
-            // Convert to JSON and save
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(bookFile.toFile(), book);
+
+            // Convert to JSON and save using centralized writer
+            String json = BookJsonWriter.toJsonString(book);
+            Files.writeString(bookFile, json, StandardCharsets.UTF_8);
             log.debug("Saved book {} to local cache", bookId);
         } catch (Exception e) {
             LoggingUtils.warn(log, e, "Error saving book to local cache");

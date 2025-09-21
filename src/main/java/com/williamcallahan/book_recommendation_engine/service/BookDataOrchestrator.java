@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -149,11 +150,11 @@ public class BookDataOrchestrator {
         Mono<List<JsonNode>> apiResponsesMono = Mono.defer(() -> {
             Mono<JsonNode> tier4Mono = googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
                 .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 4 Google Auth HIT for {}", bookId);})
-                .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 4 Google Auth API error for {}", bookId); return Mono.<JsonNode>empty(); });
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.fetchVolumeByIdAuthenticated(" + bookId + ")"));
 
             Mono<JsonNode> tier3Mono = googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId)
                 .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 3 Google Unauth HIT for {}", bookId);})
-                .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 3 Google Unauth API error for {}", bookId); return Mono.<JsonNode>empty(); });
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.fetchVolumeByIdUnauthenticated(" + bookId + ")"));
 
             Mono<JsonNode> olMono = openLibraryBookDataService.fetchBookByIsbn(bookId)
                 .flatMap(book -> {
@@ -165,7 +166,7 @@ public class BookDataOrchestrator {
                         return Mono.<JsonNode>empty();
                     }
                 })
-                .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 5 OpenLibrary API error for {}", bookId); return Mono.<JsonNode>empty(); });
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.openLibraryFetch(" + bookId + ")"));
             
             return Mono.zip(
                     tier4Mono.defaultIfEmpty(objectMapper.createObjectNode()),
@@ -270,10 +271,7 @@ public class BookDataOrchestrator {
                     logger.info("BookDataOrchestrator: Failed to fetch/process book for identifier: {} from any tier.", bookId);
                 }
             })
-            .onErrorResume(e -> {
-                LoggingUtils.error(logger, e, "BookDataOrchestrator: Critical error during tiered fetch for identifier {}", bookId);
-                return Mono.<Book>empty();
-        });
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.getBookByIdTiered(" + bookId + ")"));
     }
 
     public Mono<Book> getBookBySlugTiered(String slug) {

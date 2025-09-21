@@ -89,6 +89,10 @@ public class NewYorkTimesService {
         return Mono.fromCallable(() ->
             postgresBookRepository.fetchLatestBestsellerBooks(listNameEncoded, effectiveLimit)
         )
+        .map(list -> {
+            log.info("NYT repository returned {} books for list '{}'", list.size(), listNameEncoded);
+            return list;
+        })
         .subscribeOn(Schedulers.boundedElastic())
         .onErrorResume(e -> {
             LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);

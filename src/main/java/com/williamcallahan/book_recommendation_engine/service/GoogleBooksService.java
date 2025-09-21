@@ -509,6 +509,9 @@ public class GoogleBooksService {
                     if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
                         return Optional.empty();
                     }
+                    if (googleBook == null) {
+                        return Optional.empty();
+                    }
                     String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
                     return Optional.of(new ImageDetails(
                         enhanced,
@@ -551,14 +554,14 @@ public class GoogleBooksService {
                         provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
                     }
                     String googleUrl = googleBook != null ? googleBook.getExternalImageUrl() : null;
-                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png") || googleBook == null) {
                         return Optional.empty();
                     }
                     String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
                     return Optional.of(new ImageDetails(
                         enhanced,
                         "GOOGLE_BOOKS",
-                        googleBook != null ? googleBook.getId() : null,
+                        googleBook.getId(),
                         com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS,
                         ImageResolutionPreference.ORIGINAL
                     ));
