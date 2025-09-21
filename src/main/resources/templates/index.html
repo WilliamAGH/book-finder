@@ -69,7 +69,7 @@
                     <div class="card h-100">
                         <div class="position-relative book-cover-container">
                             <a th:href="@{'/book/' + ${bookSlug}}" class="d-block h-100">
-                                <img th:src="${book.cover != null && book.cover.preferredUrl != null ? book.cover.preferredUrl : (book.cover != null && book.cover.s3ImagePath != null ? book.cover.s3ImagePath : (book.cover != null && book.cover.externalImageUrl != null ? book.cover.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
                                      class="card-img-top book-cover"
                                      loading="lazy"
                                      alt="Book cover" 
@@ -77,8 +77,8 @@
                                      th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.cover != null && book.cover.preferredUrl != null ? book.cover.preferredUrl : (book.cover != null && book.cover.s3ImagePath != null ? book.cover.s3ImagePath : (book.cover != null ? book.cover.externalImageUrl : null))},
-                                              data-fallback-url=${book.cover != null && book.cover.fallbackUrl != null ? book.cover.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : book.externalImageUrl)},
+                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
                                               data-ultimate-fallback='/images/placeholder-book-cover.svg'">
                             </a>
                             <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
@@ -122,7 +122,7 @@
                     <div class="card h-100">
                         <div class="position-relative book-cover-container">
                             <a th:href="@{'/book/' + ${bookSlug}}" class="d-block h-100">
-                                <img th:src="${book.cover != null && book.cover.preferredUrl != null ? book.cover.preferredUrl : (book.cover != null && book.cover.s3ImagePath != null ? book.cover.s3ImagePath : (book.cover != null && book.cover.externalImageUrl != null ? book.cover.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
                                      class="card-img-top book-cover"
                                      loading="lazy"
                                      alt="Book cover" 
@@ -130,8 +130,8 @@
                                      th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
                                      th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.cover != null && book.cover.preferredUrl != null ? book.cover.preferredUrl : (book.cover != null && book.cover.s3ImagePath != null ? book.cover.s3ImagePath : (book.cover != null ? book.cover.externalImageUrl : null))},
-                                              data-fallback-url=${book.cover != null && book.cover.fallbackUrl != null ? book.cover.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : book.externalImageUrl)},
+                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
                                               data-ultimate-fallback='/images/placeholder-book-cover.svg'">
                             </a>
                             <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">

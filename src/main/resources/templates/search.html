@@ -679,9 +679,12 @@
             const bookUrl = `/book/${identifierForUrl}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForCard = card.querySelector('.book-cover');
-            const preferredUrl = (book.cover && book.cover.preferredUrl) ? book.cover.preferredUrl
-                : ((book.cover && book.cover.s3ImagePath) || (book.cover && book.cover.externalImageUrl) || null);
-            const fallbackUrl = (book.cover && book.cover.fallbackUrl) ? book.cover.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const preferredUrl = (book.coverImages && book.coverImages.preferredUrl)
+                ? book.coverImages.preferredUrl
+                : (book.s3ImagePath || book.externalImageUrl || null);
+            const fallbackUrl = (book.coverImages && book.coverImages.fallbackUrl)
+                ? book.coverImages.fallbackUrl
+                : '/images/placeholder-book-cover.svg';
 
             imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
             imgElementForCard.alt = book.title ? `${book.title} cover` : 'Book cover';
@@ -791,9 +794,12 @@
             const bookUrl = `/book/${identifierForUrl}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
-            const preferredUrlListItem = (book.cover && book.cover.preferredUrl) ? book.cover.preferredUrl
-                : ((book.cover && book.cover.s3ImagePath) || (book.cover && book.cover.externalImageUrl) || null);
-            const fallbackUrlListItem = (book.cover && book.cover.fallbackUrl) ? book.cover.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const preferredUrlListItem = (book.coverImages && book.coverImages.preferredUrl)
+                ? book.coverImages.preferredUrl
+                : (book.s3ImagePath || book.externalImageUrl || null);
+            const fallbackUrlListItem = (book.coverImages && book.coverImages.fallbackUrl)
+                ? book.coverImages.fallbackUrl
+                : '/images/placeholder-book-cover.svg';
 
             imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src
             imgElementForListItem.alt = book.title ? `${book.title} cover` : 'Book cover';
