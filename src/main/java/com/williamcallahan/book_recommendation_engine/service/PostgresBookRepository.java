@@ -17,7 +17,8 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,7 +32,7 @@ import org.springframework.stereotype.Component;
  * existing behaviour.</p>
  */
 @Component
-@ConditionalOnBean(JdbcTemplate.class)
+@ConditionalOnClass(JdbcTemplate.class)
 public class PostgresBookRepository {
 
     private static final Logger LOG = LoggerFactory.getLogger(PostgresBookRepository.class);
@@ -42,6 +43,7 @@ public class PostgresBookRepository {
     private final ObjectMapper objectMapper;
     private final BookLookupService bookLookupService;
 
+    @Autowired
     public PostgresBookRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper, BookLookupService bookLookupService) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
@@ -99,6 +101,7 @@ public class PostgresBookRepository {
         }
 
         try {
+            // Get collection ID and book IDs in a single query
             UUID collectionId = jdbcTemplate.query(
                 """
                     SELECT id
@@ -110,13 +113,20 @@ public class PostgresBookRepository {
                     LIMIT 1
                 """,
                 ps -> ps.setString(1, providerListCode.trim()),
-                rs -> rs.next() ? (UUID) rs.getObject("id") : null
+                rs -> {
+                    if (!rs.next()) return null;
+                    Object idObj = rs.getObject("id");
+                    if (idObj instanceof UUID) return (UUID) idObj;
+                    if (idObj instanceof String) return UUID.fromString((String) idObj);
+                    return null;
+                }
             );
 
             if (collectionId == null) {
                 return List.of();
             }
 
+            // Fetch book IDs with positions
             List<CollectionEntry> entries = jdbcTemplate.query(
                 """
                     SELECT bcj.book_id, bcj.position
@@ -129,21 +139,48 @@ public class PostgresBookRepository {
                     ps.setObject(1, collectionId);
                     ps.setInt(2, limit);
                 },
-                (rs, rowNum) -> new CollectionEntry((UUID) rs.getObject("book_id"), (Integer) rs.getObject("position"))
+                (rs, rowNum) -> {
+                    Object bookIdObj = rs.getObject("book_id");
+                    UUID bookId;
+                    if (bookIdObj instanceof UUID) {
+                        bookId = (UUID) bookIdObj;
+                    } else if (bookIdObj instanceof String) {
+                        bookId = UUID.fromString((String) bookIdObj);
+                    } else {
+                        throw new IllegalStateException("Unexpected type for book_id: " + bookIdObj.getClass());
+                    }
+                    return new CollectionEntry(bookId, (Integer) rs.getObject("position"));
+                }
             );
 
             if (entries.isEmpty()) {
                 return List.of();
             }
 
-            List<Book> books = new ArrayList<>(entries.size());
+            // Extract book IDs for batch fetch
+            UUID[] bookIds = entries.stream()
+                .map(CollectionEntry::bookId)
+                .toArray(UUID[]::new);
+
+            // Batch fetch all books in one query
+            List<Book> books = fetchBooksByIdsBatch(bookIds);
+
+            // Create position map for ranking
+            Map<UUID, Integer> positionMap = entries.stream()
+                .filter(e -> e.rank() != null)
+                .collect(Collectors.toMap(CollectionEntry::bookId, CollectionEntry::rank));
+
+            // Update collection ranks and maintain order
+            Map<UUID, Book> bookMap = books.stream()
+                .collect(Collectors.toMap(b -> UUID.fromString(b.getId()), b -> b));
+
+            List<Book> orderedBooks = new ArrayList<>(entries.size());
             for (CollectionEntry entry : entries) {
-                Optional<Book> maybeBook = loadAggregate(entry.bookId());
-                if (maybeBook.isEmpty()) {
+                Book book = bookMap.get(entry.bookId());
+                if (book == null) {
                     continue;
                 }
 
-                Book book = maybeBook.get();
                 if (entry.rank() != null) {
                     List<Book.CollectionAssignment> adjustedAssignments = book.getCollections().stream()
                         .map(assignment -> assignment.getCollectionId() != null && assignment.getCollectionId().equals(collectionId.toString())
@@ -159,13 +196,281 @@ public class PostgresBookRepository {
                     book.setCollections(adjustedAssignments);
                 }
 
-                books.add(book);
+                orderedBooks.add(book);
             }
 
-            return books;
+            return orderedBooks;
         } catch (DataAccessException ex) {
             LOG.debug("Failed to fetch NYT bestseller books for {}: {}", providerListCode, ex.getMessage());
             return List.of();
+        }
+    }
+
+    /**
+     * Batch fetch multiple books by their IDs in a single optimized query.
+     * This eliminates N+1 queries and dramatically improves performance for list rendering.
+     */
+    List<Book> fetchBooksByIdsBatch(UUID[] bookIds) {
+        if (bookIds == null || bookIds.length == 0) {
+            return List.of();
+        }
+
+        try {
+            // Main book data with essential fields
+            String sql = """
+                SELECT id::text, slug, title, description, isbn10, isbn13, 
+                       published_date, language, publisher, page_count
+                FROM books
+                WHERE id = ANY(?)
+                """;
+
+            List<Book> books = jdbcTemplate.query(sql, 
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", bookIds)),
+                (rs, rowNum) -> {
+                    Book book = new Book();
+                    book.setId(rs.getString("id"));
+                    book.setSlug(rs.getString("slug"));
+                    book.setTitle(rs.getString("title"));
+                    book.setDescription(rs.getString("description"));
+                    book.setIsbn10(rs.getString("isbn10"));
+                    book.setIsbn13(rs.getString("isbn13"));
+                    java.sql.Date published = rs.getDate("published_date");
+                    if (published != null) {
+                        book.setPublishedDate(new java.util.Date(published.getTime()));
+                    }
+                    book.setLanguage(rs.getString("language"));
+                    book.setPublisher(rs.getString("publisher"));
+                    Integer pageCount = (Integer) rs.getObject("page_count");
+                    book.setPageCount(pageCount);
+                    return book;
+                }
+            );
+
+            if (books.isEmpty()) {
+                return List.of();
+            }
+
+            // Batch hydrate all related data
+            hydrateBatchAuthors(books, bookIds);
+            hydrateBatchCategories(books, bookIds);
+            hydrateBatchCollections(books, bookIds);
+            hydrateBatchCovers(books, bookIds);
+            hydrateBatchProviderMetadata(books, bookIds);
+
+            return books;
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to batch fetch books: {}", ex.getMessage());
+            return List.of();
+        }
+    }
+
+    private void hydrateBatchAuthors(List<Book> books, UUID[] bookIds) {
+        try {
+            String sql = """
+                SELECT baj.book_id::text, a.name, baj.position
+                FROM book_authors_join baj
+                JOIN authors a ON a.id = baj.author_id
+                WHERE baj.book_id = ANY(?)
+                ORDER BY baj.book_id, COALESCE(baj.position, 2147483647), lower(a.name)
+                """;
+
+            Map<String, List<String>> authorMap = new LinkedHashMap<>();
+            jdbcTemplate.query(sql,
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", bookIds)),
+                rs -> {
+                    String bookId = rs.getString("book_id");
+                    String authorName = rs.getString("name");
+                    authorMap.computeIfAbsent(bookId, k -> new ArrayList<>()).add(authorName);
+                }
+            );
+
+            books.forEach(book -> book.setAuthors(authorMap.getOrDefault(book.getId(), List.of())));
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to batch hydrate authors: {}", ex.getMessage());
+            books.forEach(book -> book.setAuthors(List.of()));
+        }
+    }
+
+    private void hydrateBatchCategories(List<Book> books, UUID[] bookIds) {
+        try {
+            String sql = """
+                SELECT bcj.book_id::text, bc.display_name
+                FROM book_collections_join bcj
+                JOIN book_collections bc ON bc.id = bcj.collection_id
+                WHERE bcj.book_id = ANY(?)
+                  AND bc.collection_type = 'CATEGORY'
+                ORDER BY bcj.book_id, COALESCE(bcj.position, 9999), lower(bc.display_name)
+                """;
+
+            Map<String, List<String>> categoryMap = new LinkedHashMap<>();
+            jdbcTemplate.query(sql,
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", bookIds)),
+                rs -> {
+                    String bookId = rs.getString("book_id");
+                    String category = rs.getString("display_name");
+                    categoryMap.computeIfAbsent(bookId, k -> new ArrayList<>()).add(category);
+                }
+            );
+
+            books.forEach(book -> book.setCategories(categoryMap.getOrDefault(book.getId(), List.of())));
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to batch hydrate categories: {}", ex.getMessage());
+            books.forEach(book -> book.setCategories(List.of()));
+        }
+    }
+
+    private void hydrateBatchCollections(List<Book> books, UUID[] bookIds) {
+        try {
+            String sql = """
+                SELECT bcj.book_id::text, bc.id::text as collection_id,
+                       bc.display_name, bc.collection_type, bc.source, bcj.position
+                FROM book_collections_join bcj
+                JOIN book_collections bc ON bc.id = bcj.collection_id
+                WHERE bcj.book_id = ANY(?)
+                ORDER BY bcj.book_id, 
+                         CASE WHEN bc.collection_type = 'CATEGORY' THEN 0 ELSE 1 END,
+                         COALESCE(bcj.position, 2147483647),
+                         lower(bc.display_name)
+                """;
+
+            Map<String, List<Book.CollectionAssignment>> collectionMap = new LinkedHashMap<>();
+            jdbcTemplate.query(sql,
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", bookIds)),
+                rs -> {
+                    String bookId = rs.getString("book_id");
+                    Book.CollectionAssignment assignment = new Book.CollectionAssignment();
+                    assignment.setCollectionId(rs.getString("collection_id"));
+                    assignment.setName(rs.getString("display_name"));
+                    assignment.setCollectionType(rs.getString("collection_type"));
+                    assignment.setRank((Integer) rs.getObject("position"));
+                    assignment.setSource(rs.getString("source"));
+                    collectionMap.computeIfAbsent(bookId, k -> new ArrayList<>()).add(assignment);
+                }
+            );
+
+            books.forEach(book -> book.setCollections(collectionMap.getOrDefault(book.getId(), List.of())));
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to batch hydrate collections: {}", ex.getMessage());
+            books.forEach(book -> book.setCollections(List.of()));
+        }
+    }
+
+    private void hydrateBatchCovers(List<Book> books, UUID[] bookIds) {
+        try {
+            String sql = """
+                SELECT book_id::text, url, s3_image_path, source, width, height, is_high_resolution
+                FROM book_image_links
+                WHERE book_id = ANY(?)
+                  AND image_type IN ('extraLarge', 'large', 'medium')
+                ORDER BY book_id,
+                         CASE image_type
+                             WHEN 'extraLarge' THEN 1
+                             WHEN 'large' THEN 2
+                             WHEN 'medium' THEN 3
+                             ELSE 4
+                         END,
+                         created_at DESC
+                """;
+
+            Map<String, CoverCandidate> coverMap = new LinkedHashMap<>();
+            jdbcTemplate.query(sql,
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", bookIds)),
+                rs -> {
+                    String bookId = rs.getString("book_id");
+                    // Only keep first (best) cover per book
+                    if (!coverMap.containsKey(bookId)) {
+                        coverMap.put(bookId, new CoverCandidate(
+                            rs.getString("url"),
+                            rs.getString("s3_image_path"),
+                            rs.getString("source"),
+                            rs.getObject("width", Integer.class),
+                            rs.getObject("height", Integer.class),
+                            rs.getObject("is_high_resolution", Boolean.class)
+                        ));
+                    }
+                }
+            );
+
+            books.forEach(book -> {
+                CoverCandidate cover = coverMap.get(book.getId());
+                if (cover != null) {
+                    book.setExternalImageUrl(cover.url());
+                    book.setS3ImagePath(cover.s3Path());
+                    book.setCoverImageWidth(cover.width());
+                    book.setCoverImageHeight(cover.height());
+                    book.setIsCoverHighResolution(cover.highRes());
+                    CoverImages coverImages = new CoverImages(cover.url(), cover.url(), toCoverSource(cover.source()));
+                    book.setCoverImages(coverImages);
+                }
+            });
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to batch hydrate covers: {}", ex.getMessage());
+        }
+    }
+
+    private void hydrateBatchProviderMetadata(List<Book> books, UUID[] bookIds) {
+        try {
+            String sql = """
+                SELECT book_id::text, info_link, preview_link, web_reader_link, purchase_link,
+                       average_rating, ratings_count, list_price, currency_code, provider_asin
+                FROM book_external_ids
+                WHERE book_id = ANY(?)
+                ORDER BY book_id, CASE WHEN source = ? THEN 0 ELSE 1 END, created_at DESC
+                """;
+
+            Map<String, ProviderMetadata> metadataMap = new LinkedHashMap<>();
+            jdbcTemplate.query(sql,
+                ps -> {
+                    ps.setArray(1, ps.getConnection().createArrayOf("uuid", bookIds));
+                    ps.setString(2, PROVIDER_GOOGLE_BOOKS);
+                },
+                rs -> {
+                    String bookId = rs.getString("book_id");
+                    // Only keep first (best) metadata per book
+                    if (!metadataMap.containsKey(bookId)) {
+                        metadataMap.put(bookId, new ProviderMetadata(
+                            rs.getString("info_link"),
+                            rs.getString("preview_link"),
+                            rs.getString("web_reader_link"),
+                            rs.getString("purchase_link"),
+                            rs.getBigDecimal("average_rating"),
+                            rs.getObject("ratings_count", Integer.class),
+                            rs.getBigDecimal("list_price"),
+                            rs.getString("currency_code"),
+                            rs.getString("provider_asin")
+                        ));
+                    }
+                }
+            );
+
+            books.forEach(book -> {
+                ProviderMetadata meta = metadataMap.get(book.getId());
+                if (meta != null) {
+                    book.setInfoLink(meta.infoLink());
+                    book.setPreviewLink(meta.previewLink());
+                    book.setWebReaderLink(meta.webReaderLink());
+                    book.setPurchaseLink(meta.purchaseLink());
+                    if (meta.averageRating() != null) {
+                        book.setAverageRating(meta.averageRating().doubleValue());
+                        book.setHasRatings(Boolean.TRUE);
+                    }
+                    if (meta.ratingsCount() != null) {
+                        book.setRatingsCount(meta.ratingsCount());
+                        book.setHasRatings(meta.ratingsCount() > 0);
+                    }
+                    if (meta.listPrice() != null) {
+                        book.setListPrice(meta.listPrice().doubleValue());
+                    }
+                    if (meta.currencyCode() != null && !meta.currencyCode().isBlank()) {
+                        book.setCurrencyCode(meta.currencyCode());
+                    }
+                    if (meta.asin() != null && !meta.asin().isBlank()) {
+                        book.setAsin(meta.asin());
+                    }
+                }
+            });
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to batch hydrate provider metadata: {}", ex.getMessage());
         }
     }
 
@@ -358,6 +663,9 @@ public class PostgresBookRepository {
                     if (key == null || key.isBlank()) {
                         continue;
                     }
+                    // Convert snake_case to camelCase for frontend compatibility
+                    String camelCaseKey = snakeToCamelCase(key);
+                    
                     Map<String, Object> attributes = new LinkedHashMap<>();
                     String displayName = rs.getString("display_name");
                     if (displayName != null && !displayName.isBlank()) {
@@ -375,7 +683,7 @@ public class PostgresBookRepository {
                     if (!metadata.isEmpty()) {
                         attributes.put("metadata", metadata);
                     }
-                    result.put(key, attributes);
+                    result.put(camelCaseKey, attributes);
                 }
                 return result;
             });
@@ -384,6 +692,31 @@ public class PostgresBookRepository {
             LOG.debug("Failed to hydrate tags for {}: {}", canonicalId, ex.getMessage());
             book.setQualifiers(Map.of());
         }
+    }
+    
+    /**
+     * Converts snake_case to camelCase.
+     * Example: nyt_bestseller -> nytBestseller
+     */
+    private String snakeToCamelCase(String snakeCase) {
+        if (snakeCase == null || snakeCase.isBlank()) {
+            return snakeCase;
+        }
+        String[] parts = snakeCase.split("_");
+        if (parts.length == 1) {
+            return snakeCase; // No underscores, return as-is
+        }
+        StringBuilder camelCase = new StringBuilder(parts[0].toLowerCase());
+        for (int i = 1; i < parts.length; i++) {
+            String part = parts[i];
+            if (!part.isEmpty()) {
+                camelCase.append(Character.toUpperCase(part.charAt(0)));
+                if (part.length() > 1) {
+                    camelCase.append(part.substring(1).toLowerCase());
+                }
+            }
+        }
+        return camelCase.toString();
     }
 
     private void hydrateEditions(Book book, UUID canonicalId) {
@@ -626,5 +959,16 @@ public class PostgresBookRepository {
                                   Integer width,
                                   Integer height,
                                   Boolean highRes) {
+    }
+
+    private record ProviderMetadata(String infoLink,
+                                   String previewLink,
+                                   String webReaderLink,
+                                   String purchaseLink,
+                                   java.math.BigDecimal averageRating,
+                                   Integer ratingsCount,
+                                   java.math.BigDecimal listPrice,
+                                   String currencyCode,
+                                   String asin) {
     }
 }
