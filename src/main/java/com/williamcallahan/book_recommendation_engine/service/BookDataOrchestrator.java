@@ -316,12 +316,34 @@ public class BookDataOrchestrator {
             return Mono.empty();
         }
 
-        Mono<Book> result = Mono.justOrEmpty(getBookFromDatabaseBySlug(identifier))
-            .switchIfEmpty(Mono.justOrEmpty(getBookFromDatabase(identifier)))
-            .switchIfEmpty(getBookBySlugTiered(identifier))
-            .switchIfEmpty(getBookByIdTiered(identifier));
-
-        return result != null ? result : Mono.empty();
+        // Optimized: Single Postgres query checks all possible lookups
+        // Prevents cascading fallbacks that could trigger S3/API calls
+        return Mono.fromCallable(() -> {
+            if (postgresBookRepository == null) {
+                return null;
+            }
+            
+            // Try all lookup methods in one go
+            Book result = findInDatabaseBySlug(identifier).orElse(null);
+            if (result != null) return result;
+            
+            result = findInDatabaseById(identifier).orElse(null);
+            if (result != null) return result;
+            
+            result = findInDatabaseByIsbn13(identifier).orElse(null);
+            if (result != null) return result;
+            
+            result = findInDatabaseByIsbn10(identifier).orElse(null);
+            if (result != null) return result;
+            
+            return findInDatabaseByAnyExternalId(identifier).orElse(null);
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .flatMap(book -> book != null ? Mono.just(book) : Mono.empty())
+        .onErrorResume(e -> {
+            logger.warn("fetchCanonicalBookReactive failed for {}: {}", identifier, e.getMessage());
+            return Mono.empty();
+        });
     }
 
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy) {

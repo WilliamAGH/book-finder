@@ -34,10 +34,12 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -135,15 +137,25 @@ public class BookCoverManagementService {
             return Mono.just(createPlaceholderCoverImages(book.getId() + " (identifierKey null)"));
         }
 
-        // Always proceed to S3/cache checks; downstream services decide based on their own enablement
+        // Check memory cache first (fast path)
+        ImageDetails cached = coverCacheManager.getFinalImageDetails(identifierKey);
+        if (cached != null && cached.getUrlOrPath() != null) {
+            log.debug("Memory cache hit for {}", identifierKey);
+            CoverImages result = new CoverImages();
+            result.setPreferredUrl(cached.getUrlOrPath());
+            result.setFallbackUrl(determineFallbackUrl(book, cached.getUrlOrPath(), localPlaceholderPath));
+            result.setSource(cached.getCoverImageSource());
+            return Mono.just(result);
+        }
 
-        // 1. Check S3 (via S3BookCoverService which might have its own internal cache for S3 object existence)
-        // Convert CompletableFuture to Mono
-        return Mono.fromFuture(s3BookCoverService.fetchCover(book)) // This now returns CompletableFuture<Optional<ImageDetails>>
-            .onErrorResume(ReactiveErrorUtils.logAndReturnDefault(
-                "BookCoverManagementService.fetchCoverFromS3(" + identifierKey + ")",
-                Optional.empty()
-            ))
+        // Check S3 with aggressive timeout - don't block rendering
+        return Mono.fromFuture(s3BookCoverService.fetchCover(book))
+            .timeout(Duration.ofMillis(100)) // Fast timeout for cover fetch
+            .subscribeOn(Schedulers.boundedElastic()) // Run on background thread
+            .onErrorResume(e -> {
+                log.debug("S3 cover fetch timed out or failed for {}: {}", identifierKey, e.getMessage());
+                return Mono.just(Optional.<ImageDetails>empty());
+            })
             .flatMap(imageDetailsOptionalFromS3 -> { // imageDetailsOptionalFromS3 is Optional<ImageDetails>
                 if (imageDetailsOptionalFromS3.isPresent()) {
                     ImageDetails imageDetailsFromS3 = imageDetailsOptionalFromS3.get();
@@ -172,63 +184,72 @@ public class BookCoverManagementService {
 
     /**
      * Prepares a single book for display by fetching its cover and ensuring fallbacks.
+     * Returns book immediately with placeholder, then resolves cover asynchronously.
      */
     public Mono<Book> prepareBookForDisplay(Book book) {
         if (book == null) {
             return Mono.empty();
         }
 
-        return getInitialCoverUrlAndTriggerBackgroundUpdate(book)
-            .map(coverImages -> {
-                book.setCoverImages(coverImages);
-                coverImagesOptional(coverImages)
-                    .filter(ValidationUtils::hasText)
-                    .ifPresentOrElse(
-                        book::setS3ImagePath,
-                        () -> {
-                            if (!ValidationUtils.hasText(book.getS3ImagePath())) {
-                                book.setS3ImagePath(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
-                            }
-                        }
-                    );
-                ensureSlug(book);
-                return book;
-            })
-            .onErrorResume(e -> {
-                log.warn("Error getting cover for book {}: {}", book.getId(), e.getMessage());
-                if (!ValidationUtils.hasText(book.getS3ImagePath())) {
-                    book.setS3ImagePath(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
-                }
-                if (book.getCoverImages() == null) {
-                    book.setCoverImages(new CoverImages(
-                        book.getS3ImagePath(),
-                        book.getS3ImagePath(),
-                        CoverImageSource.LOCAL_CACHE
-                    ));
-                }
-                ensureSlug(book);
-                return Mono.just(book);
-            });
+        // Set placeholder immediately for fast rendering
+        if (!ValidationUtils.hasText(book.getS3ImagePath())) {
+            book.setS3ImagePath(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
+        }
+        if (book.getCoverImages() == null) {
+            book.setCoverImages(createPlaceholderCoverImages(book.getId()));
+        }
+        ensureSlug(book);
+
+        // Trigger async cover resolution in background (fire and forget)
+        getInitialCoverUrlAndTriggerBackgroundUpdate(book)
+            .timeout(Duration.ofMillis(50)) // Very short timeout for sync path
+            .subscribeOn(Schedulers.parallel())
+            .subscribe(
+                coverImages -> {
+                    // Update if we got better cover quickly
+                    if (coverImages != null && coverImages.getSource() != CoverImageSource.LOCAL_CACHE) {
+                        book.setCoverImages(coverImages);
+                        coverImagesOptional(coverImages)
+                            .filter(ValidationUtils::hasText)
+                            .ifPresent(book::setS3ImagePath);
+                    }
+                },
+                e -> log.debug("Background cover fetch failed for {}: {}", book.getId(), e.getMessage())
+            );
+
+        // Return book immediately with placeholder
+        return Mono.just(book);
     }
 
     /**
      * Prepares a collection of books for display.
+     * Optimized: Sets placeholders immediately, skips individual cover resolution.
      */
     public Mono<List<Book>> prepareBooksForDisplay(List<Book> books) {
         if (books == null || books.isEmpty()) {
             return Mono.just(List.of());
         }
-        return Flux.fromIterable(books)
+        
+        // Fast path: Set placeholders on all books immediately without async lookups
+        List<Book> prepared = books.stream()
             .filter(Objects::nonNull)
-            .concatMap(this::prepareBookForDisplay)
-            .collectList()
-            .map(list -> {
-                List<Book> prepared = deduplicateAndFilter(list);
-                log.debug("Prepared {} books for display (input {}), real covers kept {}",
-                    prepared.size(), list != null ? list.size() : 0,
-                    prepared.stream().filter(book -> ValidationUtils.BookValidator.hasActualCover(book, localDiskCoverCacheService.getLocalPlaceholderPath())).count());
-                return prepared;
-            });
+            .peek(book -> {
+                // Set placeholder immediately
+                if (!ValidationUtils.hasText(book.getS3ImagePath())) {
+                    book.setS3ImagePath(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
+                }
+                if (book.getCoverImages() == null) {
+                    book.setCoverImages(createPlaceholderCoverImages(book.getId()));
+                }
+                ensureSlug(book);
+            })
+            .toList();
+        
+        // Deduplicate and return immediately
+        List<Book> deduplicated = deduplicateAndFilter(prepared);
+        log.debug("Fast-prepared {} books for display (from {} input)", deduplicated.size(), books.size());
+        
+        return Mono.just(deduplicated);
     }
 
     private Optional<String> coverImagesOptional(CoverImages coverImages) {
