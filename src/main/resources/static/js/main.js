@@ -570,25 +570,38 @@ function handleImageFailure() {
 
     let nextSrc = null;
 
+    // Helper to compare URLs ignoring query params (cache-busting, etc.)
+    function urlsMatch(url1, url2) {
+        if (!url1 || !url2 || url1 === "" || url2 === "") return false;
+        try {
+            const parsed1 = new URL(url1, window.location.href);
+            const parsed2 = new URL(url2, window.location.href);
+            return parsed1.origin === parsed2.origin && parsed1.pathname === parsed2.pathname;
+        } catch (e) {
+            // If URL parsing fails, fall back to string comparison
+            return url1.split('?')[0] === url2.split('?')[0];
+        }
+    }
+
     // Check if currentSrc matches preferred (even if currentSrc has cache-busting params)
-    if (currentSrc.startsWith(preferred) && preferred !== "") { 
-        if (fallback && fallback !== "" && fallback !== currentSrc) {
+    if (urlsMatch(currentSrc, preferred)) { 
+        if (fallback && fallback !== "" && !urlsMatch(currentSrc, fallback)) {
             console.log('[Cover Retry] Preferred failed, trying fallback: ' + fallback);
             nextSrc = fallback;
-        } else if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
+        } else if (ultimate && ultimate !== "" && !urlsMatch(currentSrc, ultimate)) {
             console.log('[Cover Retry] Preferred failed, no fallback or fallback is same, trying ultimate: ' + ultimate);
             nextSrc = ultimate;
         }
     } 
     // Check if currentSrc matches fallback
-    else if (currentSrc.startsWith(fallback) && fallback !== "") {
-        if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
+    else if (urlsMatch(currentSrc, fallback)) {
+        if (ultimate && ultimate !== "" && !urlsMatch(currentSrc, ultimate)) {
             console.log('[Cover Retry] Fallback failed, trying ultimate: ' + ultimate);
             nextSrc = ultimate;
         }
     }
     // If it was some other URL (or already the ultimate fallback and it somehow errored)
-    else if (ultimate && ultimate !== "" && currentSrc !== ultimate) {
+    else if (ultimate && ultimate !== "" && !urlsMatch(currentSrc, ultimate)) {
         console.log('[Cover Retry] Current URL is not recognized or ultimate fallback itself failed previously, ensuring ultimate: ' + ultimate);
         nextSrc = ultimate;
     }
