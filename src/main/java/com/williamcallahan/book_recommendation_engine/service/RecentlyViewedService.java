@@ -193,7 +193,7 @@ public class RecentlyViewedService {
                     return Mono.just(Collections.emptyList());
                 }
 
-                return bookDataOrchestrator.searchBooksTiered(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
+                return bookDataOrchestrator.searchBooksTiered(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null, false)
                     .defaultIfEmpty(Collections.emptyList())
                     .map(this::prepareDefaultBooks)
                     .doOnSuccess(list -> {

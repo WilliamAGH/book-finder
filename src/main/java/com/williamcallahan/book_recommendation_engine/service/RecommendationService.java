@@ -448,7 +448,7 @@ public class RecommendationService {
         if (bookDataOrchestrator == null) {
             return Mono.just(Collections.emptyList());
         }
-        return Mono.defer(() -> bookDataOrchestrator.searchBooksTiered(query, langCode, limit, null))
+        return Mono.defer(() -> bookDataOrchestrator.searchBooksTiered(query, langCode, limit, null, false))
                 .defaultIfEmpty(Collections.emptyList())
                 .map(results -> limitResults(results, limit))
                 .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("RecommendationService.searchBooks query=" + query + " lang=" + langCode));
