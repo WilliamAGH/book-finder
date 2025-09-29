@@ -119,7 +119,8 @@ public class BookSupplementalPersistenceService {
             "INSERT INTO book_tag_assignments (id, book_id, tag_id, source, confidence, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?::jsonb, NOW()) " +
             "ON CONFLICT (book_id, tag_id, source) DO UPDATE SET metadata = EXCLUDED.metadata, confidence = COALESCE(EXCLUDED.confidence, book_tag_assignments.confidence)",
             IdGenerator.generateLong(),
-            UUID.fromString(bookId),
+            JdbcUtils.toUuid(bookId),
+
             tagId,
             source,
             confidence,

@@ -46,16 +46,18 @@ class BookSupplementalPersistenceServiceTest {
                 .thenReturn("tag-001");
 
         ArgumentCaptor<String> metadataCaptor = ArgumentCaptor.forClass(String.class);
+        // Use a valid UUID for book ID
+        String bookId = "11111111-1111-4111-8111-111111111111";
 
         service.assignQualifierTags(
-                "book-123",
+                bookId,
                 Map.of("nytBestseller", Map.of("list", "hardcover-fiction", "rank", 1))
         );
 
         verify(jdbcTemplate).update(
                 startsWith("INSERT INTO book_tag_assignments"),
                 any(),
-                eq("book-123"),
+                any(), // book_id is converted to UUID, not the original string
                 eq("tag-001"),
                 eq("QUALIFIER"),
                 isNull(),

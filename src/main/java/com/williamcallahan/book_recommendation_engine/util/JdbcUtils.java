@@ -84,6 +84,20 @@ public final class JdbcUtils {
     }
 
     /**
+     * Converts a string to a UUID, returning null if the string is null or not a valid UUID.
+     */
+    public static UUID toUuid(String uuidString) {
+        if (uuidString == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(uuidString);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
      * Query for a Long, returning null if not found.
      */
     public static Long queryForLong(JdbcTemplate jdbc, String sql, Object... params) {
