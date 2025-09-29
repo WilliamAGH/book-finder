@@ -157,22 +157,42 @@ public class HomeController {
         model.addAttribute("currentBestsellers", List.of());
         model.addAttribute("recentBooks", List.of());
 
-        // Fetch with timeout and fallback to empty lists - prevents blocking
+        // Fetch with increased timeout (3s) for Postgres queries - prevents premature timeouts
         Mono<List<Book>> bestsellers = loadCurrentBestsellers()
-            .timeout(Duration.ofMillis(500))
+            .timeout(Duration.ofMillis(3000))
             .onErrorResume(e -> {
-                log.warn("Bestsellers timed out or failed: {}", e.getMessage());
+                if (e instanceof java.util.concurrent.TimeoutException) {
+                    log.warn("Bestsellers timed out after 3000ms");
+                } else {
+                    log.warn("Bestsellers failed: {}", e.getMessage());
+                }
+                // Return partial results if available instead of empty
                 return Mono.just(List.of());
             })
-            .doOnNext(list -> model.addAttribute("currentBestsellers", list));
+            .doOnNext(list -> {
+                model.addAttribute("currentBestsellers", list);
+                if (!list.isEmpty()) {
+                    log.debug("Homepage: Loaded {} bestsellers successfully", list.size());
+                }
+            });
 
         Mono<List<Book>> recentBooks = loadRecentBooks()
-            .timeout(Duration.ofMillis(500))
+            .timeout(Duration.ofMillis(3000))
             .onErrorResume(e -> {
-                log.warn("Recent books timed out or failed: {}", e.getMessage());
+                if (e instanceof java.util.concurrent.TimeoutException) {
+                    log.warn("Recent books timed out after 3000ms");
+                } else {
+                    log.warn("Recent books failed: {}", e.getMessage());
+                }
+                // Return partial results if available instead of empty
                 return Mono.just(List.of());
             })
-            .doOnNext(list -> model.addAttribute("recentBooks", list));
+            .doOnNext(list -> {
+                model.addAttribute("recentBooks", list);
+                if (!list.isEmpty()) {
+                    log.debug("Homepage: Loaded {} recent books successfully", list.size());
+                }
+            });
 
         // Use zipDelayError to allow partial failures without blocking entire page
         return Mono.zipDelayError(bestsellers, recentBooks)
@@ -308,18 +328,25 @@ public class HomeController {
 
     /**
      * Handles requests to the search results page
+     * - Server-renders initial search results for immediate display
      * - Sets up model attributes for search view
      * - Configures SEO metadata for search page
-     * - Prepares for client-side API calls
+     * - JavaScript handles pagination and filtering (progressive enhancement)
      *
      * @param query The search query string from user input
+     * @param year Optional publication year filter
+     * @param page Page number for pagination (0-indexed internally, 1-indexed in UI)
+     * @param sort Sort order (relevance, title, author, newest, rating)
      * @param model The model for the view
-     * @return The name of the template to render (search.html)
+     * @return Mono containing the template name for async rendering
      */
     @GetMapping("/search")
-    public Object search(String query,
-                         @RequestParam(required = false) Integer year,
-                         Model model) {
+    public Mono<String> search(@RequestParam(required = false) String query,
+                               @RequestParam(required = false) Integer year,
+                               @RequestParam(required = false, defaultValue = "0") int page,
+                               @RequestParam(required = false, defaultValue = "newest") String sort,
+                               Model model) {
+        // Handle year extraction from query if enabled
         if (isYearFilteringEnabled && year == null && ValidationUtils.hasText(query)) {
             Matcher matcher = YEAR_PATTERN.matcher(query);
             if (matcher.find()) {
@@ -330,7 +357,7 @@ public class HomeController {
                     .trim()
                     .replaceAll("\\s+", " ");
 
-                return redirectTo("/search?query=" + URLEncoder.encode(processedQuery, StandardCharsets.UTF_8)
+                return Mono.just("redirect:/search?query=" + URLEncoder.encode(processedQuery, StandardCharsets.UTF_8)
                     + "&year=" + extractedYear);
             }
         }
@@ -340,6 +367,8 @@ public class HomeController {
         applyBaseAttributes(model, "search");
         model.addAttribute("query", query);
         model.addAttribute("year", effectiveYear);
+        model.addAttribute("currentPage", page);
+        model.addAttribute("currentSort", sort);
         model.addAttribute("isYearFilteringEnabled", isYearFilteringEnabled);
 
         applySeo(
@@ -351,7 +380,35 @@ public class HomeController {
             ApplicationConstants.Urls.DEFAULT_SOCIAL_IMAGE
         );
 
-        return "search";
+        // Server-render initial results if query provided
+        if (ValidationUtils.hasText(query)) {
+            int maxResults = 12; // Default page size
+            int startIndex = page * maxResults;
+            
+            return bookDataOrchestrator.searchBooksTiered(query, null, maxResults, sort, false)
+                .timeout(Duration.ofMillis(2000))
+                .flatMap(books -> bookCoverManagementService.prepareBooksForDisplay(books))
+                .map(books -> {
+                    model.addAttribute("initialResults", books);
+                    model.addAttribute("hasInitialResults", !books.isEmpty());
+                    model.addAttribute("totalResults", books.size());
+                    log.info("Server-rendered {} search results for query '{}'", books.size(), query);
+                    return books;
+                })
+                .onErrorResume(e -> {
+                    log.warn("Error server-rendering search results for '{}': {}", query, e.getMessage());
+                    model.addAttribute("initialResults", List.of());
+                    model.addAttribute("hasInitialResults", false);
+                    model.addAttribute("totalResults", 0);
+                    return Mono.just(List.of());
+                })
+                .thenReturn("search");
+        }
+
+        // No query - show search page with no results
+        model.addAttribute("initialResults", List.of());
+        model.addAttribute("hasInitialResults", false);
+        return Mono.just("search");
     }
 
     /**
@@ -427,12 +484,16 @@ public class HomeController {
             .flatMap(bookCoverManagementService::prepareBookForDisplay)
             .cache();
 
-        // Load similar books in parallel with timeouts to prevent blocking
+        // Load similar books in parallel with increased timeout to allow Postgres queries to complete
         Mono<List<Book>> similarBooksMono = resolvedBookMono
             .flatMap(book -> loadSimilarBooks(book != null ? book.getId() : id)
-                .timeout(Duration.ofMillis(300))
+                .timeout(Duration.ofMillis(2000)) // Increased from 300ms to 2000ms
                 .onErrorResume(e -> {
-                    log.warn("Similar books timed out or failed for {}: {}", id, e.getMessage());
+                    if (e instanceof java.util.concurrent.TimeoutException) {
+                        log.warn("Similar books timed out after 2000ms for {}", id);
+                    } else {
+                        log.warn("Similar books failed for {}: {}", id, e.getMessage());
+                    }
                     return Mono.just(List.of());
                 }))
             .defaultIfEmpty(List.of())
@@ -471,7 +532,7 @@ public class HomeController {
     private Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit) {
         // Homepage should ONLY query Postgres - no external API calls
         // This ensures instant page loads without external dependencies
-        return bookDataOrchestrator.searchBooksTiered(query, null, limit, null)
+        return bookDataOrchestrator.searchBooksTiered(query, null, limit, null, true) // bypassExternalApis=true
             .timeout(Duration.ofMillis(300)) // Quick timeout
             .onErrorResume(ex -> {
                 log.warn("Postgres homepage filler lookup failed for query '{}': {}", query, ex.getMessage());

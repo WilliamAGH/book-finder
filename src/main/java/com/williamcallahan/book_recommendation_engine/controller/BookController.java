@@ -48,7 +48,8 @@ public class BookController {
     @GetMapping("/search")
     public Mono<ResponseEntity<SearchResponse>> searchBooks(@RequestParam String query,
                                                             @RequestParam(name = "startIndex", defaultValue = "0") int startIndex,
-                                                            @RequestParam(name = "maxResults", defaultValue = "10") int maxResults) {
+                                                            @RequestParam(name = "maxResults", defaultValue = "10") int maxResults,
+                                                            @RequestParam(name = "orderBy", defaultValue = "newest") String orderBy) {
         String normalizedQuery = SearchQueryUtils.normalize(query);
         PagingUtils.Window window = PagingUtils.window(
             startIndex,
@@ -59,7 +60,8 @@ public class BookController {
             ApplicationConstants.Paging.MAX_TIERED_LIMIT
         );
 
-        return bookDataOrchestrator.searchBooksTiered(normalizedQuery, null, window.totalRequested(), null)
+        // Pass orderBy to orchestrator for server-side sorting
+        return bookDataOrchestrator.searchBooksTiered(normalizedQuery, null, window.totalRequested(), orderBy)
                 .defaultIfEmpty(List.of())
                 .map(results -> buildSearchResponse(normalizedQuery, window.startIndex(), window.limit(), results))
                 .map(ResponseEntity::ok)

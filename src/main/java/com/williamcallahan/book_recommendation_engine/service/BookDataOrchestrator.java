@@ -347,7 +347,11 @@ public class BookDataOrchestrator {
     }
 
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy) {
-        return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy));
+        return searchBooksTiered(query, langCode, desiredTotalResults, orderBy, false);
+    }
+    
+    public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
+        return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis));
     }
 
     public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
