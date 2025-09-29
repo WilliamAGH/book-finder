@@ -461,7 +461,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeBookCovers() {
     const covers = document.querySelectorAll('img.book-cover');
     if (covers.length === 0) {
-        console.log("No book covers found to initialize.");
+        console.debug("No book covers found to initialize.");
         return;
     }
     console.log('Initializing ' + covers.length + ' book covers.');
