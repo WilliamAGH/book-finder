@@ -28,10 +28,10 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
 
 /**
@@ -54,8 +54,8 @@ public class RecentlyViewedService {
     private final RecentBookViewRepository recentBookViewRepository;
     private final boolean externalFallbackEnabled;
 
-    // In-memory storage for recently viewed books
-    private final LinkedList<Book> recentlyViewedBooks = new LinkedList<>();
+    // In-memory storage for recently viewed books (lock-free for better concurrency)
+    private final ConcurrentLinkedDeque<Book> recentlyViewedBooks = new ConcurrentLinkedDeque<>();
     private static final int MAX_RECENT_BOOKS = ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2;
     private static final String DEFAULT_FALLBACK_QUERY = ApplicationConstants.Search.DEFAULT_RECENT_FALLBACK_QUERY;
 
@@ -143,28 +143,21 @@ public class RecentlyViewedService {
         // Use a final reference for lambda capture below
         final Book bookRef = bookToAdd;
 
-        synchronized (recentlyViewedBooks) {
-            String existingIds = recentlyViewedBooks.stream()
-                                    .map(b -> b != null ? b.getId() : "null")
-                                    .collect(Collectors.joining(", "));
-            log.info("RECENT_VIEWS_DEBUG: Existing IDs in recent views before removal: [{}] for new canonical ID '{}'", existingIds, finalCanonicalId);
-    
-            boolean removed = recentlyViewedBooks.removeIf(b -> 
-                b != null && java.util.Objects.equals(b.getId(), finalCanonicalId)
-            );
+        // Lock-free operations using ConcurrentLinkedDeque
+        // Remove existing entry for this book
+        recentlyViewedBooks.removeIf(b -> 
+            b != null && java.util.Objects.equals(b.getId(), finalCanonicalId)
+        );
 
-            if (removed) {
-                log.info("RECENT_VIEWS_DEBUG: Found and removed existing entry for canonical ID '{}'", finalCanonicalId);
-            } else {
-                log.info("RECENT_VIEWS_DEBUG: No existing entry found for canonical ID '{}'", finalCanonicalId);
-            }
-    
-            recentlyViewedBooks.addFirst(bookToAdd); // Add the (potentially new) book instance with canonical ID
-            log.info("RECENT_VIEWS_DEBUG: Added book with canonical ID '{}'. List size now: {}", finalCanonicalId, recentlyViewedBooks.size());
-    
-            while (recentlyViewedBooks.size() > MAX_RECENT_BOOKS) {
-                Book removedLastBook = recentlyViewedBooks.removeLast();
-                log.info("RECENT_VIEWS_DEBUG: Trimmed book. ID: '{}'. List size now: {}", removedLastBook.getId(), recentlyViewedBooks.size());
+        // Add to front
+        recentlyViewedBooks.addFirst(bookToAdd);
+        log.info("RECENT_VIEWS_DEBUG: Added book with canonical ID '{}'. List size now: {}", finalCanonicalId, recentlyViewedBooks.size());
+
+        // Trim to max size
+        while (recentlyViewedBooks.size() > MAX_RECENT_BOOKS) {
+            Book removedLastBook = recentlyViewedBooks.pollLast();
+            if (removedLastBook != null) {
+                log.debug("RECENT_VIEWS_DEBUG: Trimmed book. ID: '{}'", removedLastBook.getId());
             }
         }
 
@@ -243,11 +236,10 @@ public class RecentlyViewedService {
      */
     public Mono<List<Book>> getRecentlyViewedBooksReactive() {
         return Mono.defer(() -> {
-            synchronized (recentlyViewedBooks) {
-                if (!recentlyViewedBooks.isEmpty()) {
-                    log.debug("Returning {} recently viewed books from cache.", recentlyViewedBooks.size());
-                    return Mono.just(new ArrayList<>(recentlyViewedBooks));
-                }
+            // Lock-free read
+            if (!recentlyViewedBooks.isEmpty()) {
+                log.debug("Returning {} recently viewed books from cache.", recentlyViewedBooks.size());
+                return Mono.just(new ArrayList<>(recentlyViewedBooks));
             }
 
             return fetchDefaultBooksAsync()
@@ -262,20 +254,15 @@ public class RecentlyViewedService {
                 })
                 .map(defaultBooks -> defaultBooks == null ? Collections.<Book>emptyList() : defaultBooks)
                 .doOnNext(defaultBooks -> {
-                    if (defaultBooks.isEmpty()) {
-                        return;
-                    }
-                    synchronized (recentlyViewedBooks) {
-                        if (recentlyViewedBooks.isEmpty()) {
-                            recentlyViewedBooks.addAll(defaultBooks);
-                        }
+                    if (!defaultBooks.isEmpty() && recentlyViewedBooks.isEmpty()) {
+                        // Only add if still empty (another thread might have populated)
+                        recentlyViewedBooks.addAll(defaultBooks);
                     }
                 })
                 .map(defaultBooks -> {
-                    synchronized (recentlyViewedBooks) {
-                        if (!recentlyViewedBooks.isEmpty()) {
-                            return new ArrayList<>(recentlyViewedBooks);
-                        }
+                    // Return current state (might have been populated by another thread)
+                    if (!recentlyViewedBooks.isEmpty()) {
+                        return new ArrayList<>(recentlyViewedBooks);
                     }
                     return defaultBooks;
                 });
@@ -445,9 +432,7 @@ public class RecentlyViewedService {
      * Does not affect default recommendations which are generated dynamically
      */
     public void clearRecentlyViewedBooks() {
-        synchronized (recentlyViewedBooks) {
-            recentlyViewedBooks.clear();
-            log.debug("Recently viewed books cleared.");
-        }
+        recentlyViewedBooks.clear();
+        log.debug("Recently viewed books cleared.");
     }
 }

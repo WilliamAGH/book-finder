@@ -3,6 +3,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.sql.Timestamp;
@@ -38,12 +39,14 @@ public class RecentBookViewRepository {
     }
 
     /**
-     * Records a single book view. Safe to invoke even when the repository is disabled.
+     * Records a single book view asynchronously. Safe to invoke even when the repository is disabled.
+     * Uses @Async to prevent blocking the main request thread.
      *
      * @param canonicalBookId Canonical UUID string for the book that was viewed
      * @param viewedAt         Timestamp for the view (defaults to {@link Instant#now()} when null)
      * @param source           Optional source label (e.g., "web", "api")
      */
+    @Async
     public void recordView(String canonicalBookId, @Nullable Instant viewedAt, @Nullable String source) {
         if (!isEnabled() || ValidationUtils.isNullOrBlank(canonicalBookId)) {
             return;
