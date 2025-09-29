@@ -262,7 +262,8 @@ public class NewYorkTimesBestsellerScheduler {
         }
 
         Book book = new Book();
-        book.setTitle(title);
+        // Normalize title to proper case
+        book.setTitle(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(title));
 
         String description = firstNonEmptyText(bookNode, "description", "summary");
         if (ValidationUtils.hasText(description)) {
@@ -288,7 +289,11 @@ public class NewYorkTimesBestsellerScheduler {
 
         List<String> authors = extractAuthors(bookNode);
         if (!authors.isEmpty()) {
-            book.setAuthors(authors);
+            // Normalize author names to proper case
+            List<String> normalizedAuthors = authors.stream()
+                .map(com.williamcallahan.book_recommendation_engine.util.TextUtils::normalizeAuthorName)
+                .collect(java.util.stream.Collectors.toList());
+            book.setAuthors(normalizedAuthors);
         }
 
         String imageUrl = firstNonEmptyText(bookNode, "book_image", "book_image_url");
