@@ -66,7 +66,8 @@ public class BookCoverManagementServiceTest {
     @Autowired
     private CoverSourceFetchingService coverSourceFetchingService;
 
-    // Using real CoverCacheManager from Spring context, not a mock
+    @Autowired
+    private CoverCacheManager coverCacheManager;
 
     @Autowired
     private ApplicationEventPublisher eventPublisher;
@@ -95,8 +96,16 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
      */
     @BeforeEach
     public void setUp() {
-        // Reset only the mocks - not the coverCacheManager which is a real object managed by Spring
-        Mockito.reset(s3BookCoverService, localDiskCoverCacheService, coverSourceFetchingService);
+        // Reset mocks and clear the real CoverCacheManager
+        Mockito.reset(s3BookCoverService, localDiskCoverCacheService, coverSourceFetchingService, environmentService);
+        
+        // Clear the in-memory cache between tests to avoid cross-test contamination
+        // This is crucial because tests can cache image details that affect other tests
+        String[] testKeys = {"9781234567890", "9780000000001", "9780000000002"};
+        for (String key : testKeys) {
+            coverCacheManager.invalidateProvisionalUrl(key);
+            coverCacheManager.invalidateFinalImageDetails(key);
+        }
 
         // Configure common behavior for the mocks
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
@@ -107,6 +116,15 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
         ImageDetails placeholderDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.placeholder(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
         when(localDiskCoverCacheService.createPlaceholderImageDetails(anyString(), anyString()))
             .thenReturn(placeholderDetails);
+        
+        // Default S3 behavior - return empty (cache miss)
+        when(s3BookCoverService.fetchCover(any(Book.class)))
+            .thenReturn(CompletableFuture.completedFuture(java.util.Optional.empty()));
+        
+        // Default background processing behavior
+        ImageDetails defaultBackgroundDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.localCache("book-covers", "default.jpg", 600, 900);
+        when(coverSourceFetchingService.getBestCoverImageUrlAsync(any(Book.class), any(), any()))
+            .thenReturn(CompletableFuture.completedFuture(defaultBackgroundDetails));
 
         // Create a test book
         testBook = new Book();
@@ -128,36 +146,42 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
      */
     @Test
     public void testGetInitialCoverUrlAndTriggerBackgroundUpdate_S3Hit() {
+        // Use a different book to avoid cache pollution from other tests
+        Book s3TestBook = new Book();
+        s3TestBook.setId("s3-test-book");
+        s3TestBook.setTitle("S3 Test Book");
+        s3TestBook.setAuthors(java.util.Collections.singletonList("Test Author"));
+        s3TestBook.setIsbn13("9780000000001");
+        s3TestBook.setCoverImageUrl("https://example.com/s3testbook-cover.jpg");
+        
         // Set up the S3 hit scenario
 ImageDetails s3ImageDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.s3Cache(
-            "https://test-cdn.example.com/images/book-covers/testbook123-lg-google-books.jpg",
-            "images/book-covers/testbook123-lg-google-books.jpg",
+            "https://test-cdn.example.com/images/book-covers/s3-test-book-lg-google-books.jpg",
+            "images/book-covers/s3-test-book-lg-google-books.jpg",
             300, 450
         );
 
         CompletableFuture<java.util.Optional<ImageDetails>> s3Result = 
             CompletableFuture.completedFuture(java.util.Optional.of(s3ImageDetails));
         
-        when(s3BookCoverService.fetchCover(any(Book.class))).thenReturn(s3Result);
+        // Override the default mock behavior for this test
+        when(s3BookCoverService.fetchCover(eq(s3TestBook))).thenReturn(s3Result);
 
         // Execute and verify the result
-        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(testBook);
+        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(s3TestBook);
         
         StepVerifier.create(result)
             .assertNext(coverImages -> {
                 assertNotNull(coverImages);
-                if (coverImages.getSource() == CoverImageSource.S3_CACHE) {
-                    assertEquals(s3ImageDetails.getUrlOrPath(), coverImages.getPreferredUrl());
-                    assertEquals(testBook.getCoverImageUrl(), coverImages.getFallbackUrl());
-                } else {
-                    assertEquals(CoverImageSource.LOCAL_CACHE, coverImages.getSource());
-                    assertEquals(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH, coverImages.getPreferredUrl());
-                }
+                // With the mock configuration, we should get S3_CACHE source
+                assertEquals(CoverImageSource.S3_CACHE, coverImages.getSource());
+                assertEquals(s3ImageDetails.getUrlOrPath(), coverImages.getPreferredUrl());
+                assertEquals(s3TestBook.getCoverImageUrl(), coverImages.getFallbackUrl());
             })
             .verifyComplete();
 
         // Verify S3 interactions
-        verify(s3BookCoverService, times(1)).fetchCover(testBook);
+        verify(s3BookCoverService, times(1)).fetchCover(s3TestBook);
         // Verify no background processing since we got a hit from S3
         verify(coverSourceFetchingService, never()).getBestCoverImageUrlAsync(any(), any(), any());
     }
@@ -241,25 +265,33 @@ ImageDetails s3ImageDetails = com.williamcallahan.book_recommendation_engine.tes
      */
     @Test
     public void testGetInitialCoverUrlAndTriggerBackgroundUpdate_CacheMiss() {
+        // Use a different book to avoid cache pollution from other tests
+        Book cacheMissBook = new Book();
+        cacheMissBook.setId("cache-miss-book");
+        cacheMissBook.setTitle("Cache Miss Book");
+        cacheMissBook.setAuthors(java.util.Collections.singletonList("Test Author"));
+        cacheMissBook.setIsbn13("9780000000002");
+        cacheMissBook.setCoverImageUrl("https://example.com/cachemissbook-cover.jpg");
+        
         // Test when S3 and caches are empty, should return fallback and trigger background processing
+        // S3 returns empty
         when(s3BookCoverService.fetchCover(any(Book.class)))
             .thenReturn(CompletableFuture.completedFuture(java.util.Optional.empty()));
             
-        // Mock the background processing to avoid null pointer
-ImageDetails backgroundImageDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.localCache("book-covers", "background-testbook123.jpg", 600, 900);
+        // Mock the background processing to avoid null pointer - use any() matchers
+ImageDetails backgroundImageDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.localCache("book-covers", "background-cache-miss-book.jpg", 600, 900);
         when(coverSourceFetchingService.getBestCoverImageUrlAsync(any(Book.class), anyString(), any(ImageProvenanceData.class)))
             .thenReturn(CompletableFuture.completedFuture(backgroundImageDetails));
 
         // Execute
-        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(testBook);
+        Mono<CoverImages> result = bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(cacheMissBook);
         
         // Verify result
         StepVerifier.create(result)
             .assertNext(coverImages -> {
                 assertNotNull(coverImages);
-                // With our new implementation of CoverCacheManager used in the test, it might return the placeholder
-                // instead of the original URL, so we check for either possible value
-                boolean preferredIsExpected = coverImages.getPreferredUrl().equals(testBook.getCoverImageUrl())
+                // With cache miss, we should get the book's original cover URL or placeholder
+                boolean preferredIsExpected = coverImages.getPreferredUrl().equals(cacheMissBook.getCoverImageUrl())
                     || coverImages.getPreferredUrl().equals(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH)
                     || coverImages.getPreferredUrl().startsWith("/book-covers/");
                 assertTrue(
@@ -270,14 +302,14 @@ ImageDetails backgroundImageDetails = com.williamcallahan.book_recommendation_en
                 // The fallback URL should be either the placeholder or the book's URL
                 assertTrue(
                     coverImages.getFallbackUrl().equals(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH) || 
-                    coverImages.getFallbackUrl().equals(testBook.getCoverImageUrl()),
-                    "Expected either '" + ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH + "' or testBook.getCoverImageUrl(), but got: " + coverImages.getFallbackUrl()
+                    coverImages.getFallbackUrl().equals(cacheMissBook.getCoverImageUrl()),
+                    "Expected either '" + ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH + "' or cacheMissBook.getCoverImageUrl(), but got: " + coverImages.getFallbackUrl()
                 );
             })
             .verifyComplete();
 
         // Verify that S3 was checked
-        verify(s3BookCoverService, times(1)).fetchCover(testBook);
+        verify(s3BookCoverService, times(1)).fetchCover(cacheMissBook);
         
         // Note: We no longer verify the background processing which happens asynchronously
         // This makes the test more reliable since it might happen at different times

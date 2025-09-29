@@ -75,7 +75,7 @@ class BookControllerTest {
     @Test
     @DisplayName("GET /api/books/search returns DTO results")
     void searchBooks_returnsDtos() throws Exception {
-        when(bookDataOrchestrator.searchBooksTiered(eq("Fixture"), eq(null), eq(5), eq(null)))
+        when(bookDataOrchestrator.searchBooksTiered(eq("Fixture"), eq(null), eq(5), eq("newest")))
                 .thenReturn(Mono.just(List.of(fixtureBook)));
 
         performAsync(get("/api/books/search")

@@ -49,12 +49,12 @@ class RecentlyViewedServiceTest {
     void fetchDefaultBooks_prefersPostgresResults() {
 Book postgresBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
                 .id("postgres-book").publishedDate(Date.from(Instant.parse("2022-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/postgres-book.jpg").build();
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.just(List.of(postgresBook)));
 
 com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "postgres-book");
 
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
     }
 
@@ -64,7 +64,7 @@ com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verify
 
         recentlyViewedService = createService(true);
 
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.just(List.of()));
 
 Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
@@ -74,7 +74,7 @@ Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTe
 
 com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "google-book");
 
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
     }
 
@@ -84,7 +84,7 @@ com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verify
 
         recentlyViewedService = createService(true);
 
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.error(new RuntimeException("boom")));
 
 Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
@@ -94,7 +94,7 @@ Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTe
 
 com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "google-book");
 
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
     }
 
@@ -102,12 +102,12 @@ com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verify
     void fetchDefaultBooks_returnsEmptyWhenFallbackDisabled() {
         when(recentBookViewRepository.isEnabled()).thenReturn(false);
 
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.just(List.of()));
 
 com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyEmptyList(recentlyViewedService.fetchDefaultBooksAsync());
 
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
     }
 
@@ -140,7 +140,7 @@ Book dbBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestDa
 
         verify(recentBookViewRepository).fetchMostRecentViews(anyInt());
         verify(bookDataOrchestrator).getBookFromDatabase("uuid-1");
-        verify(bookDataOrchestrator, never()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator, never()).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
     }
 
     @Test

@@ -221,7 +221,8 @@ class HomeControllerTest {
                 argThat((String query) -> query != null && !query.equals("hardcover-fiction")),
                 isNull(String.class),
                 anyInt(),
-                isNull(String.class)))
+                isNull(String.class),
+                eq(true))) // bypassExternalApis=true for homepage
             .thenReturn(Mono.just(additionalRecentBooks));
         // Override recently viewed to include our recent book deterministically
         when(recentlyViewedService.getRecentlyViewedBooksReactive())
@@ -256,7 +257,7 @@ class HomeControllerTest {
     void shouldShowEmptyHomePageWhenServicesReturnEmptyLists() {
         // Default setUp mocks already return empty lists
 
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull(), eq(true)))
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
         // Act & Assert
@@ -278,7 +279,7 @@ class HomeControllerTest {
         // Arrange - updated signature
         when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
             .thenReturn(Mono.error(new RuntimeException("simulated bestseller fetch failure")));
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull(), eq(true)))
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
         // Act & Assert
         webTestClient.get().uri("/")

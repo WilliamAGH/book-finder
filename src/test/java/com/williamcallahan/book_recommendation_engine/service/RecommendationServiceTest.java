@@ -35,14 +35,14 @@ class RecommendationServiceTest {
         Book postgresMatch = buildBook("postgres-match", "en", List.of("Author Two"), List.of("Fiction"));
 
         when(bookDataOrchestrator.fetchCanonicalBookReactive("source")).thenReturn(Mono.just(source));
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.just(List.of(postgresMatch)));
 
         StepVerifier.create(recommendationService.getSimilarBooks("source", 3))
             .expectNextMatches(results -> results.stream().anyMatch(book -> "postgres-match".equals(book.getId())))
             .verifyComplete();
 
-        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
     }
 
@@ -52,14 +52,14 @@ class RecommendationServiceTest {
         Book fallbackMatch = buildBook("fallback-match", "en", List.of("Author Two"), List.of("Fiction"));
 
         when(bookDataOrchestrator.fetchCanonicalBookReactive("source")).thenReturn(Mono.just(source));
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.just(List.of(fallbackMatch)));
 
         StepVerifier.create(recommendationService.getSimilarBooks("source", 3))
             .expectNextMatches(results -> results.stream().anyMatch(book -> "fallback-match".equals(book.getId())))
             .verifyComplete();
 
-        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(recommendationPersistenceService, atLeastOnce()).persistPipelineRecommendations(any(), any());
     }
 
@@ -69,14 +69,14 @@ class RecommendationServiceTest {
         Book source = buildBook("source", "en", List.of("Author One"), List.of("Fiction"));
 
         when(bookDataOrchestrator.fetchCanonicalBookReactive("source")).thenReturn(Mono.just(source));
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any()))
+        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
             .thenReturn(Mono.just(List.of()));
 
         StepVerifier.create(recommendationService.getSimilarBooks("source", 3))
             .expectNext(List.of())
             .verifyComplete();
 
-        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator, atLeastOnce()).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(recommendationPersistenceService, never()).persistPipelineRecommendations(any(), any());
     }
 
@@ -88,7 +88,7 @@ class RecommendationServiceTest {
             .expectNext(List.of())
             .verifyComplete();
 
-        verify(bookDataOrchestrator, never()).searchBooksTiered(anyString(), any(), anyInt(), any());
+        verify(bookDataOrchestrator, never()).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
         verify(recommendationPersistenceService, never()).persistPipelineRecommendations(any(), any());
     }
 
