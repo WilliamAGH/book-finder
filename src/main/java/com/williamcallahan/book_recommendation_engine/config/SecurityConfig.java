@@ -112,8 +112,8 @@ public class SecurityConfig {
             headers.referrerPolicy(referrer -> referrer.policy(policy));
 
             if (cspEnabled) { // Check if CSP is enabled first
-                StringBuilder imgSrcDirective = new StringBuilder("'self' data: ");
-                StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline'");
+                StringBuilder imgSrcDirective = new StringBuilder("'self' data: blob: ");
+                StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline' blob:");
                 StringBuilder connectSrcDirective = new StringBuilder("'self'");
 
                 if (clickyEnabled) {
