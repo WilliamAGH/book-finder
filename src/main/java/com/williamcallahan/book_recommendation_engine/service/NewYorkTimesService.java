@@ -25,6 +25,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 // import java.util.ArrayList; // Unused
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Collections;
@@ -84,6 +85,8 @@ public class NewYorkTimesService {
 
     /**
      * Fetch the latest published list's books for the given provider list code from Postgres.
+     * Queries cached data in Postgres (populated by scheduled job).
+     * Falls back to external API only if Postgres is empty (should not happen in prod).
      */
     @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100)")
     public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
@@ -102,9 +105,14 @@ public class NewYorkTimesService {
             log.info("NYT repository returned {} books for list '{}'", list.size(), listNameEncoded);
             return list;
         })
+        .timeout(Duration.ofMillis(3000)) // 3s timeout for Postgres query
         .subscribeOn(Schedulers.boundedElastic())
         .onErrorResume(e -> {
-            LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);
+            if (e instanceof java.util.concurrent.TimeoutException) {
+                log.error("Timeout fetching bestsellers for list '{}' after 3000ms", listNameEncoded);
+            } else {
+                LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);
+            }
             return Mono.just(Collections.emptyList());
         });
     }
