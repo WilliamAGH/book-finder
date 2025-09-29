@@ -135,9 +135,19 @@ public class Book {
     }
 
     public void setCoverImageUrl(String coverImageUrl) {
-        if (coverImageUrl != null && (coverImageUrl.startsWith("http://") || coverImageUrl.startsWith("https://"))) {
+        // Don't overwrite existing values with null
+        if (coverImageUrl == null) {
+            return;
+        }
+
+        // Check if it's an S3 URL (amazonaws.com or other S3-compatible services)
+        if (coverImageUrl.contains("s3.amazonaws.com") || coverImageUrl.contains(".digitaloceanspaces.com")) {
+            this.s3ImagePath = coverImageUrl;
+        } else if (coverImageUrl.startsWith("http://") || coverImageUrl.startsWith("https://")) {
+            // External URL (Google Books, Open Library, etc.)
             this.externalImageUrl = coverImageUrl;
         } else {
+            // Relative path or S3 key (no protocol)
             this.s3ImagePath = coverImageUrl;
         }
     }
