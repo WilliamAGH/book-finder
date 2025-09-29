@@ -9,8 +9,11 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Utility class for text normalization and formatting operations.
- * Provides consistent text handling across the application.
+ * Centralized text normalization utilities for book data consistency.
+ * Converts API data (often ALL CAPS) to proper title/name case at ingestion time.
+ * 
+ * @author William Callahan
+ * @since 1.0.0
  */
 public class TextUtils {
 
@@ -41,17 +44,21 @@ public class TextUtils {
     }
 
     /**
-     * Normalizes a book title to proper title case.
-     * Handles edge cases like:
-     * - All uppercase titles (converts to title case)
-     * - All lowercase titles (converts to title case)
-     * - Mixed case titles (preserves intentional capitalization)
-     * - Articles and prepositions (lowercase unless first/last word)
-     * - Abbreviations and acronyms (uppercase)
-     * - Roman numerals (uppercase)
+     * Converts book titles to proper English title case.
      * 
-     * @param title The raw book title
-     * @return Normalized title, or null if input is null
+     * <p><strong>Examples:</strong>
+     * <ul>
+     * <li>"THE GREAT GATSBY" → "The Great Gatsby"</li>
+     * <li>"WORLD WAR II: A HISTORY" → "World War II: A History"</li>
+     * <li>"THE FBI FILES" → "The FBI Files"</li>
+     * </ul>
+     * 
+     * <p><strong>Rules:</strong> Capitalizes first word, proper nouns, Roman numerals, acronyms.
+     * Lowercases articles/prepositions (a, the, of, in, etc.) unless first/last word.
+     * Preserves intentional mixed case (e.g., "eBay").
+     * 
+     * @param title raw title from external API (may be ALL CAPS)
+     * @return normalized title in proper case, or null if input is null
      */
     public static String normalizeBookTitle(String title) {
         if (title == null || title.isBlank()) {
@@ -76,10 +83,10 @@ public class TextUtils {
     }
 
     /**
-     * Converts a string to title case following standard English title capitalization rules.
+     * Internal method applying English title case rules with subtitle handling.
      * 
-     * @param text The text to convert
-     * @return Title-cased text
+     * @param text text known to need normalization (all upper/lower case)
+     * @return title-cased text with proper capitalization after colons/dashes
      */
     private static String toTitleCase(String text) {
         if (text == null || text.isBlank()) {
@@ -146,10 +153,10 @@ public class TextUtils {
     }
 
     /**
-     * Capitalizes the first letter of a word.
+     * Capitalizes first letter, handles leading punctuation (e.g., "'til" → "'Til").
      * 
-     * @param word The word to capitalize
-     * @return Word with first letter capitalized
+     * @param word single word to capitalize
+     * @return word with first letter capitalized, preserving punctuation
      */
     private static String capitalize(String word) {
         if (word == null || word.isEmpty()) {
@@ -172,12 +179,12 @@ public class TextUtils {
     }
 
     /**
-     * Capitalizes the first letter after a delimiter (e.g., colon, em-dash).
-     * Used for subtitles and multi-part titles.
+     * Capitalizes first letter after delimiter for subtitle handling.
+     * Example: "clean code: a handbook" → "clean code: A handbook"
      * 
-     * @param text The text to process
-     * @param delimiter The delimiter character
-     * @return Text with words after delimiter capitalized
+     * @param text text to process
+     * @param delimiter character after which to capitalize (typically ':' or '—')
+     * @return text with post-delimiter capitalization applied
      */
     private static String capitalizeAfterDelimiter(String text, char delimiter) {
         if (text == null || text.isEmpty()) {
@@ -205,11 +212,21 @@ public class TextUtils {
     }
 
     /**
-     * Normalizes author names to proper case.
-     * Handles special cases like "McDONALD" -> "McDonald" and "VON NEUMANN" -> "von Neumann".
+     * Converts author names to proper case with prefix handling.
      * 
-     * @param name The author name to normalize
-     * @return Normalized author name
+     * <p><strong>Examples:</strong>
+     * <ul>
+     * <li>"STEPHEN KING" → "Stephen King"</li>
+     * <li>"PATRICK MCDONALD" → "Patrick McDonald"</li>
+     * <li>"LUDWIG VON BEETHOVEN" → "Ludwig von Beethoven"</li>
+     * <li>"CONNOR O'BRIEN" → "Connor O'Brien"</li>
+     * </ul>
+     * 
+     * <p><strong>Special handling:</strong> Mc/Mac/O' prefixes, nobility particles (von, van, de).
+     * Preserves intentional mixed case.
+     * 
+     * @param name raw author name from external API (may be ALL CAPS)
+     * @return normalized name in proper case, or null if input is null
      */
     public static String normalizeAuthorName(String name) {
         if (name == null || name.isBlank()) {
@@ -232,10 +249,11 @@ public class TextUtils {
     }
 
     /**
-     * Capitalizes a part of a name (handles prefixes like Mc, Mac, O', etc.).
+     * Capitalizes name part with prefix-specific rules.
+     * Handles Mc/Mac/O' (Irish/Scottish), von/van/de (nobility particles).
      * 
-     * @param part The name part to capitalize
-     * @return Capitalized name part
+     * @param part single name component (e.g., "mcdonald", "von")
+     * @return properly capitalized part following naming conventions
      */
     private static String capitalizeNamePart(String part) {
         if (part == null || part.isEmpty()) {

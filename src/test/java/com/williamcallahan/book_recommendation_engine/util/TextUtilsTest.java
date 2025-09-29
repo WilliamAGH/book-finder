@@ -7,10 +7,28 @@ import org.junit.jupiter.params.provider.CsvSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test suite for TextUtils text normalization utilities.
+ * Comprehensive test suite for {@link TextUtils} text normalization.
+ * 
+ * <p>Tests 40+ cases covering:
+ * <ul>
+ * <li>Title case conversion (uppercase/lowercase → proper case)</li>
+ * <li>Mixed case preservation (intentional formatting)</li>
+ * <li>Articles and prepositions (a, the, of, in → lowercase)</li>
+ * <li>Subtitle capitalization (after colons, dashes, em-dashes)</li>
+ * <li>Roman numerals and acronyms (FBI, NASA, II, VIII)</li>
+ * <li>Author name prefixes (Mc, Mac, O', von, van, de)</li>
+ * <li>Edge cases (punctuation, whitespace, null handling)</li>
+ * </ul>
+ * 
+ * @see TextUtils
+ * @author William Callahan
  */
 public class TextUtilsTest {
 
+    /**
+     * Tests title normalization with various uppercase/lowercase inputs.
+     * Verifies proper title case with articles, prepositions, Roman numerals, acronyms.
+     */
     @ParameterizedTest
     @CsvSource(delimiter = '|', value = {
         "THE GREAT GATSBY|The Great Gatsby",
@@ -37,16 +55,19 @@ public class TextUtilsTest {
         assertEquals(expected, TextUtils.normalizeBookTitle(input));
     }
 
+    /** Verifies null input returns null without throwing exception. */
     @Test
     void testNormalizeBookTitle_NullInput() {
         assertNull(TextUtils.normalizeBookTitle(null));
     }
 
+    /** Verifies blank strings are preserved (not converted to empty). */
     @Test
     void testNormalizeBookTitle_BlankInput() {
         assertEquals("   ", TextUtils.normalizeBookTitle("   "));
     }
 
+    /** Verifies intentional mixed case (e.g., eBay, iPhone) is preserved. */
     @Test
     void testNormalizeBookTitle_PreserveIntentionalMixedCase() {
         String title1 = "The Lord of the Rings";
@@ -59,6 +80,10 @@ public class TextUtilsTest {
         assertEquals(title3, TextUtils.normalizeBookTitle(title3));
     }
 
+    /**
+     * Tests author name normalization with special prefix handling.
+     * Covers Mc/Mac/O' prefixes and nobility particles (von, van, de).
+     */
     @ParameterizedTest
     @CsvSource(delimiter = '|', value = {
         "JOHN DOE|John Doe",
@@ -77,11 +102,13 @@ public class TextUtilsTest {
         assertEquals(expected, TextUtils.normalizeAuthorName(input));
     }
 
+    /** Verifies null author name returns null without throwing exception. */
     @Test
     void testNormalizeAuthorName_NullInput() {
         assertNull(TextUtils.normalizeAuthorName(null));
     }
 
+    /** Verifies already properly cased author names are preserved unchanged. */
     @Test
     void testNormalizeAuthorName_PreserveMixedCase() {
         String author1 = "Stephen King";
@@ -91,6 +118,7 @@ public class TextUtilsTest {
         assertEquals(author2, TextUtils.normalizeAuthorName(author2));
     }
 
+    /** Tests colon-separated subtitle capitalization. */
     @Test
     void testTitleCaseWithSubtitle() {
         String input = "THE DESIGN OF EVERYDAY THINGS: REVISED AND EXPANDED EDITION";
@@ -98,6 +126,7 @@ public class TextUtilsTest {
         assertEquals(expected, TextUtils.normalizeBookTitle(input));
     }
 
+    /** Tests em-dash subtitle capitalization. */
     @Test
     void testTitleCaseWithEmDash() {
         String input = "THE PRAGMATIC PROGRAMMER—FROM JOURNEYMAN TO MASTER";
@@ -105,6 +134,7 @@ public class TextUtilsTest {
         assertEquals(expected, TextUtils.normalizeBookTitle(input));
     }
 
+    /** Verifies known acronyms (FBI, CIA, NASA) remain uppercase. */
     @Test
     void testTitleCasePreservesAcronyms() {
         String input = "THE FBI STORY";
@@ -112,6 +142,7 @@ public class TextUtilsTest {
         assertTrue(result.contains("FBI"), "FBI acronym should be preserved");
     }
 
+    /** Tests handling of complex punctuation (question marks, colons, etc.). */
     @Test
     void testHandlesComplexPunctuation() {
         String input = "WHAT IF?: SERIOUS SCIENTIFIC ANSWERS TO ABSURD HYPOTHETICAL QUESTIONS";
@@ -121,6 +152,7 @@ public class TextUtilsTest {
         assertTrue(result.contains(": Serious"), "Should capitalize after colon");
     }
 
+    /** Verifies excessive whitespace structure is preserved during normalization. */
     @Test
     void testWhitespacePreservation() {
         String input = "THE    GREAT     GATSBY";
