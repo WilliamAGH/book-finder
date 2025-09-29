@@ -10,6 +10,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.LinkedHashMap;
+import reactor.core.publisher.Flux;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,21 +51,50 @@ public class TieredBookSearchService {
     }
 
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
-        LOGGER.debug("TieredBookSearch: Starting search for query: '{}', lang: {}, total: {}, order: {}", query, langCode, desiredTotalResults, orderBy);
+        return searchBooks(query, langCode, desiredTotalResults, orderBy, false);
+    }
+    
+    Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
+        LOGGER.debug("TieredBookSearch: Starting search for query: '{}', lang: {}, total: {}, order: {}, bypassExternal: {}", 
+            query, langCode, desiredTotalResults, orderBy, bypassExternalApis);
 
-        // Try Postgres first with timeout
-        List<Book> postgresHits = searchPostgresFirst(query, desiredTotalResults);
-        if (!postgresHits.isEmpty()) {
-            LOGGER.info("TieredBookSearch: Postgres satisfied query '{}' with {} results.", query, postgresHits.size());
-            return Mono.just(postgresHits);
-        }
-        
-        LOGGER.debug("TieredBookSearch: Postgres returned empty for '{}', checking external fallback", query);
-
-        if (!externalFallbackEnabled) {
-            LOGGER.info("TieredBookSearch: External fallbacks disabled; returning empty result set for query '{}' after Postgres miss.", query);
-            return Mono.just(postgresHits);
-        }
+        // ALWAYS try Postgres first - baseline results
+        return searchPostgresFirstReactive(query, desiredTotalResults)
+            .flatMap(postgresHits -> {
+                LOGGER.info("TieredBookSearch: Postgres returned {} results for query '{}'", postgresHits.size(), query);
+                
+                // If we have enough results from Postgres, return them immediately
+                if (!postgresHits.isEmpty() && postgresHits.size() >= desiredTotalResults) {
+                    LOGGER.info("TieredBookSearch: Postgres fully satisfied query '{}' with {} results.", query, postgresHits.size());
+                    return Mono.just(postgresHits);
+                }
+                
+                // If external fallback disabled OR explicitly bypassed (e.g., for homepage), return what Postgres gave us
+                if (!externalFallbackEnabled || bypassExternalApis) {
+                    if (bypassExternalApis) {
+                        LOGGER.info("TieredBookSearch: External APIs bypassed for query '{}'; returning {} Postgres-only results.", query, postgresHits.size());
+                    } else {
+                        LOGGER.info("TieredBookSearch: External fallbacks disabled; returning {} Postgres results for query '{}'.", postgresHits.size(), query);
+                    }
+                    return Mono.just(postgresHits);
+                }
+                
+                // Otherwise, augment Postgres results with external APIs
+                int needed = Math.max(0, desiredTotalResults - postgresHits.size());
+                LOGGER.debug("TieredBookSearch: Augmenting {} Postgres results with up to {} external results", postgresHits.size(), needed);
+                
+                return performExternalSearch(query, langCode, needed, orderBy)
+                    .map(externalHits -> mergeResults(postgresHits, externalHits, desiredTotalResults))
+                    .defaultIfEmpty(postgresHits); // On external failure, return Postgres results
+            })
+            .onErrorResume(e -> {
+                LOGGER.error("TieredBookSearch: Error during search for '{}': {}", query, e.getMessage());
+                // On error, try to return empty instead of failing completely
+                return Mono.just(List.of());
+            });
+    }
+    
+    private Mono<List<Book>> performExternalSearch(String query, String langCode, int desiredTotalResults, String orderBy) {
 
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
         boolean googleFallbackEnabled = googleApiFetcher.isGoogleFallbackEnabled();
@@ -113,8 +145,7 @@ public class TieredBookSearchService {
                 } else {
                     LOGGER.info("TieredBookSearch: Search for query '{}' yielded no results from any tier.", query);
                 }
-            })
-            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.searchBooks(" + query + ")"));
+            });
     }
 
     Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
@@ -127,25 +158,80 @@ public class TieredBookSearchService {
                 .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.searchAuthors(" + query + ")"));
     }
 
-    private List<Book> searchPostgresFirst(String query, int desiredTotalResults) {
+    /**
+     * Merges Postgres baseline results with external API results.
+     * Postgres results take priority; external results fill remaining slots.
+     * Deduplicates by book ID.
+     */
+    private List<Book> mergeResults(List<Book> postgresResults, List<Book> externalResults, int maxTotal) {
+        LinkedHashMap<String, Book> merged = new LinkedHashMap<>();
+        
+        // Add Postgres results first (highest priority)
+        for (Book book : postgresResults) {
+            if (book != null && book.getId() != null) {
+                merged.putIfAbsent(book.getId(), book);
+            }
+        }
+        
+        // Add external results to fill remaining slots
+        for (Book book : externalResults) {
+            if (book != null && book.getId() != null && merged.size() < maxTotal) {
+                merged.putIfAbsent(book.getId(), book);
+            }
+        }
+        
+        List<Book> result = merged.values().stream().limit(maxTotal).collect(Collectors.toList());
+        LOGGER.debug("Merged {} Postgres + {} external = {} total results (max: {})", 
+            postgresResults.size(), externalResults.size(), result.size(), maxTotal);
+        return result;
+    }
+    
+    /**
+     * Searches Postgres reactively without blocking.
+     * Fetches search results and hydrates books in parallel using reactive streams.
+     */
+    private Mono<List<Book>> searchPostgresFirstReactive(String query, int desiredTotalResults) {
         if (bookSearchService == null || postgresBookRepository == null) {
-            return List.of();
+            return Mono.just(List.of());
         }
+        
         int safeTotal = desiredTotalResults <= 0 ? 20 : PagingUtils.atLeast(desiredTotalResults, 1);
-        List<BookSearchService.SearchResult> hits = bookSearchService.searchBooks(query, safeTotal);
-        if (hits == null || hits.isEmpty()) {
-            return List.of();
-        }
-        List<Book> resolved = new ArrayList<>(hits.size());
-        for (BookSearchService.SearchResult hit : hits) {
-            Optional<Book> book = postgresBookRepository.fetchByCanonicalId(hit.bookId().toString());
-            book.ifPresent(resolvedBook -> {
-                resolvedBook.addQualifier("search.matchType", hit.matchTypeNormalised());
-                resolvedBook.addQualifier("search.relevanceScore", hit.relevanceScore());
-                resolved.add(resolvedBook);
+        
+        return Mono.fromCallable(() -> bookSearchService.searchBooks(query, safeTotal))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(hits -> {
+                if (hits == null || hits.isEmpty()) {
+                    return Mono.just(List.<Book>of());
+                }
+                
+                // Reactive batch fetch with parallel hydration
+                return Flux.fromIterable(hits)
+                    .flatMap(hit -> 
+                        Mono.fromCallable(() -> postgresBookRepository.fetchByCanonicalId(hit.bookId().toString()))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .map(optBook -> {
+                                if (optBook.isPresent()) {
+                                    Book book = optBook.get();
+                                    book.addQualifier("search.matchType", hit.matchTypeNormalised());
+                                    book.addQualifier("search.relevanceScore", hit.relevanceScore());
+                                    return book;
+                                }
+                                return null;
+                            })
+                            .onErrorResume(e -> {
+                                LOGGER.warn("Failed to fetch book {}: {}", hit.bookId(), e.getMessage());
+                                return Mono.empty();
+                            })
+                    , 8) // Concurrency of 8 for parallel DB fetches
+                    .filter(Objects::nonNull)
+                    .collectList();
+            })
+            .defaultIfEmpty(List.of())
+            .doOnSuccess(results -> {
+                if (!results.isEmpty()) {
+                    LOGGER.debug("Postgres search returned {} books for query '{}'", results.size(), query);
+                }
             });
-        }
-        return resolved;
     }
 
     private Mono<List<Book>> executePagedSearch(String query,
