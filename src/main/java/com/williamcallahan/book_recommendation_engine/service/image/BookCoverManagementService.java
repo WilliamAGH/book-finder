@@ -148,9 +148,9 @@ public class BookCoverManagementService {
             return Mono.just(result);
         }
 
-        // Check S3 with aggressive timeout - don't block rendering
+        // Check S3 with reasonable timeout - balance responsiveness with success rate
         return Mono.fromFuture(s3BookCoverService.fetchCover(book))
-            .timeout(Duration.ofMillis(100)) // Fast timeout for cover fetch
+            .timeout(Duration.ofMillis(500)) // 500ms timeout allows S3 to respond in most cases
             .subscribeOn(Schedulers.boundedElastic()) // Run on background thread
             .onErrorResume(e -> {
                 log.debug("S3 cover fetch timed out or failed for {}: {}", identifierKey, e.getMessage());

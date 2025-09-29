@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.LinkedHashMap;
 import reactor.core.publisher.Flux;
@@ -17,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -27,7 +29,7 @@ import java.time.Duration;
  * with Google and OpenLibrary fallbacks while keeping the orchestrator slim.
  */
 @Component
-@ConditionalOnBean({BookSearchService.class, PostgresBookRepository.class})
+@ConditionalOnBean(BookSearchService.class)
 public class TieredBookSearchService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TieredBookSearchService.class);
@@ -41,7 +43,7 @@ public class TieredBookSearchService {
     TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
                             OpenLibraryBookDataService openLibraryBookDataService,
-                            PostgresBookRepository postgresBookRepository,
+                            @Nullable PostgresBookRepository postgresBookRepository,
                             @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
@@ -204,27 +206,35 @@ public class TieredBookSearchService {
                     return Mono.just(List.<Book>of());
                 }
                 
-                // Reactive batch fetch with parallel hydration
-                return Flux.fromIterable(hits)
-                    .flatMap(hit -> 
-                        Mono.fromCallable(() -> postgresBookRepository.fetchByCanonicalId(hit.bookId().toString()))
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .map(optBook -> {
-                                if (optBook.isPresent()) {
-                                    Book book = optBook.get();
-                                    book.addQualifier("search.matchType", hit.matchTypeNormalised());
-                                    book.addQualifier("search.relevanceScore", hit.relevanceScore());
-                                    return book;
-                                }
-                                return null;
-                            })
-                            .onErrorResume(e -> {
-                                LOGGER.warn("Failed to fetch book {}: {}", hit.bookId(), e.getMessage());
-                                return Mono.empty();
-                            })
-                    , 8) // Concurrency of 8 for parallel DB fetches
-                    .filter(Objects::nonNull)
-                    .collectList();
+                // Extract book IDs for batch fetch (much faster than N+1 queries)
+                UUID[] bookIds = hits.stream()
+                    .map(hit -> hit.bookId())
+                    .toArray(UUID[]::new);
+                
+                if (bookIds.length == 0) {
+                    return Mono.just(List.<Book>of());
+                }
+                
+                // Single batch query instead of N individual queries
+                return Mono.fromCallable(() -> postgresBookRepository.fetchBooksByIdsBatch(bookIds))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .map(books -> {
+                        // Create map for fast lookup
+                        Map<String, Book> bookMap = books.stream()
+                            .collect(Collectors.toMap(Book::getId, book -> book));
+                        
+                        // Apply search qualifiers and maintain order
+                        List<Book> orderedResults = new ArrayList<>();
+                        for (BookSearchService.SearchResult hit : hits) {
+                            Book book = bookMap.get(hit.bookId().toString());
+                            if (book != null) {
+                                book.addQualifier("search.matchType", hit.matchTypeNormalised());
+                                book.addQualifier("search.relevanceScore", hit.relevanceScore());
+                                orderedResults.add(book);
+                            }
+                        }
+                        return orderedResults;
+                    });
             })
             .defaultIfEmpty(List.of())
             .doOnSuccess(results -> {
