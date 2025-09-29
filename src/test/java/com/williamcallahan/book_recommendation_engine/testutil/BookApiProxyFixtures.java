@@ -22,7 +22,7 @@ public final class BookApiProxyFixtures {
                 googleBooksService,
                 new ObjectMapper(),
                 mockService,
-                false,
+                true,  // Enable local cache for tests
                 tempDir.toString(),
                 false,
                 enableGoogleFallback,
