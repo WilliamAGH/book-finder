@@ -178,12 +178,16 @@ public class OpenLibraryBookDataService {
         }
         book.setId(olid);
 
-        book.setTitle(bookDataNode.path("title").asText(null));
+        // Normalize title to proper case
+        String rawTitle = bookDataNode.path("title").asText(null);
+        book.setTitle(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(rawTitle));
 
         List<String> authors = new ArrayList<>();
         if (bookDataNode.has("authors")) {
             for (JsonNode authorNode : bookDataNode.path("authors")) {
-                authors.add(authorNode.path("name").asText(null));
+                String rawAuthor = authorNode.path("name").asText(null);
+                // Normalize author name to proper case
+                authors.add(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeAuthorName(rawAuthor));
             }
         }
         book.setAuthors(authors.isEmpty() ? null : authors);
@@ -295,12 +299,16 @@ public class OpenLibraryBookDataService {
             book.setId(key.substring(key.lastIndexOf('/') + 1)); // Use OLID as ID
         }
 
-        book.setTitle(docNode.path("title").asText(null));
+        // Normalize title to proper case
+        String rawTitle = docNode.path("title").asText(null);
+        book.setTitle(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(rawTitle));
 
         List<String> authors = new ArrayList<>();
         if (docNode.has("author_name") && docNode.get("author_name").isArray()) {
             for (JsonNode authorNameNode : docNode.get("author_name")) {
-                authors.add(authorNameNode.asText(null));
+                String rawAuthor = authorNameNode.asText(null);
+                // Normalize author name to proper case
+                authors.add(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeAuthorName(rawAuthor));
             }
         }
         book.setAuthors(authors.isEmpty() ? null : authors);

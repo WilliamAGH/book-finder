@@ -81,7 +81,11 @@ public class BookJsonParser {
         JsonNode volumeInfo = item.get("volumeInfo");
 
         book.setId(item.has("id") ? item.get("id").asText() : null);
-        book.setTitle(volumeInfo.has("title") ? volumeInfo.get("title").asText() : null);
+        
+        // Normalize title to proper case
+        String rawTitle = volumeInfo.has("title") ? volumeInfo.get("title").asText() : null;
+        book.setTitle(TextUtils.normalizeBookTitle(rawTitle));
+        
         book.setAuthors(getAuthorsFromVolumeInfo(volumeInfo));
 
         String rawPublisher = volumeInfo.has("publisher") ? volumeInfo.get("publisher").asText() : null;
@@ -280,7 +284,8 @@ public class BookJsonParser {
                     if (authorNode != null && !authorNode.isNull()) {
                         String authorText = authorNode.asText("").trim();
                         if (!authorText.isEmpty()) {
-                            authors.add(authorText);
+                            // Normalize author name to proper case
+                            authors.add(TextUtils.normalizeAuthorName(authorText));
                         }
                     }
                 });
@@ -288,7 +293,8 @@ public class BookJsonParser {
                 // Handle case where authors might be a single string instead of an array
                 String authorText = authorsNode.asText("").trim();
                 if (!authorText.isEmpty()) {
-                    authors.add(authorText);
+                    // Normalize author name to proper case
+                    authors.add(TextUtils.normalizeAuthorName(authorText));
                 }
             } else {
                 logger.warn("Authors field is present but is neither an array nor a string: {}", authorsNode.getNodeType());
