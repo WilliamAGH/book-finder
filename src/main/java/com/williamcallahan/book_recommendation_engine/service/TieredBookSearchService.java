@@ -17,6 +17,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import java.time.Duration;
 
 /**
  * Extracted tiered search orchestration from {@link BookDataOrchestrator}. Handles DB-first search
@@ -49,11 +50,14 @@ public class TieredBookSearchService {
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
         LOGGER.debug("TieredBookSearch: Starting search for query: '{}', lang: {}, total: {}, order: {}", query, langCode, desiredTotalResults, orderBy);
 
+        // Try Postgres first with timeout
         List<Book> postgresHits = searchPostgresFirst(query, desiredTotalResults);
         if (!postgresHits.isEmpty()) {
             LOGGER.info("TieredBookSearch: Postgres satisfied query '{}' with {} results.", query, postgresHits.size());
             return Mono.just(postgresHits);
         }
+        
+        LOGGER.debug("TieredBookSearch: Postgres returned empty for '{}', checking external fallback", query);
 
         if (!externalFallbackEnabled) {
             LOGGER.info("TieredBookSearch: External fallbacks disabled; returning empty result set for query '{}' after Postgres miss.", query);
