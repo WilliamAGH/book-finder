@@ -179,6 +179,8 @@ public class NewYorkTimesBestsellerScheduler {
         }
 
         String canonicalId = resolveCanonicalBookId(isbn13, isbn10);
+        boolean isNewBook = (canonicalId == null);
+        
         // IMPORTANT: For NYT ingestion, we DO NOT consult any external sources (Google/OpenLibrary) at all.
         // If the book is not already present in Postgres, create a minimal canonical record directly from NYT data.
         if (canonicalId == null) {
@@ -186,9 +188,13 @@ public class NewYorkTimesBestsellerScheduler {
         }
 
         if (canonicalId == null) {
-            log.warn("Unable to locate or create canonical book for NYT list entry (ISBN13: {}, ISBN10: {}).", isbn13, isbn10);
+            log.warn("Unable to locate or create canonical book for NYT list entry (ISBN13: {}, ISBN10: {}, title: {}).",
+                isbn13, isbn10, bookNode.path("title").asText("unknown"));
             return;
         }
+        
+        log.info("Processing NYT book: canonicalId='{}', isNew={}, isbn13='{}', title='{}'",
+            canonicalId, isNewBook, isbn13, bookNode.path("title").asText("unknown"));
 
         Integer rank = bookNode.path("rank").isInt() ? bookNode.get("rank").asInt() : null;
         Integer weeksOnList = bookNode.path("weeks_on_list").isInt() ? bookNode.get("weeks_on_list").asInt() : null;

@@ -93,22 +93,40 @@ public class CanonicalBookPersistenceService {
     }
 
     public boolean saveMinimalBook(Book book, JsonNode sourceJson) {
+        if (book == null) {
+            LOGGER.warn("saveMinimalBook called with null book");
+            return false;
+        }
+        if (book.getTitle() == null || book.getTitle().isBlank()) {
+            LOGGER.warn("saveMinimalBook called with book missing title: {}", book.getId());
+            return false;
+        }
+        LOGGER.info("Attempting to save minimal book: title='{}', isbn13='{}', isbn10='{}', id='{}'",
+            book.getTitle(), book.getIsbn13(), book.getIsbn10(), book.getId());
         return saveBook(book, sourceJson);
     }
 
     boolean saveBook(Book book, JsonNode sourceJson) {
         if (jdbcTemplate == null || book == null) {
+            LOGGER.warn("saveBook failed: jdbcTemplate={}, book={}", jdbcTemplate != null, book != null);
             return false;
         }
 
-        Runnable work = () -> persistCanonicalBook(book, sourceJson);
+        try {
+            Runnable work = () -> persistCanonicalBook(book, sourceJson);
 
-        if (transactionTemplate != null) {
-            transactionTemplate.executeWithoutResult(status -> work.run());
-        } else {
-            work.run();
+            if (transactionTemplate != null) {
+                transactionTemplate.executeWithoutResult(status -> work.run());
+            } else {
+                work.run();
+            }
+            LOGGER.info("Successfully persisted book: id='{}', title='{}'", book.getId(), book.getTitle());
+            return true;
+        } catch (Exception ex) {
+            LoggingUtils.error(LOGGER, ex, "Failed to persist book: id='{}', title='{}', isbn13='{}'",
+                book.getId(), book.getTitle(), book.getIsbn13());
+            return false;
         }
-        return true;
     }
 
     private void persistCanonicalBook(Book book, JsonNode sourceJson) {

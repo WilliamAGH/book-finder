@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class BookCollectionPersistenceService {
 
     private final JdbcTemplate jdbcTemplate;
@@ -114,27 +117,48 @@ public class BookCollectionPersistenceService {
                                            String providerIsbn10,
                                            String providerBookRef,
                                            String rawItemJson) {
-        if (jdbcTemplate == null || collectionId == null || bookId == null) {
+        if (jdbcTemplate == null) {
+            log.warn("upsertBestsellerMembership: jdbcTemplate is null");
+            return;
+        }
+        if (collectionId == null || bookId == null) {
+            log.warn("upsertBestsellerMembership: collectionId or bookId is null - collectionId: {}, bookId: {}", collectionId, bookId);
             return;
         }
 
-        JdbcUtils.executeUpdate(
-            jdbcTemplate,
-            "INSERT INTO book_collections_join (id, collection_id, book_id, position, weeks_on_list, rank_last_week, peak_position, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json, created_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
-            "ON CONFLICT (collection_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = COALESCE(EXCLUDED.weeks_on_list, book_collections_join.weeks_on_list), rank_last_week = COALESCE(EXCLUDED.rank_last_week, book_collections_join.rank_last_week), peak_position = COALESCE(EXCLUDED.peak_position, book_collections_join.peak_position), provider_isbn13 = COALESCE(EXCLUDED.provider_isbn13, book_collections_join.provider_isbn13), provider_isbn10 = COALESCE(EXCLUDED.provider_isbn10, book_collections_join.provider_isbn10), provider_book_ref = COALESCE(EXCLUDED.provider_book_ref, book_collections_join.provider_book_ref), raw_item_json = EXCLUDED.raw_item_json, updated_at = NOW()",
-            IdGenerator.generateLong(),
-            collectionId,
-            UUID.fromString(bookId),
-            position,
-            weeksOnList,
-            rankLastWeek,
-            peakPosition,
-            providerIsbn13,
-            providerIsbn10,
-            providerBookRef,
-            rawItemJson
-        );
+        try {
+            // Validate that bookId is a valid UUID
+            UUID bookUuid = UUID.fromString(bookId);
+            
+            log.debug("Inserting book into collection: collectionId='{}', bookId='{}', position={}, isbn13='{}'",
+                collectionId, bookId, position, providerIsbn13);
+            
+            JdbcUtils.executeUpdate(
+                jdbcTemplate,
+                "INSERT INTO book_collections_join (id, collection_id, book_id, position, weeks_on_list, rank_last_week, peak_position, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
+                "ON CONFLICT (collection_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = COALESCE(EXCLUDED.weeks_on_list, book_collections_join.weeks_on_list), rank_last_week = COALESCE(EXCLUDED.rank_last_week, book_collections_join.rank_last_week), peak_position = COALESCE(EXCLUDED.peak_position, book_collections_join.peak_position), provider_isbn13 = COALESCE(EXCLUDED.provider_isbn13, book_collections_join.provider_isbn13), provider_isbn10 = COALESCE(EXCLUDED.provider_isbn10, book_collections_join.provider_isbn10), provider_book_ref = COALESCE(EXCLUDED.provider_book_ref, book_collections_join.provider_book_ref), raw_item_json = EXCLUDED.raw_item_json, updated_at = NOW()",
+                IdGenerator.generateLong(),
+                collectionId,
+                bookUuid,
+                position,
+                weeksOnList,
+                rankLastWeek,
+                peakPosition,
+                providerIsbn13,
+                providerIsbn10,
+                providerBookRef,
+                rawItemJson
+            );
+            
+            log.info("Successfully added book to collection: collectionId='{}', bookId='{}', position={}",
+                collectionId, bookId, position);
+        } catch (IllegalArgumentException ex) {
+            LoggingUtils.error(log, ex, "Invalid UUID format for bookId: {}", bookId);
+        } catch (DataAccessException ex) {
+            LoggingUtils.error(log, ex, "Database error adding book to collection: collectionId='{}', bookId='{}', position={}, isbn13='{}'",
+                collectionId, bookId, position, providerIsbn13);
+        }
     }
 
     public Optional<String> upsertList(String source,
