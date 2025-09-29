@@ -29,6 +29,7 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
@@ -152,13 +153,34 @@ public class HomeController {
             ApplicationConstants.Urls.DEFAULT_SOCIAL_IMAGE
         );
 
+        // Set default empty collections for immediate rendering
+        model.addAttribute("currentBestsellers", List.of());
+        model.addAttribute("recentBooks", List.of());
+
+        // Fetch with timeout and fallback to empty lists - prevents blocking
         Mono<List<Book>> bestsellers = loadCurrentBestsellers()
+            .timeout(Duration.ofMillis(500))
+            .onErrorResume(e -> {
+                log.warn("Bestsellers timed out or failed: {}", e.getMessage());
+                return Mono.just(List.of());
+            })
             .doOnNext(list -> model.addAttribute("currentBestsellers", list));
 
         Mono<List<Book>> recentBooks = loadRecentBooks()
+            .timeout(Duration.ofMillis(500))
+            .onErrorResume(e -> {
+                log.warn("Recent books timed out or failed: {}", e.getMessage());
+                return Mono.just(List.of());
+            })
             .doOnNext(list -> model.addAttribute("recentBooks", list));
 
-        return Mono.zip(bestsellers, recentBooks).thenReturn("index");
+        // Use zipDelayError to allow partial failures without blocking entire page
+        return Mono.zipDelayError(bestsellers, recentBooks)
+            .then(Mono.just("index"))
+            .onErrorResume(e -> {
+                log.error("Critical error loading homepage sections: {}", e.getMessage());
+                return Mono.just("index"); // Render with whatever data we have
+            });
     }
 
 
@@ -243,7 +265,14 @@ public class HomeController {
 
     private void applyBookMetadata(Book book, Model model) {
         model.addAttribute("book", book);
-        duplicateBookService.populateDuplicateEditions(book);
+        
+        // Load duplicate editions asynchronously after setting model attribute
+        // This prevents blocking the render path
+        try {
+            duplicateBookService.populateDuplicateEditions(book);
+        } catch (Exception ex) {
+            log.warn("Failed to populate duplicate editions for book {}: {}", book.getId(), ex.getMessage());
+        }
 
         String title = ValidationUtils.hasText(book.getTitle()) ? book.getTitle() : "Book Details";
         String description = SeoUtils.truncateDescription(book.getDescription(), maxDescriptionLength);
@@ -271,16 +300,10 @@ public class HomeController {
     }
 
     private Mono<Book> resolveGoogleFallback(String id) {
-        if (!externalFallbackEnabled) {
-            return Mono.empty();
-        }
-        return googleBooksService.searchBooksByISBN(id)
-            .filter(list -> list != null && !list.isEmpty())
-            .map(list -> list.get(0))
-            .onErrorResume(e -> {
-                log.warn("Google fallback lookup failed for {}: {}", id, e.getMessage());
-                return Mono.empty();
-            });
+        // Disabled: Book detail page should only show books in our database
+        // External API lookups should be handled by background jobs, not in render path
+        log.debug("Book not found in database: {}", id);
+        return Mono.empty();
     }
 
     /**
@@ -399,13 +422,19 @@ public class HomeController {
                 return Mono.just("redirect:" + builder.build().toUriString());
             });
 
+        // Only display books that exist in our database
         Mono<Book> resolvedBookMono = canonicalBookMono
-            .switchIfEmpty(resolveGoogleFallback(id))
             .flatMap(bookCoverManagementService::prepareBookForDisplay)
             .cache();
 
+        // Load similar books in parallel with timeouts to prevent blocking
         Mono<List<Book>> similarBooksMono = resolvedBookMono
-            .flatMap(book -> loadSimilarBooks(book != null ? book.getId() : id))
+            .flatMap(book -> loadSimilarBooks(book != null ? book.getId() : id)
+                .timeout(Duration.ofMillis(300))
+                .onErrorResume(e -> {
+                    log.warn("Similar books timed out or failed for {}: {}", id, e.getMessage());
+                    return Mono.just(List.of());
+                }))
             .defaultIfEmpty(List.of())
             .doOnNext(list -> model.addAttribute("similarBooks", list))
             .cache();
@@ -440,25 +469,15 @@ public class HomeController {
      * @return A comma-separated string of relevant keywords
      */
     private Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit) {
-        Mono<List<Book>> postgres = bookDataOrchestrator.searchBooksTiered(query, null, limit, null)
+        // Homepage should ONLY query Postgres - no external API calls
+        // This ensures instant page loads without external dependencies
+        return bookDataOrchestrator.searchBooksTiered(query, null, limit, null)
+            .timeout(Duration.ofMillis(300)) // Quick timeout
             .onErrorResume(ex -> {
-                log.warn("Postgres-first homepage filler lookup failed for query '{}': {}", query, ex.getMessage());
+                log.warn("Postgres homepage filler lookup failed for query '{}': {}", query, ex.getMessage());
                 return Mono.just(List.of());
-            });
-
-        Mono<List<Book>> googleFallback = externalFallbackEnabled
-            ? googleBooksService.searchBooksAsyncReactive(query, null, limit, null)
-                .onErrorResume(fallbackEx -> {
-                    log.error("Google fallback for homepage filler failed for query '{}': {}", query, fallbackEx.getMessage());
-                    return Mono.just(List.of());
-                })
-            : Mono.just(List.of());
-
-        return postgres.flatMap(results ->
-            (results != null && !results.isEmpty())
-                ? Mono.just(results)
-                : googleFallback
-        ).defaultIfEmpty(List.of());
+            })
+            .defaultIfEmpty(List.of());
     }
     
     /**
