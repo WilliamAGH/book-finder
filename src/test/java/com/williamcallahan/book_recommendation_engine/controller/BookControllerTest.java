@@ -65,7 +65,7 @@ class BookControllerTest {
     @BeforeEach
     void setUp() {
         fixtureBook = buildBook("11111111-1111-4111-8111-111111111111", "Fixture Title");
-        when(bookDataOrchestrator.getBookBySlugTiered(anyString())).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.fetchCanonicalBookReactive(anyString())).thenReturn(Mono.empty());
 
         when(googleBooksService.getBookById(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
         when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class)))
@@ -96,7 +96,7 @@ class BookControllerTest {
     @Test
     @DisplayName("GET /api/books/{id} returns mapped DTO")
     void getBookByIdentifier_returnsDto() throws Exception {
-        when(bookDataOrchestrator.getBookByIdTiered(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
+        when(bookDataOrchestrator.fetchCanonicalBookReactive(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
 
         performAsync(get("/api/books/" + fixtureBook.getId()))
                 .andExpect(status().isOk())
@@ -111,8 +111,7 @@ class BookControllerTest {
     @Test
     @DisplayName("GET /api/books/{slug} falls back to slug lookup")
     void getBookBySlug_fallsBackToSlugLookup() throws Exception {
-        when(bookDataOrchestrator.getBookByIdTiered("fixture-book-of-secrets")).thenReturn(Mono.empty());
-        when(bookDataOrchestrator.getBookBySlugTiered("fixture-book-of-secrets")).thenReturn(Mono.just(fixtureBook));
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("fixture-book-of-secrets")).thenReturn(Mono.just(fixtureBook));
 
         performAsync(get("/api/books/fixture-book-of-secrets"))
                 .andExpect(status().isOk())
@@ -124,8 +123,7 @@ class BookControllerTest {
     @Test
     @DisplayName("GET /api/books/{id} returns 404 when not found")
     void getBook_notFound() throws Exception {
-        when(bookDataOrchestrator.getBookByIdTiered("missing")).thenReturn(Mono.empty());
-        when(bookDataOrchestrator.getBookBySlugTiered("missing")).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("missing")).thenReturn(Mono.empty());
 
         performAsync(get("/api/books/missing"))
                 .andExpect(status().isNotFound());
@@ -135,7 +133,7 @@ class BookControllerTest {
     @DisplayName("GET /api/books/{id}/similar returns mapped DTOs")
     void getSimilarBooks_returnsDtos() throws Exception {
         Book similar = buildBook("22222222-2222-4222-8222-222222222222", "Sibling Title");
-        when(bookDataOrchestrator.getBookByIdTiered(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
+        when(bookDataOrchestrator.fetchCanonicalBookReactive(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
         when(recommendationService.getSimilarBooks(eq(fixtureBook.getId()), anyInt()))
                 .thenReturn(Mono.just(List.of(similar)));
 
