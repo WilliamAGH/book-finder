@@ -1,3 +1,11 @@
+# =============================================================================
+# PRODUCTION-SAFE DEFAULTS
+# =============================================================================
+# This configuration contains secure defaults suitable for production.
+# Dev/test profiles override these settings for development convenience.
+# If no profile is set, these production-safe defaults apply (default: prod).
+# =============================================================================
+
 spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL:}
@@ -14,11 +22,18 @@ spring:
       leak-detection-threshold: 60000
   main:
     allow-bean-definition-overriding: true
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate # PRODUCTION-SAFE: Only validate schema, never auto-create/update
+    show-sql: false # PRODUCTION-SAFE: No SQL logging (security/performance)
+  
   sql:
     init:
-      mode: never # schema initialization handled per-profile to prevent production data loss
+      mode: never # PRODUCTION-SAFE: Schema initialization disabled to prevent data loss
+  
   profiles:
-    default: prod # Default to prod if no other profile is active
+    default: prod # PRODUCTION-SAFE: Default to prod if no profile is explicitly set
   
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
@@ -120,72 +135,114 @@ sitemap:
   html-page-size: 100
   xml-page-size: 5000
 
-# Common Logging (can be overridden by profiles)
+# Affiliate link configuration
+affiliate:
+  amazon:
+    associate-tag: ${AMAZON_ASSOCIATE_TAG:}
+  barnesandnoble:
+    publisher-id: ${BARNES_NOBLE_PUBLISHER_ID:}
+    website-id: ${BARNES_NOBLE_WEBSITE_ID:}
+  bookshop:
+    affiliate-id: ${BOOKSHOP_AFFILIATE_ID:}
+
+# Common Logging - Production-safe defaults (minimal verbosity)
 logging:
   level:
-    root: INFO # Default root level
+    root: INFO # PRODUCTION-SAFE: Standard INFO level
     "[com.williamcallahan.book_recommendation_engine]": INFO
     "[org.springframework.cache]": WARN
     "[org.hibernate]": WARN
+    "[org.springframework.web]": WARN # PRODUCTION-SAFE: Minimal web logging
 
+# =============================================================================
+# DEVELOPMENT PROFILE - Permissive settings for local development
+# =============================================================================
 ---
 spring:
   config:
     activate:
       on-profile: dev
+  
   devtools:
     restart:
       enabled: true
     livereload:
       enabled: true
+  
+  jpa:
+    show-sql: true # DEV OVERRIDE: Show SQL for debugging
+    hibernate:
+      ddl-auto: validate # Still validate only, never auto-create
+  
   # Dev-specific cache configuration
   cache:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Dev cache settings
+
 logging:
   level:
-    '[org.springframework.boot.devtools]': WARN  # suppress DevTools internal logs
-    "[org.springframework.web]": INFO # Changed from DEBUG
+    '[org.springframework.boot.devtools]': WARN
+    "[org.springframework.web]": INFO # DEV OVERRIDE: More verbose web logging
+    "[com.williamcallahan.book_recommendation_engine]": DEBUG # DEV OVERRIDE: Debug app logging
+
 app:
   environment:
-    mode: development # Custom property for dev mode
+    mode: development
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD:devAdminPass}
     user:
       password: ${APP_USER_PASSWORD:devUserPass}
 
+# =============================================================================
+# PRODUCTION PROFILE - Minimal overrides (base config is already prod-safe)
+# =============================================================================
 ---
 spring:
   config:
     activate:
       on-profile: prod
+  
   # Production-specific cache configuration with optimized settings
   cache:
     cache-names: books,bookSearchResults,nytBestsellersCurrent
     caffeine:
-      spec: "maximumSize=2000,expireAfterWrite=12h,recordStats" # Optimized for production
+      spec: "maximumSize=2000,expireAfterWrite=12h,recordStats" # Optimized for production load
+
 logging:
   level:
-    "[com.williamcallahan.book_recommendation_engine]": INFO # Standard INFO level for prod
+    "[com.williamcallahan.book_recommendation_engine]": INFO
+
 app:
   environment:
-    mode: production # Custom property for prod mode
+    mode: production
 
+# =============================================================================
+# TEST PROFILE - Simplified settings for automated testing
+# =============================================================================
 ---
 spring:
   config:
     activate:
       on-profile: test
+  
+  jpa:
+    show-sql: false # TEST: Keep SQL logging off for cleaner test output
+  
   cache:
-    type: simple
+    type: simple # TEST: Use simple in-memory cache for testing
+
 logging:
   level:
     root: WARN
     "[com.williamcallahan.book_recommendation_engine]": INFO
     "[org.springframework]": WARN
+
 s3:
   cdn-url: https://book-finder.sfo3.digitaloceanspaces.com
+
 app:
   cache:
     enabled: true
+  environment:
+    mode: test

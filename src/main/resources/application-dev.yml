@@ -1,14 +1,22 @@
-# Development profile configuration
+# =============================================================================
+# DEVELOPMENT PROFILE OVERRIDES
+# =============================================================================
+# This file provides development-specific overrides that make local development
+# more convenient. These settings are MORE PERMISSIVE than production defaults.
+# Use this profile for local development only: --spring.profiles.active=dev
+# =============================================================================
+
 spring:
   sql:
     init:
-      mode: never # Disabled - schema managed manually in PostgreSQL
+      mode: never # Schema managed manually in PostgreSQL (consistent across all envs)
+  
   jpa:
     hibernate:
-      ddl-auto: validate # Validate schema against entities
-    show-sql: true # Show SQL queries in console for debugging
+      ddl-auto: validate # Validate schema against entities (never auto-create)
+    show-sql: true # DEV OVERRIDE: Show SQL queries in console for debugging
 
 app:
   features:
     external-fallback:
-      enabled: false
+      enabled: false # Disable external API fallbacks in local dev
