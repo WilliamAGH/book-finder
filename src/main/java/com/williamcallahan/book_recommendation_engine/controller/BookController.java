@@ -137,7 +137,10 @@ public class BookController {
                 }
             });
 
-        Mono<Book> tieredById = Mono.defer(() -> bookDataOrchestrator.getBookByIdTiered(identifier))
+        Mono<Book> tieredById = Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.getBookByIdTiered(identifier);
+            return lookup != null ? lookup : Mono.empty();
+        })
             .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL", identifier, null))
             .doOnNext(book -> {
                 if (book != null && ValidationUtils.hasText(book.getId())) {
@@ -145,11 +148,14 @@ public class BookController {
                 }
             });
 
-        Mono<Book> tieredBySlug = Mono.defer(() -> bookDataOrchestrator.getBookBySlugTiered(identifier))
+        Mono<Book> tieredBySlug = Mono.defer(() -> {
+            Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
+            return lookup != null ? lookup : Mono.empty();
+        })
             .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL_SLUG", identifier, null))
             .doOnNext(book -> {
                 if (book != null && ValidationUtils.hasText(book.getId())) {
-                    ExternalApiLogger.logHydrationSuccess(log, "DETAIL_SLUG", identifier, book.getId(), "TIERED_FLOW");
+                    ExternalApiLogger.logHydrationSuccess(log, "DETAIL_SLUG", identifier, book.getId(), "SLUG");
                 }
             });
 
