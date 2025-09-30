@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -202,25 +203,6 @@ public class HomeController {
 
 
     /**
-     * @deprecated No longer needed for BookCard DTOs. Cover URLs are selected in SQL.
-     * Kept temporarily for Book entity paths only.
-     */
-    @Deprecated
-    private Mono<List<Book>> prepareForDisplay(Mono<List<Book>> source, int limit, Consumer<Throwable> errorHandler) {
-        return source
-            .defaultIfEmpty(List.of())
-            .flatMap(list -> {
-                Mono<List<Book>> prepared = bookCoverManagementService.prepareBooksForDisplay(list);
-                return prepared != null ? prepared : Mono.just(list);
-            })
-            .map(list -> list.stream().limit(limit).collect(Collectors.toList()))
-            .onErrorResume(e -> {
-                errorHandler.accept(e);
-                return Mono.just(List.of());
-            });
-    }
-
-    /**
      * Load current NYT bestsellers using optimized BookCard DTOs.
      * SINGLE QUERY replaces 40 queries (8 books × 5 queries each).
      */
@@ -277,11 +259,78 @@ public class HomeController {
     }
 
     private Mono<List<Book>> loadSimilarBooks(String bookId) {
-        return prepareForDisplay(
-            recommendationService.getSimilarBooks(bookId, ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2),
-            6,
-            e -> log.warn("Error fetching similar book recommendations for ID {}: {}", bookId, e.getMessage())
-        );
+        return recommendationService.getSimilarBooks(bookId, ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2)
+            .flatMap(books -> {
+                if (books == null || books.isEmpty()) {
+                    return Mono.just(List.<Book>of());
+                }
+                
+                // Extract book UUIDs for database query
+                List<UUID> bookUuids = books.stream()
+                    .map(Book::getId)
+                    .filter(Objects::nonNull)
+                    .map(id -> {
+                        try {
+                            return UUID.fromString(id);
+                        } catch (IllegalArgumentException e) {
+                            log.warn("Invalid UUID for similar book: {}", id);
+                            return null;
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+                
+                if (bookUuids.isEmpty()) {
+                    log.warn("No valid UUIDs found for similar books of {}", bookId);
+                    return Mono.just(List.<Book>of());
+                }
+                
+                // Fetch book cards with proper cover URLs from database
+                return Mono.fromCallable(() -> bookQueryRepository.fetchBookCards(bookUuids))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .map(bookCards -> {
+                        // Create a map of ID to cover URL for fast lookup
+                        Map<String, String> coverUrlMap = bookCards.stream()
+                            .filter(card -> card.coverUrl() != null)
+                            .collect(Collectors.toMap(BookCard::id, BookCard::coverUrl, (a, b) -> a));
+                        
+                        // Populate cover URLs on the Book objects
+                        books.forEach(book -> {
+                            if (book.getId() != null) {
+                                String coverUrl = coverUrlMap.get(book.getId());
+                                if (coverUrl != null && !coverUrl.isEmpty()) {
+                                    // Set cover URL and create CoverImages object
+                                    book.setS3ImagePath(coverUrl);
+                                    if (book.getCoverImages() == null) {
+                                        book.setCoverImages(new com.williamcallahan.book_recommendation_engine.model.image.CoverImages());
+                                    }
+                                    book.getCoverImages().setPreferredUrl(coverUrl);
+                                    book.getCoverImages().setFallbackUrl(coverUrl);
+                                    // Determine source from URL
+                                    if (coverUrl.contains("digitaloceanspaces.com") || coverUrl.contains("s3.amazonaws.com")) {
+                                        book.getCoverImages().setSource(com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.S3_CACHE);
+                                    } else if (coverUrl.contains("books.google.com")) {
+                                        book.getCoverImages().setSource(com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS);
+                                    } else if (coverUrl.contains("openlibrary.org")) {
+                                        book.getCoverImages().setSource(com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.OPEN_LIBRARY);
+                                    }
+                                    log.debug("Set cover URL for similar book {}: {}", book.getId(), coverUrl);
+                                }
+                            }
+                        });
+                        
+                        // Return limited and filtered list
+                        return books.stream()
+                            .filter(Objects::nonNull)
+                            .limit(6)
+                            .collect(Collectors.toList());
+                    })
+                    .onErrorResume(e -> {
+                        log.warn("Error fetching cover URLs for similar books of ID {}: {}", bookId, e.getMessage());
+                        return Mono.just(books.stream().limit(6).collect(Collectors.toList()));
+                    });
+            })
+            .defaultIfEmpty(List.of());
     }
 
     private void applyBookMetadata(Book book, Model model) {
