@@ -163,7 +163,7 @@ public class PostgresBookRepository {
                 SELECT a.name
                 FROM book_authors_join baj
                 JOIN authors a ON a.id = baj.author_id
-                WHERE baj.book_id = ?
+                WHERE baj.book_id = ?::uuid
                 ORDER BY COALESCE(baj.position, 2147483647), lower(a.name)
                 """;
         try {
@@ -180,7 +180,7 @@ public class PostgresBookRepository {
                 SELECT bc.display_name
                 FROM book_collections_join bcj
                 JOIN book_collections bc ON bc.id = bcj.collection_id
-                WHERE bcj.book_id = ?
+                WHERE bcj.book_id = ?::uuid
                   AND bc.collection_type = 'CATEGORY'
                 ORDER BY COALESCE(bcj.position, 9999), lower(bc.display_name)
                 """;
@@ -202,7 +202,7 @@ public class PostgresBookRepository {
                        bcj.position
                 FROM book_collections_join bcj
                 JOIN book_collections bc ON bc.id = bcj.collection_id
-                WHERE bcj.book_id = ?
+                WHERE bcj.book_id = ?::uuid
                 ORDER BY CASE WHEN bc.collection_type = 'CATEGORY' THEN 0 ELSE 1 END,
                          COALESCE(bcj.position, 2147483647),
                          lower(bc.display_name)
@@ -233,7 +233,7 @@ public class PostgresBookRepository {
         String sql = """
                 SELECT height_cm, width_cm, thickness_cm, weight_grams
                 FROM book_dimensions
-                WHERE book_id = ?
+                WHERE book_id = ?::uuid
                 LIMIT 1
                 """;
         try {
@@ -260,7 +260,7 @@ public class PostgresBookRepository {
         String sql = """
                 SELECT raw_json_response::text
                 FROM book_raw_data
-                WHERE book_id = ?
+                WHERE book_id = ?::uuid
                 ORDER BY contributed_at DESC
                 LIMIT 1
                 """;
@@ -279,7 +279,7 @@ public class PostgresBookRepository {
                 SELECT bt.key, bt.display_name, bta.source, bta.confidence, bta.metadata
                 FROM book_tag_assignments bta
                 JOIN book_tags bt ON bt.id = bta.tag_id
-                WHERE bta.book_id = ?
+                WHERE bta.book_id = ?::uuid
                 """;
         try {
             Map<String, Object> tags = jdbcTemplate.query(sql, ps -> ps.setObject(1, canonicalId), rs -> {
