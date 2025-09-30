@@ -114,7 +114,7 @@ public class TieredBookSearchService {
                 LOGGER.debug("TieredBookSearch: Augmenting {} Postgres results with up to {} external results", postgresHits.size(), needed);
 
                 // FIX BUG #2 & #3: Handle external search errors gracefully, preserve Postgres results
-                return performExternalSearch(query, langCode, needed, orderBy)
+                return performExternalSearch(query, langCode, needed, orderBy, postgresHits.isEmpty())
                     .map(externalHits -> {
                         List<Book> merged = mergeResults(postgresHits, externalHits, desiredTotalResults);
                         LOGGER.info("TieredBookSearch: Merged {} Postgres + {} external = {} total results for query '{}'",
@@ -137,11 +137,15 @@ public class TieredBookSearchService {
             });
     }
     
-    private Mono<List<Book>> performExternalSearch(String query, String langCode, int desiredTotalResults, String orderBy) {
+    private Mono<List<Book>> performExternalSearch(String query, String langCode, int desiredTotalResults, String orderBy, boolean postgresWasEmpty) {
 
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
         boolean googleFallbackEnabled = googleApiFetcher.isGoogleFallbackEnabled();
         boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
+        
+        // If Postgres returned no results, try author-specific search first
+        // This handles cases where users search for author names like "Elin Hilderbrand"
+        boolean shouldTryAuthorSearch = postgresWasEmpty && looksLikeAuthorName(query);
 
         Mono<List<Book>> openLibrarySearchMono = openLibraryBookDataService.searchBooksByTitle(query)
             .collectList()
@@ -158,12 +162,18 @@ public class TieredBookSearchService {
             return openLibrarySearchMono;
         }
 
+        // Determine search strategy based on whether this looks like an author query
+        String effectiveQuery = shouldTryAuthorSearch ? "inauthor:" + query : query;
+        if (shouldTryAuthorSearch) {
+            LOGGER.info("TieredBookSearch: Query '{}' looks like author name, searching with 'inauthor:' qualifier", query);
+        }
+        
         Mono<List<Book>> primarySearchMono = apiKeyAvailable
-            ? executePagedSearch(query, langCode, desiredTotalResults, orderBy, true, queryQualifiers)
-            : executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers);
+            ? executePagedSearch(effectiveQuery, langCode, desiredTotalResults, orderBy, true, queryQualifiers)
+            : executePagedSearch(effectiveQuery, langCode, desiredTotalResults, orderBy, false, queryQualifiers);
 
         Mono<List<Book>> fallbackSearchMono = apiKeyAvailable
-            ? executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers)
+            ? executePagedSearch(effectiveQuery, langCode, desiredTotalResults, orderBy, false, queryQualifiers)
             : Mono.just(Collections.emptyList());
 
         // FIX BUG #4: Ensure errors in primary search don't prevent fallback attempts
@@ -197,6 +207,14 @@ public class TieredBookSearchService {
                         return openLibrarySearchMono;
                     });
             })
+            .flatMap(results -> {
+                // If author-specific search yielded no results, try again with general search
+                if (shouldTryAuthorSearch && results.isEmpty()) {
+                    LOGGER.info("TieredBookSearch: Author-specific search for '{}' yielded no results. Retrying as general search.", query);
+                    return performExternalSearch(query, langCode, desiredTotalResults, orderBy, false);
+                }
+                return Mono.just(results);
+            })
             .doOnSuccess(books -> {
                 if (!books.isEmpty()) {
                     LOGGER.info("TieredBookSearch: Successfully searched books for query '{}'. Found {} books.", query, books.size());
@@ -204,6 +222,52 @@ public class TieredBookSearchService {
                     LOGGER.info("TieredBookSearch: Search for query '{}' yielded no results from any tier.", query);
                 }
             });
+    }
+    
+    /**
+     * Heuristic to detect if a query looks like an author name.
+     * Author names typically:
+     * - Contain 2-4 words (first/middle/last names)
+     * - Start with capital letters
+     * - Don't contain special search operators or common book-related words
+     * - May contain "and" or "&" for co-authors
+     */
+    private boolean looksLikeAuthorName(String query) {
+        if (query == null || query.isBlank()) {
+            return false;
+        }
+        
+        String normalized = query.trim();
+        
+        // Skip if it contains search operators or qualifiers
+        if (normalized.contains("intitle:") || normalized.contains("inauthor:") || 
+            normalized.contains("isbn:") || normalized.contains("subject:") ||
+            normalized.contains("publisher:")) {
+            return false;
+        }
+        
+        // Remove common co-author separators for word count
+        String withoutConjunctions = normalized.replaceAll("\\s+and\\s+", " ")
+                                               .replaceAll("\\s*&\\s*", " ")
+                                               .replaceAll("\\s+", " ")
+                                               .trim();
+        
+        // Count words (author names typically have 2-6 words including co-authors)
+        String[] words = withoutConjunctions.split("\\s+");
+        if (words.length < 2 || words.length > 6) {
+            return false;
+        }
+        
+        // Check if words start with capital letters (typical for names)
+        int capitalizedWords = 0;
+        for (String word : words) {
+            if (!word.isEmpty() && Character.isUpperCase(word.charAt(0))) {
+                capitalizedWords++;
+            }
+        }
+        
+        // At least half the words should be capitalized
+        return capitalizedWords >= (words.length / 2.0);
     }
 
     Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
