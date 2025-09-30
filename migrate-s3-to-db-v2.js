@@ -908,7 +908,7 @@ class BookMigrator {
     if (!height && !width && !thickness) return;
 
     const existingDimensions = await this.client.query(
-      `SELECT id FROM book_dimensions
+      `SELECT book_id FROM book_dimensions
        WHERE book_id = $1::uuid
        LIMIT 1`,
       [bookId]
@@ -916,15 +916,16 @@ class BookMigrator {
 
     await this.client.query(
       `INSERT INTO book_dimensions (
-        id, book_id, height_cm, width_cm, thickness_cm, created_at
+        book_id, height, width, thickness, created_at, updated_at
       ) VALUES (
-        $1, $2::uuid, $3, $4, $5, NOW()
+        $1::uuid, $2, $3, $4, NOW(), NOW()
       )
       ON CONFLICT (book_id) DO UPDATE SET
-        height_cm = COALESCE(EXCLUDED.height_cm, book_dimensions.height_cm),
-        width_cm = COALESCE(EXCLUDED.width_cm, book_dimensions.width_cm),
-        thickness_cm = COALESCE(EXCLUDED.thickness_cm, book_dimensions.thickness_cm)`,
-      [generateNanoId(8), bookId, height, width, thickness]
+        height = COALESCE(EXCLUDED.height, book_dimensions.height),
+        width = COALESCE(EXCLUDED.width, book_dimensions.width),
+        thickness = COALESCE(EXCLUDED.thickness, book_dimensions.thickness),
+        updated_at = NOW()`,
+      [bookId, height, width, thickness]
     );
 
     if (existingDimensions.rows.length > 0) {
