@@ -54,4 +54,17 @@ class BookDtoMapperTest {
         assertThat(dto.editions()).hasSize(1);
         assertThat(dto.recommendationIds()).containsExactly("rec-1", "rec-2");
     }
+
+    @Test
+    void toDto_stripsWrappingQuotesFromPublisher() {
+        Book book = new Book();
+        book.setId("id-sanitized");
+        book.setTitle("Quoted Publisher Book");
+        book.setAuthors(List.of("Author"));
+        book.setPublisher("\"O'Reilly Media, Inc.\"");
+
+        BookDto dto = BookDtoMapper.toDto(book);
+
+        assertThat(dto.publication().publisher()).isEqualTo("O'Reilly Media, Inc.");
+    }
 }
