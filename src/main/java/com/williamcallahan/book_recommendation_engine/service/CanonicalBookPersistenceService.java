@@ -296,6 +296,10 @@ public class CanonicalBookPersistenceService {
 
         String providerIsbn10 = book.getIsbn10();
         String providerIsbn13 = book.getIsbn13();
+        
+        // Convert empty strings to NULL for unique constraints
+        if (providerIsbn10 != null && providerIsbn10.isBlank()) providerIsbn10 = null;
+        if (providerIsbn13 != null && providerIsbn13.isBlank()) providerIsbn13 = null;
 
         if (providerIsbn13 != null && !providerIsbn13.isBlank()) {
             try {
