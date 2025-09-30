@@ -30,8 +30,10 @@ import reactor.core.publisher.Mono;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 @RestController
 @RequestMapping("/api/books")
@@ -109,7 +111,7 @@ public class BookController {
         int safeLimit = PagingUtils.safeLimit(
             limit,
             ApplicationConstants.Paging.DEFAULT_SIMILAR_LIMIT,
-            ApplicationConstants.Paging.MIN_AUTHOR_LIMIT,
+            ApplicationConstants.Paging.MIN_SEARCH_LIMIT,
             ApplicationConstants.Paging.MAX_SIMILAR_LIMIT
         );
         Mono<List<BookDto>> similarBooks = fetchBook(identifier)
@@ -134,20 +136,18 @@ public class BookController {
             return Mono.empty();
         }
 
-        Mono<Book> canonical = Mono.defer(() -> {
-            Mono<Book> lookup = bookDataOrchestrator.fetchCanonicalBookReactive(identifier);
-            return lookup != null ? lookup : Mono.empty();
-        })
+        Mono<Book> canonical = invokeOrchestrator(() ->
+            bookDataOrchestrator.fetchCanonicalBookReactive(identifier)
+        )
             .doOnNext(book -> {
                 if (book != null && ValidationUtils.hasText(book.getId())) {
                     ExternalApiLogger.logHydrationSuccess(log, "DETAIL_CANONICAL", identifier, book.getId(), "POSTGRES");
                 }
             });
 
-        Mono<Book> tieredById = Mono.defer(() -> {
-            Mono<Book> lookup = bookDataOrchestrator.getBookByIdTiered(identifier);
-            return lookup != null ? lookup : Mono.empty();
-        })
+        Mono<Book> tieredById = invokeOrchestrator(() ->
+            bookDataOrchestrator.getBookByIdTiered(identifier)
+        )
             .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL", identifier, null))
             .doOnNext(book -> {
                 if (book != null && ValidationUtils.hasText(book.getId())) {
@@ -155,10 +155,9 @@ public class BookController {
                 }
             });
 
-        Mono<Book> tieredBySlug = Mono.defer(() -> {
-            Mono<Book> lookup = bookDataOrchestrator.getBookBySlugTiered(identifier);
-            return lookup != null ? lookup : Mono.empty();
-        })
+        Mono<Book> tieredBySlug = invokeOrchestrator(() ->
+            bookDataOrchestrator.getBookBySlugTiered(identifier)
+        )
             .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL_SLUG", identifier, null))
             .doOnNext(book -> {
                 if (book != null && ValidationUtils.hasText(book.getId())) {
@@ -236,6 +235,7 @@ return canonical
         List<BookSearchService.AuthorResult> safeResults = results == null ? List.of() : results;
         List<AuthorHitDto> hits = safeResults.stream()
                 .sorted(Comparator.comparingDouble(BookSearchService.AuthorResult::relevanceScore).reversed())
+                .limit(Math.max(0, limit))
                 .map(this::toAuthorHit)
                 .toList();
         return new AuthorSearchResponse(query, limit, hits);
@@ -256,6 +256,11 @@ return canonical
                 authorResult.bookCount(),
                 authorResult.relevanceScore()
         );
+    }
+
+    private Mono<Book> invokeOrchestrator(Supplier<Mono<Book>> invocation) {
+        return Mono.defer(() -> Mono.justOrEmpty(invocation.get()))
+            .flatMap(Function.identity());
     }
 
     private record SearchResponse(String query,

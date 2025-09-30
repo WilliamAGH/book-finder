@@ -209,6 +209,10 @@ public class GoogleApiFetcher {
      * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesAuthenticated(String query, int startIndex, String orderBy, String langCode) {
+        return searchVolumesAuthenticated(query, startIndex, orderBy, langCode, 40);
+    }
+
+    public Mono<JsonNode> searchVolumesAuthenticated(String query, int startIndex, String orderBy, String langCode, int pageSize) {
         if (!googleFallbackEnabled) {
             log.debug("Google fallback disabled - skipping authenticated search for query '{}'", query);
             return Mono.empty();
@@ -224,7 +228,7 @@ public class GoogleApiFetcher {
             log.debug("No API key configured - skipping authenticated search for query '{}'", query);
             return Mono.empty();
         }
-        return searchVolumesInternal(query, startIndex, orderBy, langCode, true);
+        return searchVolumesInternal(query, startIndex, orderBy, langCode, true, pageSize);
     }
 
     /**
@@ -237,11 +241,15 @@ public class GoogleApiFetcher {
      * @return JsonNode containing search results
      */
     public Mono<JsonNode> searchVolumesUnauthenticated(String query, int startIndex, String orderBy, String langCode) {
+        return searchVolumesUnauthenticated(query, startIndex, orderBy, langCode, 40);
+    }
+
+    public Mono<JsonNode> searchVolumesUnauthenticated(String query, int startIndex, String orderBy, String langCode, int pageSize) {
         if (!googleFallbackEnabled) {
             log.debug("Google fallback disabled - skipping unauthenticated search for query '{}'", query);
             return Mono.empty();
         }
-        return searchVolumesInternal(query, startIndex, orderBy, langCode, false);
+        return searchVolumesInternal(query, startIndex, orderBy, langCode, false, pageSize);
     }
 
     /**
@@ -268,9 +276,13 @@ public class GoogleApiFetcher {
         return Flux.range(0, pageCount)
             .map(page -> page * maxResultsPerPage)
             .concatMap(startIndex -> {
+                int remaining = Math.max(effectiveMax - startIndex, 0);
+                int pageSize = Math.min(maxResultsPerPage, remaining == 0 ? maxResultsPerPage : remaining);
+                pageSize = Math.max(pageSize, 1);
+
                 Mono<JsonNode> apiCall = authenticated
-                    ? searchVolumesAuthenticated(query, startIndex, orderBy, langCode)
-                    : searchVolumesUnauthenticated(query, startIndex, orderBy, langCode);
+                    ? searchVolumesAuthenticated(query, startIndex, orderBy, langCode, pageSize)
+                    : searchVolumesUnauthenticated(query, startIndex, orderBy, langCode, pageSize);
 
                 ExternalApiLogger.logApiCallAttempt(log,
                     "GoogleBooks",
@@ -329,12 +341,17 @@ public class GoogleApiFetcher {
      * @param authenticated Use API key for authentication
      * @return JsonNode response with search results
      */
-    private Mono<JsonNode> searchVolumesInternal(String query, int startIndex, String orderBy, String langCode, boolean authenticated) {
+    private Mono<JsonNode> searchVolumesInternal(String query,
+                                                 int startIndex,
+                                                 String orderBy,
+                                                 String langCode,
+                                                 boolean authenticated,
+                                                 int pageSize) {
         UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(googleBooksApiUrl)
                 .pathSegment("volumes")
                 .queryParam("q", query) // builder will safely encode
                 .queryParam("startIndex", startIndex)
-                .queryParam("maxResults", 40); // Standard maxResults
+                .queryParam("maxResults", Math.max(1, Math.min(40, pageSize))); // Keep within Google API bounds
 
         if (authenticated && googleBooksApiKey != null && !googleBooksApiKey.isEmpty()) {
             builder.queryParam("key", googleBooksApiKey);

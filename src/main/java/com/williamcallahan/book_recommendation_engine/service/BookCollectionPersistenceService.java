@@ -89,26 +89,37 @@ public class BookCollectionPersistenceService {
             ? normalizedName
             : listCode.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
 
+        String safeDisplayName = (displayName == null || displayName.isBlank()) ? listCode : displayName;
         String rawJson = rawListJson != null ? rawListJson.toString() : null;
 
-        String id = jdbcTemplate.queryForObject(
-            "INSERT INTO book_collections (id, collection_type, source, provider_list_id, provider_list_code, display_name, normalized_name, description, bestsellers_date, published_date, raw_data_json, created_at, updated_at) " +
-            "VALUES (?, 'BESTSELLER_LIST', 'NYT', ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
-            "ON CONFLICT (source, provider_list_code, published_date) WHERE provider_list_code IS NOT NULL AND published_date IS NOT NULL " +
-            "DO UPDATE SET display_name = EXCLUDED.display_name, description = EXCLUDED.description, raw_data_json = EXCLUDED.raw_data_json, updated_at = NOW() RETURNING id",
-            (rs, rowNum) -> rs.getString("id"),
-            IdGenerator.generateShort(),
-            providerListId,
-            listCode,
-            displayName,
-            normalized,
-            description,
-            bestsellersDate,
-            publishedDate,
-            rawJson
-        );
+        try {
+            String id = jdbcTemplate.queryForObject(
+                "INSERT INTO book_collections (id, collection_type, source, provider_list_id, provider_list_code, display_name, normalized_name, description, bestsellers_date, published_date, raw_data_json, created_at, updated_at) " +
+                "VALUES (?, 'BESTSELLER_LIST', 'NYT', ?, ?, ?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW()) " +
+                "ON CONFLICT (source, provider_list_code, published_date) WHERE provider_list_code IS NOT NULL AND published_date IS NOT NULL " +
+                "DO UPDATE SET display_name = EXCLUDED.display_name, description = EXCLUDED.description, raw_data_json = EXCLUDED.raw_data_json, updated_at = NOW() RETURNING id",
+                (rs, rowNum) -> rs.getString("id"),
+                IdGenerator.generateShort(),
+                providerListId,
+                listCode,
+                safeDisplayName,
+                normalized,
+                description,
+                bestsellersDate,
+                publishedDate,
+                rawJson
+            );
 
-        return Optional.ofNullable(id);
+            return Optional.ofNullable(id);
+        } catch (DataAccessException ex) {
+            LoggingUtils.error(log, ex, "Failed upserting bestseller collection listCode={} publishedDate={}", listCode, publishedDate);
+            return JdbcUtils.optionalString(
+                jdbcTemplate,
+                "SELECT id FROM book_collections WHERE source = 'NYT' AND provider_list_code = ? AND published_date = ?",
+                listCode,
+                publishedDate
+            );
+        }
     }
 
     public void upsertBestsellerMembership(String collectionId,

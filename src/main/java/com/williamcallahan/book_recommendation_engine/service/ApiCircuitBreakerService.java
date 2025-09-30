@@ -91,7 +91,7 @@ public class ApiCircuitBreakerService {
      * IMMEDIATELY opens circuit breaker for remainder of UTC day (Google Books quota resets at UTC midnight)
      */
     public void recordRateLimitFailure() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         LocalDate nowUtcDate = LocalDate.now(ZoneOffset.UTC);
         lastFailureTime.set(now);
         
@@ -117,7 +117,7 @@ public class ApiCircuitBreakerService {
      * Only rate limit (429) errors trigger the circuit breaker
      */
     public void recordGeneralFailure() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         lastFailureTime.set(now);
         
         // Log but don't open circuit - only 429 errors should trigger the breaker

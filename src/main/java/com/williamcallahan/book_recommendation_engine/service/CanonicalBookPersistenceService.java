@@ -11,6 +11,7 @@ import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
+import com.williamcallahan.book_recommendation_engine.util.UrlUtils;
 import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import java.sql.Date;
 import java.util.List;
@@ -31,7 +32,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Handles canonical {@link Book} persistence into Postgres, extracted from
  * {@link BookDataOrchestrator} to keep orchestration logic lightweight and reuseable.
+ * 
+ * @deprecated This service is being replaced by {@link BookUpsertService} + {@link com.williamcallahan.book_recommendation_engine.service.image.CoverImageService}
+ *             for a cleaner, more maintainable persistence layer. New code should use BookUpsertService.
+ *             This class will be removed in a future version after full migration.
  */
+@Deprecated(since = "2025-01-30", forRemoval = true)
 @Component
 @ConditionalOnBean(JdbcTemplate.class)
 public class CanonicalBookPersistenceService {
@@ -386,10 +392,10 @@ public class CanonicalBookPersistenceService {
             externalId,
             providerIsbn10,
             providerIsbn13,
-            normalizeToHttps(book.getInfoLink()),
-            normalizeToHttps(book.getPreviewLink()),
-            normalizeToHttps(book.getPurchaseLink()),
-            normalizeToHttps(book.getWebReaderLink()),
+            UrlUtils.normalizeToHttps(book.getInfoLink()),
+            UrlUtils.normalizeToHttps(book.getPreviewLink()),
+            UrlUtils.normalizeToHttps(book.getPurchaseLink()),
+            UrlUtils.normalizeToHttps(book.getWebReaderLink()),
             averageRating,
             ratingsCount,
             book.getPdfAvailable(),
@@ -467,6 +473,12 @@ public class CanonicalBookPersistenceService {
         }
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.service.image.CoverImageService#upsertAllAndSetPrimary}
+     *             via {@link BookUpsertService} instead. This method only persists basic image URLs without
+     *             enhanced metadata (width, height, resolution).
+     */
+    @Deprecated(since = "2025-01-30", forRemoval = false)
     private void persistImageLinks(String bookId, Book book) {
         CoverImages images = book.getCoverImages();
         if (images == null) {
@@ -487,11 +499,15 @@ public class CanonicalBookPersistenceService {
         }
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.service.image.CoverImageService#upsertAllAndSetPrimary}
+     *             via {@link BookUpsertService} instead. This method only persists basic image URLs without
+     *             enhanced metadata (width, height, resolution).
+     */
+    @Deprecated(since = "2025-01-30", forRemoval = false)
     private void upsertImageLink(String bookId, String type, String url, String source) {
-        // Normalize HTTP to HTTPS for Google Books and other APIs
-        String normalizedUrl = url != null && url.startsWith("http://") 
-            ? url.replace("http://", "https://") 
-            : url;
+        // Use shared UrlUtils instead of inline duplication
+        String normalizedUrl = UrlUtils.normalizeToHttps(url);
             
         jdbcTemplate.update(
             "INSERT INTO book_image_links (id, book_id, image_type, url, source, created_at) VALUES (?, ?::uuid, ?, ?, ?, NOW()) " +
@@ -510,16 +526,6 @@ public class CanonicalBookPersistenceService {
         // See schema.sql comments for migration details
     }
     
-    /**
-     * Normalize HTTP URLs to HTTPS for security.
-     * Google Books and other APIs often return HTTP URLs that should be HTTPS.
-     */
-    private String normalizeToHttps(String url) {
-        if (url == null || url.isBlank()) {
-            return url;
-        }
-        return url.startsWith("http://") ? url.replace("http://", "https://") : url;
-    }
 
     private String determineSource(JsonNode sourceJson) {
         if (sourceJson == null) {

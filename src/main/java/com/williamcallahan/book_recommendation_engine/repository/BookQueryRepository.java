@@ -110,7 +110,8 @@ public class BookQueryRepository {
      * @return List of BookCard DTOs ordered by position
      */
     public List<BookCard> fetchBookCardsByProviderListCode(String providerListCode, int limit) {
-        if (providerListCode == null || providerListCode.isBlank() || limit <= 0) {
+        String trimmedCode = providerListCode == null ? null : providerListCode.trim();
+        if (trimmedCode == null || trimmedCode.isBlank() || limit <= 0) {
             return List.of();
         }
 
@@ -129,14 +130,14 @@ public class BookQueryRepository {
             List<String> collectionIds = jdbcTemplate.query(
                 collectionSql,
                 (rs, rowNum) -> rs.getString("id"),
-                providerListCode.trim()
+                trimmedCode
             ).stream()
             .filter(Objects::nonNull)
             .filter(id -> !id.isBlank())
             .collect(Collectors.toList());
             
             if (collectionIds.isEmpty()) {
-                log.debug("No collection found for provider list code: {}", providerListCode);
+                log.debug("No collection found for provider list code: {}", trimmedCode);
                 return List.of();
             }
             
@@ -263,7 +264,7 @@ public class BookQueryRepository {
         @Override
         public BookCard mapRow(@NonNull ResultSet rs, int rowNum) throws SQLException {
             List<String> authors = parseTextArray(rs.getArray("authors"));
-            log.debug("BookCard row: id={}, title={}, authors={}, coverUrl={}", 
+            log.trace("BookCard row: id={}, title={}, authors={}, coverUrl={}", 
                 rs.getString("id"), rs.getString("title"), authors, rs.getString("cover_url"));
             return new BookCard(
                 rs.getString("id"),
