@@ -13,6 +13,7 @@
 package com.williamcallahan.book_recommendation_engine;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 import com.williamcallahan.book_recommendation_engine.util.S3Paths;
@@ -31,6 +32,8 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfigura
 import org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @SpringBootApplication(exclude = {
     OpenAiAudioSpeechAutoConfiguration.class,
@@ -52,6 +55,8 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoCon
 @EnableScheduling
 @EnableRetry
 public class BookRecommendationEngineApplication implements ApplicationRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(BookRecommendationEngineApplication.class);
 
     private final com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator;
 
@@ -139,11 +144,14 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
                 existingPass = System.getProperty("spring.datasource.password");
             }
 
-            if (ValidationUtils.isNullOrBlank(existingUser) && ValidationUtils.hasText(result.username)) {
-                System.setProperty("spring.datasource.username", result.username);
+            String decodedUser = decodeUrlComponent(result.username);
+            String decodedPass = decodeUrlComponent(result.password);
+
+            if (ValidationUtils.isNullOrBlank(existingUser) && ValidationUtils.hasText(decodedUser)) {
+                System.setProperty("spring.datasource.username", decodedUser);
             }
-            if (ValidationUtils.isNullOrBlank(existingPass) && ValidationUtils.hasText(result.password)) {
-                System.setProperty("spring.datasource.password", result.password);
+            if (ValidationUtils.isNullOrBlank(existingPass) && ValidationUtils.hasText(decodedPass)) {
+                System.setProperty("spring.datasource.password", decodedPass);
             }
 
             // Echo minimal confirmation to stdout (password omitted)
@@ -158,32 +166,60 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         if (args.containsOption("migrate.s3.books")) {
-            String rawPrefix = args.containsOption("migrate.prefix") ? args.getOptionValues("migrate.prefix").get(0) : null;
+            assertOrchestratorAvailable("--migrate.s3.books");
+
+            String rawPrefix = firstOptionValue(args, "migrate.prefix");
             String prefix = S3Paths.ensureTrailingSlash(rawPrefix);
             int max = parseIntArg(args, "migrate.max", 0);
             int skip = parseIntArg(args, "migrate.skip", 0);
-            if (bookDataOrchestrator != null) {
-                bookDataOrchestrator.migrateBooksFromS3(prefix, max, skip);
-            }
+            bookDataOrchestrator.migrateBooksFromS3(prefix, max, skip);
         }
 
         if (args.containsOption("migrate.s3.lists")) {
-            String provider = args.containsOption("migrate.lists.provider") ? args.getOptionValues("migrate.lists.provider").get(0) : "NYT";
+            assertOrchestratorAvailable("--migrate.s3.lists");
+
+            String provider = java.util.Optional.ofNullable(firstOptionValue(args, "migrate.lists.provider"))
+                    .filter(ValidationUtils::hasText)
+                    .orElse("NYT");
             String defaultPrefix = "lists/" + provider.toLowerCase(Locale.ROOT) + "/";
-            String rawListPrefix = args.containsOption("migrate.lists.prefix") ? args.getOptionValues("migrate.lists.prefix").get(0) : null;
+            String rawListPrefix = firstOptionValue(args, "migrate.lists.prefix");
             String listPrefix = S3Paths.ensureTrailingSlash(rawListPrefix, defaultPrefix);
             int maxLists = parseIntArg(args, "migrate.lists.max", 0);
             int skipLists = parseIntArg(args, "migrate.lists.skip", 0);
-            if (bookDataOrchestrator != null) {
-                bookDataOrchestrator.migrateListsFromS3(provider, listPrefix, maxLists, skipLists);
-            }
+            bookDataOrchestrator.migrateListsFromS3(provider, listPrefix, maxLists, skipLists);
         }
+    }
+
+    private void assertOrchestratorAvailable(String triggerOption) {
+        if (bookDataOrchestrator == null) {
+            String message = "BookDataOrchestrator bean is required for " + triggerOption + " but is not initialized.";
+            log.error(message);
+            throw new IllegalStateException(message);
+        }
+    }
+
+    private static String decodeUrlComponent(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return java.net.URLDecoder.decode(value, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            log.warn("Failed to URL-decode datasource credential component; using raw value", ex);
+            return value;
+        }
+    }
+
+    private String firstOptionValue(ApplicationArguments args, String name) {
+        java.util.List<String> values = args.getOptionValues(name);
+        return (values == null || values.isEmpty()) ? null : values.get(0);
     }
 
     private int parseIntArg(ApplicationArguments args, String name, int defaultValue) {
         try {
-            if (args.containsOption(name)) {
-                return Integer.parseInt(args.getOptionValues(name).get(0));
+            String value = firstOptionValue(args, name);
+            if (ValidationUtils.hasText(value)) {
+                return Integer.parseInt(value);
             }
         } catch (Exception ignored) { }
         return defaultValue;

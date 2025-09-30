@@ -2,6 +2,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
+import com.williamcallahan.book_recommendation_engine.service.image.CoverImageService;
 import com.williamcallahan.book_recommendation_engine.util.DimensionParser;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
@@ -57,15 +58,18 @@ public class BookUpsertService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final BookCollectionPersistenceService collectionPersistenceService;
+    private final CoverImageService coverImageService;
     
     public BookUpsertService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
-        BookCollectionPersistenceService collectionPersistenceService
+        BookCollectionPersistenceService collectionPersistenceService,
+        CoverImageService coverImageService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.collectionPersistenceService = collectionPersistenceService;
+        this.coverImageService = coverImageService;
     }
     
     /**
@@ -132,9 +136,9 @@ public class BookUpsertService {
             upsertExternalIds(bookId, aggregate.getIdentifiers());
         }
         
-        // 6. UPSERT image links
+        // 6. UPSERT image links with enhanced metadata (dimensions, high-res detection)
         if (aggregate.getIdentifiers() != null && aggregate.getIdentifiers().getImageLinks() != null) {
-            upsertImageLinks(bookId, aggregate.getIdentifiers().getImageLinks());
+            upsertImageLinksEnhanced(bookId, aggregate.getIdentifiers());
         }
         
         // 7. UPSERT categories
@@ -505,9 +509,47 @@ public class BookUpsertService {
     }
     
     /**
-     * UPSERT book_image_links table.
+     * UPSERT book_image_links table with enhanced metadata.
+     * 
+     * Uses CoverImageService (SSOT) to:
+     * - Normalize URLs to HTTPS
+     * - Estimate dimensions based on image type
+     * - Detect high-resolution images
+     * - Update books.s3_image_path with canonical cover
+     * 
+     * Falls back to simple upsert if CoverImageService fails.
      */
-    private void upsertImageLinks(UUID bookId, Map<String, String> imageLinks) {
+    private void upsertImageLinksEnhanced(UUID bookId, BookAggregate.ExternalIdentifiers identifiers) {
+        Map<String, String> imageLinks = identifiers.getImageLinks();
+        String source = identifiers.getSource() != null ? identifiers.getSource() : "GOOGLE_BOOKS";
+        
+        try {
+            // Use CoverImageService for enhanced metadata persistence
+            CoverImageService.PersistedCover result = coverImageService.upsertAllAndSetPrimary(
+                bookId, 
+                imageLinks, 
+                source
+            );
+            
+            log.debug("Enhanced image metadata persisted for book {}: s3Key={}, dimensions={}x{}, highRes={}",
+                bookId, result.s3Key(), result.width(), result.height(), result.highRes());
+            
+        } catch (Exception e) {
+            // Fallback to simple upsert if enhanced service fails
+            log.warn("CoverImageService failed for book {}, falling back to simple upsert: {}", 
+                bookId, e.getMessage());
+            upsertImageLinksSimple(bookId, imageLinks, source);
+        }
+    }
+    
+    /**
+     * Fallback: Simple UPSERT without enhanced metadata.
+     * Only persists URL and source - no dimensions or high-res detection.
+     * 
+     * @deprecated Use upsertImageLinksEnhanced instead
+     */
+    @Deprecated(since = "2025-01-30", forRemoval = false)
+    private void upsertImageLinksSimple(UUID bookId, Map<String, String> imageLinks, String source) {
         for (Map.Entry<String, String> entry : imageLinks.entrySet()) {
             String imageType = entry.getKey();
             String url = entry.getValue();
@@ -528,7 +570,7 @@ public class BookUpsertService {
                 bookId,
                 imageType,
                 normalizeToHttps(url),
-                "GOOGLE_BOOKS"
+                source
             );
         }
     }

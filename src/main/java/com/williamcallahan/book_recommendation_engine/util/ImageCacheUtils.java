@@ -20,8 +20,8 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSour
 import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
-
 import org.slf4j.Logger;
 
 import java.security.MessageDigest;
@@ -232,11 +232,8 @@ public final class ImageCacheUtils {
             return null;
         }
 
-        String enhancedUrl = baseUrl;
-
-        if (enhancedUrl.startsWith("http://")) {
-            enhancedUrl = "https://" + enhancedUrl.substring(7);
-        }
+        // Use shared UrlUtils instead of inline duplication
+        String enhancedUrl = UrlUtils.normalizeToHttps(baseUrl);
 
         if (enhancedUrl.contains("&fife=")) {
             enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+(-h\\d+)?", "");
