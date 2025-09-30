@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
@@ -85,6 +86,11 @@ public class CanonicalBookPersistenceService {
             return saveBook(incoming, sourceJson);
         } catch (Exception ex) {
             LoggingUtils.warn(LOGGER, ex, "DB enrich-upsert failed for incoming book {}", incoming != null ? incoming.getId() : null);
+            ExternalApiLogger.logPersistenceFailure(
+                LOGGER,
+                "CANONICAL",
+                incoming != null ? incoming.getId() : null,
+                ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
             return false;
         }
     }
@@ -122,6 +128,11 @@ public class CanonicalBookPersistenceService {
         } catch (Exception ex) {
             LoggingUtils.error(LOGGER, ex, "Failed to persist book: id='{}', title='{}', isbn13='{}'",
                 book.getId(), book.getTitle(), book.getIsbn13());
+            ExternalApiLogger.logPersistenceFailure(
+                LOGGER,
+                "CANONICAL",
+                book != null ? book.getId() : null,
+                ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
             return false;
         }
     }
@@ -178,6 +189,7 @@ public class CanonicalBookPersistenceService {
         persistImageLinks(canonicalId, book);
         supplementalPersistenceService.assignQualifierTags(canonicalId, book.getQualifiers());
         synchronizeEditionRelationships(canonicalId, book);
+        ExternalApiLogger.logPersistenceSuccess(LOGGER, "CANONICAL", canonicalId, isNew, book.getTitle());
     }
 
     private String extractGoogleId(JsonNode sourceJson, Book book) {
