@@ -114,12 +114,12 @@ public class SecurityConfig {
             if (cspEnabled) { // Check if CSP is enabled first
                 StringBuilder imgSrcDirective = new StringBuilder("'self' data: blob: ");
                 StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline' blob:");
-                StringBuilder connectSrcDirective = new StringBuilder("'self'");
+                StringBuilder connectSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com");
 
                 if (clickyEnabled) {
                     // Add Clicky Analytics domains for img-src, script-src, and connect-src
                     imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
-                    scriptSrcDirective.append(" https://static.getclicky.com https://clicky.com");
+                    scriptSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
                     connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
                 }
 
