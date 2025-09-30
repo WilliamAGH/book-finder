@@ -565,6 +565,10 @@ document.addEventListener('DOMContentLoaded', function() {
           }
         }
       });
+      // Subscribe to persistence upserts for this book
+      stompClient.subscribe('/topic/book/' + id + '/upsert', function(message) {
+        try { var payload = JSON.parse(message.body); console.log('[WS][upsert]', payload); } catch(e) {}
+      });
     });
   });
 });
