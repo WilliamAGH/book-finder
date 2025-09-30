@@ -16,6 +16,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyInt;
 
 import java.lang.reflect.Field;
 
@@ -49,7 +50,7 @@ class BookCacheWarmingSchedulerTest {
         Book fallback = new Book();
         fallback.setId("google-tier");
 
-        given(recentlyViewedService.getRecentlyViewedBooks()).willReturn(List.of(orchestrated));
+        given(recentlyViewedService.getRecentlyViewedBookIds(anyInt())).willReturn(List.of("pg-tier"));
         given(bookDataOrchestrator.getBookByIdTiered("pg-tier")).willReturn(Mono.just(orchestrated));
         given(googleBooksService.getBookById("pg-tier")).willReturn(CompletableFuture.completedFuture(fallback));
 
@@ -64,7 +65,7 @@ class BookCacheWarmingSchedulerTest {
         Book fallback = new Book();
         fallback.setId("google-tier");
 
-        given(recentlyViewedService.getRecentlyViewedBooks()).willReturn(List.of(fallback));
+        given(recentlyViewedService.getRecentlyViewedBookIds(anyInt())).willReturn(List.of("google-tier"));
         given(bookDataOrchestrator.getBookByIdTiered("google-tier")).willReturn(Mono.empty());
         given(googleBooksService.getBookById("google-tier")).willReturn(CompletableFuture.completedFuture(fallback));
 

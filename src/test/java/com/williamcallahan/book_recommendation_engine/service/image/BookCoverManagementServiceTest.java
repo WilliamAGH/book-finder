@@ -84,6 +84,10 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
 
     @MockitoBean
     private BookDataOrchestrator bookDataOrchestrator;
+    
+    // Mock NewYorkTimesService to prevent Spring from trying to instantiate it with missing dependencies
+    @MockitoBean
+    private com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService newYorkTimesService;
 
     private Book testBook;
 

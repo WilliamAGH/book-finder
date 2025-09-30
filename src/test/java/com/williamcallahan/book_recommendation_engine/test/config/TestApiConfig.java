@@ -12,17 +12,9 @@ package com.williamcallahan.book_recommendation_engine.test.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
-import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.service.S3StorageService;
-import com.williamcallahan.book_recommendation_engine.service.image.LongitoodService;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
-import org.mockito.Mockito;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,26 +23,14 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
-import jakarta.annotation.PostConstruct;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
-import java.nio.charset.StandardCharsets;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-
-// S3Client imports
-import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectResponse;
-
-// LocalDiskCoverCacheService and related imports
-import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
-import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Test-specific configuration that prevents real API calls
@@ -159,83 +139,9 @@ public class TestApiConfig {
         logger.info("=============================================================");
     }
 
-    @Bean
-    @Primary
-    public LongitoodService testLongitoodService() {
-        LongitoodService mockLongitoodService = Mockito.mock(LongitoodService.class);
-        // Default behavior: return an empty optional for any book
-        Mockito.when(mockLongitoodService.fetchCover(Mockito.any(Book.class)))
-               .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
-        
-        logger.info("Mock LongitoodService configured to return empty Optional by default.");
-        return mockLongitoodService;
-    }
+    // LongitoodService bean removed - now provided by TestBookCoverConfig to avoid duplicate bean definition
 
-    @Bean
-    @Primary
-    public S3Client testS3Client() {
-        S3Client mockS3Client = Mockito.mock(S3Client.class);
+    // S3Client bean removed - now provided by TestBookCoverConfig to avoid duplicate bean definition
 
-        // Default behavior for headObject: simulate object not found
-        Mockito.when(mockS3Client.headObject(Mockito.any(HeadObjectRequest.class)))
-               .thenThrow(NoSuchKeyException.builder().message("Mock S3: Object not found for test").build());
-
-        // Default behavior for putObject: simulate successful upload
-        Mockito.when(mockS3Client.putObject(Mockito.any(PutObjectRequest.class), Mockito.any(RequestBody.class)))
-               .thenReturn(PutObjectResponse.builder().build());
-        
-        // Add other specific S3 client behaviors if needed for particular tests
-
-        logger.info("Mock S3Client configured.");
-        return mockS3Client;
-    }
-
-    @Bean
-    @Primary
-    public LocalDiskCoverCacheService testLocalDiskCoverCacheService() {
-        LocalDiskCoverCacheService mockDiskCache = Mockito.mock(LocalDiskCoverCacheService.class);
-
-        // Stub getLocalPlaceholderPath
-        String placeholderPath = "/images/mock-placeholder.svg";
-        Mockito.when(mockDiskCache.getLocalPlaceholderPath()).thenReturn(placeholderPath);
-
-        // Stub downloadAndStoreImageLocallyAsync to return a placeholder
-        Mockito.when(mockDiskCache.downloadAndStoreImageLocallyAsync(
-            Mockito.anyString(), Mockito.anyString(), 
-            Mockito.any(ImageProvenanceData.class), Mockito.anyString()))
-            .thenAnswer(invocation -> {
-                String bookIdForLog = invocation.getArgument(1);
-                ImageDetails placeholderDetails = new ImageDetails(
-                    placeholderPath, 
-                    "MOCK_DISK_CACHE", 
-                    "mock-placeholder-" + bookIdForLog, 
-                    CoverImageSource.NONE,
-                    ImageResolutionPreference.ANY,
-                    0, 0 // Placeholder dimensions
-                );
-                return CompletableFuture.completedFuture(placeholderDetails);
-            });
-
-        // Stub createPlaceholderImageDetails to return a valid placeholder
-        Mockito.when(mockDiskCache.createPlaceholderImageDetails(Mockito.anyString(), Mockito.anyString()))
-            .thenAnswer(invocation -> {
-                String bookIdForLogArg = invocation.getArgument(0);
-                String reasonSuffixArg = invocation.getArgument(1);
-                // Using the same placeholderPath as defined above for consistency
-                return new ImageDetails(
-                    placeholderPath,
-                    "MOCK_SYSTEM_PLACEHOLDER",
-                    "mock-placeholder-" + reasonSuffixArg + "-" + bookIdForLogArg,
-                    CoverImageSource.LOCAL_CACHE, // Corrected to LOCAL_CACHE
-                    ImageResolutionPreference.UNKNOWN,
-                    0,0
-                );
-            });
-        
-        // Stub other public methods if necessary for tests, e.g., methods to check if an image exists in cache
-        // Mockito.when(mockDiskCache.getCachedImagePath(Mockito.anyString())).thenReturn(Optional.empty());
-
-        logger.info("Mock LocalDiskCoverCacheService configured.");
-        return mockDiskCache;
-    }
+    // LocalDiskCoverCacheService bean removed - now provided by TestBookCoverConfig to avoid duplicate bean definition
 }

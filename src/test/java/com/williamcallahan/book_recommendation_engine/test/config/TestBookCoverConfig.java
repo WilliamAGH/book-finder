@@ -15,6 +15,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 // CachedBookRepository removed with Redis; no longer needed
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
+import com.williamcallahan.book_recommendation_engine.service.PostgresBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
 import com.williamcallahan.book_recommendation_engine.service.image.CoverCacheManager;
@@ -590,6 +592,46 @@ public class TestBookCoverConfig {
     
     // CachedBookRepository removed; no bean required
 
+    /**
+     * Provides a mock BookQueryRepository for testing
+     * - Prevents actual database queries during testing
+     * - Returns empty results by default
+     * 
+     * @return Mock BookQueryRepository for testing
+     */
+    @Bean
+    @Primary
+    public BookQueryRepository testBookQueryRepository() {
+        BookQueryRepository mockRepository = Mockito.mock(BookQueryRepository.class);
+        
+        // Configure default behaviors to return empty results
+        Mockito.when(mockRepository.fetchBookCards(Mockito.anyList()))
+            .thenReturn(java.util.Collections.emptyList());
+        Mockito.when(mockRepository.fetchBookListItems(Mockito.anyList()))
+            .thenReturn(java.util.Collections.emptyList());
+        Mockito.when(mockRepository.fetchBookCardsByProviderListCode(Mockito.anyString(), Mockito.anyInt()))
+            .thenReturn(java.util.Collections.emptyList());
+        
+        logger.info("Mock BookQueryRepository configured for testing");
+        return mockRepository;
+    }
+    
+    /**
+     * Provides a mock PostgresBookRepository for testing
+     * - Prevents actual database queries during testing
+     * - Returns empty results by default
+     * 
+     * @return Mock PostgresBookRepository for testing
+     */
+    @Bean
+    @Primary
+    public PostgresBookRepository testPostgresBookRepository() {
+        PostgresBookRepository mockRepository = Mockito.mock(PostgresBookRepository.class);
+        
+        logger.info("Mock PostgresBookRepository configured for testing");
+        return mockRepository;
+    }
+    
     /**
      * Utility method to create an ArgumentCaptor for BookCoverUpdatedEvent
      * Makes it easy for tests to verify events being published

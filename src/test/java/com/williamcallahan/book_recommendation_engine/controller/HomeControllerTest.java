@@ -35,9 +35,10 @@ import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBook
 import static org.mockito.ArgumentMatchers.any; // For mocking any objects
 import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
 import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
-import static org.mockito.ArgumentMatchers.argThat; // For custom argument matcher
 import reactor.core.publisher.Mono; // For mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 @WebFluxTest(value = HomeController.class,
     excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
@@ -50,10 +51,6 @@ class HomeControllerTest {
      * Mock for RecommendationService dependency
      */
     @org.springframework.beans.factory.annotation.Autowired
-    @SuppressWarnings("unused")
-    private RecommendationService recommendationService;
-    
-    @org.springframework.beans.factory.annotation.Autowired
     private BookDataOrchestrator bookDataOrchestrator;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -63,25 +60,16 @@ class HomeControllerTest {
     private RecentlyViewedService recentlyViewedService;
     
     @org.springframework.beans.factory.annotation.Autowired
-    @SuppressWarnings("unused")
-    private com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService bookImageOrchestrationService;
-    
-    @org.springframework.beans.factory.annotation.Autowired
     private com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService bookCoverManagementService;
 
     @org.springframework.beans.factory.annotation.Autowired
     private com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService localDiskCoverCacheService;
     
     @org.springframework.beans.factory.annotation.Autowired
-    @SuppressWarnings("unused")
-    private com.williamcallahan.book_recommendation_engine.service.EnvironmentService environmentService;
+    private NewYorkTimesService newYorkTimesService;
     
     @org.springframework.beans.factory.annotation.Autowired
-    @SuppressWarnings("unused")
-    private com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService;
-
-    @org.springframework.beans.factory.annotation.Autowired
-    private NewYorkTimesService newYorkTimesService;
+    private BookQueryRepository bookQueryRepository;
 
     @TestConfiguration
     static class MocksConfig {
@@ -96,6 +84,7 @@ class HomeControllerTest {
         @Bean com.williamcallahan.book_recommendation_engine.service.DuplicateBookService duplicateBookService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.DuplicateBookService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService affiliateLinkService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService.class); }
         @Bean NewYorkTimesService newYorkTimesService() { return Mockito.mock(NewYorkTimesService.class); }
+        @Bean BookQueryRepository bookQueryRepository() { return Mockito.mock(BookQueryRepository.class); }
     }
     
     /**
@@ -108,9 +97,13 @@ class HomeControllerTest {
         when(googleBooksService.searchBooksAsyncReactive(anyString(), isNull(), anyInt(), isNull()))
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
-        // Configure NewYorkTimesService to return empty list by default
-        when(newYorkTimesService.getCurrentBestSellers(anyString(), anyInt()))
+        // Configure NewYorkTimesService to return empty BookCard list by default (NEW OPTIMIZED METHOD)
+        when(newYorkTimesService.getCurrentBestSellersCards(anyString(), anyInt()))
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
+        
+        // Configure BookQueryRepository to return empty BookCard list by default
+        when(bookQueryRepository.fetchBookCards(org.mockito.ArgumentMatchers.anyList()))
+            .thenReturn(java.util.Collections.emptyList());
 
         // Configure BookCoverManagementService with mock cover generation
         when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class)))
@@ -132,6 +125,10 @@ class HomeControllerTest {
         // Configure RecentlyViewedService with empty view history (reactive)
         when(recentlyViewedService.getRecentlyViewedBooksReactive())
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
+        
+        // Configure RecentlyViewedService to return empty BookCard IDs by default
+        when(recentlyViewedService.getRecentlyViewedBookIds(anyInt()))
+            .thenReturn(java.util.Collections.emptyList());
 
         when(bookDataOrchestrator.getBookByIdTiered(anyString())).thenReturn(Mono.empty());
     }
@@ -207,26 +204,42 @@ class HomeControllerTest {
      */
     @Test
     void shouldReturnHomeViewWithBestsellersAndRecentBooks() {
-        // Arrange
-        Book bestsellerBook = createTestBook("bestseller1", "NYT Bestseller", "Author A");
-        List<Book> bestsellers = List.of(bestsellerBook);
-        Book recentBook = createTestBook("recent1", "Recent Read", "Author B");
-        List<Book> additionalRecentBooks = List.of(recentBook);
-        // Mock for bestsellers from NYT service
-        when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
-            .thenReturn(Mono.just(bestsellers));
-        when(recentlyViewedService.getRecentlyViewedBooksReactive())
-            .thenReturn(Mono.just(java.util.Collections.emptyList()));
-        when(bookDataOrchestrator.searchBooksTiered(
-                argThat((String query) -> query != null && !query.equals("hardcover-fiction")),
-                isNull(String.class),
-                anyInt(),
-                isNull(String.class),
-                eq(true))) // bypassExternalApis=true for homepage
-            .thenReturn(Mono.just(additionalRecentBooks));
-        // Override recently viewed to include our recent book deterministically
-        when(recentlyViewedService.getRecentlyViewedBooksReactive())
-            .thenReturn(Mono.just(additionalRecentBooks));
+        // Arrange - use BookCard DTOs (THE NEW WAY)
+        BookCard bestsellerCard = new BookCard(
+            "bestseller1",
+            "nyt-bestseller-slug",
+            "NYT Bestseller",
+            List.of("Author A"),
+            "http://example.com/cover/bestseller1.jpg",
+            4.5,
+            100,
+            java.util.Map.of()
+        );
+        List<BookCard> bestsellerCards = List.of(bestsellerCard);
+        
+        // Mock for bestsellers from NYT service (NEW OPTIMIZED METHOD)
+        when(newYorkTimesService.getCurrentBestSellersCards(eq("hardcover-fiction"), eq(8)))
+            .thenReturn(Mono.just(bestsellerCards));
+        // Mock recently viewed book IDs (NEW OPTIMIZED WAY) - use proper UUIDs
+        String recentBookUuid = "550e8400-e29b-41d4-a716-446655440001";
+        when(recentlyViewedService.getRecentlyViewedBookIds(anyInt()))
+            .thenReturn(List.of(recentBookUuid));
+        
+        // Create recent card with same UUID
+        BookCard recentCardWithUuid = new BookCard(
+            recentBookUuid,
+            "recent-read-slug",
+            "Recent Read",
+            List.of("Author B"),
+            "http://example.com/cover/recent1.jpg",
+            4.0,
+            50,
+            java.util.Map.of()
+        );
+        
+        // Mock BookQueryRepository to return recent cards
+        when(bookQueryRepository.fetchBookCards(org.mockito.ArgumentMatchers.anyList()))
+            .thenReturn(List.of(recentCardWithUuid));
 
         // Act & Assert
         webTestClient.get().uri("/")
@@ -276,11 +289,11 @@ class HomeControllerTest {
      */
     @Test
     void shouldShowEmptyHomePageWhenServiceThrowsException() {
-        // Arrange - updated signature
-        when(newYorkTimesService.getCurrentBestSellers(eq("hardcover-fiction"), eq(8)))
+        // Arrange - NEW OPTIMIZED METHOD
+        when(newYorkTimesService.getCurrentBestSellersCards(eq("hardcover-fiction"), eq(8)))
             .thenReturn(Mono.error(new RuntimeException("simulated bestseller fetch failure")));
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull(), eq(true)))
-            .thenReturn(Mono.just(java.util.Collections.emptyList()));
+        when(recentlyViewedService.getRecentlyViewedBookIds(anyInt()))
+            .thenReturn(java.util.Collections.emptyList());
         // Act & Assert
         webTestClient.get().uri("/")
             .accept(MediaType.TEXT_HTML)
