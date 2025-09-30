@@ -75,7 +75,7 @@ class BookDataOrchestratorPersistenceScenariosTest {
         bookS3CacheService = new BookS3CacheService(s3RetryService, om);
         postgresBookRepository = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
         bookLookupService = new BookLookupService(jdbcTemplate);
-        canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTemplate, om, supplementalPersistenceService, bookLookupService);
+canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTemplate, om, supplementalPersistenceService, bookLookupService, null);
 
         orchestrator = new BookDataOrchestrator(
                 s3RetryService,
@@ -188,12 +188,15 @@ class TieredBookSearchServiceAuthorSearchTest {
 
     @BeforeEach
     void setUp() {
-        service = new TieredBookSearchService(
+service = new TieredBookSearchService(
             bookSearchService,
             googleApiFetcher,
             openLibraryBookDataService,
             null,
-            true
+            true,
+            null,
+            null,
+            objectMapper
         );
 
         lenient().when(googleApiFetcher.isGoogleFallbackEnabled()).thenReturn(true);
