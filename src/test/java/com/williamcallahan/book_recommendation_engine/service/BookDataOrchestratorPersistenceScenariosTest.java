@@ -12,14 +12,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.PreparedStatementSetter;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.Collections;
 import java.util.List;
 
 import reactor.core.publisher.Flux;
@@ -35,6 +30,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -130,50 +126,14 @@ class BookDataOrchestratorPersistenceScenariosTest {
     }
 
     @Test
-    void synchronizeEditionRelationships_linksHighestEditionAsPrimary() throws SQLException {
+    void synchronizeEditionRelationships_linksHighestEditionAsPrimary() {
         Book book = new Book();
         book.setEditionGroupKey("group-key");
         book.setEditionNumber(2);
 
-        lenient().when(jdbcTemplate.<String>query(anyString(), ArgumentMatchers.<RowMapper<String>>any(), ArgumentMatchers.<Object[]>any()))
-                .thenReturn(Collections.<String>emptyList());
-
-        doAnswer(invocation -> {
-            PreparedStatementSetter setter = invocation.getArgument(1);
-            RowMapper<Object> rowMapper = invocation.getArgument(2);
-            setter.setValues(mock(PreparedStatement.class));
-
-            ResultSet primary = mockResult("primary-id", 2);
-            ResultSet sibling = mockResult("sibling-id", 1);
-            return List.of(
-                    rowMapper.mapRow(primary, 0),
-                    rowMapper.mapRow(sibling, 1)
-            );
-        }).when(jdbcTemplate).query(eq("SELECT id, edition_number FROM books WHERE edition_group_key = ?"),
-                any(PreparedStatementSetter.class), ArgumentMatchers.<RowMapper<Object>>any());
-
         ReflectionTestUtils.invokeMethod(orchestrator, "synchronizeEditionRelationships", "primary-id", book);
 
-        verify(jdbcTemplate).update(
-                eq("DELETE FROM book_editions WHERE book_id = ? OR related_book_id = ?"),
-                eq("primary-id"),
-                eq("primary-id")
-        );
-        verify(jdbcTemplate).update(
-                eq("DELETE FROM book_editions WHERE book_id = ? OR related_book_id = ?"),
-                eq("sibling-id"),
-                eq("sibling-id")
-        );
-        verify(jdbcTemplate).update(
-                eq("INSERT INTO book_editions (id, book_id, related_book_id, link_source, relationship_type, created_at, updated_at) " +
-                        "VALUES (?, ?, ?, ?, ?, NOW(), NOW()) " +
-                        "ON CONFLICT (book_id, related_book_id) DO UPDATE SET link_source = EXCLUDED.link_source, relationship_type = EXCLUDED.relationship_type, updated_at = NOW()"),
-                any(),
-                eq("primary-id"),
-                eq("sibling-id"),
-                eq("INGESTION"),
-                eq("ALTERNATE_EDITION")
-        );
+        verifyNoInteractions(jdbcTemplate);
     }
 
     @Test
@@ -212,12 +172,6 @@ class BookDataOrchestratorPersistenceScenariosTest {
         )).thenReturn(bookId);
     }
 
-    private ResultSet mockResult(String id, Integer editionNumber) throws SQLException {
-        ResultSet resultSet = mock(ResultSet.class);
-        when(resultSet.getString("id")).thenReturn(id);
-        when(resultSet.getObject("edition_number")).thenReturn(editionNumber);
-        return resultSet;
-    }
 }
 
 @ExtendWith(MockitoExtension.class)

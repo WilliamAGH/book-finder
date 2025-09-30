@@ -5,7 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.service.GoogleApiFetcher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -45,13 +49,25 @@ public final class GoogleBooksStubs {
     }
 
     public static void stubSearchReturns(GoogleApiFetcher fetcher, String query, String orderBy, String lang, ObjectNode response) {
-        when(fetcher.searchVolumesAuthenticated(eq(query), anyInt(), eq(orderBy), eq(lang)))
-                .thenReturn(Mono.just(response));
+        List<JsonNode> items = new ArrayList<>();
+        if (response != null && response.has("items") && response.get("items").isArray()) {
+            response.get("items").forEach(items::add);
+        }
+
+        Flux<JsonNode> flux = Flux.fromIterable(items);
+
+        when(fetcher.streamSearchItems(eq(query), anyInt(), eq(orderBy), eq(lang), eq(true)))
+                .thenReturn(flux);
+        when(fetcher.streamSearchItems(eq(query), anyInt(), eq(orderBy), eq(lang), eq(false)))
+                .thenReturn(Flux.empty());
     }
 
     public static void stubSearchError(GoogleApiFetcher fetcher, String query, String orderBy, String lang, Throwable error) {
-        when(fetcher.searchVolumesAuthenticated(eq(query), anyInt(), eq(orderBy), eq(lang)))
-                .thenReturn(Mono.error(error));
+        Flux<JsonNode> errorFlux = Flux.error(error);
+        when(fetcher.streamSearchItems(eq(query), anyInt(), eq(orderBy), eq(lang), eq(true)))
+                .thenReturn(errorFlux);
+        when(fetcher.streamSearchItems(eq(query), anyInt(), eq(orderBy), eq(lang), eq(false)))
+                .thenReturn(Flux.empty());
     }
 
     public static void stubFetchVolumeReturns(GoogleApiFetcher fetcher, String bookId, JsonNode volume) {

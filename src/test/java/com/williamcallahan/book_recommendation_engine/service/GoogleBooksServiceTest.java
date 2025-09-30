@@ -20,6 +20,7 @@ import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -74,6 +75,16 @@ class GoogleBooksServiceTest {
                 externalCoverFetchHelperMock,
                 googleCoverUrlEvaluatorMock
         );
+
+        when(googleApiFetcherMock.isGoogleFallbackEnabled()).thenReturn(true);
+        when(googleApiFetcherMock.isApiKeyAvailable()).thenReturn(false);
+
+        when(googleApiFetcherMock.isGoogleFallbackEnabled()).thenReturn(true);
+        when(googleApiFetcherMock.isApiKeyAvailable()).thenReturn(true);
+        when(googleApiFetcherMock.streamSearchItems(anyString(), anyInt(), anyString(), anyString(), eq(true)))
+                .thenReturn(reactor.core.publisher.Flux.empty());
+        when(googleApiFetcherMock.streamSearchItems(anyString(), anyInt(), anyString(), anyString(), eq(false)))
+                .thenReturn(reactor.core.publisher.Flux.empty());
 
         // @Value fields are no longer in GoogleBooksService, they are in GoogleApiFetcher
         // ReflectionTestUtils.setField(googleBooksService, "googleBooksApiUrl", "http://fakeapi.com");
@@ -218,9 +229,13 @@ com.williamcallahan.book_recommendation_engine.testutil.GoogleBooksStubs.stubFet
         
         mockApiResponse.set("items", items);
 
-        // Mock the call to googleApiFetcherMock
-        when(googleApiFetcherMock.searchVolumesAuthenticated(eq("test query"), anyInt(), eq("relevance"), eq("en")))
-                .thenReturn(Mono.just(mockApiResponse));
+        List<JsonNode> volumeNodes = new java.util.ArrayList<>();
+        items.forEach(volumeNodes::add);
+
+        when(googleApiFetcherMock.streamSearchItems(eq("test query"), anyInt(), eq("relevance"), eq("en"), eq(false)))
+                .thenReturn(reactor.core.publisher.Flux.fromIterable(volumeNodes));
+        when(googleApiFetcherMock.streamSearchItems(eq("test query"), anyInt(), eq("relevance"), eq("en"), eq(true)))
+                .thenReturn(reactor.core.publisher.Flux.empty());
 
         Mono<List<Book>> result = googleBooksService.searchBooksAsyncReactive("test query", "en", 10, "relevance");
 
