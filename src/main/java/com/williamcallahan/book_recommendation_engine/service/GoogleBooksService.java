@@ -136,47 +136,7 @@ public class GoogleBooksService {
      * @return Mono containing a list of {@link Book} objects retrieved from the API
      */
     public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode, int desiredTotalResults, String orderBy) {
-        final int maxResultsPerPage = 40;
-        final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
-        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
-
-        log.debug("GoogleBooksService.searchBooksAsyncReactive with query: '{}', langCode: {}, maxResults: {}, orderBy: {}",
-            query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
-
-        final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
-
-        // Calculate number of pages needed to fetch the desired total results
-        final int numberOfPages = (int) Math.ceil((double) maxTotalResultsToFetch / maxResultsPerPage);
-
-        // IMPORTANT: Do NOT call methods on a Mockito mock that rely on real implementation.
-        // Tests stub searchVolumesAuthenticated(...), so we build the stream from that.
-        // Use Flux.range to paginate through multiple pages of results
-        return Flux.range(0, numberOfPages)
-            .concatMap(pageIndex -> {
-                int startIndex = pageIndex * maxResultsPerPage;
-                log.debug("Fetching page {} (startIndex={}) for query '{}'", pageIndex, startIndex, query);
-
-                return googleApiFetcher.searchVolumesAuthenticated(query, startIndex, effectiveOrderBy, langCode)
-                    .flatMapMany(responseNode -> {
-                        if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
-                            return Flux.fromIterable(responseNode.get("items"));
-                        }
-                        return Flux.empty();
-                    })
-                    .onErrorResume(e -> {
-                        log.warn("Error fetching page {} for query '{}': {}", pageIndex, query, e.getMessage());
-                        return Flux.empty(); // Continue with other pages if one fails
-                    });
-            })
-            .map(BookJsonParser::convertJsonToBook)
-            .filter(Objects::nonNull)
-            .map(book -> {
-                if (!queryQualifiers.isEmpty()) {
-                    queryQualifiers.forEach(book::addQualifier);
-                }
-                return book;
-            })
-            .take(maxTotalResultsToFetch) // Limit to exact number requested
+        return streamBooksReactive(query, langCode, desiredTotalResults, orderBy)
             .collectList()
             .map(books -> {
                 log.info("GoogleBooksService.searchBooksAsyncReactive completed for query '{}'. Retrieved {} books total.",
@@ -191,6 +151,69 @@ public class GoogleBooksService {
                 );
                 return Mono.just(Collections.<Book>emptyList());
             });
+    }
+
+    /**
+     * Streams results from Google Books, emitting authenticated results first and falling back to
+     * unauthenticated calls when the authenticated path is blocked or unavailable. Results are
+     * deduplicated by volume ID and capped to the desired total.
+     */
+    public Flux<Book> streamBooksReactive(String query,
+                                          String langCode,
+                                          int desiredTotalResults,
+                                          String orderBy) {
+        if (!googleApiFetcher.isGoogleFallbackEnabled()) {
+            log.debug("GoogleBooksService.streamBooksReactive skipping because Google fallback disabled for query '{}'", query);
+            return Flux.empty();
+        }
+
+        final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
+        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
+        final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
+
+        final boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
+
+        Set<String> seenIds = Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+        Flux<Book> authenticatedFlux = Flux.empty();
+        if (apiKeyAvailable) {
+            authenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
+                .map(BookJsonParser::convertJsonToBook)
+                .filter(Objects::nonNull)
+                .map(book -> applyQualifiers(book, queryQualifiers))
+                .onErrorResume(error -> {
+                    LoggingUtils.warn(log, error,
+                        "GoogleBooksService.streamBooksReactive authenticated search failed for query '{}'", query);
+                    apiRequestMonitor.recordFailedRequest("volumes/search/authenticated/" + query, error.getMessage());
+                    return Flux.empty();
+                });
+        }
+
+        Flux<Book> unauthenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
+            .map(BookJsonParser::convertJsonToBook)
+            .filter(Objects::nonNull)
+            .map(book -> applyQualifiers(book, queryQualifiers))
+            .onErrorResume(error -> {
+                LoggingUtils.warn(log, error,
+                    "GoogleBooksService.streamBooksReactive unauthenticated search failed for query '{}'", query);
+                apiRequestMonitor.recordFailedRequest("volumes/search/unauthenticated/" + query, error.getMessage());
+                return Flux.empty();
+            });
+
+        Flux<Book> combinedFlux = apiKeyAvailable
+            ? Flux.concat(authenticatedFlux, unauthenticatedFlux)
+            : unauthenticatedFlux;
+
+        return combinedFlux
+            .filter(book -> book.getId() != null && seenIds.add(book.getId()))
+            .take(maxTotalResultsToFetch)
+            .doOnSubscribe(subscription -> log.debug(
+                "GoogleBooksService.streamBooksReactive starting stream for query '{}' (max {} results, orderBy={})",
+                query, maxTotalResultsToFetch, effectiveOrderBy))
+            .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream"))
+            .doOnComplete(() -> log.debug(
+                "GoogleBooksService.streamBooksReactive completed stream for query '{}' (emitted {} results)",
+                query, seenIds.size()));
     }
 
     /**
@@ -296,6 +319,13 @@ public class GoogleBooksService {
      */
     public Mono<List<Book>> searchBooksByISBN(String isbn) {
         return searchBooksByISBN(isbn, null);
+    }
+
+    private Book applyQualifiers(Book book, Map<String, Object> queryQualifiers) {
+        if (book != null && queryQualifiers != null && !queryQualifiers.isEmpty()) {
+            queryQualifiers.forEach(book::addQualifier);
+        }
+        return book;
     }
 
     /**

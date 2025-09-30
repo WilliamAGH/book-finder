@@ -152,6 +152,55 @@ public class OpenLibraryBookDataService {
                 });
     }
 
+    @RateLimiter(name = "openLibraryDataService")
+    @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
+    public Flux<Book> searchBooksByAuthor(String author) {
+        if (author == null || author.trim().isEmpty()) {
+            log.warn("Author is null or empty. Cannot search books on OpenLibrary.");
+            return Flux.empty();
+        }
+        if (!externalFallbackEnabled) {
+            log.debug("External fallback disabled; skipping OpenLibrary author search for: {}", author);
+            return Flux.empty();
+        }
+
+        log.info("Attempting to search OpenLibrary for author: {}", author);
+
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/search.json")
+                        .queryParam("author", author)
+                        .queryParam("limit", 20)
+                        .build())
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(5))
+                .onErrorResume(PrematureCloseException.class, e -> {
+                    log.debug("OpenLibrary author search connection closed early for '{}': {}", author, e.toString());
+                    return Mono.empty();
+                })
+                .flatMapMany(responseNode -> {
+                    if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
+                        return Flux.empty();
+                    }
+                    return Flux.fromIterable(responseNode.get("docs"))
+                            .map(this::parseOpenLibrarySearchDoc)
+                            .filter(Objects::nonNull);
+                })
+                .doOnError(e -> LoggingUtils.error(log, e, "Error searching books by author '{}' from OpenLibrary", author))
+                .onErrorResume(e -> {
+                    LoggingUtils.warn(log, e, "Error during OpenLibrary search for author '{}', returning empty Flux", author);
+                    return Flux.empty();
+                });
+    }
+
+    /**
+     * Unified entry point that selects title or author search heuristics.
+     */
+    public Flux<Book> searchBooks(String query, boolean treatAsAuthor) {
+        return treatAsAuthor ? searchBooksByAuthor(query) : searchBooksByTitle(query);
+    }
+
     // --- Fallback Methods ---
 
     public Mono<Book> fetchBookFallback(String isbn, Throwable t) {
