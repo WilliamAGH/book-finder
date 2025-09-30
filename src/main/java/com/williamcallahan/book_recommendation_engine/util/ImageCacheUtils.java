@@ -341,12 +341,19 @@ public final class ImageCacheUtils {
 
         Comparator<ImageDetails> comparator = Comparator
             .<ImageDetails>comparingInt(details -> {
-                if (details.getCoverImageSource() == CoverImageSource.S3_CACHE
+                // Priority 0: Our own images (local disk or S3 CDN) with reasonable dimensions
+                // LOCAL_CACHE = server's local disk cache (book-covers/ directory) - fastest
+                // S3_CACHE = permanent CDN storage - second fastest
+                // Both get priority over external API calls
+                CoverImageSource src = details.getCoverImageSource();
+                if ((src == CoverImageSource.LOCAL_CACHE || src == CoverImageSource.S3_CACHE)
                     && details.getWidth() != null && details.getWidth() > 150
-                    && details.getHeight() != null && details.getHeight() > 150) {
-                    return 0;
+                    && details.getHeight() != null && details.getHeight() > 150
+                    && details.getUrlOrPath() != null
+                    && !details.getUrlOrPath().equals(placeholderPath)) {
+                    return 0; // Highest priority for our own images
                 }
-                return 1;
+                return 1; // Lower priority for external API sources
             })
             .thenComparing(Comparator.<ImageDetails>comparingLong(details -> {
                 if (details.getWidth() == null || details.getHeight() == null) {
@@ -355,16 +362,22 @@ public final class ImageCacheUtils {
                 return (long) details.getWidth() * details.getHeight();
             }).reversed())
             .thenComparingInt(details -> {
+                // Final tiebreaker by source quality:
+                // 1. LOCAL_CACHE (fastest - server disk)
+                // 2. S3_CACHE (fast - CDN)
+                // 3. GOOGLE_BOOKS (external API - reliable)
+                // 4. OPEN_LIBRARY (external API - free)
+                // 5. LONGITOOD (external API - fallback)
                 CoverImageSource src = details.getCoverImageSource();
-                if (src == CoverImageSource.S3_CACHE) return 0;
-                if (src == CoverImageSource.GOOGLE_BOOKS) return 1;
-                if (src == CoverImageSource.OPEN_LIBRARY) return 2;
-                if (src == CoverImageSource.LONGITOOD) return 3;
                 if (src == CoverImageSource.LOCAL_CACHE
                     && details.getUrlOrPath() != null
                     && !details.getUrlOrPath().equals(placeholderPath)) {
-                    return 4;
+                    return 0;
                 }
+                if (src == CoverImageSource.S3_CACHE) return 1;
+                if (src == CoverImageSource.GOOGLE_BOOKS) return 2;
+                if (src == CoverImageSource.OPEN_LIBRARY) return 3;
+                if (src == CoverImageSource.LONGITOOD) return 4;
                 return 5;
             });
 
