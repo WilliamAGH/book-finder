@@ -4,12 +4,10 @@ import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
 import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
 import com.williamcallahan.book_recommendation_engine.dto.EditionSummary;
+import com.williamcallahan.book_recommendation_engine.test.annotations.DbIntegrationTest;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
 import java.util.Optional;
@@ -25,9 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 
  * Tests only run when database is available (not in CI without DB).
  */
-@SpringBootTest
-@ActiveProfiles("test")
-@EnabledIfEnvironmentVariable(named = "SPRING_DATASOURCE_URL", matches = ".*")
+@DbIntegrationTest
 class BookQueryRepositoryTest {
 
     @Autowired(required = false)
