@@ -46,9 +46,9 @@ public class CacheWarmupService {
     private void warmupBestsellersCache() {
         try {
             // Pre-load the most common list
-            newYorkTimesService.getCurrentBestSellers("hardcover-fiction", 8)
+            newYorkTimesService.getCurrentBestSellersCards("hardcover-fiction", 8)
                 .subscribe(
-                    list -> log.info("Warmed bestsellers cache with {} books", list.size()),
+                    list -> log.info("Warmed bestsellers cache with {} bestsellers", list.size()),
                     error -> log.warn("Failed to warm bestsellers cache: {}", error.getMessage())
                 );
         } catch (Exception e) {

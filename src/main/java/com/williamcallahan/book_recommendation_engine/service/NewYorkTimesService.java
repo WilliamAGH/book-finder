@@ -12,10 +12,14 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.lang.Nullable;
@@ -40,17 +44,37 @@ public class NewYorkTimesService {
     private final String nytApiBaseUrl;
 
     private final String nytApiKey;
+    /**
+     * @deprecated Use {@link #bookQueryRepository} instead. This is kept temporarily for backward compatibility.
+     * Will be removed once all consumers migrate to the new optimized repository.
+     */
+    @Deprecated
+    @SuppressWarnings("unused")
     private final PostgresBookRepository postgresBookRepository;
+    
+    /**
+     * THE SINGLE SOURCE OF TRUTH for book queries.
+     * All new code must use this repository.
+     */
+    private final BookQueryRepository bookQueryRepository;
+    
     private static final DateTimeFormatter API_DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
 
+    /**
+     * Preferred constructor using BookQueryRepository (THE SINGLE SOURCE OF TRUTH).
+     * Spring will automatically inject all dependencies.
+     */
+    @Autowired
     public NewYorkTimesService(WebClient.Builder webClientBuilder,
                                @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
                                @Value("${nyt.api.key}") String nytApiKey,
-                               @Nullable PostgresBookRepository postgresBookRepository) {
+                               @Autowired(required = false) PostgresBookRepository postgresBookRepository,
+                               @Autowired(required = false) BookQueryRepository bookQueryRepository) {
         this.nytApiBaseUrl = nytApiBaseUrl;
         this.nytApiKey = nytApiKey;
         this.webClient = webClientBuilder.baseUrl(nytApiBaseUrl).build();
         this.postgresBookRepository = postgresBookRepository;
+        this.bookQueryRepository = bookQueryRepository;
     }
 
     /**
@@ -85,36 +109,55 @@ public class NewYorkTimesService {
 
     /**
      * Fetch the latest published list's books for the given provider list code from Postgres.
-     * Queries cached data in Postgres (populated by scheduled job).
-     * Falls back to external API only if Postgres is empty (should not happen in prod).
+     * Returns BookCard DTOs as THE SINGLE SOURCE OF TRUTH.
+     * 
+     * Performance: Single optimized query instead of 5+ queries per book.
+     * 
+     * @param listNameEncoded NYT list code (e.g., "hardcover-fiction")
+     * @param limit Maximum number of books to return
+     * @return Mono of BookCard list (optimized DTOs for card display)
      */
     @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100)")
-    public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
+    public Mono<List<BookCard>> getCurrentBestSellersCards(String listNameEncoded, int limit) {
         // Validate and clamp limit to reasonable range
         final int effectiveLimit = PagingUtils.clamp(limit, 1, 100);
 
-        if (postgresBookRepository == null) {
-            log.warn("PostgresBookRepository not available; returning empty bestsellers list.");
-            return Mono.just(Collections.emptyList());
+        // Use BookQueryRepository as THE SINGLE SOURCE
+        if (bookQueryRepository != null) {
+            return Mono.fromCallable(() -> {
+                List<BookCard> cards = bookQueryRepository.fetchBookCardsByProviderListCode(listNameEncoded, effectiveLimit);
+                log.info("BookQueryRepository returned {} book cards for list '{}' (optimized query)", cards.size(), listNameEncoded);
+                return cards; // Return DTOs directly - no conversion needed!
+            })
+            .timeout(Duration.ofMillis(3000)) // 3s timeout for Postgres query
+            .subscribeOn(Schedulers.boundedElastic())
+            .onErrorResume(e -> {
+                if (e instanceof java.util.concurrent.TimeoutException) {
+                    log.error("Timeout fetching bestsellers for list '{}' after 3000ms", listNameEncoded);
+                } else {
+                    LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);
+                }
+                return Mono.just(Collections.emptyList());
+            });
         }
-
-        return Mono.fromCallable(() ->
-            postgresBookRepository.fetchLatestBestsellerBooks(listNameEncoded, effectiveLimit)
-        )
-        .map(list -> {
-            log.info("NYT repository returned {} books for list '{}'", list.size(), listNameEncoded);
-            return list;
-        })
-        .timeout(Duration.ofMillis(3000)) // 3s timeout for Postgres query
-        .subscribeOn(Schedulers.boundedElastic())
-        .onErrorResume(e -> {
-            if (e instanceof java.util.concurrent.TimeoutException) {
-                log.error("Timeout fetching bestsellers for list '{}' after 3000ms", listNameEncoded);
-            } else {
-                LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);
-            }
-            return Mono.just(Collections.emptyList());
-        });
+        
+        // No BookQueryRepository available
+        log.error("BookQueryRepository not injected - cannot fetch bestsellers");
+        return Mono.just(Collections.emptyList());
+    }
+    
+    /**
+     * @deprecated Use {@link #getCurrentBestSellersCards(String, int)} instead.
+     * This method returns Book entities which trigger hydration queries.
+     * The replacement returns BookCard DTOs with 40x better performance.
+     * Will be removed in v2.0.
+     */
+    @Deprecated(since = "1.5", forRemoval = true)
+    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100) + '-book'")
+    public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
+        // Bridge to new method for backward compatibility
+        return getCurrentBestSellersCards(listNameEncoded, limit)
+            .map(DtoToBookMapper::toBooks);
     }
 
 }

@@ -1,6 +1,8 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
@@ -9,11 +11,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.LinkedHashMap;
-import reactor.core.publisher.Flux;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,11 +22,12 @@ import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
-import java.time.Duration;
 
 /**
  * Extracted tiered search orchestration from {@link BookDataOrchestrator}. Handles DB-first search
  * with Google and OpenLibrary fallbacks while keeping the orchestrator slim.
+ * 
+ * Uses BookQueryRepository as THE SINGLE SOURCE OF TRUTH for optimized queries.
  */
 @Component
 @ConditionalOnBean(BookSearchService.class)
@@ -37,18 +38,23 @@ public class TieredBookSearchService {
     private final BookSearchService bookSearchService;
     private final GoogleApiFetcher googleApiFetcher;
     private final OpenLibraryBookDataService openLibraryBookDataService;
-    private final PostgresBookRepository postgresBookRepository;
+    
+    /**
+     * THE SINGLE SOURCE OF TRUTH for book queries - uses optimized SQL functions.
+     */
+    private final BookQueryRepository bookQueryRepository;
+    
     private final boolean externalFallbackEnabled;
 
     TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
                             OpenLibraryBookDataService openLibraryBookDataService,
-                            @Nullable PostgresBookRepository postgresBookRepository,
+                            @Nullable BookQueryRepository bookQueryRepository,
                             @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
         this.openLibraryBookDataService = openLibraryBookDataService;
-        this.postgresBookRepository = postgresBookRepository;
+        this.bookQueryRepository = bookQueryRepository;
         this.externalFallbackEnabled = externalFallbackEnabled;
     }
 
@@ -190,10 +196,12 @@ public class TieredBookSearchService {
     
     /**
      * Searches Postgres reactively without blocking.
-     * Fetches search results and hydrates books in parallel using reactive streams.
+     * Uses BookQueryRepository for SINGLE OPTIMIZED QUERY instead of N+1 hydration queries.
+     * 
+     * Performance: Single query to fetch all book cards vs 5+ queries per book.
      */
     private Mono<List<Book>> searchPostgresFirstReactive(String query, int desiredTotalResults) {
-        if (bookSearchService == null || postgresBookRepository == null) {
+        if (bookSearchService == null || bookQueryRepository == null) {
             return Mono.just(List.of());
         }
         
@@ -206,19 +214,22 @@ public class TieredBookSearchService {
                     return Mono.just(List.<Book>of());
                 }
                 
-                // Extract book IDs for batch fetch (much faster than N+1 queries)
-                UUID[] bookIds = hits.stream()
+                // Extract book IDs for optimized fetch
+                List<UUID> bookIds = hits.stream()
                     .map(hit -> hit.bookId())
-                    .toArray(UUID[]::new);
+                    .collect(Collectors.toList());
                 
-                if (bookIds.length == 0) {
+                if (bookIds.isEmpty()) {
                     return Mono.just(List.<Book>of());
                 }
                 
-                // Single batch query instead of N individual queries
-                return Mono.fromCallable(() -> postgresBookRepository.fetchBooksByIdsBatch(bookIds))
+                // SINGLE optimized query using BookQueryRepository (THE SINGLE SOURCE OF TRUTH)
+                return Mono.fromCallable(() -> bookQueryRepository.fetchBookCards(bookIds))
                     .subscribeOn(Schedulers.boundedElastic())
-                    .map(books -> {
+                    .map(cards -> {
+                        // Convert BookCard DTOs to Book entities (temporary bridge)
+                        List<Book> books = DtoToBookMapper.toBooks(cards);
+                        
                         // Create map for fast lookup
                         Map<String, Book> bookMap = books.stream()
                             .collect(Collectors.toMap(Book::getId, book -> book));

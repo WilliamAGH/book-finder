@@ -270,14 +270,47 @@ public class RecentlyViewedService {
     }
 
     /**
-     * Gets the list of recently viewed books using a blocking approach
+     * Gets list of recently viewed book IDs for use with BookQueryRepository.
+     * This is THE SINGLE SOURCE for recently viewed book IDs.
      * 
-     * @return A list of recently viewed books or default recommendations
+     * Performance: Returns only UUIDs, caller fetches as BookCard DTOs with single query.
      * 
-     * @implNote Blocking version of getRecentlyViewedBooksReactive for backward compatibility
-     * Delegates to the reactive method and blocks until completion
-     * Use only when reactive programming is not suitable for the calling context
+     * @param limit Maximum number of book IDs to return
+     * @return List of book UUIDs (as Strings) for recently viewed books
      */
+    public List<String> getRecentlyViewedBookIds(int limit) {
+        // Check repository first (persistent storage)
+        if (recentBookViewRepository != null && recentBookViewRepository.isEnabled()) {
+            try {
+                List<RecentBookViewRepository.ViewStats> stats = 
+                    recentBookViewRepository.fetchMostRecentViews(limit);
+                
+                if (!stats.isEmpty()) {
+                    return stats.stream()
+                        .map(RecentBookViewRepository.ViewStats::bookId)
+                        .filter(ValidationUtils::hasText)
+                        .limit(limit)
+                        .collect(Collectors.toList());
+                }
+            } catch (Exception e) {
+                log.warn("Failed to fetch book IDs from repository: {}", e.getMessage());
+            }
+        }
+        
+        // Fallback to in-memory cache
+        return recentlyViewedBooks.stream()
+            .filter(b -> b != null && ValidationUtils.hasText(b.getId()))
+            .map(Book::getId)
+            .limit(limit)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * @deprecated Use {@link #getRecentlyViewedBookIds(int)} with BookQueryRepository instead.
+     * This method returns hydrated Book entities which trigger multiple queries.
+     * Will be removed in v2.0.
+     */
+    @Deprecated(since = "1.5", forRemoval = true)
     public List<Book> getRecentlyViewedBooks() {
         return getRecentlyViewedBooksReactive().block();
     }
