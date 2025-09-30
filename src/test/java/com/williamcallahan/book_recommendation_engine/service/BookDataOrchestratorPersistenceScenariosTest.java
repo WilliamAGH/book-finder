@@ -245,7 +245,10 @@ class TieredBookSearchServiceAuthorSearchTest {
             googleBooksService,
             openLibraryBookDataService,
             null,
-            true
+            null,  // CanonicalBookPersistenceService (not needed for these tests)
+            new ObjectMapper(),  // ObjectMapper for JSON parsing
+            true,  // externalFallbackEnabled
+            false  // persistSearchResults (disabled for tests to avoid side effects)
         );
 
         lenient().when(googleApiFetcher.isGoogleFallbackEnabled()).thenReturn(true);

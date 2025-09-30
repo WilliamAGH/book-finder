@@ -41,8 +41,11 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.function.Function;
@@ -59,7 +62,9 @@ import com.williamcallahan.book_recommendation_engine.service.image.CoverCacheMa
 @Slf4j
 public class GoogleBooksService {
 
-    
+    private static final Duration STREAM_HYDRATION_TIMEOUT = Duration.ofSeconds(6);
+    private final Set<String> inflightSearchHydrations = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
@@ -191,6 +196,11 @@ public class GoogleBooksService {
                     LoggingUtils.warn(log, error,
                         "GoogleBooksService.streamBooksReactive authenticated search failed for query '{}'", query);
                     apiRequestMonitor.recordFailedRequest("volumes/search/authenticated/" + query, error.getMessage());
+                    ExternalApiLogger.logApiCallFailure(log,
+                        "GoogleBooks",
+                        "STREAM_AUTH",
+                        query,
+                        error.getMessage());
                     return Flux.empty();
                 });
         }
@@ -226,7 +236,10 @@ public class GoogleBooksService {
             .doOnSubscribe(subscription -> log.debug(
                 "GoogleBooksService.streamBooksReactive starting stream for query '{}' (max {} results, orderBy={})",
                 query, maxTotalResultsToFetch, effectiveOrderBy))
-            .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream"))
+            .doOnNext(book -> {
+                triggerSearchResultHydration(book);
+                apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream");
+            })
             .doOnComplete(() -> {
                 log.debug(
                     "GoogleBooksService.streamBooksReactive completed stream for query '{}' (emitted {} results)",
@@ -237,6 +250,37 @@ public class GoogleBooksService {
                     query,
                     seenIds.size());
             });
+    }
+
+    private void triggerSearchResultHydration(Book book) {
+        if (book == null) {
+            return;
+        }
+
+        String bookId = book.getId();
+        if (!ValidationUtils.hasText(bookId)) {
+            return;
+        }
+
+        if (!inflightSearchHydrations.add(bookId)) {
+            return;
+        }
+
+        bookDataOrchestrator.getBookByIdTiered(bookId)
+            .timeout(STREAM_HYDRATION_TIMEOUT)
+            .subscribeOn(Schedulers.boundedElastic())
+            .doFinally(signal -> inflightSearchHydrations.remove(bookId))
+            .subscribe(
+                hydrated -> {
+                    if (hydrated != null) {
+                        log.debug("Hydrated Google fallback search result '{}' into canonical record '{}'", bookId, hydrated.getId());
+                    } else {
+                        log.debug("Hydration finished for Google result '{}' with no canonical book emitted", bookId);
+                    }
+                },
+                error -> LoggingUtils.warn(log, error, "Hydration failed for Google fallback search result {}", bookId),
+                () -> log.debug("Hydration completed for Google result '{}'", bookId)
+            );
     }
 
     /**

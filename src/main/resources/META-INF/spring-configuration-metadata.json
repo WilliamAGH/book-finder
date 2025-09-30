@@ -535,6 +535,12 @@
       "type": "java.lang.Boolean",
       "description": "Enable Google Books fallback for covers/data",
       "defaultValue": false
+    },
+    {
+      "name": "app.features.persist-search-results",
+      "type": "java.lang.Boolean",
+      "description": "Persist external API search results to Postgres asynchronously so they're available when users click on them",
+      "defaultValue": true
     }
   ],
   "hints": []

@@ -66,6 +66,7 @@ app:
       enabled: ${APP_FEATURE_EXTERNAL_FALLBACK_ENABLED:true}
     google-fallback:
       enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:true}
+    persist-search-results: ${APP_FEATURE_PERSIST_SEARCH_RESULTS:true} # Persist external API search results to Postgres for click availability
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}
