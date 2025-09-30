@@ -124,7 +124,18 @@ public final class JdbcUtils {
      * Execute an update and return whether any rows were affected.
      */
     public static boolean executeUpdate(JdbcTemplate jdbc, String sql, Object... params) {
-        return jdbc.update(sql, params) > 0;
+        try {
+            return jdbc.update(sql, params) > 0;
+        } catch (DataAccessException ex) {
+            // Log detailed error for debugging SQL issues
+            System.err.println("SQL Error: " + ex.getMessage());
+            System.err.println("SQL: " + sql);
+            System.err.println("Params: " + java.util.Arrays.toString(params));
+            if (ex.getCause() != null) {
+                System.err.println("Root cause: " + ex.getCause().getMessage());
+            }
+            throw ex;
+        }
     }
 
     /**
