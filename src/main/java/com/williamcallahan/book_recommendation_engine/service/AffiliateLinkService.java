@@ -39,7 +39,7 @@ public class AffiliateLinkService {
         // Prefer ISBN-13 for most links
         Optional.ofNullable(isbn13).ifPresent(isbn -> {
             if (ValidationUtils.allNotNull(barnesNobleCjPublisherId, barnesNobleCjWebsiteId)) {
-                links.put("barnesNoble", buildBarnesNobleLink(isbn));
+                links.put("barnesAndNoble", buildBarnesNobleLink(isbn));
             }
             if (bookshopAffiliateId != null) {
                 links.put("bookshop", buildBookshopLink(isbn));
