@@ -1,11 +1,12 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
@@ -26,14 +27,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.util.UriComponentsBuilder;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
-import java.util.LinkedHashMap;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ThreadLocalRandom;
@@ -46,7 +47,6 @@ import java.util.Objects;
 public class HomeController {
 
     private final BookDataOrchestrator bookDataOrchestrator;
-    private final GoogleBooksService googleBooksService;
     private final RecentlyViewedService recentlyViewedService;
     private final RecommendationService recommendationService;
     private final BookCoverManagementService bookCoverManagementService;
@@ -55,7 +55,7 @@ public class HomeController {
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
     private final NewYorkTimesService newYorkTimesService;
     private final AffiliateLinkService affiliateLinkService;
-    private final boolean externalFallbackEnabled;
+    private final BookQueryRepository bookQueryRepository;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -78,7 +78,6 @@ public class HomeController {
      * Constructs the HomeController with required services
      * 
      * @param bookDataOrchestrator Service for orchestrating book data retrieval
-     * @param googleBooksService Service for accessing Google Books API
      * @param recentlyViewedService Service for tracking user book view history
      * @param recommendationService Service for generating book recommendations
      * @param bookCoverManagementService Service for retrieving and caching book cover images
@@ -86,7 +85,6 @@ public class HomeController {
      * @param duplicateBookService Service for handling duplicate book editions
      */
     public HomeController(BookDataOrchestrator bookDataOrchestrator,
-                          GoogleBooksService googleBooksService,
                           RecentlyViewedService recentlyViewedService,
                           RecommendationService recommendationService,
                           BookCoverManagementService bookCoverManagementService,
@@ -94,11 +92,10 @@ public class HomeController {
                           DuplicateBookService duplicateBookService,
                           LocalDiskCoverCacheService localDiskCoverCacheService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled,
-                          @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
                           NewYorkTimesService newYorkTimesService,
-                          AffiliateLinkService affiliateLinkService) {
+                          AffiliateLinkService affiliateLinkService,
+                          BookQueryRepository bookQueryRepository) {
         this.bookDataOrchestrator = bookDataOrchestrator;
-        this.googleBooksService = googleBooksService;
         this.recentlyViewedService = recentlyViewedService;
         this.recommendationService = recommendationService;
         this.bookCoverManagementService = bookCoverManagementService;
@@ -106,9 +103,9 @@ public class HomeController {
         this.duplicateBookService = duplicateBookService;
         this.localDiskCoverCacheService = localDiskCoverCacheService;
         this.isYearFilteringEnabled = isYearFilteringEnabled;
-        this.externalFallbackEnabled = externalFallbackEnabled;
         this.newYorkTimesService = newYorkTimesService;
         this.affiliateLinkService = affiliateLinkService;
+        this.bookQueryRepository = bookQueryRepository;
     }
 
     private void applyBaseAttributes(Model model, String activeTab) {
@@ -154,11 +151,11 @@ public class HomeController {
         );
 
         // Set default empty collections for immediate rendering
-        model.addAttribute("currentBestsellers", List.of());
-        model.addAttribute("recentBooks", List.of());
+        model.addAttribute("currentBestsellers", List.<BookCard>of());
+        model.addAttribute("recentBooks", List.<BookCard>of());
 
         // Fetch with increased timeout (3s) for Postgres queries - prevents premature timeouts
-        Mono<List<Book>> bestsellers = loadCurrentBestsellers()
+        Mono<List<BookCard>> bestsellers = loadCurrentBestsellers()
             .timeout(Duration.ofMillis(3000))
             .onErrorResume(e -> {
                 if (e instanceof java.util.concurrent.TimeoutException) {
@@ -176,7 +173,7 @@ public class HomeController {
                 }
             });
 
-        Mono<List<Book>> recentBooks = loadRecentBooks()
+        Mono<List<BookCard>> recentBooks = loadRecentBooks()
             .timeout(Duration.ofMillis(3000))
             .onErrorResume(e -> {
                 if (e instanceof java.util.concurrent.TimeoutException) {
@@ -204,6 +201,11 @@ public class HomeController {
     }
 
 
+    /**
+     * @deprecated No longer needed for BookCard DTOs. Cover URLs are selected in SQL.
+     * Kept temporarily for Book entity paths only.
+     */
+    @Deprecated
     private Mono<List<Book>> prepareForDisplay(Mono<List<Book>> source, int limit, Consumer<Throwable> errorHandler) {
         return source
             .defaultIfEmpty(List.of())
@@ -218,61 +220,60 @@ public class HomeController {
             });
     }
 
-    private Mono<List<Book>> loadCurrentBestsellers() {
-        return prepareForDisplay(
-            newYorkTimesService.getCurrentBestSellers("hardcover-fiction", MAX_BESTSELLERS),
-            MAX_BESTSELLERS,
-            e -> log.error("Error fetching and filtering current bestsellers: {}", e.getMessage())
-        );
+    /**
+     * Load current NYT bestsellers using optimized BookCard DTOs.
+     * SINGLE QUERY replaces 40 queries (8 books × 5 queries each).
+     */
+    private Mono<List<BookCard>> loadCurrentBestsellers() {
+        return newYorkTimesService.getCurrentBestSellersCards("hardcover-fiction", MAX_BESTSELLERS)
+            .map(cards -> cards.stream().limit(MAX_BESTSELLERS).collect(Collectors.toList()))
+            .onErrorResume(e -> {
+                log.error("Error fetching current bestsellers: {}", e.getMessage());
+                return Mono.just(List.of());
+            });
     }
 
-    private Mono<List<Book>> loadRecentBooks() {
-        Mono<List<Book>> recentMono = Mono.defer(() -> {
-            Mono<List<Book>> recentReactive = recentlyViewedService.getRecentlyViewedBooksReactive();
-            return recentReactive != null ? recentReactive : Mono.just(List.<Book>of());
-        })
-        .onErrorResume(e -> {
-            log.warn("Error fetching recently viewed books reactively: {}", e.getMessage());
-            return Mono.just(List.<Book>of());
-        })
-        .map(list -> list != null ? list : List.<Book>of());
-
-        Mono<List<Book>> combined = recentMono
-            .map(list -> list.stream()
+    /**
+     * Load recently viewed books using optimized BookCard DTOs.
+     * SINGLE QUERY replaces N queries (1 query per book).
+     */
+    private Mono<List<BookCard>> loadRecentBooks() {
+        return Mono.fromCallable(() -> {
+            // Get recently viewed book IDs
+            List<String> bookIds = recentlyViewedService.getRecentlyViewedBookIds(MAX_RECENT_BOOKS);
+            
+            if (bookIds.isEmpty()) {
+                log.debug("No recently viewed books, returning empty list");
+                return List.<BookCard>of();
+            }
+            
+            // Convert String IDs to UUIDs
+            List<UUID> uuids = bookIds.stream()
+                .map(id -> {
+                    try {
+                        return UUID.fromString(id);
+                    } catch (IllegalArgumentException e) {
+                        log.warn("Invalid UUID in recently viewed: {}", id);
+                        return null;
+                    }
+                })
                 .filter(Objects::nonNull)
-                .limit(MAX_RECENT_BOOKS)
-                .collect(Collectors.toList()))
-            .flatMap(trimmed -> {
-                if (trimmed.size() >= MAX_RECENT_BOOKS) {
-                    return Mono.just(trimmed);
-                }
-
-                int needed = MAX_RECENT_BOOKS - trimmed.size();
-                String randomQuery = EXPLORE_QUERIES.get(ThreadLocalRandom.current().nextInt(EXPLORE_QUERIES.size()));
-                log.info("Fetching {} additional books for homepage with query: '{}'", needed, randomQuery);
-
-                return fetchAdditionalHomepageBooks(randomQuery, needed)
-                    .map(fallback -> mergeForHomepage(trimmed, fallback, MAX_RECENT_BOOKS));
-            });
-
-        return prepareForDisplay(
-            combined,
-            MAX_RECENT_BOOKS,
-            e -> log.error("Error fetching and filtering recent books: {}", e.getMessage())
-        );
-    }
-
-    private List<Book> mergeForHomepage(List<Book> primary, List<Book> fallback, int limit) {
-        LinkedHashMap<String, Book> ordered = new LinkedHashMap<>();
-        Stream.concat(primary.stream(), fallback == null ? Stream.<Book>empty() : fallback.stream())
-            .filter(Objects::nonNull)
-            .forEach(book -> {
-                String key = ValidationUtils.hasText(book.getId()) ? book.getId() : book.getSlug();
-                if (ValidationUtils.hasText(key) && ordered.size() < limit) {
-                    ordered.putIfAbsent(key, book);
-                }
-            });
-        return ordered.values().stream().limit(limit).collect(Collectors.toList());
+                .collect(Collectors.toList());
+            
+            if (uuids.isEmpty()) {
+                return List.<BookCard>of();
+            }
+            
+            // Fetch as BookCard DTOs with single query
+            List<BookCard> cards = bookQueryRepository.fetchBookCards(uuids);
+            log.debug("Loaded {} recent books as BookCard DTOs", cards.size());
+            return cards;
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .onErrorResume(e -> {
+            log.error("Error loading recent books: {}", e.getMessage());
+            return Mono.just(List.of());
+        });
     }
 
     private Mono<List<Book>> loadSimilarBooks(String bookId) {
@@ -317,13 +318,6 @@ public class HomeController {
             return coverUrl;
         }
         return ApplicationConstants.Urls.OG_LOGO;
-    }
-
-    private Mono<Book> resolveGoogleFallback(String id) {
-        // Disabled: Book detail page should only show books in our database
-        // External API lookups should be handled by background jobs, not in render path
-        log.debug("Book not found in database: {}", id);
-        return Mono.empty();
     }
 
     /**
@@ -383,7 +377,6 @@ public class HomeController {
         // Server-render initial results if query provided
         if (ValidationUtils.hasText(query)) {
             int maxResults = 12; // Default page size
-            int startIndex = page * maxResults;
             
             return bookDataOrchestrator.searchBooksTiered(query, null, maxResults, sort, false)
                 .timeout(Duration.ofMillis(2000))
@@ -529,18 +522,6 @@ public class HomeController {
      * @param book The book object to generate keywords from
      * @return A comma-separated string of relevant keywords
      */
-    private Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit) {
-        // Homepage should ONLY query Postgres - no external API calls
-        // This ensures instant page loads without external dependencies
-        return bookDataOrchestrator.searchBooksTiered(query, null, limit, null, true) // bypassExternalApis=true
-            .timeout(Duration.ofMillis(300)) // Quick timeout
-            .onErrorResume(ex -> {
-                log.warn("Postgres homepage filler lookup failed for query '{}': {}", query, ex.getMessage());
-                return Mono.just(List.of());
-            })
-            .defaultIfEmpty(List.of());
-    }
-    
     /**
      * Handle book lookup by ISBN (works with both ISBN-10 and ISBN-13 formats),
      * then redirect to the canonical URL with Google Book ID
