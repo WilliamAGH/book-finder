@@ -107,17 +107,18 @@ public class BookQueryRepository {
      * 
      * This is THE SINGLE SOURCE for collection-based card fetching.
      * 
-     * @param collectionId Collection UUID
+     * @param collectionId Collection ID (NanoID text, not UUID)
      * @param limit Maximum number of books to return
      * @return List of BookCard DTOs ordered by collection position
      */
-    public List<BookCard> fetchBookCardsByCollection(UUID collectionId, int limit) {
-        if (collectionId == null || limit <= 0) {
+    public List<BookCard> fetchBookCardsByCollection(String collectionId, int limit) {
+        if (collectionId == null || collectionId.isBlank() || limit <= 0) {
             return List.of();
         }
 
         try {
-            String sql = "SELECT * FROM get_book_cards_by_collection(?::UUID, ?)";
+            // Note: collection_id is TEXT (NanoID), not UUID
+            String sql = "SELECT * FROM get_book_cards_by_collection(?, ?)";
             
             return jdbcTemplate.query(sql, new BookCardRowMapper(), collectionId, limit);
         } catch (DataAccessException ex) {
@@ -154,19 +155,13 @@ public class BookQueryRepository {
                 LIMIT 1
                 """;
             
-            List<UUID> collectionIds = jdbcTemplate.query(
+            List<String> collectionIds = jdbcTemplate.query(
                 collectionSql,
-                (rs, rowNum) -> {
-                    UUID id = rs.getObject("id", UUID.class);
-                    if (id != null) {
-                        return id;
-                    }
-                    String raw = rs.getString("id");
-                    return raw == null ? null : UUID.fromString(raw);
-                },
+                (rs, rowNum) -> rs.getString("id"),
                 providerListCode.trim()
             ).stream()
             .filter(Objects::nonNull)
+            .filter(id -> !id.isBlank())
             .collect(Collectors.toList());
             
             if (collectionIds.isEmpty()) {

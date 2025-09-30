@@ -312,7 +312,7 @@ COMMENT ON FUNCTION get_book_editions IS 'Optimized query for book editions - fe
 -- Used by: Homepage for bestseller lists, category browsing
 -- ============================================================================
 CREATE OR REPLACE FUNCTION get_book_cards_by_collection(
-    collection_id_param UUID,
+    collection_id_param TEXT,
     limit_param INTEGER DEFAULT 12
 )
 RETURNS TABLE (
@@ -393,7 +393,7 @@ CREATE INDEX IF NOT EXISTS idx_work_cluster_members_cluster_id ON work_cluster_m
 
 -- Test get_book_cards_by_collection (if you have collections)
 -- SELECT * FROM get_book_cards_by_collection(
---     (SELECT id FROM book_collections WHERE collection_type = 'BESTSELLER_LIST' LIMIT 1)::UUID,
+--     (SELECT id FROM book_collections WHERE collection_type = 'BESTSELLER_LIST' LIMIT 1),
 --     8
 -- );
 
