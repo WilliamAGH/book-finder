@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.S3Paths;
+import com.williamcallahan.book_recommendation_engine.util.TextUtils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -177,7 +178,7 @@ class S3BookMigrationService {
                             Book minimal = new Book();
                             minimal.setIsbn13(isbn13);
                             minimal.setIsbn10(isbn10);
-                            minimal.setTitle(title);
+                            minimal.setTitle(TextUtils.normalizeBookTitle(title));
                             minimal.setPublisher(item.path("publisher").asText(null));
                             minimal.setExternalImageUrl(item.path("book_image").asText(null));
 
