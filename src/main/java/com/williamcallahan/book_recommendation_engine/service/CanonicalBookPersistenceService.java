@@ -364,10 +364,10 @@ public class CanonicalBookPersistenceService {
             externalId,
             providerIsbn10,
             providerIsbn13,
-            book.getInfoLink(),
-            book.getPreviewLink(),
-            book.getPurchaseLink(),
-            book.getWebReaderLink(),
+            normalizeToHttps(book.getInfoLink()),
+            normalizeToHttps(book.getPreviewLink()),
+            normalizeToHttps(book.getPurchaseLink()),
+            normalizeToHttps(book.getWebReaderLink()),
             averageRating,
             ratingsCount,
             book.getPdfAvailable(),
@@ -486,6 +486,17 @@ public class CanonicalBookPersistenceService {
         // DISABLED: book_editions table replaced with work_clusters system
         // Edition tracking is now handled by work_cluster_members table
         // See schema.sql comments for migration details
+    }
+    
+    /**
+     * Normalize HTTP URLs to HTTPS for security.
+     * Google Books and other APIs often return HTTP URLs that should be HTTPS.
+     */
+    private String normalizeToHttps(String url) {
+        if (url == null || url.isBlank()) {
+            return url;
+        }
+        return url.startsWith("http://") ? url.replace("http://", "https://") : url;
     }
 
     private String determineSource(JsonNode sourceJson) {
