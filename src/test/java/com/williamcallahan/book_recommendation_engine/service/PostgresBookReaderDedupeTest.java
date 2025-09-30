@@ -44,6 +44,8 @@ class PostgresBookReaderDedupeTest {
         var aggregator = Mockito.mock(BookDataAggregatorService.class);
         var collection = Mockito.mock(BookCollectionPersistenceService.class);
         var search = createBookSearchServiceMock();
+        var canonicalBookPersistenceService = Mockito.mock(CanonicalBookPersistenceService.class);
+        var tieredBookSearchService = Mockito.mock(TieredBookSearchService.class);
 
         PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
 
@@ -57,8 +59,10 @@ class PostgresBookReaderDedupeTest {
                 search,
                 new BookS3CacheService(s3RetryService, om),
                 repo,
-                null,
-                null,
+                canonicalBookPersistenceService,
+                tieredBookSearchService,
+                false,
+                false,
                 false,
                 false
         );

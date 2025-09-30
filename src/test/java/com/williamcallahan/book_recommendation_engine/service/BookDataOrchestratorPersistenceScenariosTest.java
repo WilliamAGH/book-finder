@@ -61,6 +61,9 @@ class BookDataOrchestratorPersistenceScenariosTest {
     @Mock
     private BookSearchService bookSearchService;
 
+    @Mock
+    private TieredBookSearchService tieredBookSearchService;
+
     private BookDataOrchestrator orchestrator;
 
     // Concrete dependencies instantiated in setUp()
@@ -88,7 +91,9 @@ canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTempla
                 bookS3CacheService,
                 postgresBookRepository,
                 canonicalBookPersistenceService,
-                null,
+                tieredBookSearchService,
+                false,
+                false,
                 false,
                 false
         );
