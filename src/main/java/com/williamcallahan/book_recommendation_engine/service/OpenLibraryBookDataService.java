@@ -15,6 +15,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
@@ -117,6 +118,7 @@ public class OpenLibraryBookDataService {
         }
         // Example endpoint: /search.json?q={title} or /search.json?title={title}&author={author}
         log.info("Attempting to search books from OpenLibrary for title: {}", title);
+        ExternalApiLogger.logApiCallAttempt(log, "OpenLibrary", "SEARCH_TITLE", title, false);
         // Placeholder:
         // return webClient.get().uri("/search.json?q=" + title)
         // .retrieve()
@@ -139,8 +141,11 @@ public class OpenLibraryBookDataService {
                 })
                 .flatMapMany(responseNode -> {
                     if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
+                        ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_TITLE", title, 0);
                         return Flux.empty();
                     }
+                    int count = responseNode.get("docs").size();
+                    ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_TITLE", title, count);
                     return Flux.fromIterable(responseNode.get("docs"))
                                .map(this::parseOpenLibrarySearchDoc)
                                .filter(Objects::nonNull);
@@ -148,6 +153,7 @@ public class OpenLibraryBookDataService {
                 .doOnError(e -> LoggingUtils.error(log, e, "Error searching books by title '{}' from OpenLibrary", title))
                 .onErrorResume(e -> {
                      LoggingUtils.warn(log, e, "Error during OpenLibrary search for title '{}', returning empty Flux", title);
+                     ExternalApiLogger.logApiCallFailure(log, "OpenLibrary", "SEARCH_TITLE", title, e.getMessage());
                      return Flux.empty();
                 });
     }
@@ -165,6 +171,7 @@ public class OpenLibraryBookDataService {
         }
 
         log.info("Attempting to search OpenLibrary for author: {}", author);
+        ExternalApiLogger.logApiCallAttempt(log, "OpenLibrary", "SEARCH_AUTHOR", author, false);
 
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
@@ -181,8 +188,11 @@ public class OpenLibraryBookDataService {
                 })
                 .flatMapMany(responseNode -> {
                     if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
+                        ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_AUTHOR", author, 0);
                         return Flux.empty();
                     }
+                    int count = responseNode.get("docs").size();
+                    ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_AUTHOR", author, count);
                     return Flux.fromIterable(responseNode.get("docs"))
                             .map(this::parseOpenLibrarySearchDoc)
                             .filter(Objects::nonNull);
@@ -190,6 +200,7 @@ public class OpenLibraryBookDataService {
                 .doOnError(e -> LoggingUtils.error(log, e, "Error searching books by author '{}' from OpenLibrary", author))
                 .onErrorResume(e -> {
                     LoggingUtils.warn(log, e, "Error during OpenLibrary search for author '{}', returning empty Flux", author);
+                    ExternalApiLogger.logApiCallFailure(log, "OpenLibrary", "SEARCH_AUTHOR", author, e.getMessage());
                     return Flux.empty();
                 });
     }

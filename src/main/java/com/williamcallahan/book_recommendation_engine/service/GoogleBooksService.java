@@ -25,6 +25,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceNam
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.service.image.GoogleCoverUrlEvaluator;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import com.williamcallahan.book_recommendation_engine.service.image.ExternalCoverFetchHelper;
@@ -178,6 +179,11 @@ public class GoogleBooksService {
         Flux<Book> authenticatedFlux = Flux.empty();
         if (apiKeyAvailable) {
             authenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
+                .doOnSubscribe(subscription -> ExternalApiLogger.logApiCallAttempt(log,
+                    "GoogleBooks",
+                    "STREAM_AUTH",
+                    query,
+                    true))
                 .map(BookJsonParser::convertJsonToBook)
                 .filter(Objects::nonNull)
                 .map(book -> applyQualifiers(book, queryQualifiers))
@@ -190,6 +196,11 @@ public class GoogleBooksService {
         }
 
         Flux<Book> unauthenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
+            .doOnSubscribe(subscription -> ExternalApiLogger.logApiCallAttempt(log,
+                "GoogleBooks",
+                "STREAM_UNAUTH",
+                query,
+                false))
             .map(BookJsonParser::convertJsonToBook)
             .filter(Objects::nonNull)
             .map(book -> applyQualifiers(book, queryQualifiers))
@@ -197,6 +208,11 @@ public class GoogleBooksService {
                 LoggingUtils.warn(log, error,
                     "GoogleBooksService.streamBooksReactive unauthenticated search failed for query '{}'", query);
                 apiRequestMonitor.recordFailedRequest("volumes/search/unauthenticated/" + query, error.getMessage());
+                ExternalApiLogger.logApiCallFailure(log,
+                    "GoogleBooks",
+                    "STREAM_UNAUTH",
+                    query,
+                    error.getMessage());
                 return Flux.empty();
             });
 
@@ -211,9 +227,16 @@ public class GoogleBooksService {
                 "GoogleBooksService.streamBooksReactive starting stream for query '{}' (max {} results, orderBy={})",
                 query, maxTotalResultsToFetch, effectiveOrderBy))
             .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream"))
-            .doOnComplete(() -> log.debug(
-                "GoogleBooksService.streamBooksReactive completed stream for query '{}' (emitted {} results)",
-                query, seenIds.size()));
+            .doOnComplete(() -> {
+                log.debug(
+                    "GoogleBooksService.streamBooksReactive completed stream for query '{}' (emitted {} results)",
+                    query, seenIds.size());
+                ExternalApiLogger.logApiCallSuccess(log,
+                    "GoogleBooks",
+                    "STREAM_COMBINED",
+                    query,
+                    seenIds.size());
+            });
     }
 
     /**

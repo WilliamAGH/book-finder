@@ -193,9 +193,9 @@ class BookControllerTest {
             .andExpect(status().isOk())
             .andExpect(content().contentType(MediaType.APPLICATION_JSON))
             .andExpect(jsonPath("$.results", hasSize(2)))
-            .andExpect(jsonPath("$.results[0].authorId", equalTo("db-1")))
-            .andExpect(jsonPath("$.results[1].authorId", containsString("external-author-")))
-            .andExpect(jsonPath("$.results[1].authorName", equalTo("Mystery Author")));
+            .andExpect(jsonPath("$.results[0].id", equalTo("db-1")))
+            .andExpect(jsonPath("$.results[1].id", containsString("external-author-")))
+            .andExpect(jsonPath("$.results[1].name", equalTo("Mystery Author")));
     }
 
     private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {

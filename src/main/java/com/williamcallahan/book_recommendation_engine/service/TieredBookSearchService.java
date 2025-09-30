@@ -1,5 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
@@ -57,21 +58,34 @@ public class TieredBookSearchService {
      * THE SINGLE SOURCE OF TRUTH for book queries - uses optimized SQL functions.
      */
     private final BookQueryRepository bookQueryRepository;
-    
+
+    /**
+     * Persistence service to save external API results so they're available when users click them.
+     */
+    private final CanonicalBookPersistenceService persistenceService;
+    private final ObjectMapper objectMapper;
+
     private final boolean externalFallbackEnabled;
+    private final boolean persistSearchResults;
 
     TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
                             GoogleBooksService googleBooksService,
                             OpenLibraryBookDataService openLibraryBookDataService,
                             @Nullable BookQueryRepository bookQueryRepository,
-                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
+                            @Nullable CanonicalBookPersistenceService persistenceService,
+                            ObjectMapper objectMapper,
+                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
+                            @Value("${app.features.persist-search-results:true}") boolean persistSearchResults) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
         this.googleBooksService = googleBooksService;
         this.openLibraryBookDataService = openLibraryBookDataService;
         this.bookQueryRepository = bookQueryRepository;
+        this.persistenceService = persistenceService;
+        this.objectMapper = objectMapper;
         this.externalFallbackEnabled = externalFallbackEnabled;
+        this.persistSearchResults = persistSearchResults;
     }
 
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
@@ -196,7 +210,10 @@ public class TieredBookSearchService {
         return combined
             .distinct(Book::getId)
             .take(desiredTotalResults)
-            .doOnNext(book -> emittedCount.incrementAndGet())
+            .doOnNext(book -> {
+                emittedCount.incrementAndGet();
+                persistBookAsync(book);  // Save to Postgres so it's available when user clicks
+            })
             .doOnComplete(() -> ExternalApiLogger.logApiCallSuccess(
                 LOGGER,
                 "GoogleBooks",
@@ -204,7 +221,43 @@ public class TieredBookSearchService {
                 effectiveQuery,
                 emittedCount.get()));
     }
-    
+
+    /**
+     * Persists a book to Postgres asynchronously without blocking the search stream.
+     * This ensures external API results are available when users click on them.
+     *
+     * Failures are logged but don't affect the search results stream.
+     */
+    private void persistBookAsync(Book book) {
+        if (!persistSearchResults || persistenceService == null || book == null) {
+            return;
+        }
+
+        // Only persist books with valid IDs and titles
+        if (book.getId() == null || book.getTitle() == null || book.getTitle().isBlank()) {
+            return;
+        }
+
+        // Fire-and-forget async persistence
+        Mono.fromRunnable(() -> {
+            try {
+                com.fasterxml.jackson.databind.JsonNode sourceJson = null;
+                if (book.getRawJsonResponse() != null) {
+                    sourceJson = objectMapper.readTree(book.getRawJsonResponse());
+                }
+
+                boolean persisted = persistenceService.saveBook(book, sourceJson);
+                if (persisted) {
+                    LOGGER.debug("Async persisted search result: {} ({})", book.getTitle(), book.getId());
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Failed to async persist book {}: {}", book.getId(), e.getMessage());
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .subscribe();
+    }
+
     /**
      * Heuristic to detect if a query looks like an author name.
      * Author names typically:
