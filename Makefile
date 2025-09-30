@@ -10,7 +10,7 @@ MIGRATE_SKIP ?= 0
 MIGRATE_PREFIX ?= books/v1/
 MIGRATE_DEBUG ?= false
 
-.PHONY: run build test kill-port migrate-books migrate-books-spring
+.PHONY: run build test kill-port migrate-books migrate-books-spring cluster-books
 
 # Kill any process currently listening on $(PORT)
 kill-port:
@@ -114,6 +114,27 @@ db-generate-slugs:
 		fi && \
 		psql "$$SPRING_DATASOURCE_URL" -c "SELECT generate_all_book_slugs();" && \
 		echo "✅ Slugs generated for all books"; \
+	else \
+		echo "❌ Error: .env file not found"; \
+		exit 1; \
+	fi
+
+# Cluster books into edition families (run after adding new books)
+cluster-books:
+	@echo "Clustering books into edition families..."
+	@if [ -f .env ]; then \
+		set -a && source .env && set +a && \
+		if [ -z "$$SPRING_DATASOURCE_URL" ]; then \
+			echo "❌ Error: SPRING_DATASOURCE_URL not found in .env"; \
+			exit 1; \
+		fi && \
+		echo "Clustering by ISBN prefix..." && \
+		psql "$$SPRING_DATASOURCE_URL" -c "SELECT * FROM cluster_books_by_isbn();" && \
+		echo "Clustering by Google canonical ID..." && \
+		psql "$$SPRING_DATASOURCE_URL" -c "SELECT * FROM cluster_books_by_google_canonical();" && \
+		echo "Getting statistics..." && \
+		psql "$$SPRING_DATASOURCE_URL" -c "SELECT * FROM get_clustering_stats();" && \
+		echo "✅ Book clustering complete"; \
 	else \
 		echo "❌ Error: .env file not found"; \
 		exit 1; \

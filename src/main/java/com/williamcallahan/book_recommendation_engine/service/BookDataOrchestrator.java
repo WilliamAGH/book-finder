@@ -503,7 +503,10 @@ public class BookDataOrchestrator {
 
     public void migrateListsFromS3(String provider, String prefix, int maxRecords, int skipRecords) {
         buildS3BookMigrationService("S3→DB list migration")
-            .ifPresent(service -> service.migrateListsFromS3(provider, prefix, maxRecords, skipRecords));
+            .ifPresent(service -> {
+                service.migrateListsFromS3(provider, prefix, maxRecords, skipRecords);
+                logger.info("Migration complete. Work clustering will run automatically via WorkClusterScheduler, or manually run: SELECT * FROM cluster_books_by_isbn(); SELECT * FROM cluster_books_by_google_canonical();");
+            });
     }
 
     private Optional<S3BookMigrationService> buildS3BookMigrationService(String contextLabel) {
