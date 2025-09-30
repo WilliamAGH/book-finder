@@ -231,19 +231,6 @@ public class NewYorkTimesBestsellerScheduler {
         return bookLookupService.resolveCanonicalBookId(isbn13, isbn10);
     }
 
-    private String firstAuthor(JsonNode bookNode) {
-        String author = bookNode.path("author").asText(null);
-        if (author != null && !author.isBlank()) {
-            return author;
-        }
-        // Some NYT feeds use 'contributor'
-        String contributor = bookNode.path("contributor").asText(null);
-        if (contributor != null && !contributor.isBlank()) {
-            return contributor;
-        }
-        return null;
-    }
-
     private String createCanonicalFromNyt(JsonNode bookNode, String listCode, String isbn13, String isbn10) {
         if (canonicalBookPersistenceService == null) {
             return null;
@@ -357,10 +344,11 @@ public class NewYorkTimesBestsellerScheduler {
     }
 
     private void addAuthors(List<String> authors, @Nullable String raw) {
-        if (!ValidationUtils.hasText(raw)) {
+        String sanitized = raw == null ? "" : raw;
+        if (!ValidationUtils.hasText(sanitized)) {
             return;
         }
-        String normalized = raw.replace(" and ", ",");
+        String normalized = sanitized.replace(" and ", ",");
         for (String part : normalized.split("[,;&]")) {
             String cleaned = part.trim();
             if (ValidationUtils.hasText(cleaned)) {

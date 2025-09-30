@@ -32,7 +32,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 import reactor.core.publisher.Mono;
 
@@ -211,18 +210,15 @@ public class BookCacheWarmingScheduler {
      */
     private List<String> getBookIdsToWarm() {
         List<String> result = new ArrayList<>();
-        
-        // 1. Recently viewed books
-        List<String> recentlyViewedIds = recentlyViewedService.getRecentlyViewedBooks().stream()
-            .map(Book::getId)
-            .filter(id -> id != null && !id.isEmpty())
-            .collect(Collectors.toList());
+
+        int lookupLimit = Math.max(maxBooksPerRun * 2, 20);
+        List<String> recentlyViewedIds = recentlyViewedService.getRecentlyViewedBookIds(lookupLimit);
         for (String id : recentlyViewedIds) {
-            if (!recentlyWarmedBooks.contains(id)) {
+            if (id != null && !id.isBlank() && !recentlyWarmedBooks.contains(id)) {
                 result.add(id);
             }
         }
-        
+
         return result;
     }
 }
