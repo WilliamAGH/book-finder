@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
@@ -27,14 +28,18 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class BookDataOrchestrator {
@@ -365,7 +370,12 @@ public class BookDataOrchestrator {
     }
     
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
-        return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis));
+        return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis))
+            .doOnSuccess(results -> {
+                if (!bypassExternalApis) {
+                    triggerBackgroundHydration(results, "SEARCH", query);
+                }
+            });
     }
 
     public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
@@ -385,6 +395,82 @@ public class BookDataOrchestrator {
         Mono<List<T>> result = operation.apply(tieredBookSearchService);
         return result != null ? result : Mono.just(List.<T>of());
     }
+
+    public Mono<Void> hydrateBooksReactive(List<Book> books, String context, String correlationId) {
+        if (books == null || books.isEmpty()) {
+            return Mono.empty();
+        }
+        Set<String> identifiers = books.stream()
+            .map(this::determineBestIdentifier)
+            .filter(id -> id != null && !id.isBlank())
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (identifiers.isEmpty()) {
+            return Mono.empty();
+        }
+        return Flux.fromIterable(identifiers)
+            .flatMap(id -> hydrateSingleBook(id, context, correlationId), 4)
+            .then();
+    }
+
+    public void hydrateBooksAsync(List<Book> books, String context, String correlationId) {
+        triggerBackgroundHydration(books, context, correlationId);
+    }
+
+    private void triggerBackgroundHydration(List<Book> books, String context, String correlationId) {
+        if (books == null || books.isEmpty()) {
+            return;
+        }
+        hydrateBooksReactive(books, context, correlationId)
+            .subscribeOn(Schedulers.boundedElastic())
+            .subscribe(
+                ignored -> { },
+                error -> logger.warn("Background hydration failed for context {}: {}", context, error.getMessage())
+            );
+    }
+
+    private Mono<Void> hydrateSingleBook(String identifier, String context, String correlationId) {
+        if (identifier == null || identifier.isBlank()) {
+            return Mono.empty();
+        }
+        return Mono.defer(() -> {
+            ExternalApiLogger.logHydrationStart(logger, context, identifier, correlationId);
+            return getBookByIdTiered(identifier)
+                .doOnNext(book -> {
+                    if (book != null && book.getId() != null) {
+                        ExternalApiLogger.logHydrationSuccess(logger, context, identifier, book.getId(), "TIERED_FLOW");
+                    }
+                })
+                .switchIfEmpty(Mono.fromRunnable(() ->
+                    ExternalApiLogger.logHydrationFailure(logger, context, identifier, "NOT_FOUND")
+                ))
+                .onErrorResume(ex -> {
+                    ExternalApiLogger.logHydrationFailure(
+                        logger,
+                        context,
+                        identifier,
+                        ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+                    return Mono.empty();
+                })
+                .then();
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private String determineBestIdentifier(Book book) {
+        if (book == null) {
+            return null;
+        }
+        if (book.getId() != null && !book.getId().isBlank()) {
+            return book.getId();
+        }
+        if (book.getIsbn13() != null && !book.getIsbn13().isBlank()) {
+            return book.getIsbn13();
+        }
+        if (book.getIsbn10() != null && !book.getIsbn10().isBlank()) {
+            return book.getIsbn10();
+        }
+        return null;
+    }
+
 
     private void triggerSearchViewRefresh(boolean force) {
         if (bookSearchService == null) {

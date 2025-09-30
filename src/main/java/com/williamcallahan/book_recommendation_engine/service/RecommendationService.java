@@ -206,6 +206,9 @@ public class RecommendationService {
                 List<Book> limitedRecommendations = orderedBooks.stream()
                     .limit(effectiveCount)
                     .collect(Collectors.toList());
+                if (bookDataOrchestrator != null) {
+                    bookDataOrchestrator.hydrateBooksAsync(limitedRecommendations, "RECOMMENDATION", sourceBook.getId());
+                }
 
                 List<String> newRecommendationIds = orderedBooks.stream()
                     .map(Book::getId)
