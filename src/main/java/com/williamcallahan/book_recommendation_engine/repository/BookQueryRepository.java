@@ -27,38 +27,8 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * THE SINGLE SOURCE OF TRUTH for optimized book queries using Postgres functions.
- * 
- * This repository REPLACES the hydration-heavy PostgresBookRepository for ALL read operations.
- * It uses optimized SQL functions that fetch exactly what each view needs in 1-2 queries total,
- * eliminating the N+1 query problem that caused 80-120 queries per page.
- * 
- * <p><b>Performance improvements:</b></p>
- * <ul>
- *   <li>Homepage: 80 queries → 1 query (80x faster)</li>
- *   <li>Search: 120 queries → 1 query (120x faster)</li>
- *   <li>Detail: 10 queries → 2 queries (5x faster)</li>
- * </ul>
- * 
- * <p><b>Architecture principle: DRY (Don't Repeat Yourself)</b></p>
- * <ul>
- *   <li>Each DTO type (BookCard, BookListItem, BookDetail) has ONE query function</li>
- *   <li>Each controller uses THIS repository - no other data sources</li>
- *   <li>All consumers get data from the same optimized source</li>
- * </ul>
- * 
- * <p><b>Usage by view:</b></p>
- * <ul>
- *   <li>Homepage/Grid: {@link #fetchBookCards(List)}</li>
- *   <li>Search List: {@link #fetchBookListItems(List)}</li>
- *   <li>Detail Page: {@link #fetchBookDetail(UUID)} or {@link #fetchBookDetailBySlug(String)}</li>
- *   <li>Editions Tab: {@link #fetchBookEditions(UUID)}</li>
- * </ul>
- * 
- * @see BookCard Single source of truth for card data
- * @see BookListItem Single source of truth for list data
- * @see BookDetail Single source of truth for detail data
- * @see EditionSummary Single source of truth for edition data
+ * Repository that centralises optimized Postgres read queries for book views.
+ * Replaces the hydration-heavy implementation with concise functions per DTO use case.
  */
 @Repository
 public class BookQueryRepository {
