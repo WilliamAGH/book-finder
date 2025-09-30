@@ -130,7 +130,12 @@ public class BookController {
         Mono<Book> canonical = Mono.defer(() -> {
             Mono<Book> lookup = bookDataOrchestrator.fetchCanonicalBookReactive(identifier);
             return lookup != null ? lookup : Mono.empty();
-        });
+        })
+            .doOnNext(book -> {
+                if (book != null && ValidationUtils.hasText(book.getId())) {
+                    ExternalApiLogger.logHydrationSuccess(log, "DETAIL_CANONICAL", identifier, book.getId(), "POSTGRES");
+                }
+            });
 
         Mono<Book> tieredById = Mono.defer(() -> bookDataOrchestrator.getBookByIdTiered(identifier))
             .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL", identifier, null))

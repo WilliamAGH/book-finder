@@ -437,15 +437,24 @@ public class BookDataOrchestrator {
             .then();
     }
 
+    private void logHydrationSuccess(String context, String identifier, String tier, Book book) {
+        if (book == null) {
+            return;
+        }
+        String canonicalId = book.getId();
+        if (canonicalId == null || canonicalId.isBlank()) {
+            return;
+        }
+        ExternalApiLogger.logHydrationSuccess(logger, context, identifier, canonicalId, tier);
+    }
+
     private Mono<Book> lookupBookWithLogging(String identifier, String context, String correlationId) {
         return Mono.defer(() -> {
             ExternalApiLogger.logHydrationStart(logger, context, identifier, correlationId);
             return getBookByIdTiered(identifier)
-                .doOnNext(book -> {
-                    if (book != null && book.getId() != null) {
-                        ExternalApiLogger.logHydrationSuccess(logger, context, identifier, book.getId(), "TIERED_FLOW");
-                    }
-                })
+                .doOnNext(book -> logHydrationSuccess(context, identifier, "TIERED_FLOW", book))
+                .switchIfEmpty(Mono.defer(() -> getBookBySlugTiered(identifier)
+                    .doOnNext(book -> logHydrationSuccess(context, identifier, "SLUG", book))))
                 .switchIfEmpty(Mono.defer(() -> {
                     ExternalApiLogger.logHydrationFailure(logger, context, identifier, "NOT_FOUND");
                     return Mono.empty();

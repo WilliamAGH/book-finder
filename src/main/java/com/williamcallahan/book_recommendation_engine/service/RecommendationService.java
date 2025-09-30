@@ -165,7 +165,12 @@ public class RecommendationService {
                 .distinct(Book::getId)
                 .take(limit)
                 .collectList()
-                .doOnNext(results -> log.debug("Hydrated {} cached recommendations for {}", results.size(), sourceBook.getId()));
+                .doOnNext(results -> {
+                    log.debug("Hydrated {} cached recommendations for {}", results.size(), sourceBook.getId());
+                    if (bookDataOrchestrator != null) {
+                        bookDataOrchestrator.hydrateBooksAsync(results, "RECOMMENDATION_CACHE", sourceBook.getId());
+                    }
+                });
     }
 
     private Mono<List<Book>> fetchRecommendationsFromApiAndUpdateCache(Book sourceBook, int effectiveCount) {
