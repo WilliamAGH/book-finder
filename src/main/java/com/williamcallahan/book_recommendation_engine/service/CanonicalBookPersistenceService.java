@@ -232,7 +232,7 @@ public class CanonicalBookPersistenceService {
 
     private String resolveSlug(String bookId, Book book, boolean isNew) {
         if (!isNew) {
-            String existing = queryForId("SELECT slug FROM books WHERE id = ?", bookId);
+            String existing = queryForId("SELECT slug FROM books WHERE id = ?::uuid", bookId);
             if (existing != null && !existing.isBlank()) {
                 return existing;
             }
