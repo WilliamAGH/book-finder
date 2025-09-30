@@ -432,6 +432,12 @@ public class BookDataOrchestrator {
         if (identifier == null || identifier.isBlank()) {
             return Mono.empty();
         }
+        return lookupBookWithLogging(identifier, context, correlationId)
+            .subscribeOn(Schedulers.boundedElastic())
+            .then();
+    }
+
+    private Mono<Book> lookupBookWithLogging(String identifier, String context, String correlationId) {
         return Mono.defer(() -> {
             ExternalApiLogger.logHydrationStart(logger, context, identifier, correlationId);
             return getBookByIdTiered(identifier)
@@ -440,9 +446,10 @@ public class BookDataOrchestrator {
                         ExternalApiLogger.logHydrationSuccess(logger, context, identifier, book.getId(), "TIERED_FLOW");
                     }
                 })
-                .switchIfEmpty(Mono.fromRunnable(() ->
-                    ExternalApiLogger.logHydrationFailure(logger, context, identifier, "NOT_FOUND")
-                ))
+                .switchIfEmpty(Mono.defer(() -> {
+                    ExternalApiLogger.logHydrationFailure(logger, context, identifier, "NOT_FOUND");
+                    return Mono.empty();
+                }))
                 .onErrorResume(ex -> {
                     ExternalApiLogger.logHydrationFailure(
                         logger,
@@ -450,9 +457,8 @@ public class BookDataOrchestrator {
                         identifier,
                         ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
                     return Mono.empty();
-                })
-                .then();
-        }).subscribeOn(Schedulers.boundedElastic());
+                });
+        });
     }
 
     private String determineBestIdentifier(Book book) {

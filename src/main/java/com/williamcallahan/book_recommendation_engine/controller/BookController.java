@@ -11,6 +11,7 @@ import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrat
 import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveControllerUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
@@ -125,11 +126,34 @@ public class BookController {
         if (ValidationUtils.isNullOrBlank(identifier)) {
             return Mono.empty();
         }
-        // DRY: delegate to central orchestrator method that handles slug/ID resolution and fallbacks
-        return Mono.defer(() -> {
+
+        Mono<Book> canonical = Mono.defer(() -> {
             Mono<Book> lookup = bookDataOrchestrator.fetchCanonicalBookReactive(identifier);
             return lookup != null ? lookup : Mono.empty();
         });
+
+        Mono<Book> tieredById = Mono.defer(() -> bookDataOrchestrator.getBookByIdTiered(identifier))
+            .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL", identifier, null))
+            .doOnNext(book -> {
+                if (book != null && ValidationUtils.hasText(book.getId())) {
+                    ExternalApiLogger.logHydrationSuccess(log, "DETAIL", identifier, book.getId(), "TIERED_FLOW");
+                }
+            });
+
+        Mono<Book> tieredBySlug = Mono.defer(() -> bookDataOrchestrator.getBookBySlugTiered(identifier))
+            .doOnSubscribe(sub -> ExternalApiLogger.logHydrationStart(log, "DETAIL_SLUG", identifier, null))
+            .doOnNext(book -> {
+                if (book != null && ValidationUtils.hasText(book.getId())) {
+                    ExternalApiLogger.logHydrationSuccess(log, "DETAIL_SLUG", identifier, book.getId(), "TIERED_FLOW");
+                }
+            });
+
+        return canonical
+            .switchIfEmpty(tieredById.switchIfEmpty(tieredBySlug))
+            .switchIfEmpty(Mono.defer(() -> {
+                ExternalApiLogger.logHydrationFailure(log, "DETAIL", identifier, "NOT_FOUND");
+                return Mono.empty();
+            }));
     }
 
     private SearchResponse buildSearchResponse(String query,
