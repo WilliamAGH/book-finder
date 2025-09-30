@@ -454,6 +454,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// Placeholder image constants
+const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
+// Inline fallback for cases where server isn't available - embedded SVG as data URI
+const INLINE_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjMwMCIgZmlsbD0iI2Y4ZjlmYSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIGZpbGw9IiM2Yzc1N2QiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5ObyBDb3ZlcjwvdGV4dD48L3N2Zz4=';
+
 /**
  * Initialize book cover images with loading and placeholder functionality
  * Includes advanced error handling, retry mechanism, and preload validation
@@ -466,7 +471,6 @@ function initializeBookCovers() {
     }
     console.log('Initializing ' + covers.length + ' book covers.');
 
-    const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
     // const _MAX_RETRIES = 1; // reserved for future use
     
     covers.forEach((cover, index) => {
@@ -489,6 +493,7 @@ function initializeBookCovers() {
         cover.setAttribute('data-preferred-url-internal', preferredUrl || '');
         cover.setAttribute('data-fallback-url-internal', fallbackUrl || '');
         cover.setAttribute('data-ultimate-fallback-internal', ultimateFallback);
+        cover.setAttribute('data-inline-fallback-internal', INLINE_PLACEHOLDER);
 
         // Add loading indicators and placeholder div
         const parent = cover.parentNode;
@@ -522,7 +527,8 @@ function initializeBookCovers() {
             cover.src = ensureHttpsForGoogleBooks(ultimateFallback);
             // If it's already the placeholder, the load event might not fire consistently if src doesn't change
             // Manually trigger if it's already the placeholder and not loading
-            if (cover.complete && ultimateFallback.includes(LOCAL_PLACEHOLDER)) {
+            const isPlaceholder = ultimateFallback.includes(LOCAL_PLACEHOLDER) || ultimateFallback.includes('data:image/svg');
+            if (cover.complete && isPlaceholder) {
                  setTimeout(() => handleImageSuccess.call(cover), 0);
             }
         }
@@ -545,7 +551,8 @@ function handleImageSuccess() {
     cover.classList.add('loaded');
     cover.style.opacity = '1';
 
-    if (cover.naturalWidth < 20 && cover.naturalHeight < 20 && !cover.src.includes(LOCAL_PLACEHOLDER)) {
+    const isPlaceholder = cover.src.includes(LOCAL_PLACEHOLDER) || cover.src.includes('data:image/svg');
+    if (cover.naturalWidth < 20 && cover.naturalHeight < 20 && !isPlaceholder) {
         console.warn('[Cover Warning] Loaded image is tiny (' + cover.naturalWidth + 'x' + cover.naturalHeight + '), treating as failure for: ' + cover.src);
         handleImageFailure.call(cover); // Treat as error
     } else {
@@ -626,9 +633,15 @@ function handleImageFailure() {
         cover.src = ensureHttpsForGoogleBooks(nextSrc);
         if (nextSrc === ultimate) {
             // If we're falling back to the ultimate (local) placeholder,
-            // it should ideally not error. If it does, stop trying.
+            // it should ideally not error. If it does, use inline fallback.
             cover.onerror = function() {
                 console.error('[Cover Final Failure] Ultimate fallback itself failed: ' + this.src);
+                const inlineFallback = this.getAttribute('data-inline-fallback-internal');
+                if (inlineFallback && this.src !== inlineFallback) {
+                    console.log('[Cover Inline Fallback] Using embedded placeholder');
+                    this.src = inlineFallback;
+                    this.onerror = null; // Stop retrying after inline fallback
+                }
                 const container = this.closest('.book-cover-container, .book-cover-wrapper');
                 const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
                 if (placeholderDiv) placeholderDiv.style.display = 'none';
@@ -639,12 +652,27 @@ function handleImageFailure() {
         }
     } else {
         console.error('[Cover Final Failure] All fallbacks exhausted for initial src: ' + cover.getAttribute('data-preferred-url-internal'));
+        const inlineFallback = cover.getAttribute('data-inline-fallback-internal');
         const container = cover.closest('.book-cover-container, .book-cover-wrapper');
         const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
         if (placeholderDiv) placeholderDiv.style.display = 'none';
         cover.style.opacity = '1';
-        cover.src = ensureHttpsForGoogleBooks(ultimate);
-        cover.onerror = null;
+        
+        // Try ultimate fallback first, then inline if that fails
+        if (ultimate && !cover.src.includes(inlineFallback)) {
+            cover.src = ensureHttpsForGoogleBooks(ultimate);
+            cover.onerror = function() {
+                console.log('[Cover Inline Fallback] Server placeholder failed, using embedded');
+                const inline = this.getAttribute('data-inline-fallback-internal');
+                if (inline) {
+                    this.src = inline;
+                    this.onerror = null;
+                }
+            };
+        } else {
+            cover.src = inlineFallback;
+            cover.onerror = null;
+        }
         cover.classList.remove('loading');
         cover.classList.add('failed');
     }

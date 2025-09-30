@@ -178,10 +178,11 @@ public class BookCollectionPersistenceService {
 
         JdbcUtils.executeUpdate(
             jdbcTemplate,
-            "INSERT INTO book_lists (list_id, source, provider_list_id, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_list_json) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
-            "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, bestsellers_date = EXCLUDED.bestsellers_date, updated_frequency = EXCLUDED.updated_frequency, raw_list_json = EXCLUDED.raw_list_json, updated_at = now()",
+            "INSERT INTO book_collections (id, collection_type, source, provider_list_id, provider_list_code, display_name, bestsellers_date, published_date, updated_frequency, raw_data_json) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
+            "ON CONFLICT (source, provider_list_code, published_date) DO UPDATE SET display_name = EXCLUDED.display_name, bestsellers_date = EXCLUDED.bestsellers_date, updated_frequency = EXCLUDED.updated_frequency, raw_data_json = EXCLUDED.raw_data_json, updated_at = now()",
             listId,
+            "BESTSELLER_LIST",
             source,
             providerListId,
             providerListCode,
@@ -208,9 +209,10 @@ public class BookCollectionPersistenceService {
 
         JdbcUtils.executeUpdate(
             jdbcTemplate,
-            "INSERT INTO book_lists_join (list_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
-            "ON CONFLICT (list_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, provider_book_ref = EXCLUDED.provider_book_ref, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
+            "INSERT INTO book_collections_join (id, collection_id, book_id, position, weeks_on_list, provider_isbn13, provider_isbn10, provider_book_ref, raw_item_json) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb)) " +
+            "ON CONFLICT (collection_id, book_id) DO UPDATE SET position = EXCLUDED.position, weeks_on_list = EXCLUDED.weeks_on_list, provider_isbn13 = EXCLUDED.provider_isbn13, provider_isbn10 = EXCLUDED.provider_isbn10, provider_book_ref = EXCLUDED.provider_book_ref, raw_item_json = EXCLUDED.raw_item_json, updated_at = now()",
+            com.williamcallahan.book_recommendation_engine.util.IdGenerator.generateLong(),
             listId,
             UUID.fromString(bookId),
             position,
