@@ -685,7 +685,7 @@
                 ? book.cover.fallbackUrl
                 : '/images/placeholder-book-cover.svg';
 
-            imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
+            imgElementForCard.src = preferredUrl || fallbackUrl;
             imgElementForCard.alt = book.title ? `${book.title} cover` : 'Book cover';
             imgElementForCard.setAttribute('data-book-id', book.id);
             imgElementForCard.setAttribute('data-preferred-url', preferredUrl || '');
@@ -800,7 +800,7 @@
                 ? book.cover.fallbackUrl
                 : '/images/placeholder-book-cover.svg';
 
-            imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src
+            imgElementForListItem.src = preferredUrlListItem || fallbackUrlListItem;
             imgElementForListItem.alt = book.title ? `${book.title} cover` : 'Book cover';
             imgElementForListItem.setAttribute('data-book-id', book.id);
             imgElementForListItem.setAttribute('data-preferred-url', preferredUrlListItem || '');
