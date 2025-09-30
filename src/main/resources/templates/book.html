@@ -169,10 +169,10 @@
                         <!-- Book Cover Section -->
                         <div class="col-md-4 col-lg-3 book-cover-section">
                             <div class="position-relative book-cover-container book-cover-wrapper">
-                                <img th:src="@{/images/placeholder-book-cover.svg}"
-                                     th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : book.externalImageUrl)}, 
-                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                                     th:attr="data-book-id=${book.id},
+                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : book.externalImageUrl)},
+                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'},
                                               data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                      class="img-fluid rounded-start book-cover"
                                      title="Book cover" th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
