@@ -43,16 +43,19 @@ BEGIN
             ARRAY_AGG(a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL),
             ARRAY[]::TEXT[]
         ) as authors,
-        -- Get best cover image (prefer extraLarge → large → medium)
+        -- Get best cover image (prefer extraLarge → large → medium → external → small → thumbnail → smallThumbnail)
         (SELECT bil.url 
          FROM book_image_links bil 
          WHERE bil.book_id = b.id 
-           AND bil.image_type IN ('extraLarge', 'large', 'medium')
          ORDER BY CASE bil.image_type
                    WHEN 'extraLarge' THEN 1
                    WHEN 'large' THEN 2
                    WHEN 'medium' THEN 3
-                   ELSE 4
+                   WHEN 'external' THEN 4
+                   WHEN 'small' THEN 5
+                   WHEN 'thumbnail' THEN 6
+                   WHEN 'smallThumbnail' THEN 7
+                   ELSE 8
                   END
          LIMIT 1) as cover_url,
         bei.average_rating,
@@ -117,12 +120,15 @@ BEGIN
         (SELECT bil.url 
          FROM book_image_links bil 
          WHERE bil.book_id = b.id 
-           AND bil.image_type IN ('extraLarge', 'large', 'medium')
          ORDER BY CASE bil.image_type
                    WHEN 'extraLarge' THEN 1
                    WHEN 'large' THEN 2
                    WHEN 'medium' THEN 3
-                   ELSE 4
+                   WHEN 'external' THEN 4
+                   WHEN 'small' THEN 5
+                   WHEN 'thumbnail' THEN 6
+                   WHEN 'smallThumbnail' THEN 7
+                   ELSE 8
                   END
          LIMIT 1) as cover_url,
         bei.average_rating,
@@ -203,23 +209,30 @@ BEGIN
         (SELECT bil.url 
          FROM book_image_links bil 
          WHERE bil.book_id = b.id 
-           AND bil.image_type IN ('extraLarge', 'large')
          ORDER BY CASE bil.image_type
                    WHEN 'extraLarge' THEN 1
                    WHEN 'large' THEN 2
-                   ELSE 3
+                   WHEN 'medium' THEN 3
+                   WHEN 'external' THEN 4
+                   WHEN 'small' THEN 5
+                   WHEN 'thumbnail' THEN 6
+                   WHEN 'smallThumbnail' THEN 7
+                   ELSE 8
                   END
          LIMIT 1) as cover_url,
         -- Get thumbnail for smaller displays
         (SELECT bil.url 
          FROM book_image_links bil 
          WHERE bil.book_id = b.id 
-           AND bil.image_type IN ('thumbnail', 'smallThumbnail', 'medium')
          ORDER BY CASE bil.image_type
                    WHEN 'thumbnail' THEN 1
                    WHEN 'medium' THEN 2
                    WHEN 'smallThumbnail' THEN 3
-                   ELSE 4
+                   WHEN 'small' THEN 4
+                   WHEN 'external' THEN 5
+                   WHEN 'large' THEN 6
+                   WHEN 'extraLarge' THEN 7
+                   ELSE 8
                   END
          LIMIT 1) as thumbnail_url,
         bei.average_rating,

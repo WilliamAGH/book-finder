@@ -261,11 +261,14 @@ public class BookQueryRepository {
     private class BookCardRowMapper implements RowMapper<BookCard> {
         @Override
         public BookCard mapRow(@NonNull ResultSet rs, int rowNum) throws SQLException {
+            List<String> authors = parseTextArray(rs.getArray("authors"));
+            log.debug("BookCard row: id={}, title={}, authors={}, coverUrl={}", 
+                rs.getString("id"), rs.getString("title"), authors, rs.getString("cover_url"));
             return new BookCard(
                 rs.getString("id"),
                 rs.getString("slug"),
                 rs.getString("title"),
-                parseTextArray(rs.getArray("authors")),
+                authors,
                 rs.getString("cover_url"),
                 getDoubleOrNull(rs, "average_rating"),
                 getIntOrNull(rs, "ratings_count"),

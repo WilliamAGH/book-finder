@@ -117,7 +117,7 @@ public class NewYorkTimesService {
      * @param limit Maximum number of books to return
      * @return Mono of BookCard list (optimized DTOs for card display)
      */
-    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100)")
+    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100) + '-v2'")
     public Mono<List<BookCard>> getCurrentBestSellersCards(String listNameEncoded, int limit) {
         // Validate and clamp limit to reasonable range
         final int effectiveLimit = PagingUtils.clamp(limit, 1, 100);
