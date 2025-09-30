@@ -69,9 +69,9 @@ public final class ApplicationConstants {
     public static final class Database {
         public static final class Queries {
             // Book lookups
-            public static final String BOOK_BY_ISBN13 = "SELECT id FROM books WHERE isbn13 = ? LIMIT 1";
-            public static final String BOOK_BY_ISBN10 = "SELECT id FROM books WHERE isbn10 = ? LIMIT 1";
-            public static final String BOOK_BY_ID = "SELECT id FROM books WHERE id = ? LIMIT 1";
+            public static final String BOOK_BY_ISBN13 = "SELECT id::text FROM books WHERE isbn13 = ? LIMIT 1";
+            public static final String BOOK_BY_ISBN10 = "SELECT id::text FROM books WHERE isbn10 = ? LIMIT 1";
+            public static final String BOOK_BY_ID = "SELECT id::text FROM books WHERE id = ?::uuid LIMIT 1";
             public static final String BOOK_BY_SLUG = "SELECT id FROM books WHERE slug = ? LIMIT 1";
 
             // Existence checks
