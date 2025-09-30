@@ -86,6 +86,15 @@ public class TieredBookSearchService {
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
+    // Backward-compatible constructor for tests and older injection paths
+    TieredBookSearchService(BookSearchService bookSearchService,
+                            GoogleApiFetcher googleApiFetcher,
+                            OpenLibraryBookDataService openLibraryBookDataService,
+                            @Nullable BookQueryRepository bookQueryRepository,
+                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
+        this(bookSearchService, googleApiFetcher, openLibraryBookDataService, bookQueryRepository, externalFallbackEnabled, null, null, new ObjectMapper());
+    }
+
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
         return searchBooks(query, langCode, desiredTotalResults, orderBy, false);
     }
