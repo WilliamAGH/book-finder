@@ -41,11 +41,8 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
-import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.function.Function;
@@ -61,10 +58,6 @@ import com.williamcallahan.book_recommendation_engine.service.image.CoverCacheMa
 @Service
 @Slf4j
 public class GoogleBooksService {
-
-    private static final Duration STREAM_HYDRATION_TIMEOUT = Duration.ofSeconds(6);
-    private final Set<String> inflightSearchHydrations = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    private final boolean persistSearchResults;
 
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
@@ -91,15 +84,13 @@ public class GoogleBooksService {
             GoogleApiFetcher googleApiFetcher,
             BookDataOrchestrator bookDataOrchestrator,
             ExternalCoverFetchHelper externalCoverFetchHelper,
-            GoogleCoverUrlEvaluator googleCoverUrlEvaluator,
-            @Value("${app.features.persist-search-results:true}") boolean persistSearchResults) {
+            GoogleCoverUrlEvaluator googleCoverUrlEvaluator) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.externalCoverFetchHelper = externalCoverFetchHelper;
         this.googleCoverUrlEvaluator = googleCoverUrlEvaluator;
-        this.persistSearchResults = persistSearchResults;
     }
 
     /**
@@ -239,10 +230,7 @@ public class GoogleBooksService {
             .doOnSubscribe(subscription -> log.debug(
                 "GoogleBooksService.streamBooksReactive starting stream for query '{}' (max {} results, orderBy={})",
                 query, maxTotalResultsToFetch, effectiveOrderBy))
-            .doOnNext(book -> {
-                triggerSearchResultHydration(book);
-                apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream");
-            })
+            .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream"))
             .doOnComplete(() -> {
                 log.debug(
                     "GoogleBooksService.streamBooksReactive completed stream for query '{}' (emitted {} results)",
@@ -253,37 +241,6 @@ public class GoogleBooksService {
                     query,
                     seenIds.size());
             });
-    }
-
-    private void triggerSearchResultHydration(Book book) {
-        if (!persistSearchResults || book == null) {
-            return;
-        }
-
-        String bookId = book.getId();
-        if (!ValidationUtils.hasText(bookId)) {
-            return;
-        }
-
-        if (!inflightSearchHydrations.add(bookId)) {
-            return;
-        }
-
-        bookDataOrchestrator.getBookByIdTiered(bookId)
-            .timeout(STREAM_HYDRATION_TIMEOUT)
-            .subscribeOn(Schedulers.boundedElastic())
-            .doFinally(signal -> inflightSearchHydrations.remove(bookId))
-            .subscribe(
-                hydrated -> {
-                    if (hydrated != null) {
-                        log.debug("Hydrated Google fallback search result '{}' into canonical record '{}'", bookId, hydrated.getId());
-                    } else {
-                        log.debug("Hydration finished for Google result '{}' with no canonical book emitted", bookId);
-                    }
-                },
-                error -> LoggingUtils.warn(log, error, "Hydration failed for Google fallback search result {}", bookId),
-                () -> log.debug("Hydration completed for Google result '{}'", bookId)
-            );
     }
 
     /**

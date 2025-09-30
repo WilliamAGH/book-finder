@@ -64,7 +64,6 @@ public class NewYorkTimesService {
      * Preferred constructor using BookQueryRepository (THE SINGLE SOURCE OF TRUTH).
      * Spring will automatically inject all dependencies.
      */
-    @Autowired
     public NewYorkTimesService(WebClient.Builder webClientBuilder,
                                @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
                                @Value("${nyt.api.key}") String nytApiKey,
