@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
-import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.S3Paths;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -172,17 +171,23 @@ class S3BookMigrationService {
                             String isbn13 = item.path("primary_isbn13").asText(null);
                             String isbn10 = item.path("primary_isbn10").asText(null);
                             String providerRef = item.path("amazon_product_url").asText(null);
+                            String title = item.path("title").asText(null);
 
+                            // Look up existing book by ISBN, persist minimal if not found
                             Book minimal = new Book();
-                            minimal.setId(isbn13 != null ? isbn13 : (isbn10 != null ? isbn10 : IdGenerator.uuidV7()));
                             minimal.setIsbn13(isbn13);
                             minimal.setIsbn10(isbn10);
-                            minimal.setTitle(item.path("title").asText(null));
+                            minimal.setTitle(title);
                             minimal.setPublisher(item.path("publisher").asText(null));
                             minimal.setExternalImageUrl(item.path("book_image").asText(null));
 
-                            persistenceCallback.accept(minimal, null);
+                            persistenceCallback.accept(minimal, item);
                             String canonicalId = minimal.getId();
+
+                            if (canonicalId == null || canonicalId.isBlank()) {
+                                LOGGER.warn("S3→DB list migration: Failed to persist book for list item with ISBN13={}, ISBN10={}, title='{}'. Skipping join.", isbn13, isbn10, title);
+                                continue;
+                            }
 
                             collectionPersistenceService.upsertListMembership(listId, canonicalId, rank, weeksOnList, isbn13, isbn10, providerRef, item);
                         }
