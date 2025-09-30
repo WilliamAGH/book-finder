@@ -423,16 +423,16 @@
                                         <div class="mt-4 pt-3 border-top" th:if="${affiliateLinks != null and !affiliateLinks.isEmpty()}">
                                             <h5 class="mb-3">Purchase Options</h5>
                                             <div class="d-flex flex-wrap gap-2">
-                                                <a th:if="${affiliateLinks.barnesAndNoble}" th:href="${affiliateLinks.barnesAndNoble}" target="_blank" rel="noopener sponsored" class="btn btn-barnesandnoble btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['barnesAndNoble']}" th:href="${affiliateLinks['barnesAndNoble']}" target="_blank" rel="noopener sponsored" class="btn btn-barnesandnoble btn-affiliate mb-2">
                                                     <i class="fas fa-store me-2"></i> Barnes & Noble
                                                 </a>
-                                                <a th:if="${affiliateLinks.bookshop}" th:href="${affiliateLinks.bookshop}" target="_blank" rel="noopener sponsored" class="btn btn-bookshop btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['bookshop']}" th:href="${affiliateLinks['bookshop']}" target="_blank" rel="noopener sponsored" class="btn btn-bookshop btn-affiliate mb-2">
                                                     <i class="fas fa-shopping-bag me-2"></i> Bookshop.org
                                                 </a>
-                                                <a th:if="${affiliateLinks.audible}" th:href="${affiliateLinks.audible}" target="_blank" rel="noopener sponsored" class="btn btn-audible btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['audible']}" th:href="${affiliateLinks['audible']}" target="_blank" rel="noopener sponsored" class="btn btn-audible btn-affiliate mb-2">
                                                     <i class="fas fa-headphones-alt me-2"></i> Listen on Audible
                                                 </a>
-                                                <a th:if="${affiliateLinks.amazon}" th:href="${affiliateLinks.amazon}" target="_blank" rel="noopener sponsored" class="btn btn-warning btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['amazon']}" th:href="${affiliateLinks['amazon']}" target="_blank" rel="noopener sponsored" class="btn btn-warning btn-affiliate mb-2">
                                                     <i class="fas fa-shopping-cart me-2"></i> View on Amazon.com
                                                 </a>
                                             </div>
