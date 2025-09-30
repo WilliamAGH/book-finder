@@ -15,6 +15,9 @@
       "severity": "ignore"
     },
     "markdownlint.config": {
-      "MD024": false
+      "MD024": false,
+      "MD029": false,
+      "MD036": false,
+      "MD033": false
     }
 }
