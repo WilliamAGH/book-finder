@@ -98,7 +98,6 @@ public class TextUtils {
         StringBuilder result = new StringBuilder();
         
         boolean isFirstWord = true;
-        int wordCount = 0;
         
         for (String word : words) {
             if (word.isBlank() || word.matches("[\\s\\-:;,.]")) {
@@ -107,7 +106,6 @@ public class TextUtils {
                 continue;
             }
 
-            wordCount++;
             String lowerWord = word.toLowerCase();
             String processedWord;
 

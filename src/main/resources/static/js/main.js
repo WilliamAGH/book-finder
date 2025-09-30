@@ -577,8 +577,8 @@ function handleImageFailure() {
             const parsed1 = new URL(url1, window.location.href);
             const parsed2 = new URL(url2, window.location.href);
             return parsed1.origin === parsed2.origin && parsed1.pathname === parsed2.pathname;
-        } catch (e) {
-            // If URL parsing fails, fall back to string comparison
+        } catch (error) {
+            console.debug('[Cover Fallback] URL parsing failed, using string comparison.', error);
             return url1.split('?')[0] === url2.split('?')[0];
         }
     }
