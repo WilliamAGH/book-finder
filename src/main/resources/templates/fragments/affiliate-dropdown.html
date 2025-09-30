@@ -1,7 +1,8 @@
 <div xmlns:th="http://www.thymeleaf.org" th:fragment="affiliateDropdown(affiliateLinks)">
-    <div class="btn-group mb-2 affiliate-dropdown">
+    <!-- Only show dropdown if there are actual affiliate links -->
+    <div class="btn-group mb-2 affiliate-dropdown" th:if="${affiliateLinks != null and !affiliateLinks.isEmpty()}">
         <button type="button" class="btn btn-warning btn-affiliate dropdown-toggle" data-bs-toggle="dropdown" data-bs-display="static" aria-expanded="false">
-            <i class="fas fa-shopping-cart me-2"></i> Amazon.com
+            <i class="fas fa-shopping-cart me-2"></i> Buy Now
         </button>
         <ul class="dropdown-menu">
             <li th:if="${affiliateLinks['amazon']}">
