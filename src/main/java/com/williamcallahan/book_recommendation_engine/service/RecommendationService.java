@@ -212,7 +212,8 @@ public class RecommendationService {
                     .limit(effectiveCount)
                     .collect(Collectors.toList());
                 if (bookDataOrchestrator != null) {
-                    bookDataOrchestrator.hydrateBooksAsync(limitedRecommendations, "RECOMMENDATION", sourceBook.getId());
+                    // Persist recommendations opportunistically to Postgres
+                    bookDataOrchestrator.persistBooksAsync(limitedRecommendations, "RECOMMENDATION");
                 }
 
                 List<String> newRecommendationIds = orderedBooks.stream()

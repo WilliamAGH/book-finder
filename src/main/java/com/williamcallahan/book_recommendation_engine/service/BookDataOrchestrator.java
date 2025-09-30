@@ -375,7 +375,8 @@ public class BookDataOrchestrator {
         return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis))
             .doOnSuccess(results -> {
                 if (!bypassExternalApis && results != null && !results.isEmpty()) {
-                    hydrateBooksAsync(results, "SEARCH", query);
+                    // Persist search results opportunistically to Postgres
+                    persistBooksAsync(results, "SEARCH");
                 }
             });
     }
@@ -430,6 +431,58 @@ public class BookDataOrchestrator {
             .flatMap(Set::stream)
             .collect(Collectors.toCollection(LinkedHashSet::new));
         hydrateIdentifiersAsync(identifiers, context, correlationId);
+    }
+
+    /**
+     * Persists books that were fetched from external APIs during search/recommendations.
+     * This ensures opportunistic upsert: books returned from API calls get saved to Postgres.
+     * 
+     * @param books List of books to persist
+     * @param context Context string for logging (e.g., "SEARCH", "RECOMMENDATION")
+     */
+    public void persistBooksAsync(List<Book> books, String context) {
+        if (books == null || books.isEmpty()) {
+            return;
+        }
+        
+        Mono.fromRunnable(() -> {
+            logger.info("[EXTERNAL-API] [{}] Persisting {} books to Postgres", context, books.size());
+            int successCount = 0;
+            int failureCount = 0;
+            
+            for (Book book : books) {
+                if (book == null || book.getId() == null) {
+                    continue;
+                }
+                
+                try {
+                    ExternalApiLogger.logHydrationStart(logger, context, book.getId(), context);
+                    
+                    // Convert book to JSON for storage
+                    JsonNode bookJson = book.getRawJsonResponse() != null && !book.getRawJsonResponse().isBlank()
+                        ? objectMapper.readTree(book.getRawJsonResponse())
+                        : objectMapper.valueToTree(book);
+                    
+                    // Persist using the same method as individual fetches
+                    persistBook(book, bookJson, false);
+                    
+                    ExternalApiLogger.logHydrationSuccess(logger, context, book.getId(), book.getId(), "POSTGRES_UPSERT");
+                    successCount++;
+                } catch (Exception ex) {
+                    ExternalApiLogger.logHydrationFailure(logger, context, book.getId(), ex.getMessage());
+                    failureCount++;
+                    logger.warn("Failed to persist book {} from {}: {}", book.getId(), context, ex.getMessage());
+                }
+            }
+            
+            logger.info("[EXTERNAL-API] [{}] Persistence complete: {} succeeded, {} failed", 
+                context, successCount, failureCount);
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .subscribe(
+            ignored -> { },
+            error -> logger.error("Background persistence failed for context {}: {}", context, error.getMessage())
+        );
     }
 
     public void hydrateIdentifiersAsync(Collection<String> identifiers, String context, String correlationId) {
