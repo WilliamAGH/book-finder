@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Consolidated sitemap refresh job that warms Postgres queries, persists S3 artefacts, and hydrates external data.
@@ -48,6 +49,18 @@ public class SitemapRefreshScheduler {
             return;
         }
 
+        int maxJitterSeconds = sitemapProperties.getSchedulerJitterSeconds();
+        long jitterSeconds = maxJitterSeconds > 0
+                ? ThreadLocalRandom.current().nextLong(0, maxJitterSeconds + 1L)
+                : 0L;
+        if (jitterSeconds > 0) {
+            try {
+                Thread.sleep(jitterSeconds * 1000L);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
         Instant start = Instant.now();
         log.info("Sitemap refresh scheduler started.");
 
@@ -62,6 +75,13 @@ public class SitemapRefreshScheduler {
         BookSitemapService.SnapshotSyncResult snapshotResult = bookSitemapService.synchronizeSnapshot();
         List<BookSitemapItem> books = snapshotResult.snapshot().books();
 
+        boolean cachesCleared = sitemapService.refreshSitemapCachesIfDatasetChanged();
+        if (cachesCleared) {
+            sitemapService.getBooksXmlPageCount();
+            sitemapService.getBookSitemapPageMetadata();
+            sitemapService.getAuthorSitemapPageMetadata();
+        }
+
         int coverSampleSize = PagingUtils.atLeast(sitemapProperties.getSchedulerCoverSampleSize(), 0);
         int externalHydrationLimit = PagingUtils.atLeast(sitemapProperties.getSchedulerExternalHydrationSize(), 0);
 
@@ -70,13 +90,14 @@ public class SitemapRefreshScheduler {
         int coverWarmups = warmCoverAssets(books, coverSampleSize);
 
         Duration elapsed = Duration.between(start, Instant.now());
-        log.info("Sitemap refresh scheduler finished in {}s (books={}, s3Upload={}, hydration={{attempted:{}, success:{}}}, coverWarmups={}).",
+        log.info("Sitemap refresh scheduler finished in {}s (books={}, s3Upload={}, hydration={{attempted:{}, success:{}}}, coverWarmups={}, cachesRefreshed={}).",
                 elapsed.toSeconds(),
                 books.size(),
                 snapshotResult.uploaded(),
                 hydrationSummary.attempted(),
                 hydrationSummary.succeeded(),
-                coverWarmups);
+                coverWarmups,
+                cachesCleared);
     }
 
     private int warmCoverAssets(List<BookSitemapItem> candidates, int limit) {
