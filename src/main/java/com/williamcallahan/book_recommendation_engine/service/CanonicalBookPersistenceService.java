@@ -254,27 +254,33 @@ public class CanonicalBookPersistenceService {
         java.util.Date published = book.getPublishedDate();
         Date sqlDate = published != null ? new Date(published.getTime()) : null;
 
+        String isbn10 = book.getIsbn10();
+        String isbn13 = book.getIsbn13();
+        // Convert empty strings to NULL to avoid unique constraint violations on partial indexes
+        if (isbn10 != null && isbn10.isBlank()) isbn10 = null;
+        if (isbn13 != null && isbn13.isBlank()) isbn13 = null;
+        
         jdbcTemplate.update(
             "INSERT INTO books (id, title, subtitle, description, isbn10, isbn13, published_date, language, publisher, page_count, slug, created_at, updated_at) " +
             "VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
             "ON CONFLICT (id) DO UPDATE SET " +
             "title = EXCLUDED.title, " +
-            "subtitle = COALESCE(EXCLUDED.subtitle, books.subtitle), " +
-            "description = COALESCE(EXCLUDED.description, books.description), " +
-            "isbn10 = COALESCE(EXCLUDED.isbn10, books.isbn10), " +
-            "isbn13 = COALESCE(EXCLUDED.isbn13, books.isbn13), " +
+            "subtitle = COALESCE(NULLIF(EXCLUDED.subtitle, ''), books.subtitle), " +
+            "description = COALESCE(NULLIF(EXCLUDED.description, ''), books.description), " +
+            "isbn10 = COALESCE(NULLIF(EXCLUDED.isbn10, ''), books.isbn10), " +
+            "isbn13 = COALESCE(NULLIF(EXCLUDED.isbn13, ''), books.isbn13), " +
             "published_date = COALESCE(EXCLUDED.published_date, books.published_date), " +
-            "language = COALESCE(EXCLUDED.language, books.language), " +
-            "publisher = COALESCE(EXCLUDED.publisher, books.publisher), " +
+            "language = COALESCE(NULLIF(EXCLUDED.language, ''), books.language), " +
+            "publisher = COALESCE(NULLIF(EXCLUDED.publisher, ''), books.publisher), " +
             "page_count = COALESCE(EXCLUDED.page_count, books.page_count), " +
-            "slug = COALESCE(EXCLUDED.slug, books.slug), " +
+            "slug = COALESCE(NULLIF(EXCLUDED.slug, ''), books.slug), " +
             "updated_at = NOW()",
             book.getId(),
             book.getTitle(),
             null,
             book.getDescription(),
-            book.getIsbn10(),
-            book.getIsbn13(),
+            isbn10,
+            isbn13,
             sqlDate,
             book.getLanguage(),
             book.getPublisher(),
