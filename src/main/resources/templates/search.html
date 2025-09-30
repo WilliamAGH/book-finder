@@ -507,6 +507,14 @@
         }
         
         function performSearch(query, startIndex, sortBy, coverSource, resolution, year) {
+            // Ensure WebSocket client is ready
+            try {
+                if (!window._searchStompClient) {
+                    var socket = new SockJS('/ws');
+                    window._searchStompClient = Stomp.over(socket);
+                    window._searchStompClient.connect({}, function(){ console.log('[WS] Search client connected'); });
+                }
+            } catch (e) { console.warn('Search WS init failed:', e); }
             if (!query) return;
             
             // Show loading indicator and completely hide results container
@@ -554,6 +562,16 @@
                     console.log("Set year input field to", year);
                 }
             }
+            
+            // Subscribe to search WS topics for this query
+            try {
+                const queryHash = (query || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '_');
+                if (window._searchStompClient && window._searchWsQuery !== queryHash) {
+                    window._searchWsQuery = queryHash;
+                    window._searchStompClient.subscribe(`/topic/search/${queryHash}/progress`, function(msg){ try{ console.log('[WS][progress]', JSON.parse(msg.body)); } catch(e){} });
+                    window._searchStompClient.subscribe(`/topic/search/${queryHash}/results`, function(msg){ try{ console.log('[WS][results]', JSON.parse(msg.body)); } catch(e){} });
+                }
+            } catch (e) { console.warn('Search WS subscribe failed:', e); }
             
             fetch(apiUrl)
                 .then(response => {
