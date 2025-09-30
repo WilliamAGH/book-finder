@@ -1003,6 +1003,14 @@ class BookMigrator {
   }
 
   /**
+   * Normalize HTTP URLs to HTTPS for security
+   */
+  normalizeToHttps(url) {
+    if (!url) return url;
+    return url.startsWith('http://') ? url.replace('http://', 'https://') : url;
+  }
+
+  /**
    * Insert categories
    */
   async insertCategories(bookId, categories) {
