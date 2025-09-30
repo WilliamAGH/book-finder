@@ -181,30 +181,24 @@ class TieredBookSearchServiceAuthorSearchTest {
     private GoogleApiFetcher googleApiFetcher;
 
     @Mock
-    private GoogleBooksService googleBooksService;
-
-    @Mock
     private OpenLibraryBookDataService openLibraryBookDataService;
 
     private TieredBookSearchService service;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() {
         service = new TieredBookSearchService(
             bookSearchService,
             googleApiFetcher,
-            googleBooksService,
             openLibraryBookDataService,
             null,
-            null,  // CanonicalBookPersistenceService (not needed for these tests)
-            new ObjectMapper(),  // ObjectMapper for JSON parsing
-            true,  // externalFallbackEnabled
-            false  // persistSearchResults (disabled for tests to avoid side effects)
+            true
         );
 
         lenient().when(googleApiFetcher.isGoogleFallbackEnabled()).thenReturn(true);
         lenient().when(googleApiFetcher.isApiKeyAvailable()).thenReturn(false);
-        lenient().when(googleBooksService.streamBooksReactive(anyString(), any(), anyInt(), anyString()))
+        lenient().when(googleApiFetcher.streamSearchItems(anyString(), anyInt(), anyString(), any(), anyBoolean()))
             .thenReturn(Flux.empty());
         lenient().when(openLibraryBookDataService.searchBooks(anyString(), anyBoolean())).thenReturn(Flux.empty());
     }
@@ -222,7 +216,7 @@ class TieredBookSearchServiceAuthorSearchTest {
 
         assertThat(results).isNotNull();
         assertThat(results).containsExactlyElementsOf(postgres);
-        verify(googleBooksService, never()).streamBooksReactive(anyString(), any(), anyInt(), anyString());
+        verify(googleApiFetcher, never()).streamSearchItems(anyString(), anyInt(), anyString(), any(), anyBoolean());
         verify(openLibraryBookDataService, never()).searchBooks(anyString(), anyBoolean());
     }
 
@@ -230,10 +224,10 @@ class TieredBookSearchServiceAuthorSearchTest {
     void searchAuthors_fallsBackToExternalWhenPostgresEmpty() {
         when(bookSearchService.searchAuthors(eq("Ann Patchett"), any())).thenReturn(List.of());
 
-        when(googleBooksService.streamBooksReactive(eq("inauthor:Ann Patchett"), any(), anyInt(), anyString()))
+        when(googleApiFetcher.streamSearchItems(eq("inauthor:Ann Patchett"), anyInt(), anyString(), any(), eq(false)))
             .thenReturn(Flux.just(
-                buildExternalBook("g-1", "Ann Patchett", 0.82),
-                buildExternalBook("g-2", "Another Author", 0.58)
+                buildGoogleVolume("g-1", "Ann Patchett", 0.82),
+                buildGoogleVolume("g-2", "Another Author", 0.58)
             ));
 
         when(openLibraryBookDataService.searchBooks(eq("Ann Patchett"), anyBoolean()))
@@ -257,10 +251,10 @@ class TieredBookSearchServiceAuthorSearchTest {
 
         when(bookSearchService.searchAuthors(eq("Shared Author"), any())).thenReturn(postgres);
 
-        when(googleBooksService.streamBooksReactive(eq("Shared Author"), any(), anyInt(), anyString()))
+        when(googleApiFetcher.streamSearchItems(eq("Shared Author"), anyInt(), anyString(), any(), eq(false)))
             .thenReturn(Flux.just(
-                buildExternalBook("g-3", "Shared Author", 0.41),
-                buildExternalBook("g-4", "New Contributor", 0.63)
+                buildGoogleVolume("g-3", "Shared Author", 0.41),
+                buildGoogleVolume("g-4", "New Contributor", 0.63)
             ));
 
         List<BookSearchService.AuthorResult> results = service.searchAuthors("Shared Author", 3).block();
@@ -284,5 +278,13 @@ class TieredBookSearchServiceAuthorSearchTest {
         book.setAuthors(List.of(authorName));
         book.addQualifier("search.relevanceScore", relevance);
         return book;
+    }
+
+    private JsonNode buildGoogleVolume(String id, String authorName, double relevance) {
+        try {
+            return objectMapper.readTree(String.format("{\n  \"id\": \"%s\",\n  \"volumeInfo\": {\n    \"title\": \"Title %s\",\n    \"authors\": [\"%s\"]\n  },\n  \"qualifiers\": {\n    \"search.relevanceScore\": %s\n  }\n}", id, id, authorName, Double.toString(relevance)));
+        } catch (Exception exception) {
+            throw new RuntimeException("Failed to build Google volume JSON", exception);
+        }
     }
 }
