@@ -149,6 +149,12 @@ public class PostgresBookRepository {
                 hydrateCover(book, canonicalId);
                 hydrateRecommendations(book, canonicalId);
                 hydrateProviderMetadata(book, canonicalId);
+                
+                // Set retrieval metadata for development mode tracking
+                book.setRetrievedFrom("POSTGRES");
+                book.setInPostgres(true);
+                // Data source will be determined from collections/provider metadata
+                hydrateDataSource(book, canonicalId);
 
                 return Optional.of(book);
             });
@@ -231,7 +237,7 @@ public class PostgresBookRepository {
 
     private void hydrateDimensions(Book book, UUID canonicalId) {
         String sql = """
-                SELECT height_cm, width_cm, thickness_cm, weight_grams
+                SELECT height, width, thickness, weight_grams
                 FROM book_dimensions
                 WHERE book_id = ?::uuid
                 LIMIT 1
@@ -241,9 +247,9 @@ public class PostgresBookRepository {
                 if (!rs.next()) {
                     return null;
                 }
-                book.setHeightCm(toDouble(rs.getBigDecimal("height_cm")));
-                book.setWidthCm(toDouble(rs.getBigDecimal("width_cm")));
-                book.setThicknessCm(toDouble(rs.getBigDecimal("thickness_cm")));
+                book.setHeightCm(toDouble(rs.getBigDecimal("height")));
+                book.setWidthCm(toDouble(rs.getBigDecimal("width")));
+                book.setThicknessCm(toDouble(rs.getBigDecimal("thickness")));
                 book.setWeightGrams(toDouble(rs.getBigDecimal("weight_grams")));
                 return null;
             });
@@ -515,6 +521,44 @@ public class PostgresBookRepository {
         }
     }
 
+    private void hydrateDataSource(Book book, UUID canonicalId) {
+        // Check if book is part of NYT bestseller list
+        String nytCheck = """
+                SELECT 1
+                FROM book_collections_join bcj
+                JOIN book_collections bc ON bc.id = bcj.collection_id
+                WHERE bcj.book_id = ?
+                  AND bc.source = 'NYT'
+                LIMIT 1
+                """;
+        try {
+            List<Integer> nytResults = jdbcTemplate.query(nytCheck, ps -> ps.setObject(1, canonicalId), (rs, rowNum) -> 1);
+            if (!nytResults.isEmpty()) {
+                book.setDataSource("NYT");
+                return;
+            }
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to check NYT source for {}: {}", canonicalId, ex.getMessage());
+        }
+        
+        // Check external provider IDs to determine primary data source
+        String providerCheck = """
+                SELECT source
+                FROM book_external_ids
+                WHERE book_id = ?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """;
+        try {
+            List<String> sources = jdbcTemplate.query(providerCheck, ps -> ps.setObject(1, canonicalId), (rs, rowNum) -> rs.getString("source"));
+            if (!sources.isEmpty()) {
+                book.setDataSource(sources.get(0));
+            }
+        } catch (DataAccessException ex) {
+            LOG.debug("Failed to check provider source for {}: {}", canonicalId, ex.getMessage());
+        }
+    }
+    
     private Optional<UUID> queryForUuid(String sql, Object param) {
         try {
             UUID result = jdbcTemplate.queryForObject(sql, UUID.class, param);

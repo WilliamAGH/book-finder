@@ -151,7 +151,12 @@ public class S3StorageService {
      * @param jsonContent The JSON string to upload.
      * @return A CompletableFuture<Void> that completes when the upload is finished or fails.
      */
-    public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. JSON book payloads are no longer
+ * written to S3. This API will be removed in version 1.0. S3 image uploads are unaffected.
+ */
+@Deprecated
+public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot upload JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
             return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
@@ -166,7 +171,12 @@ public class S3StorageService {
      * @param volumeId The Google Books volume ID, used to construct the S3 key.
      * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found
      */
-    public CompletableFuture<S3FetchResult<String>> fetchJsonAsync(String volumeId) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. JSON book payloads are no longer
+ * fetched from S3 at runtime. This API will be removed in version 1.0. S3 image reads are unaffected.
+ */
+@Deprecated
+public CompletableFuture<S3FetchResult<String>> fetchJsonAsync(String volumeId) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot fetch JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
@@ -183,7 +193,12 @@ public class S3StorageService {
      * @param gzipCompress true to GZIP compress the content before uploading, false otherwise
      * @return A CompletableFuture<Void> that completes when the upload is finished or fails
      */
-    public CompletableFuture<Void> uploadGenericJsonAsync(String keyName, String jsonContent, boolean gzipCompress) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Generic JSON storage in S3 will be removed
+ * in version 1.0. This does not impact S3 image storage APIs.
+ */
+@Deprecated
+public CompletableFuture<Void> uploadGenericJsonAsync(String keyName, String jsonContent, boolean gzipCompress) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot upload generic JSON to key: {}. S3 may be disabled or misconfigured.", keyName);
             return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
@@ -235,7 +250,12 @@ public class S3StorageService {
      * @param keyName The full S3 key (path/filename) from which to fetch the JSON.
      * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found.
      */
-    public CompletableFuture<S3FetchResult<String>> fetchGenericJsonAsync(String keyName) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Generic JSON fetches from S3 will be removed
+ * in version 1.0. This does not impact S3 image storage APIs.
+ */
+@Deprecated
+public CompletableFuture<S3FetchResult<String>> fetchGenericJsonAsync(String keyName) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot fetch generic JSON from key: {}. S3 may be disabled or misconfigured.", keyName);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
@@ -271,7 +291,10 @@ public class S3StorageService {
                 logger.info("Successfully fetched generic JSON from S3 key {}", keyName);
                 return S3FetchResult.success(jsonString);
             } catch (NoSuchKeyException e) {
-                logger.debug("Generic JSON not found in S3 for key {}: {}", keyName, e.getMessage());
+                // TRACE level: 404s are expected for new books not yet cached in S3
+                if (logger.isTraceEnabled()) {
+                    logger.trace("Generic JSON not found in S3 for key {}: {}", keyName, e.getMessage());
+                }
                 return S3FetchResult.notFound();
             } catch (Exception e) { 
                 logger.error("Error fetching generic JSON from S3 for key {}: {}", keyName, e.getMessage(), e);

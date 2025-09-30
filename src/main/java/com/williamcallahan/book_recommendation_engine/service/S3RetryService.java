@@ -61,7 +61,12 @@ public class S3RetryService {
      * @param volumeId The Google Books volume ID to fetch
      * @return A CompletableFuture that completes with the S3 fetch result
      */
-    public CompletableFuture<S3FetchResult<String>> fetchJsonWithRetry(String volumeId) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Runtime S3 JSON fetch retries will be removed
+ * in version 1.0. Cover image S3 operations remain supported.
+ */
+@Deprecated
+public CompletableFuture<S3FetchResult<String>> fetchJsonWithRetry(String volumeId) {
         return fetchJsonWithRetryInternal(volumeId, 0, initialBackoffMs);
     }
 
@@ -124,7 +129,12 @@ public class S3RetryService {
      * @param jsonContent The JSON content to upload
      * @return A CompletableFuture that completes when the upload is done
      */
-    public CompletableFuture<Void> uploadJsonWithRetry(String volumeId, String jsonContent) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Runtime S3 JSON upload retries will be
+ * removed in version 1.0. Cover image S3 operations remain supported.
+ */
+@Deprecated
+public CompletableFuture<Void> uploadJsonWithRetry(String volumeId, String jsonContent) {
         return uploadJsonWithRetryInternal(volumeId, jsonContent, 0, initialBackoffMs);
     }
 
@@ -173,7 +183,12 @@ public class S3RetryService {
      * @param book The book with updated qualifiers to persist
      * @return A CompletableFuture that completes when the update is done
      */
-    public CompletableFuture<Void> updateBookJsonWithRetry(Book book) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Runtime S3 JSON updates will be removed
+ * in version 1.0. Cover image S3 operations remain supported.
+ */
+@Deprecated
+public CompletableFuture<Void> updateBookJsonWithRetry(Book book) {
         if (book == null || book.getId() == null) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException("Cannot update S3 book data: Book or Book ID is null"));

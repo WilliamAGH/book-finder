@@ -214,6 +214,8 @@ public class RecommendationService {
                 if (bookDataOrchestrator != null) {
                     // Persist recommendations opportunistically to Postgres
                     bookDataOrchestrator.persistBooksAsync(limitedRecommendations, "RECOMMENDATION");
+                    // Hydrate recommendations to ensure full metadata (authors, dimensions, etc.) before returning
+                    bookDataOrchestrator.hydrateBooksAsync(limitedRecommendations, "RECOMMENDATION_API", sourceBook.getId());
                 }
 
                 List<String> newRecommendationIds = orderedBooks.stream()

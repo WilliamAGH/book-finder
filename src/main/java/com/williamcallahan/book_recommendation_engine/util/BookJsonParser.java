@@ -14,6 +14,8 @@ package com.williamcallahan.book_recommendation_engine.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
+import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,12 +35,22 @@ import java.util.Locale;
 public class BookJsonParser {
 
     private static final Logger logger = LoggerFactory.getLogger(BookJsonParser.class);
+    
+    // GoogleBooksMapper is THE SSOT for parsing Google Books JSON
+    // BookJsonParser now delegates to it for consistency
+    private static final GoogleBooksMapper googleBooksMapper = new GoogleBooksMapper();
     private static final Pattern EDITION_WORD_PATTERN = Pattern.compile("(\\d+)(?:st|nd|rd|th)?\\s*(?:edition|ed\\b)", Pattern.CASE_INSENSITIVE);
     private static final Pattern TRAILING_NUMBER_PATTERN = Pattern.compile("(\\d+)(?:\\.\\d+)*$");
     private static final Pattern QUALIFIER_NORMALIZE_PATTERN = Pattern.compile("[^a-z0-9]+");
 
     /**
-     * Converts Google Books API JSON to Book object
+     * Converts Google Books API JSON to Book object.
+     * <p>
+     * REFACTORED: Now delegates to GoogleBooksMapper (SSOT) for parsing,
+     * then converts BookAggregate → Book via BookAggregateToBookConverter.
+     * <p>
+     * This ensures consistency: both old path (this method) and new path
+     * (BookUpsertService) use GoogleBooksMapper as single source of truth.
      *
      * @param item JsonNode with volume data
      * @return Populated Book object or null if input is null
@@ -48,14 +60,60 @@ public class BookJsonParser {
             logger.warn("Input JsonNode is null. Cannot convert to Book.");
             return null;
         }
-
+        
+        // Check if this looks like Google Books JSON
+        boolean isGoogleBooks = item.has("volumeInfo") || 
+                               (item.has("kind") && item.get("kind").asText("").contains("books#volume"));
+        
+        if (!isGoogleBooks) {
+            // Not Google Books format - fall back to legacy parsing
+            logger.debug("Non-Google Books JSON detected, using legacy parsing");
+            return convertJsonToBookLegacy(item);
+        }
+        
+        try {
+            // NEW PATH: Use GoogleBooksMapper (SSOT) to parse
+            BookAggregate aggregate = googleBooksMapper.map(item);
+            
+            if (aggregate == null) {
+                logger.warn("GoogleBooksMapper returned null for JSON: {}", item.has("id") ? item.get("id").asText() : "UNKNOWN");
+                // Fallback to legacy parsing
+                return convertJsonToBookLegacy(item);
+            }
+            
+            // Convert BookAggregate → Book
+            Book book = BookAggregateToBookConverter.convert(aggregate);
+            
+            if (book != null) {
+                // Preserve raw JSON (not in BookAggregate)
+                book.setRawJsonResponse(item.toString());
+                
+                // Apply legacy-specific logic that's not in BookAggregate yet
+                extractQualifiersFromItem(item, book);
+                normalizeQualifierKeys(book);
+                applyEditionMetadata(item, book);
+            }
+            
+            return book;
+            
+        } catch (Exception e) {
+            logger.warn("Error using GoogleBooksMapper for JSON, falling back to legacy: {}", e.getMessage());
+            return convertJsonToBookLegacy(item);
+        }
+    }
+    
+    /**
+     * Legacy conversion method (fallback only).
+     * Used when GoogleBooksMapper fails or for non-Google Books JSON.
+     */
+    private static Book convertJsonToBookLegacy(JsonNode item) {
         Book book = new Book();
-        book.setRawJsonResponse(item.toString()); // Store raw JSON
+        book.setRawJsonResponse(item.toString());
 
         extractBookBaseInfo(item, book);
         setAdditionalFields(item, book);
         setLinks(item, book);
-        extractQualifiersFromItem(item, book); // Extract qualifiers if present
+        extractQualifiersFromItem(item, book);
         normalizeQualifierKeys(book);
         applyEditionMetadata(item, book);
 

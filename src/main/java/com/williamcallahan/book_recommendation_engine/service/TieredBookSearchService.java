@@ -132,6 +132,12 @@ public class TieredBookSearchService {
                 List<Book> baseline = postgresHits == null ? List.of() : postgresHits;
                 Flux<Book> postgresFlux = Flux.fromIterable(baseline);
 
+                if (!baseline.isEmpty()) {
+                    // Always publish baseline results and persist them
+                    safePublish(new SearchResultsUpdatedEvent(query, baseline, "POSTGRES", baseline.size(), queryHash, false));
+                    persistBatch(baseline);
+                }
+
                 if (!externalFallbackEnabled || bypassExternalApis) {
                     if (bypassExternalApis) {
                         LOGGER.info("TieredBookSearch: External APIs bypassed for '{}' — streaming {} Postgres result(s) only.", query, baseline.size());
@@ -145,6 +151,10 @@ public class TieredBookSearchService {
                 boolean satisfied = !baseline.isEmpty() && baseline.size() >= desiredTotalResults;
                 if (satisfied) {
                     LOGGER.info("TieredBookSearch: Postgres fully satisfied '{}' with {} result(s); external fallback skipped.", query, baseline.size());
+                    if (!baseline.isEmpty()) {
+                        safePublish(new SearchResultsUpdatedEvent(query, baseline, "POSTGRES", baseline.size(), queryHash, true));
+                        persistBatch(baseline);
+                    }
                     safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.COMPLETE, "Search complete (satisfied by Postgres)", queryHash));
                     return postgresFlux.take(desiredTotalResults);
                 }

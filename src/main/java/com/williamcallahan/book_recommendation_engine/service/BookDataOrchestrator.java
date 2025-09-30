@@ -12,6 +12,8 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import org.springframework.stereotype.Service;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -27,7 +29,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.lang.Nullable;
-import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -62,9 +63,26 @@ public class BookDataOrchestrator {
     private final TieredBookSearchService tieredBookSearchService;
     @Autowired(required = false)
     private S3StorageService s3StorageService; // Optional S3 layer
+    @Autowired(required = false)
+    private BookUpsertService bookUpsertService; // New SSOT for writes (Phase 2)
+    @Autowired(required = false)
+    private com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper googleBooksMapper; // For Book->BookAggregate mapping
     private static final long SEARCH_VIEW_REFRESH_INTERVAL_MS = 60_000L;
     private final AtomicLong lastSearchViewRefresh = new AtomicLong(0L);
     private final boolean externalFallbackEnabled;
+    private final boolean asyncBackfillEnabled;
+    /**
+     * @deprecated S3 JSON fallback is deprecated. Use Postgres-first retrieval.
+     * Will be removed in version 1.0.
+     */
+    @Deprecated
+    private final boolean s3FallbackEnabled;
+    /**
+     * @deprecated S3 JSON cache writes are deprecated. Use Postgres as the source of truth.
+     * Will be removed in version 1.0.
+     */
+    @Deprecated
+    private final boolean s3JsonCacheEnabled;
 
     public BookDataOrchestrator(S3RetryService s3RetryService,
                                 GoogleApiFetcher googleApiFetcher,
@@ -78,7 +96,10 @@ public class BookDataOrchestrator {
                                 @Nullable PostgresBookRepository postgresBookRepository,
                                 @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService,
                                 @Lazy @Nullable TieredBookSearchService tieredBookSearchService,
-                                @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
+                                @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
+                                @Value("${app.features.async-backfill.enabled:false}") boolean asyncBackfillEnabled,
+                                @Value("${app.features.s3-fallback.enabled:false}") boolean s3FallbackEnabled,
+                                @Value("${app.features.s3-json-cache.enabled:false}") boolean s3JsonCacheEnabled) {
         this.s3RetryService = s3RetryService;
         this.googleApiFetcher = googleApiFetcher;
         this.objectMapper = objectMapper;
@@ -92,6 +113,17 @@ public class BookDataOrchestrator {
         this.canonicalBookPersistenceService = canonicalBookPersistenceService;
         this.tieredBookSearchService = tieredBookSearchService;
         this.externalFallbackEnabled = externalFallbackEnabled;
+        this.asyncBackfillEnabled = asyncBackfillEnabled;
+        this.s3FallbackEnabled = s3FallbackEnabled;
+        this.s3JsonCacheEnabled = s3JsonCacheEnabled;
+        // Startup validation logs
+        if (this.canonicalBookPersistenceService == null) {
+            logger.warn("BookDataOrchestrator: CanonicalBookPersistenceService is NOT configured. Persistence will be disabled (legacy path).");
+        }
+        if (this.asyncBackfillEnabled && (this.bookUpsertService == null || this.googleBooksMapper == null)) {
+            logger.warn("BookDataOrchestrator: async-backfill is ENABLED but required services are missing (bookUpsertService={}, googleBooksMapper={}). Falling back to legacy persistence.",
+                this.bookUpsertService != null, this.googleBooksMapper != null);
+        }
     }
 
     public void refreshSearchView() {
@@ -207,7 +239,8 @@ public class BookDataOrchestrator {
                     .flatMap(book -> {
                         try {
                             logger.info("BookDataOrchestrator: Tier 5 OpenLibrary HIT for {}. Title: {}", bookId, book.getTitle());
-                            return Mono.just(objectMapper.valueToTree(book));
+                            JsonNode bookNode = objectMapper.valueToTree(book);
+                            return Mono.just(bookNode);
                         } catch (IllegalArgumentException e) {
                             LoggingUtils.error(logger, e, "Error converting OpenLibrary Book to JsonNode for {}", bookId);
                             return Mono.<JsonNode>empty();
@@ -242,12 +275,23 @@ public class BookDataOrchestrator {
                 return Mono.<Book>empty(); 
             }
             // Use the canonical ID from the aggregated book for S3 storage
-            String s3StorageKey = finalBook.getId();
+            final String s3StorageKey = finalBook.getId();
+            final Book bookToReturn = finalBook;
             logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
-            // Persist to DB first (and external ids) before S3
-            return Mono.fromRunnable(() -> persistBook(finalBook, aggregatedJson, false))
+            
+            // Set retrieval metadata - determine which API provided the data
+            bookToReturn.setRetrievedFrom("GOOGLE_BOOKS_API"); // Primary API source
+            bookToReturn.setDataSource("GOOGLE_BOOKS"); // Data source
+            bookToReturn.setInPostgres(false); // Not yet persisted
+            
+            // Persist to DB first (and external ids) before any optional S3 cache
+            return Mono.fromCallable(() -> persistBook(bookToReturn, aggregatedJson, false))
                 .subscribeOn(Schedulers.boundedElastic())
-                .then(bookS3CacheService.updateCache(finalBook, aggregatedJson, "Aggregated", s3StorageKey));
+                .doOnNext(success -> bookToReturn.setInPostgres(Boolean.TRUE.equals(success)))
+                .then(Mono.defer(() -> s3JsonCacheEnabled
+                    ? bookS3CacheService.updateCache(bookToReturn, aggregatedJson, "Aggregated", s3StorageKey)
+                    : Mono.empty()))
+                .thenReturn(bookToReturn);
         });
     }
 
@@ -276,9 +320,9 @@ public class BookDataOrchestrator {
         .subscribeOn(Schedulers.boundedElastic())
         .flatMap(b -> b != null ? Mono.just(b) : Mono.empty());
 
-        // Tier 2: S3
+        // Tier 2: S3 (disabled by default post-migration)
         Mono<Book> tier2Mono;
-        if (externalFallbackEnabled) {
+        if (s3FallbackEnabled) {
             tier2Mono = Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(bookId))
                 .flatMap(s3Result -> {
                     if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
@@ -287,9 +331,13 @@ public class BookDataOrchestrator {
                             Book bookFromS3 = BookJsonParser.convertJsonToBook(s3JsonNode);
                             if (bookFromS3 != null && bookFromS3.getId() != null) {
                                 logger.info("BookDataOrchestrator: Tier 2 S3 HIT for book ID: {}. Title: {}", bookId, bookFromS3.getTitle());
-                                // Warm DB for future direct hits
-                            persistBook(bookFromS3, s3JsonNode, false);
-                            return Mono.just(bookFromS3);
+                                // Set retrieval metadata
+                                bookFromS3.setRetrievedFrom("S3");
+                                bookFromS3.setDataSource("GOOGLE_BOOKS"); // S3 primarily stores Google Books data
+                                // Persist first, then set flag accurately
+                                boolean persisted = persistBook(bookFromS3, s3JsonNode, false);
+                                bookFromS3.setInPostgres(persisted);
+                                return Mono.just(bookFromS3);
                             }
                             logger.warn("BookDataOrchestrator: S3 data for {} parsed to null/invalid book.", bookId);
                         } catch (Exception e) {
@@ -327,7 +375,10 @@ public class BookDataOrchestrator {
         if (slug == null || slug.isBlank()) {
             return Mono.empty();
         }
-        return Mono.fromCallable(() -> findInDatabaseBySlug(slug).map(Book::getId).orElse(null))
+        return Mono.fromCallable(() -> {
+                    Optional<Book> bookOpt = findInDatabaseBySlug(slug);
+                    return bookOpt.map(Book::getId).orElse(null);
+                })
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(canonicalId -> canonicalId == null ? Mono.empty() : getBookByIdTiered(canonicalId));
     }
@@ -457,6 +508,7 @@ public class BookDataOrchestrator {
         
         Mono.fromRunnable(() -> {
             logger.info("[EXTERNAL-API] [{}] Persisting {} books to Postgres - RUNNABLE EXECUTING", context, books.size());
+            long start = System.currentTimeMillis();
             int successCount = 0;
             int failureCount = 0;
             
@@ -475,16 +527,24 @@ public class BookDataOrchestrator {
                     ExternalApiLogger.logHydrationStart(logger, context, book.getId(), context);
                     
                     // Convert book to JSON for storage
-                    JsonNode bookJson = book.getRawJsonResponse() != null && !book.getRawJsonResponse().isBlank()
-                        ? objectMapper.readTree(book.getRawJsonResponse())
-                        : objectMapper.valueToTree(book);
+                    JsonNode bookJson;
+                    if (book.getRawJsonResponse() != null && !book.getRawJsonResponse().isBlank()) {
+                        bookJson = objectMapper.readTree(book.getRawJsonResponse());
+                    } else {
+                        bookJson = objectMapper.valueToTree(book);
+                    }
                     
                     logger.debug("[EXTERNAL-API] [{}] Calling persistBook for id={}", context, book.getId());
                     // Persist using the same method as individual fetches
-                    persistBook(book, bookJson, false);
+                    boolean ok = persistBook(book, bookJson, false);
                     
-                    ExternalApiLogger.logHydrationSuccess(logger, context, book.getId(), book.getId(), "POSTGRES_UPSERT");
-                    successCount++;
+                    if (ok) {
+                        ExternalApiLogger.logHydrationSuccess(logger, context, book.getId(), book.getId(), "POSTGRES_UPSERT");
+                        successCount++;
+                    } else {
+                        failureCount++;
+                        logger.warn("[EXTERNAL-API] [{}] Persist returned false for id={}", context, book.getId());
+                    }
                     logger.debug("[EXTERNAL-API] [{}] Successfully persisted book id={}", context, book.getId());
                 } catch (Exception ex) {
                     ExternalApiLogger.logHydrationFailure(logger, context, book.getId(), ex.getMessage());
@@ -493,8 +553,9 @@ public class BookDataOrchestrator {
                 }
             }
             
-            logger.info("[EXTERNAL-API] [{}] Persistence complete: {} succeeded, {} failed", 
-                context, successCount, failureCount);
+            long elapsed = System.currentTimeMillis() - start;
+            logger.info("[EXTERNAL-API] [{}] Persistence complete: {} succeeded, {} failed ({} ms)", 
+                context, successCount, failureCount, elapsed);
         })
         .subscribeOn(Schedulers.boundedElastic())
         .doOnSubscribe(sub -> logger.info("[EXTERNAL-API] [{}] Mono subscribed for persistence", context))
@@ -754,9 +815,56 @@ public class BookDataOrchestrator {
         ));
     }
 
-    private void persistBook(Book book, JsonNode sourceJson, boolean enrich) {
+    /**
+     * Persists book to database.
+     * <p>
+     * PHASE 3 MIGRATION: Uses BookUpsertService when async-backfill feature flag is enabled.
+     * Falls back to legacy CanonicalBookPersistenceService when disabled.
+     * <p>
+     * Feature flag: app.features.async-backfill.enabled
+     * - true: Uses BookUpsertService (new SSOT for writes with UPSERT + outbox events)
+     * - false: Uses CanonicalBookPersistenceService (legacy persistence path)
+     */
+    private boolean persistBook(Book book, JsonNode sourceJson, boolean enrich) {
+        // PHASE 3: Feature-flagged migration to BookUpsertService
+        if (asyncBackfillEnabled && bookUpsertService != null && googleBooksMapper != null) {
+            try {
+                // Convert Book + JsonNode to BookAggregate using GoogleBooksMapper
+                // The mapper extracts normalized data from the source JSON
+                com.williamcallahan.book_recommendation_engine.dto.BookAggregate aggregate = 
+                    googleBooksMapper.map(sourceJson);
+                
+                if (aggregate != null) {
+                    // Use new SSOT for writes (UPSERT + outbox events)
+                    bookUpsertService.upsert(aggregate);
+                    triggerSearchViewRefresh(false);
+                    logger.debug("[ASYNC-BACKFILL] Persisted book via BookUpsertService: {}", book.getId());
+                    return true;
+                } else {
+                    logger.warn("[ASYNC-BACKFILL] GoogleBooksMapper returned null for book {}, falling back to legacy persistence", book.getId());
+                    // Fallback to legacy persistence if mapper fails
+                    return persistBookLegacy(book, sourceJson, enrich);
+                }
+            } catch (Exception e) {
+                logger.error("[ASYNC-BACKFILL] Error persisting via BookUpsertService for book {}, falling back to legacy persistence: {}",
+                    book.getId(), e.getMessage(), e);
+                // Fallback to legacy persistence on error
+                return persistBookLegacy(book, sourceJson, enrich);
+            }
+        } else {
+            // Feature flag disabled or services not available: use legacy persistence
+            return persistBookLegacy(book, sourceJson, enrich);
+        }
+    }
+    
+    /**
+     * Legacy persistence path using CanonicalBookPersistenceService.
+     * Used when async-backfill feature flag is disabled or as fallback.
+     */
+    private boolean persistBookLegacy(Book book, JsonNode sourceJson, boolean enrich) {
         if (canonicalBookPersistenceService == null) {
-            return;
+            logger.warn("persistBookLegacy skipped: CanonicalBookPersistenceService is not configured.");
+            return false;
         }
         boolean persisted = enrich
             ? canonicalBookPersistenceService.enrichAndSave(book, sourceJson)
@@ -764,6 +872,7 @@ public class BookDataOrchestrator {
         if (persisted) {
             triggerSearchViewRefresh(false);
         }
+        return persisted;
     }
 
     @SuppressWarnings("unused")

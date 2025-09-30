@@ -85,6 +85,13 @@ public class ImageProcessingService {
             int originalWidth = originalImage.getWidth();
             int originalHeight = originalImage.getHeight();
 
+            // Reject obviously invalid images (1x1 placeholders from OpenLibrary, etc.)
+            if (originalWidth <= 5 || originalHeight <= 5) {
+                logger.warn("Book ID {}: Image dimensions ({}x{}) are suspiciously small (≤5px). Likely a placeholder. REJECTED.", 
+                    bookIdForLog, originalWidth, originalHeight);
+                return CompletableFuture.completedFuture(ProcessedImage.failure("PlaceholderImage_TooSmall"));
+            }
+
             // Perform dominant color check
             if (isDominantlyWhite(originalImage, bookIdForLog)) {
                 logger.warn("Book ID {}: Image is predominantly white. Flagged as likely not a cover.", bookIdForLog);
@@ -92,7 +99,7 @@ public class ImageProcessingService {
             }
 
             if (originalWidth < MIN_ACCEPTABLE_DIMENSION || originalHeight < MIN_ACCEPTABLE_DIMENSION) {
-                logger.warn("Book ID {}: Original image dimensions ({}x{}) are below the minimum acceptable ({}x{}). Processing as is, but quality will be low.", 
+                logger.warn("Book ID {}: Original image dimensions ({}x{}) are below the minimum acceptable ({}x{}). Will process but quality will be low.", 
                     bookIdForLog, originalWidth, originalHeight, MIN_ACCEPTABLE_DIMENSION, MIN_ACCEPTABLE_DIMENSION);
                 // Still attempt to compress it, but don't resize.
                 // Note: originalImage is already in TYPE_INT_RGB here

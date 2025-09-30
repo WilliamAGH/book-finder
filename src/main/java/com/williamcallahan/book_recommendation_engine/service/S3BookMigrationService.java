@@ -28,6 +28,12 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  * Handles the heavy S3 migration logic extracted from {@link BookDataOrchestrator} so the
  * orchestrator can delegate and remain compact.
  */
+/**
+ * @deprecated S3 JSON migration utilities are deprecated in favor of Postgres-first
+ * persistence. These helpers will be removed in version 1.0 after cleanup is complete.
+ * Note: This deprecation does NOT apply to S3 image persistence for covers.
+ */
+@Deprecated
 class S3BookMigrationService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(S3BookMigrationService.class);

@@ -448,14 +448,14 @@ public class CanonicalBookPersistenceService {
 
         try {
             jdbcTemplate.update(
-                "INSERT INTO book_dimensions (id, book_id, height_cm, width_cm, thickness_cm, weight_grams, created_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?, NOW()) " +
+                "INSERT INTO book_dimensions (book_id, height, width, thickness, weight_grams, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (book_id) DO UPDATE SET " +
-                "height_cm = COALESCE(EXCLUDED.height_cm, book_dimensions.height_cm), " +
-                "width_cm = COALESCE(EXCLUDED.width_cm, book_dimensions.width_cm), " +
-                "thickness_cm = COALESCE(EXCLUDED.thickness_cm, book_dimensions.thickness_cm), " +
-                "weight_grams = COALESCE(EXCLUDED.weight_grams, book_dimensions.weight_grams)",
-                IdGenerator.generateShort(),
+                "height = COALESCE(EXCLUDED.height, book_dimensions.height), " +
+                "width = COALESCE(EXCLUDED.width, book_dimensions.width), " +
+                "thickness = COALESCE(EXCLUDED.thickness, book_dimensions.thickness), " +
+                "weight_grams = COALESCE(EXCLUDED.weight_grams, book_dimensions.weight_grams), " +
+                "updated_at = NOW()",
                 canonicalUuid,
                 height,
                 width,

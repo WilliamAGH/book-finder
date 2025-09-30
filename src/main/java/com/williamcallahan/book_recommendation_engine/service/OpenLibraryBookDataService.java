@@ -26,6 +26,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.PrematureCloseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
@@ -37,6 +39,8 @@ import java.time.Duration;
 @Service
 @Slf4j
 public class OpenLibraryBookDataService {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenLibraryBookDataService.class);
 
         private final WebClient webClient;
     private final boolean externalFallbackEnabled;

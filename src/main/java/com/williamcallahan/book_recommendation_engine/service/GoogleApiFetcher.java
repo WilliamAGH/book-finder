@@ -128,7 +128,9 @@ public class GoogleApiFetcher {
                 .toEntity(JsonNode.class)
                 .doOnSubscribe(s -> log.debug("Fetching from Google API: {}", url))
                 .timeout(Duration.ofSeconds(5))
-                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1))
+                .retryWhen(authenticated 
+                    ? Retry.max(0) // NO RETRIES for authenticated calls - fail fast to trigger circuit breaker
+                    : Retry.backoff(1, Duration.ofSeconds(1))
                         .filter(throwable -> {
                             if (throwable instanceof WebClientResponseException wcre) {
                                 // Don't retry on 429 (rate limit) - fail fast instead
@@ -139,16 +141,16 @@ public class GoogleApiFetcher {
                         .doBeforeRetry(retrySignal -> {
                             if (retrySignal.failure() instanceof WebClientResponseException wcre) {
                                 LoggingUtils.warn(log, wcre,
-                                        "Retrying API call to {} after status {}. Attempt #{}",
+                                        "Retrying unauthenticated API call to {} after status {}. Attempt #{}",
                                         url, wcre.getStatusCode(), retrySignal.totalRetries() + 1);
                             } else {
                                 LoggingUtils.warn(log, retrySignal.failure(),
-                                        "Retrying API call to {} after error. Attempt #{}",
+                                        "Retrying unauthenticated API call to {} after error. Attempt #{}",
                                         url, retrySignal.totalRetries() + 1);
                             }
                         })
                         .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                            LoggingUtils.error(log, retrySignal.failure(), "All retries failed for API call {}", url);
+                            LoggingUtils.error(log, retrySignal.failure(), "All retries failed for unauthenticated API call {}", url);
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))
@@ -359,7 +361,9 @@ public class GoogleApiFetcher {
                 .toEntity(JsonNode.class)
                 .doOnSubscribe(s -> log.debug("Making Google Books API search call ({}) for query: {}, startIndex: {}", authStatus, query, startIndex))
                 .timeout(Duration.ofSeconds(5)) // Add 5-second timeout to prevent blocking
-                .retryWhen(Retry.backoff(1, Duration.ofSeconds(1)) // Reduced retries for faster failure
+                .retryWhen(authenticated
+                    ? Retry.max(0) // NO RETRIES for authenticated calls - fail fast to trigger circuit breaker
+                    : Retry.backoff(1, Duration.ofSeconds(1)) // One retry for unauthenticated
                         .filter(throwable -> {
                             if (throwable instanceof WebClientResponseException wcre) {
                                 // Don't retry on 429 (rate limit) - fail fast instead
@@ -371,18 +375,18 @@ public class GoogleApiFetcher {
                             String targetUrl = url; // Or a more generic endpoint description
                             if (retrySignal.failure() instanceof WebClientResponseException wcre) {
                                 LoggingUtils.warn(log, wcre,
-                                        "Retrying API search call ({}) to {} after status {}. Attempt #{}",
-                                        authStatus, targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1);
+                                        "Retrying unauthenticated API search call to {} after status {}. Attempt #{}",
+                                        targetUrl, wcre.getStatusCode(), retrySignal.totalRetries() + 1);
                             } else {
                                 LoggingUtils.warn(log, retrySignal.failure(),
-                                        "Retrying API search call ({}) to {} after error. Attempt #{}",
-                                        authStatus, targetUrl, retrySignal.totalRetries() + 1);
+                                        "Retrying unauthenticated API search call to {} after error. Attempt #{}",
+                                        targetUrl, retrySignal.totalRetries() + 1);
                             }
                         })
                         .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
                             LoggingUtils.error(log, retrySignal.failure(),
-                                    "All retries failed for API search call ({}) for query '{}', startIndex {}",
-                                    authStatus, query, startIndex);
+                                    "All retries failed for unauthenticated API search call for query '{}', startIndex {}",
+                                    query, startIndex);
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))

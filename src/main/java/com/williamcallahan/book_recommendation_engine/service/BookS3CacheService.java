@@ -16,6 +16,12 @@ import reactor.core.publisher.Mono;
  * {@link BookDataOrchestrator}. Keeping this logic in a dedicated service lets
  * other components reuse the same decision-making while shrinking the orchestrator.
  */
+/**
+ * @deprecated Replaced by Postgres-first persistence. S3 JSON cache updates are no longer used
+ * for book metadata and will be removed in version 1.0. This deprecation does NOT affect
+ * S3 image persistence, which remains vital for book cover storage and delivery.
+ */
+@Deprecated
 @Component
 public class BookS3CacheService {
 

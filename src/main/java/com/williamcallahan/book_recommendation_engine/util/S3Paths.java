@@ -4,7 +4,13 @@ package com.williamcallahan.book_recommendation_engine.util;
  * Centralised S3 path helpers so cache prefixes stay consistent across services
  * and migrations.
  */
-public final class S3Paths {
+/**
+ * Utilities for working with S3 object keys.
+ *
+ * Note: JSON path helpers are deprecated in favor of Postgres-first persistence and
+ * will be removed in version 1.0. Image path helpers remain supported for cover storage.
+ */
+public class S3Paths {
 
     /** Canonical prefix for Google Books cache objects. */
     public static final String GOOGLE_BOOK_CACHE_PREFIX = "books/v1/";

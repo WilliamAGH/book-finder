@@ -17,6 +17,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
+import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,7 @@ public class BookDataAggregatorService {
 
     private static final Logger logger = LoggerFactory.getLogger(BookDataAggregatorService.class);
     private final ObjectMapper objectMapper;
+    private final GoogleBooksMapper googleBooksMapper;
 
     /**
      * Constructs the BookDataAggregatorService with required dependencies
@@ -42,6 +45,7 @@ public class BookDataAggregatorService {
      */
     public BookDataAggregatorService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
+        this.googleBooksMapper = new GoogleBooksMapper();
     }
 
     /**
@@ -239,8 +243,17 @@ public class BookDataAggregatorService {
         return currentNode;
     }
     
+    /**
+     * Check if source is Google Books format.
+     * Used to delegate parsing to GoogleBooksMapper (SSOT).
+     */
+    private boolean isGoogleBooksSource(JsonNode sourceNode) {
+        return sourceNode.has("volumeInfo") || 
+               (sourceNode.has("kind") && sourceNode.get("kind").asText("").contains("books#volume"));
+    }
+    
     private String determineSourceType(JsonNode sourceNode, String idField) {
-        if (sourceNode.has("volumeInfo")) return "GoogleBooks"; // Characteristic of Google Books API
+        if (isGoogleBooksSource(sourceNode)) return "GoogleBooks";
         if (sourceNode.has("key") && sourceNode.get("key").asText("").contains("/works/OL")) return "OpenLibraryWorks";
         if (sourceNode.has("key") && sourceNode.get("key").asText("").contains("/books/OL")) return "OpenLibraryEditions";
         if (sourceNode.has("isbn_13") || sourceNode.has("isbn_10")) return "OpenLibrary"; // General OpenLibrary

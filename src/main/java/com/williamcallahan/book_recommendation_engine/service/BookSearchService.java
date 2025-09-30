@@ -3,7 +3,9 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,9 +26,20 @@ public class BookSearchService {
     private static final int MAX_LIMIT = 200;
 
     private final JdbcTemplate jdbcTemplate;
+    private final ExternalBookIdResolver externalBookIdResolver;
+    private final BackfillCoordinator backfillCoordinator;
+    
+    @Value("${app.features.async-backfill.enabled:false}")
+    private boolean asyncBackfillEnabled;
 
-    public BookSearchService(JdbcTemplate jdbcTemplate) {
+    public BookSearchService(
+        JdbcTemplate jdbcTemplate,
+        Optional<ExternalBookIdResolver> externalBookIdResolver,
+        Optional<BackfillCoordinator> backfillCoordinator
+    ) {
         this.jdbcTemplate = jdbcTemplate;
+        this.externalBookIdResolver = externalBookIdResolver.orElse(null);
+        this.backfillCoordinator = backfillCoordinator.orElse(null);
     }
 
     public List<SearchResult> searchBooks(String query, Integer limit) {
@@ -35,7 +49,7 @@ public class BookSearchService {
         String sanitizedQuery = SearchQueryUtils.normalize(query);
         int safeLimit = PagingUtils.safeLimit(limit != null ? limit : 0, DEFAULT_LIMIT, 1, MAX_LIMIT);
         try {
-            return jdbcTemplate.query(
+            List<SearchResult> results = jdbcTemplate.query(
                     "SELECT * FROM search_books(?, ?)",
                     ps -> {
                         ps.setString(1, sanitizedQuery);
@@ -48,6 +62,13 @@ public class BookSearchService {
             ).stream()
              .filter(result -> result.bookId() != null)
              .toList();
+            
+            // Enqueue backfill for books that might need enrichment
+            if (asyncBackfillEnabled && !results.isEmpty()) {
+                enqueueBackfillForResults(results);
+            }
+            
+            return results;
         } catch (DataAccessException ex) {
             log.debug("Postgres search failed for query '{}': {}", sanitizedQuery, ex.getMessage());
             return Collections.emptyList();
@@ -75,7 +96,7 @@ public class BookSearchService {
                                     rs.getString("isbn13"),
                                     rs.getString("isbn10"),
                                     rs.getDate("published_date"),
-                                    rs.getString("publisher")))
+                                    ValidationUtils.stripWrappingQuotes(rs.getString("publisher"))))
                             : Optional.empty()
             );
         } catch (DataAccessException ex) {
@@ -117,6 +138,44 @@ public class BookSearchService {
             jdbcTemplate.execute("SELECT refresh_book_search_view()");
         } catch (DataAccessException ex) {
             log.debug("Failed to refresh book_search_view: {}", ex.getMessage());
+        }
+    }
+    
+    /**
+     * Enqueue backfill tasks for search results that might need data enrichment.
+     * <p>
+     * Strategy:
+     * - For each book in search results, look up external IDs
+     * - Enqueue high-priority backfill tasks (priority=3) for user-facing search
+     * - Runs asynchronously, doesn't block search response
+     * <p>
+     * Only runs when async-backfill feature flag is enabled.
+     */
+    private void enqueueBackfillForResults(List<SearchResult> results) {
+        if (externalBookIdResolver == null || backfillCoordinator == null) {
+            log.debug("Backfill components not available, skipping enqueue");
+            return;
+        }
+        
+        try {
+            for (SearchResult result : results) {
+                // Look up external IDs for this book
+                Map<String, String> externalIds = externalBookIdResolver.reverse(result.bookId());
+                
+                // Enqueue backfill for each external provider
+                for (Map.Entry<String, String> entry : externalIds.entrySet()) {
+                    String source = entry.getKey();
+                    String externalId = entry.getValue();
+                    
+                    // Priority 3 = high priority (user just searched)
+                    backfillCoordinator.enqueue(source, externalId, 3);
+                }
+            }
+            
+            log.debug("Enqueued backfill for {} search results", results.size());
+        } catch (Exception e) {
+            // Don't let backfill enqueue errors affect search results
+            log.warn("Error enqueuing backfill for search results: {}", e.getMessage());
         }
     }
 

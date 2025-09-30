@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
 import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
 import com.williamcallahan.book_recommendation_engine.dto.EditionSummary;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -309,7 +310,7 @@ public class BookQueryRepository {
                 rs.getString("slug"),
                 rs.getString("title"),
                 rs.getString("description"),
-                rs.getString("publisher"),
+                ValidationUtils.stripWrappingQuotes(rs.getString("publisher")),
                 getLocalDateOrNull(rs, "published_date"),
                 rs.getString("language"),
                 getIntOrNull(rs, "page_count"),
@@ -340,7 +341,7 @@ public class BookQueryRepository {
                 rs.getString("slug"),
                 rs.getString("title"),
                 getLocalDateOrNull(rs, "published_date"),
-                rs.getString("publisher"),
+                ValidationUtils.stripWrappingQuotes(rs.getString("publisher")),
                 rs.getString("isbn_13"),
                 rs.getString("cover_url"),
                 rs.getString("language"),
