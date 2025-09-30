@@ -381,21 +381,20 @@ comment on column book_raw_data.contributed_at is 'When this source contributed 
 
 -- Store dimensions separately (not all books have this)
 create table if not exists book_dimensions (
-  id text primary key, -- NanoID (8 chars via IdGenerator.generateShort())
-  book_id uuid not null references books(id) on delete cascade,
-  height_cm numeric, -- JSON: volumeInfo.dimensions.height (parsed from "23.00 cm")
-  width_cm numeric, -- JSON: volumeInfo.dimensions.width (if available)
-  thickness_cm numeric, -- JSON: volumeInfo.dimensions.thickness (if available)
+  book_id uuid primary key references books(id) on delete cascade,
+  height numeric, -- JSON: volumeInfo.dimensions.height (parsed from "23.00 cm")
+  width numeric, -- JSON: volumeInfo.dimensions.width (if available)
+  thickness numeric, -- JSON: volumeInfo.dimensions.thickness (if available)
   weight_grams numeric, -- From other sources if available
   created_at timestamptz not null default now(),
-  unique(book_id)
+  updated_at timestamptz not null default now()
 );
-
-create index if not exists idx_book_dimensions_book_id on book_dimensions(book_id);
 
 -- Table comments for book_dimensions
 comment on table book_dimensions is 'Physical dimensions of books when available';
-comment on column book_dimensions.height_cm is 'Height parsed from volumeInfo.dimensions.height';
+comment on column book_dimensions.height is 'Height in cm parsed from volumeInfo.dimensions.height';
+comment on column book_dimensions.width is 'Width in cm parsed from volumeInfo.dimensions.width';
+comment on column book_dimensions.thickness is 'Thickness in cm parsed from volumeInfo.dimensions.thickness';
 
 -- Store various image URLs from providers and map them to our S3 copies
 create table if not exists book_image_links (
@@ -849,6 +848,69 @@ comment on table book_recommendations is 'Cached book-to-book recommendations fr
 comment on column book_recommendations.source is 'Origin of recommendation: GOOGLE_SIMILAR, SAME_AUTHOR, SAME_CATEGORY, AI_GENERATED';
 comment on column book_recommendations.score is 'Relevance score from 0.0 (weak) to 1.0 (strong)';
 comment on column book_recommendations.expires_at is 'When to refresh this recommendation';
+
+-- ============================================================================
+-- ASYNC BACKFILL INFRASTRUCTURE
+-- ============================================================================
+
+-- Backfill task queue for asynchronous book data fetching from external APIs
+-- Implements idempotent deduplication to prevent duplicate API calls
+create table if not exists backfill_tasks (
+  id bigserial primary key,
+  source text not null, -- 'GOOGLE_BOOKS', 'OPEN_LIBRARY', 'AMAZON', etc.
+  source_id text not null, -- External provider's book ID
+  status text not null default 'QUEUED', -- QUEUED, PROCESSING, COMPLETED, FAILED
+  attempts int not null default 0,
+  max_attempts int not null default 3,
+  dedupe_key text not null unique, -- source || '|' || source_id for idempotency
+  error_message text,
+  priority int not null default 5, -- 1=highest (user-facing), 10=lowest (background)
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+
+create index if not exists idx_backfill_tasks_status_priority on backfill_tasks(status, priority, created_at) where status = 'QUEUED';
+create index if not exists idx_backfill_tasks_source_id on backfill_tasks(source, source_id);
+create index if not exists idx_backfill_tasks_completed on backfill_tasks(completed_at desc) where completed_at is not null;
+
+comment on table backfill_tasks is 'Queue for asynchronous book data fetching from external APIs with deduplication';
+comment on column backfill_tasks.source is 'External API source: GOOGLE_BOOKS, OPEN_LIBRARY, AMAZON';
+comment on column backfill_tasks.source_id is 'Provider-specific book identifier';
+comment on column backfill_tasks.dedupe_key is 'Unique key (source|source_id) to prevent duplicate API calls';
+comment on column backfill_tasks.priority is '1=highest priority (user-facing search), 10=lowest (background enrichment)';
+
+-- Transactional outbox pattern for WebSocket events
+-- Ensures events are reliably delivered even if WebSocket publish fails
+create table if not exists events_outbox (
+  event_id uuid primary key default gen_random_uuid(),
+  topic text not null, -- WebSocket topic path: /topic/search.{id}, /topic/book.{id}
+  payload jsonb not null, -- Event data as JSON
+  created_at timestamptz not null default now(),
+  sent_at timestamptz, -- NULL until successfully published to WebSocket
+  retry_count int not null default 0
+);
+
+create index if not exists idx_events_outbox_unsent on events_outbox(created_at) where sent_at is null;
+create index if not exists idx_events_outbox_sent on events_outbox(sent_at desc) where sent_at is not null;
+
+comment on table events_outbox is 'Transactional outbox for reliable WebSocket event delivery';
+comment on column events_outbox.topic is 'WebSocket destination topic (e.g., /topic/book.{bookId})';
+comment on column events_outbox.sent_at is 'When event was successfully published (NULL = pending)';
+
+-- Slug redirect table to handle book slug changes over time
+-- When a book's slug changes (due to title/author updates), old URLs redirect to new slug
+create table if not exists book_slug_redirect (
+  old_slug text primary key,
+  book_id uuid not null references books(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_book_slug_redirect_book_id on book_slug_redirect(book_id);
+
+comment on table book_slug_redirect is 'Maps old book slugs to current book IDs for permanent redirects';
+comment on column book_slug_redirect.old_slug is 'Previous SEO slug that no longer matches book.slug';
+comment on column book_slug_redirect.book_id is 'Current book ID (use to look up current slug)';
 
 -- ============================================================================
 -- IMAGE METADATA EXTENSION

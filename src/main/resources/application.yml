@@ -67,6 +67,8 @@ app:
     google-fallback:
       enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:true}
     persist-search-results: ${APP_FEATURE_PERSIST_SEARCH_RESULTS:true} # Persist external API search results to Postgres for click availability
+    async-backfill:
+      enabled: ${APP_FEATURE_ASYNC_BACKFILL_ENABLED:false} # PHASE 2: Async backfill infrastructure (OFF by default until Phase 3 integration)
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}
@@ -146,6 +148,32 @@ affiliate:
   bookshop:
     affiliate-id: ${BOOKSHOP_AFFILIATE_ID:113888}
 
+# =============================================================================
+# RESILIENCE4J CONFIGURATION (for backfill rate limiting and bulkheading)
+# =============================================================================
+# Note: BackfillCoordinator uses these settings to prevent API overload.
+# Rate limiter and bulkhead work together with circuit breaker in GoogleApiFetcher.
+resilience4j:
+  ratelimiter:
+    instances:
+      googleBooksServiceRateLimiter:
+        limitForPeriod: 10          # 10 requests per period
+        limitRefreshPeriod: 1s      # Period duration
+        timeoutDuration: 0ms        # Don't wait if limit exceeded (fail fast)
+  bulkhead:
+    instances:
+      googleBooksServiceBulkhead:
+        maxConcurrentCalls: 5       # Max concurrent API calls
+        maxWaitDuration: 100ms      # Max wait for permit
+  retry:
+    instances:
+      googleBooksServiceRetry:
+        maxAttempts: 3              # Retry up to 3 times
+        waitDuration: 1s            # Wait 1s between retries
+        retryExceptions:
+          - org.springframework.web.client.HttpServerErrorException
+          - java.io.IOException
+
 # Common Logging - Production-safe defaults (minimal verbosity)
 logging:
   level:
@@ -154,6 +182,8 @@ logging:
     "[org.springframework.cache]": WARN
     "[org.hibernate]": WARN
     "[org.springframework.web]": WARN # PRODUCTION-SAFE: Minimal web logging
+    "[ro.isdc.wro]": ERROR
+    "[ro.isdc.wro.extensions.processor.css.CssVariablesProcessor]": ERROR
 
 # =============================================================================
 # DEVELOPMENT PROFILE - Permissive settings for local development
@@ -185,6 +215,8 @@ logging:
     '[org.springframework.boot.devtools]': WARN
     "[org.springframework.web]": INFO # DEV OVERRIDE: More verbose web logging
     "[com.williamcallahan.book_recommendation_engine]": DEBUG # DEV OVERRIDE: Debug app logging
+    "[ro.isdc.wro]": ERROR
+    "[ro.isdc.wro.extensions.processor.css.CssVariablesProcessor]": ERROR
 
 app:
   environment:

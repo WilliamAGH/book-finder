@@ -184,13 +184,49 @@
                                     <span th:text="${book.averageRating}">4.5</span>
                                 </div>
 
-                                <!-- Development Mode Image Source Indicator -->
-                                <div th:if="${isDevelopmentMode and book.coverImages != null and book.coverImages.source != null}"
-                                     class="position-absolute bottom-0 start-0 m-2 dev-source-indicator"
-                                     th:classappend="' dev-source-' + ${#strings.toLowerCase(book.coverImages.source.name())}"
-                                     th:title="${'Source: ' + (book.coverImages.source.displayName != null ? book.coverImages.source.displayName : book.coverImages.source.name()) + (book.coverImages.preferredUrl != null ? ' | URL: ' + #strings.abbreviate(book.coverImages.preferredUrl, 70) : '')}"
-                                     style="z-index: 10; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
-                                    <i class="fas fa-check" style="font-size: 0.8em;"></i>
+                                <!-- Development Mode Data Source Panel -->
+                                <div th:if="${isDevelopmentMode}"
+                                     class="position-absolute bottom-0 start-0 m-2 p-2 bg-dark bg-opacity-75 text-white rounded"
+                                     style="z-index: 10; font-size: 0.75rem; line-height: 1.4; max-width: 260px;"
+                                     th:with="
+                                        renderedUrl=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : null))},
+                                        imageRenderedLabel=${renderedUrl == null ? 'None' : ((book.s3ImagePath != null && renderedUrl == book.s3ImagePath) || (#strings.containsIgnoreCase(renderedUrl, 'amazonaws.com') || #strings.containsIgnoreCase(renderedUrl, 'digitaloceanspaces.com')) ? 'S3' : (#strings.contains(renderedUrl, '://') ? #strings.substringBefore(#strings.substringAfter(renderedUrl, '://'), '/') : #strings.substringBefore(renderedUrl, '/')))},
+                                        dimLabel=${book.coverImageWidth != null && book.coverImageHeight != null ? (book.coverImageWidth + ' x ' + book.coverImageHeight + ' px') : 'Unknown'},
+                                        largeAvailable=${(book.coverImageWidth != null && book.coverImageWidth >= 800) || (book.isCoverHighResolution != null && book.isCoverHighResolution) || (book.coverImages != null && book.coverImages.fallbackUrl != null && book.coverImages.preferredUrl != null && book.coverImages.fallbackUrl != book.coverImages.preferredUrl)}
+                                     ">
+                                    <div class="fw-bold mb-1 text-warning">📊 Data Source</div>
+                                    <div>
+                                        <strong>Rendered From:</strong> 
+                                        <span th:text="${book.retrievedFrom != null ? book.retrievedFrom : 'Unknown'}" 
+                                              th:classappend="${book.retrievedFrom == 'POSTGRES' ? 'text-success' : (book.retrievedFrom != null ? 'text-warning' : 'text-danger')}">POSTGRES</span>
+                                    </div>
+                                    <div>
+                                        <strong>Data Source:</strong> 
+                                        <span th:text="${book.dataSource != null ? book.dataSource : 'Unknown'}" 
+                                              class="text-info">Google Books</span>
+                                    </div>
+                                    <div>
+                                        <strong>In Postgres:</strong> 
+                                        <span th:text="${book.inPostgres != null and book.inPostgres ? 'Yes' : 'No'}" 
+                                              th:classappend="${book.inPostgres != null and book.inPostgres ? 'text-success' : 'text-danger'}">Yes</span>
+                                    </div>
+                                    <div class="mt-1 pt-1 border-top border-secondary">
+                                        <strong>Image Rendered:</strong>
+                                        <span th:text="${imageRenderedLabel}" class="text-light">S3</span>
+                                    </div>
+                                    <div>
+                                        <strong>Image Dimensions:</strong>
+                                        <span th:text="${dimLabel}" class="text-light">Unknown</span>
+                                    </div>
+                                    <div>
+                                        <strong>Larger Image(s) Available:</strong>
+                                        <span th:text="${largeAvailable ? 'Yes' : 'No'}" th:classappend="${largeAvailable ? 'text-success' : 'text-danger'}">No</span>
+                                    </div>
+                                    <div th:if="${book.coverImages != null and book.coverImages.source != null}" class="mt-1 pt-1 border-top border-secondary">
+                                        <strong>Cover:</strong> 
+                                        <span th:text="${book.coverImages.source.displayName != null ? book.coverImages.source.displayName : book.coverImages.source.name()}" 
+                                              class="text-light">Source</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
