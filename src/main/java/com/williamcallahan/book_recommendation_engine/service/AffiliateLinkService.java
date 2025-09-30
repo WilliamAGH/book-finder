@@ -32,24 +32,31 @@ public class AffiliateLinkService {
 
     /**
      * Generate affiliate links for all configured retailers.
+     * Links work even without affiliate IDs (fall back to direct retailer links).
      */
     public Map<String, String> generateLinks(String isbn13, String isbn10) {
         Map<String, String> links = new HashMap<>();
 
         // Prefer ISBN-13 for most links
-        Optional.ofNullable(isbn13).ifPresent(isbn -> {
-            if (ValidationUtils.allNotNull(barnesNobleCjPublisherId, barnesNobleCjWebsiteId)) {
-                links.put("barnesAndNoble", buildBarnesNobleLink(isbn));
+        if (isbn13 != null) {
+            String barnesNobleLink = buildBarnesNobleLink(isbn13);
+            if (barnesNobleLink != null) {
+                links.put("barnesAndNoble", barnesNobleLink);
             }
-            if (bookshopAffiliateId != null) {
-                links.put("bookshop", buildBookshopLink(isbn));
+            
+            String bookshopLink = buildBookshopLink(isbn13);
+            if (bookshopLink != null) {
+                links.put("bookshop", bookshopLink);
             }
-        });
+        }
 
         // Amazon can use either ISBN
         String isbnForAmazon = isbn13 != null ? isbn13 : isbn10;
-        if (isbnForAmazon != null && amazonAssociateTag != null) {
-            links.put("amazon", buildAmazonLink(isbnForAmazon));
+        if (isbnForAmazon != null) {
+            String amazonLink = buildAmazonLink(isbnForAmazon);
+            if (amazonLink != null) {
+                links.put("amazon", amazonLink);
+            }
         }
 
         return links;
@@ -69,36 +76,48 @@ public class AffiliateLinkService {
     }
 
     /**
-     * Build Amazon affiliate link.
+     * Build Amazon link (with affiliate tag if configured, direct link otherwise).
      */
     public String buildAmazonLink(String isbn) {
-        if (isbn == null || amazonAssociateTag == null) {
+        if (isbn == null) {
             return null;
         }
-        return String.format("https://www.amazon.com/dp/%s?tag=%s", isbn, amazonAssociateTag);
+        // If affiliate tag is configured, use it; otherwise, direct link
+        if (amazonAssociateTag != null) {
+            return String.format("https://www.amazon.com/dp/%s?tag=%s", isbn, amazonAssociateTag);
+        }
+        return String.format("https://www.amazon.com/dp/%s", isbn);
     }
 
     /**
-     * Build Barnes & Noble affiliate link via CJ.
+     * Build Barnes & Noble link (with CJ affiliate if configured, direct link otherwise).
      */
     public String buildBarnesNobleLink(String isbn13) {
-        if (isbn13 == null || !ValidationUtils.allNotNull(barnesNobleCjPublisherId, barnesNobleCjWebsiteId)) {
+        if (isbn13 == null) {
             return null;
         }
-        return String.format(
-            "https://www.anrdoezrs.net/links/%s/type/dlg/sid/%s/https://www.barnesandnoble.com/w/?ean=%s",
-            barnesNobleCjPublisherId, barnesNobleCjWebsiteId, isbn13
-        );
+        // If affiliate is configured, use CJ tracking link; otherwise, direct link
+        if (ValidationUtils.allNotNull(barnesNobleCjPublisherId, barnesNobleCjWebsiteId)) {
+            return String.format(
+                "https://www.anrdoezrs.net/links/%s/type/dlg/sid/%s/https://www.barnesandnoble.com/w/?ean=%s",
+                barnesNobleCjPublisherId, barnesNobleCjWebsiteId, isbn13
+            );
+        }
+        return String.format("https://www.barnesandnoble.com/w/?ean=%s", isbn13);
     }
 
     /**
-     * Build Bookshop.org affiliate link.
+     * Build Bookshop.org link (with affiliate ID if configured, direct link otherwise).
      */
     public String buildBookshopLink(String isbn13) {
-        if (isbn13 == null || bookshopAffiliateId == null) {
+        if (isbn13 == null) {
             return null;
         }
-        return String.format("https://bookshop.org/a/%s/%s", bookshopAffiliateId, isbn13);
+        // If affiliate ID is configured, use affiliate link; otherwise, direct ISBN search
+        if (bookshopAffiliateId != null) {
+            return String.format("https://bookshop.org/a/%s/%s", bookshopAffiliateId, isbn13);
+        }
+        return String.format("https://bookshop.org/books?keywords=%s", isbn13);
     }
 
     /**
@@ -132,10 +151,6 @@ public class AffiliateLinkService {
     }
 
     private void addAudibleLink(Map<String, String> links, String asin, String title) {
-        if (amazonAssociateTag == null) {
-            return;
-        }
-
         String searchTerm = Optional.ofNullable(asin)
             .filter(ValidationUtils::hasText)
             .orElseGet(() -> Optional.ofNullable(title).orElse(""));
@@ -146,11 +161,19 @@ public class AffiliateLinkService {
 
         try {
             String encoded = URLEncoder.encode(searchTerm, StandardCharsets.UTF_8);
-            links.put("audible", String.format(
-                "https://www.amazon.com/s?k=%s&tag=%s&linkCode=ur2&linkId=audible",
-                encoded,
-                amazonAssociateTag
-            ));
+            // If affiliate tag is configured, use it; otherwise, direct Audible search
+            if (amazonAssociateTag != null) {
+                links.put("audible", String.format(
+                    "https://www.amazon.com/s?k=%s&tag=%s&linkCode=ur2&linkId=audible",
+                    encoded,
+                    amazonAssociateTag
+                ));
+            } else {
+                links.put("audible", String.format(
+                    "https://www.audible.com/search?keywords=%s",
+                    encoded
+                ));
+            }
         } catch (Exception ignored) {
             // Encoding should not fail for UTF-8, but in case it does we skip audible link.
         }
