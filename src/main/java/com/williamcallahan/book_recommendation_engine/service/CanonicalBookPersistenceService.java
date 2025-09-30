@@ -9,12 +9,9 @@ import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
-import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import java.sql.Date;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -471,94 +468,9 @@ public class CanonicalBookPersistenceService {
     }
 
     private void synchronizeEditionRelationships(String bookId, Book book) {
-        if (jdbcTemplate == null || bookId == null || bookId.isBlank()) {
-            return;
-        }
-
-        String groupKey = book.getEditionGroupKey();
-        Integer editionNumber = book.getEditionNumber();
-
-        if (groupKey == null) {
-            deleteEditionLinksForBooks(List.of(bookId));
-            return;
-        }
-
-        List<EditionLinkRecord> siblings = jdbcTemplate.query(
-            "SELECT id, edition_number FROM books WHERE edition_group_key = ?",
-            ps -> ps.setString(1, groupKey),
-            (rs, rowNum) -> {
-                String id = rs.getString("id");
-                Integer stored = (Integer) rs.getObject("edition_number");
-                int normalized = (stored != null && stored > 0) ? stored : 1;
-                return new EditionLinkRecord(id, normalized);
-            }
-        );
-
-        if (siblings.isEmpty()) {
-            return;
-        }
-
-        List<EditionLinkRecord> normalized = new ArrayList<>(siblings.size());
-        for (EditionLinkRecord record : siblings) {
-            int number = record.editionNumber();
-            if (record.id().equals(bookId) && editionNumber != null) {
-                number = PagingUtils.atLeast(editionNumber, 1);
-            }
-            normalized.add(new EditionLinkRecord(record.id(), PagingUtils.atLeast(number, 1)));
-        }
-
-        if (normalized.size() <= 1) {
-            deleteEditionLinksForBooks(List.of(bookId));
-            return;
-        }
-
-        normalized.sort((a, b) -> {
-            int diff = Integer.compare(b.editionNumber(), a.editionNumber());
-            if (diff != 0) {
-                return diff;
-            }
-            return a.id().compareTo(b.id());
-        });
-
-        List<String> groupIds = new ArrayList<>(normalized.size());
-        for (EditionLinkRecord record : normalized) {
-            groupIds.add(record.id());
-        }
-        deleteEditionLinksForBooks(groupIds);
-
-        EditionLinkRecord primary = normalized.get(0);
-        for (int i = 1; i < normalized.size(); i++) {
-            EditionLinkRecord sibling = normalized.get(i);
-            jdbcTemplate.update(
-                "INSERT INTO book_editions (id, book_id, related_book_id, link_source, relationship_type, created_at, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, NOW(), NOW()) " +
-                "ON CONFLICT (book_id, related_book_id) DO UPDATE SET link_source = EXCLUDED.link_source, relationship_type = EXCLUDED.relationship_type, updated_at = NOW()",
-                IdGenerator.generateLong(),
-                primary.id(),
-                sibling.id(),
-                "INGESTION",
-                "ALTERNATE_EDITION"
-            );
-        }
-    }
-
-    private void deleteEditionLinksForBooks(List<String> ids) {
-        if (jdbcTemplate == null || ids == null || ids.isEmpty()) {
-            return;
-        }
-        LinkedHashSet<String> unique = new LinkedHashSet<>();
-        for (String id : ids) {
-            if (id != null && !id.isBlank()) {
-                unique.add(id);
-            }
-        }
-        for (String id : unique) {
-            jdbcTemplate.update(
-                "DELETE FROM book_editions WHERE book_id = ? OR related_book_id = ?",
-                id,
-                id
-            );
-        }
+        // DISABLED: book_editions table replaced with work_clusters system
+        // Edition tracking is now handled by work_cluster_members table
+        // See schema.sql comments for migration details
     }
 
     private String determineSource(JsonNode sourceJson) {
@@ -571,8 +483,6 @@ public class CanonicalBookPersistenceService {
         return "AGGREGATED";
     }
 
-
-    private record EditionLinkRecord(String id, int editionNumber) {}
 
     // Public wrappers for orchestrator tests
     public String resolveCanonicalBookIdForOrchestrator(Book book, String googleId, String isbn13, String isbn10) {
