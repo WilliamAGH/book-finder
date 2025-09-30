@@ -493,10 +493,10 @@
                         <div class="card h-100">
                             <div class="position-relative book-cover-container">
                                 <a th:href="@{'/book/' + ${rec.id}}" class="d-block h-100">
-                                    <img th:src="@{/images/placeholder-book-cover.svg}"
-                                         th:attr="data-book-id=${rec.id}, 
-                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.s3ImagePath != null ? rec.s3ImagePath : rec.externalImageUrl)}, 
-                                                  data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                    <img th:src="${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.s3ImagePath != null ? rec.s3ImagePath : (rec.externalImageUrl != null ? rec.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                                         th:attr="data-book-id=${rec.id},
+                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.s3ImagePath != null ? rec.s3ImagePath : rec.externalImageUrl)},
+                                                  data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'},
                                                   data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                          class="card-img-top book-cover"
                                          title="Book cover" loading="lazy"
