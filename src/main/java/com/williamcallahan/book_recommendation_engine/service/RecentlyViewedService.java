@@ -101,7 +101,7 @@ public class RecentlyViewedService {
 
         String canonicalId = originalBookId; // Default to original
 
-        // Attempt to find a canonical representation (disabled after Redis removal)
+        // Attempt to find a canonical representation (currently disabled)
         Optional<Book> canonicalBookOpt = duplicateBookService.findPrimaryCanonicalBook(book);
         if (canonicalBookOpt.isPresent()) {
             Book canonicalBook = canonicalBookOpt.get();

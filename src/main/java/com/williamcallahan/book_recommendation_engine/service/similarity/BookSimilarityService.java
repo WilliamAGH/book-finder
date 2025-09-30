@@ -57,8 +57,8 @@ public class BookSimilarityService {
         String baseUrl = embeddingServiceUrl != null ? embeddingServiceUrl : "http://localhost:8095/api/embedding";
         this.embeddingClient = webClientBuilder.baseUrl(baseUrl).build();
         
-        // Vector search functionality removed with Redis
-        logger.info("BookSimilarityService initialized (vector similarity search disabled after Redis removal)");
+        // Vector similarity search functionality is disabled
+        logger.info("BookSimilarityService initialized (vector similarity search disabled)");
     }
 
     public List<Book> getSimilarBooks(String bookId, int count) {
