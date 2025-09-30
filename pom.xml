@@ -501,6 +501,9 @@
                     <includes>
                         <include>**/*Test.java</include>
                     </includes>
+                    <excludes>
+                        <exclude>**/test/annotations/**</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
             <!-- PMD Plugin: Detects unused private fields, methods, and variables -->
