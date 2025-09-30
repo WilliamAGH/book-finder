@@ -188,6 +188,9 @@ logging:
 app:
   environment:
     mode: development
+  features:
+    external-fallback:
+      enabled: false # DEV OVERRIDE: Disable external API fallbacks in local dev
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD:devAdminPass}
