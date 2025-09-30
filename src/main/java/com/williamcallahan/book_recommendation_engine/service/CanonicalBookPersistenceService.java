@@ -466,13 +466,18 @@ public class CanonicalBookPersistenceService {
     }
 
     private void upsertImageLink(String bookId, String type, String url, String source) {
+        // Normalize HTTP to HTTPS for Google Books and other APIs
+        String normalizedUrl = url != null && url.startsWith("http://") 
+            ? url.replace("http://", "https://") 
+            : url;
+            
         jdbcTemplate.update(
             "INSERT INTO book_image_links (id, book_id, image_type, url, source, created_at) VALUES (?, ?::uuid, ?, ?, ?, NOW()) " +
             "ON CONFLICT (book_id, image_type) DO UPDATE SET url = EXCLUDED.url, source = EXCLUDED.source, created_at = book_image_links.created_at",
             IdGenerator.generate(),
             bookId,
             type,
-            url,
+            normalizedUrl,
             source
         );
     }

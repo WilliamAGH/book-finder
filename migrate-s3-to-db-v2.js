@@ -855,6 +855,9 @@ class BookMigrator {
 
     for (const [imageType, url] of Object.entries(imageLinks)) {
       if (!url) continue;
+      
+      // Normalize HTTP to HTTPS for Google Books URLs
+      const normalizedUrl = url.startsWith('http://') ? url.replace('http://', 'https://') : url;
 
       const existingImage = await this.client.query(
         `SELECT id FROM book_image_links
@@ -871,7 +874,7 @@ class BookMigrator {
         )
         ON CONFLICT (book_id, image_type) DO UPDATE SET
           url = EXCLUDED.url`,
-        [generateNanoId(10), bookId, imageType, url, 'GOOGLE_BOOKS']
+        [generateNanoId(10), bookId, imageType, normalizedUrl, 'GOOGLE_BOOKS']
       );
 
       if (existingImage.rows.length > 0) {
