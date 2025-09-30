@@ -260,6 +260,15 @@ public class HomeController {
 
     private Mono<List<Book>> loadSimilarBooks(String bookId) {
         return recommendationService.getSimilarBooks(bookId, ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2)
+            .timeout(Duration.ofMillis(1500)) // Hard timeout: recommendations cannot block page render
+            .onErrorResume(e -> {
+                if (e instanceof java.util.concurrent.TimeoutException) {
+                    log.warn("Similar books timed out after 1500ms for book {}", bookId);
+                } else {
+                    log.warn("Similar books failed for book {}: {}", bookId, e.getMessage());
+                }
+                return Mono.just(List.<Book>of());
+            })
             .flatMap(books -> {
                 if (books == null || books.isEmpty()) {
                     return Mono.just(List.<Book>of());
@@ -498,8 +507,14 @@ public class HomeController {
         );
 
         Mono<Book> canonicalBookMono = bookDataOrchestrator.fetchCanonicalBookReactive(id).cache();
+        // Fallback to tiered fetch (DB→S3→APIs) when canonical not found, with a reasonable timeout
+        Mono<Book> effectiveBookMono = canonicalBookMono.switchIfEmpty(
+            bookDataOrchestrator.getBookByIdTiered(id)
+                .timeout(Duration.ofSeconds(2))
+                .onErrorResume(e -> Mono.empty())
+        ).cache();
 
-        Mono<String> redirectIfNonCanonical = canonicalBookMono
+        Mono<String> redirectIfNonCanonical = effectiveBookMono
             .flatMap(book -> {
                 if (book == null) {
                     return Mono.empty();
@@ -525,7 +540,7 @@ public class HomeController {
             });
 
         // Only display books that exist in our database
-        Mono<Book> resolvedBookMono = canonicalBookMono
+        Mono<Book> resolvedBookMono = effectiveBookMono
             .flatMap(bookCoverManagementService::prepareBookForDisplay)
             .cache();
 
