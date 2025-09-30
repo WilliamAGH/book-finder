@@ -139,20 +139,34 @@ public class GoogleBooksService {
         final int maxResultsPerPage = 40;
         final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
         final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
-        
+
         log.debug("GoogleBooksService.searchBooksAsyncReactive with query: '{}', langCode: {}, maxResults: {}, orderBy: {}",
             query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
 
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
 
+        // Calculate number of pages needed to fetch the desired total results
+        final int numberOfPages = (int) Math.ceil((double) maxTotalResultsToFetch / maxResultsPerPage);
+
         // IMPORTANT: Do NOT call methods on a Mockito mock that rely on real implementation.
         // Tests stub searchVolumesAuthenticated(...), so we build the stream from that.
-        return googleApiFetcher.searchVolumesAuthenticated(query, 0, effectiveOrderBy, langCode)
-            .flatMapMany(responseNode -> {
-                if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
-                    return Flux.fromIterable(responseNode.get("items"));
-                }
-                return Flux.empty();
+        // Use Flux.range to paginate through multiple pages of results
+        return Flux.range(0, numberOfPages)
+            .concatMap(pageIndex -> {
+                int startIndex = pageIndex * maxResultsPerPage;
+                log.debug("Fetching page {} (startIndex={}) for query '{}'", pageIndex, startIndex, query);
+
+                return googleApiFetcher.searchVolumesAuthenticated(query, startIndex, effectiveOrderBy, langCode)
+                    .flatMapMany(responseNode -> {
+                        if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
+                            return Flux.fromIterable(responseNode.get("items"));
+                        }
+                        return Flux.empty();
+                    })
+                    .onErrorResume(e -> {
+                        log.warn("Error fetching page {} for query '{}': {}", pageIndex, query, e.getMessage());
+                        return Flux.empty(); // Continue with other pages if one fails
+                    });
             })
             .map(BookJsonParser::convertJsonToBook)
             .filter(Objects::nonNull)
@@ -162,13 +176,11 @@ public class GoogleBooksService {
                 }
                 return book;
             })
+            .take(maxTotalResultsToFetch) // Limit to exact number requested
             .collectList()
             .map(books -> {
                 log.info("GoogleBooksService.searchBooksAsyncReactive completed for query '{}'. Retrieved {} books total.",
                     query, books.size());
-                if (books.size() > maxTotalResultsToFetch) {
-                    return books.subList(0, maxTotalResultsToFetch);
-                }
                 return books;
             })
             .onErrorResume(e -> {
