@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.lang.Nullable;
@@ -68,7 +69,8 @@ public class TieredBookSearchService {
     private final @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService;
     private final ObjectMapper objectMapper;
 
-    TieredBookSearchService(BookSearchService bookSearchService,
+    @Autowired
+    public TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
                             OpenLibraryBookDataService openLibraryBookDataService,
                             @Nullable BookQueryRepository bookQueryRepository,
