@@ -53,6 +53,21 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoCon
 @EnableRetry
 public class BookRecommendationEngineApplication implements ApplicationRunner {
 
+    private final com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator;
+
+    /**
+     * Constructor injection for BookDataOrchestrator
+     * Required for proper CGLIB proxy support when BookDataOrchestrator has @Async methods
+     *
+     * @param bookDataOrchestrator The book data orchestrator service (optional, lazy-loaded)
+     */
+    public BookRecommendationEngineApplication(
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            @org.springframework.context.annotation.Lazy
+            com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator) {
+        this.bookDataOrchestrator = bookDataOrchestrator;
+    }
+
     /**
      * Main method that starts the Spring Boot application
      *
@@ -139,10 +154,6 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
             System.err.println("[DB] Failed to normalize SPRING_DATASOURCE_URL: " + e.getMessage());
         }
     }
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    @org.springframework.context.annotation.Lazy
-    private com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator;
 
     @Override
     public void run(ApplicationArguments args) {
