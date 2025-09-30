@@ -4,22 +4,23 @@ import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
+import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import java.util.LinkedHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -43,6 +44,7 @@ public class TieredBookSearchService {
 
     private final BookSearchService bookSearchService;
     private final GoogleApiFetcher googleApiFetcher;
+    private final GoogleBooksService googleBooksService;
     private final OpenLibraryBookDataService openLibraryBookDataService;
     
     /**
@@ -54,11 +56,13 @@ public class TieredBookSearchService {
 
     TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
+                            GoogleBooksService googleBooksService,
                             OpenLibraryBookDataService openLibraryBookDataService,
                             @Nullable BookQueryRepository bookQueryRepository,
                             @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
+        this.googleBooksService = googleBooksService;
         this.openLibraryBookDataService = openLibraryBookDataService;
         this.bookQueryRepository = bookQueryRepository;
         this.externalFallbackEnabled = externalFallbackEnabled;
@@ -69,159 +73,129 @@ public class TieredBookSearchService {
     }
     
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
-        LOGGER.debug("TieredBookSearch: Starting search for query: '{}', lang: {}, total: {}, order: {}, bypassExternal: {}",
+        return streamSearch(query, langCode, desiredTotalResults, orderBy, bypassExternalApis)
+            .collectList();
+    }
+
+    Flux<Book> streamSearch(String query,
+                             String langCode,
+                             int desiredTotalResults,
+                             String orderBy,
+                             boolean bypassExternalApis) {
+        LOGGER.debug("TieredBookSearch: Starting stream for query='{}', lang={}, total={}, order={}, bypassExternal={}",
             query, langCode, desiredTotalResults, orderBy, bypassExternalApis);
 
-        // ALWAYS try Postgres first - baseline results
-        // FIX BUG #1: Handle Postgres errors separately so they don't prevent external fallback
         return searchPostgresFirstReactive(query, desiredTotalResults)
             .onErrorResume(postgresError -> {
-                // Log Postgres failure but continue to external search if enabled
-                LOGGER.warn("TieredBookSearch: Postgres search failed for query '{}': {}. Attempting external fallback.",
-                    query, postgresError.getMessage());
-
-                // If external fallback disabled/bypassed, fail now
+                LOGGER.warn("TieredBookSearch: Postgres search failed for query '{}': {}", query, postgresError.getMessage());
                 if (!externalFallbackEnabled || bypassExternalApis) {
-                    LOGGER.error("TieredBookSearch: Postgres failed and external fallback disabled/bypassed for query '{}'.", query);
+                    LOGGER.error("TieredBookSearch: No external fallback allowed for '{}' after Postgres failure; streaming empty results.", query);
                     return Mono.just(List.<Book>of());
                 }
-
-                // Otherwise, try external search as if Postgres returned empty
-                LOGGER.info("TieredBookSearch: Proceeding to external search after Postgres failure for query '{}'", query);
-                return Mono.just(List.<Book>of()); // Empty list to trigger external search in flatMap
+                ExternalApiLogger.logTieredSearchStart(LOGGER, query, 0, desiredTotalResults);
+                return Mono.just(List.<Book>of());
             })
-            .flatMap(postgresHits -> {
-                LOGGER.info("TieredBookSearch: Postgres returned {} results for query '{}'", postgresHits.size(), query);
+            .flatMapMany(postgresHits -> {
+                List<Book> baseline = postgresHits == null ? List.of() : postgresHits;
+                Flux<Book> postgresFlux = Flux.fromIterable(baseline);
 
-                // If we have enough results from Postgres, return them immediately
-                if (!postgresHits.isEmpty() && postgresHits.size() >= desiredTotalResults) {
-                    LOGGER.info("TieredBookSearch: Postgres fully satisfied query '{}' with {} results.", query, postgresHits.size());
-                    return Mono.just(postgresHits);
-                }
-
-                // If external fallback disabled OR explicitly bypassed (e.g., for homepage), return what Postgres gave us
                 if (!externalFallbackEnabled || bypassExternalApis) {
                     if (bypassExternalApis) {
-                        LOGGER.info("TieredBookSearch: External APIs bypassed for query '{}'; returning {} Postgres-only results.", query, postgresHits.size());
+                        LOGGER.info("TieredBookSearch: External APIs bypassed for '{}' — streaming {} Postgres result(s) only.", query, baseline.size());
                     } else {
-                        LOGGER.info("TieredBookSearch: External fallbacks disabled; returning {} Postgres results for query '{}'.", postgresHits.size(), query);
+                        LOGGER.info("TieredBookSearch: External fallback disabled; streaming {} Postgres result(s) for '{}'", baseline.size(), query);
                     }
-                    return Mono.just(postgresHits);
+                    return postgresFlux.take(desiredTotalResults);
                 }
 
-                // Otherwise, augment Postgres results with external APIs
-                int needed = Math.max(0, desiredTotalResults - postgresHits.size());
-                LOGGER.debug("TieredBookSearch: Augmenting {} Postgres results with up to {} external results", postgresHits.size(), needed);
+                boolean satisfied = !baseline.isEmpty() && baseline.size() >= desiredTotalResults;
+                if (satisfied) {
+                    LOGGER.info("TieredBookSearch: Postgres fully satisfied '{}' with {} result(s); external fallback skipped.", query, baseline.size());
+                    return postgresFlux.take(desiredTotalResults);
+                }
 
-                // FIX BUG #2 & #3: Handle external search errors gracefully, preserve Postgres results
-                return performExternalSearch(query, langCode, needed, orderBy, postgresHits.isEmpty())
-                    .map(externalHits -> {
-                        List<Book> merged = mergeResults(postgresHits, externalHits, desiredTotalResults);
-                        LOGGER.info("TieredBookSearch: Merged {} Postgres + {} external = {} total results for query '{}'",
-                            postgresHits.size(), externalHits.size(), merged.size(), query);
-                        return merged;
-                    })
-                    .onErrorResume(externalError -> {
-                        // If external search fails, return Postgres results we already have
-                        LOGGER.warn("TieredBookSearch: External search failed for query '{}': {}. Returning {} Postgres results.",
-                            query, externalError.getMessage(), postgresHits.size());
-                        return Mono.just(postgresHits);
-                    })
-                    .defaultIfEmpty(postgresHits); // If external returns empty (not error), still return Postgres results
+                int remaining = Math.max(desiredTotalResults - baseline.size(), desiredTotalResults);
+                ExternalApiLogger.logTieredSearchStart(LOGGER, query, baseline.size(), desiredTotalResults);
+
+                Duration externalTimeout = Duration.ofMillis(1200);
+
+                Flux<Book> externalFlux = performExternalSearchStream(query, langCode, remaining, orderBy, baseline.isEmpty())
+                    .timeout(externalTimeout)
+                    .onErrorResume(error -> {
+                        LOGGER.warn("TieredBookSearch: External fallback failed for '{}': {}", query, error.getMessage());
+                        return Flux.empty();
+                    });
+
+                return Flux.concat(postgresFlux, externalFlux)
+                    .take(desiredTotalResults);
             })
-            .defaultIfEmpty(List.of()) // Final safety net
-            .onErrorResume(unexpectedError -> {
-                // This should rarely be hit now that we handle errors at each tier
-                LOGGER.error("TieredBookSearch: Unexpected error during search for '{}': {}", query, unexpectedError.getMessage());
-                return Mono.just(List.of());
-            });
+            .doOnComplete(() -> LOGGER.debug("TieredBookSearch: Completed stream for '{}'", query));
     }
     
-    private Mono<List<Book>> performExternalSearch(String query, String langCode, int desiredTotalResults, String orderBy, boolean postgresWasEmpty) {
+    private Flux<Book> performExternalSearchStream(String query,
+                                                   String langCode,
+                                                   int desiredTotalResults,
+                                                   String orderBy,
+                                                   boolean postgresWasEmpty) {
+
+        if (desiredTotalResults <= 0) {
+            return Flux.empty();
+        }
 
         final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
         boolean googleFallbackEnabled = googleApiFetcher.isGoogleFallbackEnabled();
-        boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
-        
-        // If Postgres returned no results, try author-specific search first
-        // This handles cases where users search for author names like "Elin Hilderbrand"
         boolean shouldTryAuthorSearch = postgresWasEmpty && looksLikeAuthorName(query);
 
-        Mono<List<Book>> openLibrarySearchMono = openLibraryBookDataService.searchBooksByTitle(query)
-            .collectList()
-            .map(olBooks -> {
-                if (!olBooks.isEmpty() && !queryQualifiers.isEmpty()) {
-                    olBooks.forEach(book -> queryQualifiers.forEach(book::addQualifier));
+        Flux<Book> openLibraryFlux = openLibraryBookDataService
+            .searchBooks(query, shouldTryAuthorSearch)
+            .map(book -> {
+                if (!queryQualifiers.isEmpty()) {
+                    queryQualifiers.forEach(book::addQualifier);
                 }
-                return olBooks;
+                return book;
             })
-            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.openLibrarySearch(" + query + ")"));
+            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyFlux("TieredBookSearchService.openLibrarySearch(" + query + ")"));
 
         if (!googleFallbackEnabled) {
-            LOGGER.info("TieredBookSearch: Google fallback disabled for query '{}'. Returning OpenLibrary results only.", query);
-            return openLibrarySearchMono;
+            LOGGER.info("TieredBookSearch: Google fallback disabled for '{}'; using OpenLibrary only.", query);
+            ExternalApiLogger.logFallbackDisabled(LOGGER, "GoogleBooks", query);
+            return openLibraryFlux.take(desiredTotalResults);
         }
 
-        // Determine search strategy based on whether this looks like an author query
         String effectiveQuery = shouldTryAuthorSearch ? "inauthor:" + query : query;
         if (shouldTryAuthorSearch) {
-            LOGGER.info("TieredBookSearch: Query '{}' looks like author name, searching with 'inauthor:' qualifier", query);
+            LOGGER.info("TieredBookSearch: '{}' detected as author query. Using inauthor qualifier for Google.", query);
         }
-        
-        Mono<List<Book>> primarySearchMono = apiKeyAvailable
-            ? executePagedSearch(effectiveQuery, langCode, desiredTotalResults, orderBy, true, queryQualifiers)
-            : executePagedSearch(effectiveQuery, langCode, desiredTotalResults, orderBy, false, queryQualifiers);
 
-        Mono<List<Book>> fallbackSearchMono = apiKeyAvailable
-            ? executePagedSearch(effectiveQuery, langCode, desiredTotalResults, orderBy, false, queryQualifiers)
-            : Mono.just(Collections.emptyList());
+        ExternalApiLogger.logApiCallAttempt(LOGGER, "GoogleBooks", "STREAM_SEARCH", effectiveQuery, googleApiFetcher.isApiKeyAvailable());
 
-        // FIX BUG #4: Ensure errors in primary search don't prevent fallback attempts
-        return primarySearchMono
-            .onErrorResume(primaryError -> {
-                // If primary search errors (not just empty), log and proceed to fallback
-                LOGGER.warn("TieredBookSearch: Primary Google search ({}) error for query '{}': {}. Attempting fallback.",
-                    (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query, primaryError.getMessage());
-                return Mono.just(Collections.<Book>emptyList()); // Treat error as empty to trigger fallback
-            })
-            .flatMap(googleResults1 -> {
-                if (!googleResults1.isEmpty()) {
-                    LOGGER.info("TieredBookSearch: Primary Google search ({}) successful for query '{}', found {} books.", (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query, googleResults1.size());
-                    return Mono.just(googleResults1);
+        Flux<Book> googleFlux = googleBooksService.streamBooksReactive(effectiveQuery, langCode, desiredTotalResults, orderBy)
+            .map(book -> {
+                if (!queryQualifiers.isEmpty()) {
+                    queryQualifiers.forEach(book::addQualifier);
                 }
-                LOGGER.info("TieredBookSearch: Primary Google search ({}) for query '{}' yielded no results. Proceeding to fallback Google search.", (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query);
-
-                return fallbackSearchMono
-                    .onErrorResume(fallbackError -> {
-                        // If fallback search errors, log and proceed to OpenLibrary
-                        LOGGER.warn("TieredBookSearch: Fallback Google search error for query '{}': {}. Attempting OpenLibrary.",
-                            query, fallbackError.getMessage());
-                        return Mono.just(Collections.<Book>emptyList());
-                    })
-                    .flatMap(googleResults2 -> {
-                        if (!googleResults2.isEmpty()) {
-                            LOGGER.info("TieredBookSearch: Fallback Google search successful for query '{}', found {} books.", query, googleResults2.size());
-                            return Mono.just(googleResults2);
-                        }
-                        LOGGER.info("TieredBookSearch: Fallback Google search for query '{}' yielded no results. Proceeding to OpenLibrary search.", query);
-                        return openLibrarySearchMono;
-                    });
+                return book;
             })
-            .flatMap(results -> {
-                // If author-specific search yielded no results, try again with general search
-                if (shouldTryAuthorSearch && results.isEmpty()) {
-                    LOGGER.info("TieredBookSearch: Author-specific search for '{}' yielded no results. Retrying as general search.", query);
-                    return performExternalSearch(query, langCode, desiredTotalResults, orderBy, false);
-                }
-                return Mono.just(results);
-            })
-            .doOnSuccess(books -> {
-                if (!books.isEmpty()) {
-                    LOGGER.info("TieredBookSearch: Successfully searched books for query '{}'. Found {} books.", query, books.size());
-                } else {
-                    LOGGER.info("TieredBookSearch: Search for query '{}' yielded no results from any tier.", query);
-                }
+            .onErrorResume(err -> {
+                LOGGER.warn("TieredBookSearch: Google Books stream failed for '{}': {}", query, err.getMessage());
+                ExternalApiLogger.logApiCallFailure(LOGGER, "GoogleBooks", "STREAM_SEARCH", effectiveQuery, err.getMessage());
+                return Flux.empty();
             });
+
+        AtomicInteger emittedCount = new AtomicInteger(0);
+
+        Flux<Book> combined = Flux.concat(googleFlux, openLibraryFlux);
+
+        return combined
+            .distinct(Book::getId)
+            .take(desiredTotalResults)
+            .doOnNext(book -> emittedCount.incrementAndGet())
+            .doOnComplete(() -> ExternalApiLogger.logApiCallSuccess(
+                LOGGER,
+                "GoogleBooks",
+                "STREAM_SEARCH",
+                effectiveQuery,
+                emittedCount.get()));
     }
     
     /**
@@ -280,34 +254,6 @@ public class TieredBookSearchService {
                 .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.searchAuthors(" + query + ")"));
     }
 
-    /**
-     * Merges Postgres baseline results with external API results.
-     * Postgres results take priority; external results fill remaining slots.
-     * Deduplicates by book ID.
-     */
-    private List<Book> mergeResults(List<Book> postgresResults, List<Book> externalResults, int maxTotal) {
-        LinkedHashMap<String, Book> merged = new LinkedHashMap<>();
-        
-        // Add Postgres results first (highest priority)
-        for (Book book : postgresResults) {
-            if (book != null && book.getId() != null) {
-                merged.putIfAbsent(book.getId(), book);
-            }
-        }
-        
-        // Add external results to fill remaining slots
-        for (Book book : externalResults) {
-            if (book != null && book.getId() != null && merged.size() < maxTotal) {
-                merged.putIfAbsent(book.getId(), book);
-            }
-        }
-        
-        List<Book> result = merged.values().stream().limit(maxTotal).collect(Collectors.toList());
-        LOGGER.debug("Merged {} Postgres + {} external = {} total results (max: {})", 
-            postgresResults.size(), externalResults.size(), result.size(), maxTotal);
-        return result;
-    }
-    
     /**
      * Searches Postgres reactively without blocking.
      * Uses BookQueryRepository for SINGLE OPTIMIZED QUERY instead of N+1 hydration queries.
@@ -369,35 +315,4 @@ public class TieredBookSearchService {
             });
     }
 
-    private Mono<List<Book>> executePagedSearch(String query,
-                                                String langCode,
-                                                int desiredTotalResults,
-                                                String orderBy,
-                                                boolean authenticated,
-                                                Map<String, Object> queryQualifiers) {
-        final int maxTotalResultsToFetch = desiredTotalResults <= 0
-            ? 40
-            : PagingUtils.clamp(desiredTotalResults, 1, 200);
-        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "relevance";
-        String authType = authenticated ? "Authenticated" : "Unauthenticated";
-
-        LOGGER.debug("TieredBookSearch: Executing {} paged search for query: '{}', lang: {}, total_requested: {}, order: {}", authType, query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
-
-        return googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, authenticated)
-            .flatMap(jsonItem -> {
-                Book bookFromSearchItem = BookJsonParser.convertJsonToBook(jsonItem);
-                if (bookFromSearchItem != null && bookFromSearchItem.getId() != null) {
-                    if (!queryQualifiers.isEmpty()) {
-                        queryQualifiers.forEach(bookFromSearchItem::addQualifier);
-                    }
-                    return Mono.just(bookFromSearchItem);
-                }
-                return Mono.<Book>empty();
-            })
-            .filter(Objects::nonNull)
-            .collectList()
-            .map(books -> books.size() > maxTotalResultsToFetch ? books.subList(0, maxTotalResultsToFetch) : books)
-            .doOnSuccess(finalList -> LOGGER.info("TieredBookSearch: {} paged search for query '{}' completed. Aggregated {} books.", authType, query, finalList.size()))
-            .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.executePagedSearch auth=" + authType + " query=" + query));
-    }
 }
