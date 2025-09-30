@@ -1,6 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -51,41 +52,20 @@ public class TieredBookSearchService {
 
     private final BookSearchService bookSearchService;
     private final GoogleApiFetcher googleApiFetcher;
-    private final GoogleBooksService googleBooksService;
     private final OpenLibraryBookDataService openLibraryBookDataService;
-    
-    /**
-     * THE SINGLE SOURCE OF TRUTH for book queries - uses optimized SQL functions.
-     */
     private final BookQueryRepository bookQueryRepository;
-
-    /**
-     * Persistence service to save external API results so they're available when users click them.
-     */
-    private final CanonicalBookPersistenceService persistenceService;
-    private final ObjectMapper objectMapper;
-
     private final boolean externalFallbackEnabled;
-    private final boolean persistSearchResults;
 
     TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
-                            GoogleBooksService googleBooksService,
                             OpenLibraryBookDataService openLibraryBookDataService,
                             @Nullable BookQueryRepository bookQueryRepository,
-                            @Nullable CanonicalBookPersistenceService persistenceService,
-                            ObjectMapper objectMapper,
-                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
-                            @Value("${app.features.persist-search-results:true}") boolean persistSearchResults) {
+                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
-        this.googleBooksService = googleBooksService;
         this.openLibraryBookDataService = openLibraryBookDataService;
         this.bookQueryRepository = bookQueryRepository;
-        this.persistenceService = persistenceService;
-        this.objectMapper = objectMapper;
         this.externalFallbackEnabled = externalFallbackEnabled;
-        this.persistSearchResults = persistSearchResults;
     }
 
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
@@ -190,13 +170,7 @@ public class TieredBookSearchService {
 
         ExternalApiLogger.logApiCallAttempt(LOGGER, "GoogleBooks", "STREAM_SEARCH", effectiveQuery, googleApiFetcher.isApiKeyAvailable());
 
-        Flux<Book> googleFlux = googleBooksService.streamBooksReactive(effectiveQuery, langCode, desiredTotalResults, orderBy)
-            .map(book -> {
-                if (!queryQualifiers.isEmpty()) {
-                    queryQualifiers.forEach(book::addQualifier);
-                }
-                return book;
-            })
+        Flux<Book> googleFlux = buildGoogleStream(effectiveQuery, langCode, desiredTotalResults, orderBy, queryQualifiers)
             .onErrorResume(err -> {
                 LOGGER.warn("TieredBookSearch: Google Books stream failed for '{}': {}", query, err.getMessage());
                 ExternalApiLogger.logApiCallFailure(LOGGER, "GoogleBooks", "STREAM_SEARCH", effectiveQuery, err.getMessage());
@@ -210,10 +184,7 @@ public class TieredBookSearchService {
         return combined
             .distinct(Book::getId)
             .take(desiredTotalResults)
-            .doOnNext(book -> {
-                emittedCount.incrementAndGet();
-                persistBookAsync(book);  // Save to Postgres so it's available when user clicks
-            })
+            .doOnNext(book -> emittedCount.incrementAndGet())
             .doOnComplete(() -> ExternalApiLogger.logApiCallSuccess(
                 LOGGER,
                 "GoogleBooks",
@@ -222,40 +193,65 @@ public class TieredBookSearchService {
                 emittedCount.get()));
     }
 
-    /**
-     * Persists a book to Postgres asynchronously without blocking the search stream.
-     * This ensures external API results are available when users click on them.
-     *
-     * Failures are logged but don't affect the search results stream.
-     */
-    private void persistBookAsync(Book book) {
-        if (!persistSearchResults || persistenceService == null || book == null) {
-            return;
+    private Flux<Book> buildGoogleStream(String query,
+                                         String langCode,
+                                         int desiredTotalResults,
+                                         String orderBy,
+                                         Map<String, Object> queryQualifiers) {
+        final int maxTotalResultsToFetch = desiredTotalResults > 0 ? desiredTotalResults : 200;
+        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
+        final boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
+
+        Flux<JsonNode> authenticatedFlux = Flux.empty();
+        if (apiKeyAvailable) {
+            authenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
+                .doOnSubscribe(sub -> ExternalApiLogger.logApiCallAttempt(
+                    LOGGER,
+                    "GoogleBooks",
+                    "STREAM_AUTH",
+                    query,
+                    true))
+                .onErrorResume(err -> {
+                    ExternalApiLogger.logApiCallFailure(
+                        LOGGER,
+                        "GoogleBooks",
+                        "STREAM_AUTH",
+                        query,
+                        err.getMessage());
+                    return Flux.empty();
+                });
         }
 
-        // Only persist books with valid IDs and titles
-        if (book.getId() == null || book.getTitle() == null || book.getTitle().isBlank()) {
-            return;
-        }
+        Flux<JsonNode> unauthenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
+            .doOnSubscribe(sub -> ExternalApiLogger.logApiCallAttempt(
+                LOGGER,
+                "GoogleBooks",
+                "STREAM_UNAUTH",
+                query,
+                false))
+            .onErrorResume(err -> {
+                ExternalApiLogger.logApiCallFailure(
+                    LOGGER,
+                    "GoogleBooks",
+                    "STREAM_UNAUTH",
+                    query,
+                    err.getMessage());
+                return Flux.empty();
+            });
 
-        // Fire-and-forget async persistence
-        Mono.fromRunnable(() -> {
-            try {
-                com.fasterxml.jackson.databind.JsonNode sourceJson = null;
-                if (book.getRawJsonResponse() != null) {
-                    sourceJson = objectMapper.readTree(book.getRawJsonResponse());
-                }
+        Flux<JsonNode> combined = apiKeyAvailable
+            ? Flux.concat(authenticatedFlux, unauthenticatedFlux)
+            : unauthenticatedFlux;
 
-                boolean persisted = persistenceService.saveBook(book, sourceJson);
-                if (persisted) {
-                    LOGGER.debug("Async persisted search result: {} ({})", book.getTitle(), book.getId());
+        return combined
+            .map(BookJsonParser::convertJsonToBook)
+            .filter(Objects::nonNull)
+            .map(book -> {
+                if (!queryQualifiers.isEmpty()) {
+                    queryQualifiers.forEach(book::addQualifier);
                 }
-            } catch (Exception e) {
-                LOGGER.warn("Failed to async persist book {}: {}", book.getId(), e.getMessage());
-            }
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .subscribe();
+                return book;
+            });
     }
 
     /**
