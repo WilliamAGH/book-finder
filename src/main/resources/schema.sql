@@ -442,8 +442,7 @@ create table if not exists book_collections (
 );
 
 create unique index if not exists uq_book_collections_source_code_date
-  on book_collections (source, provider_list_code, published_date)
-  where provider_list_code is not null and published_date is not null;
+  on book_collections (source, provider_list_code, published_date);
 
 create index if not exists idx_book_collections_type on book_collections(collection_type);
 create index if not exists idx_book_collections_name on book_collections(display_name);

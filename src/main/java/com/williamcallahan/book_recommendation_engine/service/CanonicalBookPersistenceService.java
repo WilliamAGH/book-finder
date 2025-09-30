@@ -258,8 +258,8 @@ public class CanonicalBookPersistenceService {
         Date sqlDate = published != null ? new Date(published.getTime()) : null;
 
         jdbcTemplate.update(
-            "INSERT INTO books (id, title, subtitle, description, isbn10, isbn13, published_date, language, publisher, page_count, edition_number, edition_group_key, slug, s3_image_path, created_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
+            "INSERT INTO books (id, title, subtitle, description, isbn10, isbn13, published_date, language, publisher, page_count, slug, created_at, updated_at) " +
+            "VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
             "ON CONFLICT (id) DO UPDATE SET " +
             "title = EXCLUDED.title, " +
             "subtitle = COALESCE(EXCLUDED.subtitle, books.subtitle), " +
@@ -270,10 +270,7 @@ public class CanonicalBookPersistenceService {
             "language = COALESCE(EXCLUDED.language, books.language), " +
             "publisher = COALESCE(EXCLUDED.publisher, books.publisher), " +
             "page_count = COALESCE(EXCLUDED.page_count, books.page_count), " +
-            "edition_number = COALESCE(EXCLUDED.edition_number, books.edition_number), " +
-            "edition_group_key = COALESCE(EXCLUDED.edition_group_key, books.edition_group_key), " +
             "slug = COALESCE(EXCLUDED.slug, books.slug), " +
-            "s3_image_path = COALESCE(EXCLUDED.s3_image_path, books.s3_image_path), " +
             "updated_at = NOW()",
             book.getId(),
             book.getTitle(),
@@ -285,10 +282,7 @@ public class CanonicalBookPersistenceService {
             book.getLanguage(),
             book.getPublisher(),
             book.getPageCount(),
-            book.getEditionNumber(),
-            book.getEditionGroupKey(),
-            slug,
-            book.getS3ImagePath()
+            slug
         );
     }
 
@@ -343,7 +337,7 @@ public class CanonicalBookPersistenceService {
 
         jdbcTemplate.update(
             "INSERT INTO book_external_ids (id, book_id, source, external_id, provider_isbn10, provider_isbn13, info_link, preview_link, purchase_link, web_reader_link, average_rating, ratings_count, pdf_available, epub_available, list_price, currency_code, created_at, last_updated) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
+            "VALUES (?, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) " +
             "ON CONFLICT (source, external_id) DO UPDATE SET " +
             "book_id = EXCLUDED.book_id, " +
             "info_link = COALESCE(EXCLUDED.info_link, book_external_ids.info_link), " +
@@ -384,7 +378,7 @@ public class CanonicalBookPersistenceService {
             String payload = objectMapper.writeValueAsString(sourceJson);
             jdbcTemplate.update(
                 "INSERT INTO book_raw_data (id, book_id, raw_json_response, source, fetched_at, contributed_at, created_at) " +
-                "VALUES (?, ?, ?::jsonb, ?, NOW(), NOW(), NOW()) " +
+                "VALUES (?, ?::uuid, ?::jsonb, ?, NOW(), NOW(), NOW()) " +
                 "ON CONFLICT (book_id, source) DO UPDATE SET raw_json_response = EXCLUDED.raw_json_response, fetched_at = NOW(), contributed_at = NOW(), updated_at = NOW()",
                 IdGenerator.generate(),
                 bookId,
@@ -466,7 +460,7 @@ public class CanonicalBookPersistenceService {
 
     private void upsertImageLink(String bookId, String type, String url, String source) {
         jdbcTemplate.update(
-            "INSERT INTO book_image_links (id, book_id, image_type, url, source, created_at) VALUES (?, ?, ?, ?, ?, NOW()) " +
+            "INSERT INTO book_image_links (id, book_id, image_type, url, source, created_at) VALUES (?, ?::uuid, ?, ?, ?, NOW()) " +
             "ON CONFLICT (book_id, image_type) DO UPDATE SET url = EXCLUDED.url, source = EXCLUDED.source, created_at = book_image_links.created_at",
             IdGenerator.generate(),
             bookId,
