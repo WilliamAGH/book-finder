@@ -379,7 +379,7 @@ public class CanonicalBookPersistenceService {
             jdbcTemplate.update(
                 "INSERT INTO book_raw_data (id, book_id, raw_json_response, source, fetched_at, contributed_at, created_at) " +
                 "VALUES (?, ?::uuid, ?::jsonb, ?, NOW(), NOW(), NOW()) " +
-                "ON CONFLICT (book_id, source) DO UPDATE SET raw_json_response = EXCLUDED.raw_json_response, fetched_at = NOW(), contributed_at = NOW(), updated_at = NOW()",
+                "ON CONFLICT (book_id, source) DO UPDATE SET raw_json_response = EXCLUDED.raw_json_response, fetched_at = NOW(), contributed_at = NOW()",
                 IdGenerator.generate(),
                 bookId,
                 payload,
