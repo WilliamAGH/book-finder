@@ -32,8 +32,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.Optional;
 import java.util.UUID;
@@ -372,8 +374,8 @@ public class BookDataOrchestrator {
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
         return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis))
             .doOnSuccess(results -> {
-                if (!bypassExternalApis) {
-                    triggerBackgroundHydration(results, "SEARCH", query);
+                if (!bypassExternalApis && results != null && !results.isEmpty()) {
+                    hydrateBooksAsync(results, "SEARCH", query);
                 }
             });
     }
@@ -401,26 +403,41 @@ public class BookDataOrchestrator {
             return Mono.empty();
         }
         Set<String> identifiers = books.stream()
-            .map(this::determineBestIdentifier)
-            .filter(id -> id != null && !id.isBlank())
+            .filter(Objects::nonNull)
+            .map(this::collectIdentifiers)
+            .flatMap(Set::stream)
             .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (identifiers.isEmpty()) {
+        return hydrateIdentifiersReactive(identifiers, context, correlationId);
+    }
+
+    public Mono<Void> hydrateIdentifiersReactive(Collection<String> identifiers, String context, String correlationId) {
+        Set<String> normalized = normalizeIdentifiers(identifiers);
+        if (normalized.isEmpty()) {
             return Mono.empty();
         }
-        return Flux.fromIterable(identifiers)
-            .flatMap(id -> hydrateSingleBook(id, context, correlationId), 4)
+        return Flux.fromIterable(normalized)
+            .flatMap(id -> hydrateSingleIdentifier(id, context, correlationId), 4)
             .then();
     }
 
     public void hydrateBooksAsync(List<Book> books, String context, String correlationId) {
-        triggerBackgroundHydration(books, context, correlationId);
-    }
-
-    private void triggerBackgroundHydration(List<Book> books, String context, String correlationId) {
         if (books == null || books.isEmpty()) {
             return;
         }
-        hydrateBooksReactive(books, context, correlationId)
+        Set<String> identifiers = books.stream()
+            .filter(Objects::nonNull)
+            .map(this::collectIdentifiers)
+            .flatMap(Set::stream)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        hydrateIdentifiersAsync(identifiers, context, correlationId);
+    }
+
+    public void hydrateIdentifiersAsync(Collection<String> identifiers, String context, String correlationId) {
+        Set<String> normalized = normalizeIdentifiers(identifiers);
+        if (normalized.isEmpty()) {
+            return;
+        }
+        hydrateIdentifiersReactive(normalized, context, correlationId)
             .subscribeOn(Schedulers.boundedElastic())
             .subscribe(
                 ignored -> { },
@@ -428,7 +445,7 @@ public class BookDataOrchestrator {
             );
     }
 
-    private Mono<Void> hydrateSingleBook(String identifier, String context, String correlationId) {
+    private Mono<Void> hydrateSingleIdentifier(String identifier, String context, String correlationId) {
         if (identifier == null || identifier.isBlank()) {
             return Mono.empty();
         }
@@ -470,22 +487,38 @@ public class BookDataOrchestrator {
         });
     }
 
-    private String determineBestIdentifier(Book book) {
+    private Set<String> collectIdentifiers(Book book) {
+        LinkedHashSet<String> identifiers = new LinkedHashSet<>();
         if (book == null) {
-            return null;
+            return identifiers;
         }
-        if (book.getId() != null && !book.getId().isBlank()) {
-            return book.getId();
-        }
-        if (book.getIsbn13() != null && !book.getIsbn13().isBlank()) {
-            return book.getIsbn13();
-        }
-        if (book.getIsbn10() != null && !book.getIsbn10().isBlank()) {
-            return book.getIsbn10();
-        }
-        return null;
+        addIdentifier(identifiers, book.getId());
+        addIdentifier(identifiers, book.getSlug());
+        addIdentifier(identifiers, book.getIsbn13());
+        addIdentifier(identifiers, book.getIsbn10());
+        return identifiers;
     }
 
+    private void addIdentifier(Set<String> identifiers, String value) {
+        if (value == null) {
+            return;
+        }
+        String trimmed = value.trim();
+        if (!trimmed.isEmpty()) {
+            identifiers.add(trimmed);
+        }
+    }
+
+    private Set<String> normalizeIdentifiers(Collection<String> identifiers) {
+        if (identifiers == null || identifiers.isEmpty()) {
+            return Set.of();
+        }
+        return identifiers.stream()
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(id -> !id.isEmpty())
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
 
     private void triggerSearchViewRefresh(boolean force) {
         if (bookSearchService == null) {
