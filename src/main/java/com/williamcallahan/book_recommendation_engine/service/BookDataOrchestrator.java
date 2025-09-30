@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -69,7 +70,7 @@ public class BookDataOrchestrator {
                                 BookS3CacheService bookS3CacheService,
                                 @Nullable PostgresBookRepository postgresBookRepository,
                                 @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService,
-                                @Nullable TieredBookSearchService tieredBookSearchService,
+                                @Lazy @Nullable TieredBookSearchService tieredBookSearchService,
                                 @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.s3RetryService = s3RetryService;
         this.googleApiFetcher = googleApiFetcher;
