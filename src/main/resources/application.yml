@@ -68,7 +68,7 @@ app:
       enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:true}
     persist-search-results: ${APP_FEATURE_PERSIST_SEARCH_RESULTS:true} # Persist external API search results to Postgres for click availability
     async-backfill:
-      enabled: ${APP_FEATURE_ASYNC_BACKFILL_ENABLED:false} # PHASE 2: Async backfill infrastructure (OFF by default until Phase 3 integration)
+      enabled: ${APP_FEATURE_ASYNC_BACKFILL_ENABLED:true} # PHASE 3: Async backfill enabled with CoverImageService integration
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}

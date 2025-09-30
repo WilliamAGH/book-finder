@@ -194,15 +194,12 @@ class TieredBookSearchServiceAuthorSearchTest {
 
     @BeforeEach
     void setUp() {
-service = new TieredBookSearchService(
+        service = new TieredBookSearchService(
             bookSearchService,
             googleApiFetcher,
             openLibraryBookDataService,
             null,
-            true,
-            null,
-            null,
-            objectMapper
+            true
         );
 
         lenient().when(googleApiFetcher.isGoogleFallbackEnabled()).thenReturn(true);
