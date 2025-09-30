@@ -10,6 +10,7 @@
 package com.williamcallahan.book_recommendation_engine.model;
 
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -71,6 +72,11 @@ public class Book {
     private Map<String, Object> qualifiers;
     private List<String> cachedRecommendationIds;
     private transient String rawJsonResponse;
+    
+    // Retrieval metadata for development mode tracking
+    private transient String retrievedFrom; // "POSTGRES", "S3", "GOOGLE_BOOKS_API", "OPEN_LIBRARY_API", etc.
+    private transient String dataSource; // "GOOGLE_BOOKS", "NYT", "OPEN_LIBRARY", etc.
+    private transient Boolean inPostgres; // Whether this book is currently persisted in Postgres
 
     public Book() {
         this.otherEditions = new ArrayList<>();
@@ -194,6 +200,10 @@ public class Book {
                 this.cachedRecommendationIds.add(recommendationId);
             }
         }
+    }
+
+    public void setPublisher(String publisher) {
+        this.publisher = ValidationUtils.stripWrappingQuotes(publisher);
     }
 
     @Override
