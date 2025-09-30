@@ -59,6 +59,7 @@ class PostgresBookReaderDedupeTest {
                 repo,
                 null,
                 null,
+                false,
                 false
         );
 

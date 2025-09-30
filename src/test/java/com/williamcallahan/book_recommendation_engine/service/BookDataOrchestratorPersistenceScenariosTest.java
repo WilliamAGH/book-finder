@@ -89,6 +89,7 @@ canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTempla
                 postgresBookRepository,
                 canonicalBookPersistenceService,
                 null,
+                false,
                 false
         );
 
