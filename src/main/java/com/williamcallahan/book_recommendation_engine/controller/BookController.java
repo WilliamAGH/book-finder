@@ -115,6 +115,12 @@ public class BookController {
         Mono<List<BookDto>> similarBooks = fetchBook(identifier)
             .flatMap(book -> recommendationService.getSimilarBooks(book.getId(), safeLimit)
                 .defaultIfEmpty(List.of())
+                .doOnNext(similar -> {
+                    // Hydrate similar books to ensure full metadata consistency (same pattern as fetchBook)
+                    if (bookDataOrchestrator != null && !similar.isEmpty()) {
+                        bookDataOrchestrator.hydrateBooksAsync(similar, "SIMILAR_BOOKS", identifier);
+                    }
+                })
                 .map(similar -> similar.stream().map(BookDtoMapper::toDto).toList()));
 
         return ReactiveControllerUtils.withErrorHandling(
