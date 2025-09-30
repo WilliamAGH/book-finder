@@ -30,6 +30,15 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import org.springframework.context.ApplicationEventPublisher;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.lang.Nullable;
+import com.williamcallahan.book_recommendation_engine.service.CanonicalBookPersistenceService;
+import com.williamcallahan.book_recommendation_engine.service.event.SearchResultsUpdatedEvent;
+import com.williamcallahan.book_recommendation_engine.service.event.SearchProgressEvent;
+import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
+import java.time.temporal.ChronoUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Extracted tiered search orchestration from {@link BookDataOrchestrator}. Handles DB-first search
@@ -55,17 +64,26 @@ public class TieredBookSearchService {
     private final OpenLibraryBookDataService openLibraryBookDataService;
     private final BookQueryRepository bookQueryRepository;
     private final boolean externalFallbackEnabled;
+    private final ApplicationEventPublisher eventPublisher;
+    private final @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService;
+    private final ObjectMapper objectMapper;
 
     TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
                             OpenLibraryBookDataService openLibraryBookDataService,
                             @Nullable BookQueryRepository bookQueryRepository,
-                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
+                            @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
+                            ApplicationEventPublisher eventPublisher,
+                            @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService,
+                            ObjectMapper objectMapper) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
         this.openLibraryBookDataService = openLibraryBookDataService;
         this.bookQueryRepository = bookQueryRepository;
         this.externalFallbackEnabled = externalFallbackEnabled;
+        this.eventPublisher = eventPublisher;
+        this.canonicalBookPersistenceService = canonicalBookPersistenceService;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
@@ -85,11 +103,15 @@ public class TieredBookSearchService {
         LOGGER.debug("TieredBookSearch: Starting stream for query='{}', lang={}, total={}, order={}, bypassExternal={}",
             query, langCode, desiredTotalResults, orderBy, bypassExternalApis);
 
+        final String queryHash = computeQueryHash(query);
+        // Notify start
+        safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.STARTING, "Starting search", queryHash));
         return searchPostgresFirstReactive(query, desiredTotalResults)
             .onErrorResume(postgresError -> {
                 LOGGER.warn("TieredBookSearch: Postgres search failed for query '{}': {}", query, postgresError.getMessage());
                 if (!externalFallbackEnabled || bypassExternalApis) {
                     LOGGER.error("TieredBookSearch: No external fallback allowed for '{}' after Postgres failure; streaming empty results.", query);
+                    safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.ERROR, postgresError.getMessage(), queryHash));
                     return Mono.just(List.<Book>of());
                 }
                 ExternalApiLogger.logTieredSearchStart(LOGGER, query, 0, desiredTotalResults, desiredTotalResults);
@@ -105,12 +127,14 @@ public class TieredBookSearchService {
                     } else {
                         LOGGER.info("TieredBookSearch: External fallback disabled; streaming {} Postgres result(s) for '{}'", baseline.size(), query);
                     }
+                    safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.COMPLETE, "Search complete (Postgres only)", queryHash));
                     return postgresFlux.take(desiredTotalResults);
                 }
 
                 boolean satisfied = !baseline.isEmpty() && baseline.size() >= desiredTotalResults;
                 if (satisfied) {
                     LOGGER.info("TieredBookSearch: Postgres fully satisfied '{}' with {} result(s); external fallback skipped.", query, baseline.size());
+                    safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.COMPLETE, "Search complete (satisfied by Postgres)", queryHash));
                     return postgresFlux.take(desiredTotalResults);
                 }
 
@@ -124,10 +148,26 @@ public class TieredBookSearchService {
                     .timeout(externalTimeout)
                     .onErrorResume(error -> {
                         LOGGER.warn("TieredBookSearch: External fallback failed for '{}': {}", query, error.getMessage());
+                        safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.ERROR, error.getMessage(), queryHash));
                         return Flux.empty();
                     });
 
-                return Flux.concat(postgresFlux, externalFlux)
+                // Track totals for event payloads
+                AtomicInteger totalSoFar = new AtomicInteger(baseline.size());
+
+                // Buffer external results and publish events + persist
+                Flux<Book> instrumentedExternal = externalFlux
+                    .bufferTimeout(5, Duration.of(400, ChronoUnit.MILLIS))
+                    .doOnNext(batch -> {
+                        if (batch == null || batch.isEmpty()) return;
+                        int newTotal = totalSoFar.addAndGet(batch.size());
+                        safePublish(new SearchResultsUpdatedEvent(query, batch, "GOOGLE_OR_OL", newTotal, queryHash, false));
+                        persistBatch(batch);
+                    })
+                    .flatMap(Flux::fromIterable)
+                    .doOnComplete(() -> safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.COMPLETE, "External supplementation complete", queryHash)));
+
+                return Flux.concat(postgresFlux, instrumentedExternal)
                     .take(desiredTotalResults);
             })
             .doOnComplete(() -> LOGGER.debug("TieredBookSearch: Completed stream for '{}'", query));
@@ -607,4 +647,30 @@ public class TieredBookSearchService {
             });
     }
 
+    private void persistBatch(List<Book> batch) {
+        if (batch == null || batch.isEmpty() || canonicalBookPersistenceService == null) return;
+        for (Book b : batch) {
+            try {
+                canonicalBookPersistenceService.saveBook(b, objectMapper.valueToTree(b));
+            } catch (Exception ex) {
+                LOGGER.warn("TieredBookSearch: Failed to persist book {} from external stream: {}", b != null ? b.getId() : null, ex.getMessage());
+            }
+        }
+    }
+
+    private String computeQueryHash(String query) {
+        String canonical = SearchQueryUtils.canonicalize(query);
+        if (canonical == null) return "";
+        return canonical.replaceAll("[^a-z0-9-_]", "_");
+    }
+
+    private void safePublish(Object event) {
+        try {
+            if (eventPublisher != null && event != null) {
+                eventPublisher.publishEvent(event);
+            }
+        } catch (Exception ex) {
+            LOGGER.debug("TieredBookSearch: Failed to publish event {}: {}", event.getClass().getSimpleName(), ex.getMessage());
+        }
+    }
 }
