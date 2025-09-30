@@ -69,9 +69,18 @@ public class ExternalApiLogger {
     /**
      * Log the start of a tiered search operation
      */
-    public static void logTieredSearchStart(Logger log, String query, int postgresResults, int desiredTotal) {
-        String message = String.format("%s [TIERED-SEARCH] START: query='%s', postgresResults=%d, desiredTotal=%d, needFromExternal=%d", 
-            PREFIX, query, postgresResults, desiredTotal, Math.max(0, desiredTotal - postgresResults));
+    public static void logTieredSearchStart(Logger log,
+                                            String query,
+                                            int postgresResults,
+                                            int desiredTotal,
+                                            int externalNeeded) {
+        String message = String.format(
+            "%s [TIERED-SEARCH] START: query='%s', postgresResults=%d, desiredTotal=%d, needFromExternal=%d",
+            PREFIX,
+            query,
+            postgresResults,
+            desiredTotal,
+            externalNeeded);
         log.info(message);
         System.out.println(message);
     }

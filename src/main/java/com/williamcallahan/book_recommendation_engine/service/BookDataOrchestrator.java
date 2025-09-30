@@ -368,7 +368,13 @@ public class BookDataOrchestrator {
     }
 
     public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
-        return queryTieredSearch(service -> service.searchAuthors(query, desiredTotalResults));
+        return searchAuthors(query, desiredTotalResults, false);
+    }
+
+    public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query,
+                                                                    int desiredTotalResults,
+                                                                    boolean bypassExternalApis) {
+        return queryTieredSearch(service -> service.searchAuthors(query, desiredTotalResults, bypassExternalApis));
     }
 
     private <T> Mono<List<T>> queryTieredSearch(Function<TieredBookSearchService, Mono<List<T>>> operation) {

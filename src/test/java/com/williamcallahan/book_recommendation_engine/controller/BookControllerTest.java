@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -175,6 +176,26 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.coverUrl", equalTo(fallback.getS3ImagePath())));
 
         verify(googleBooksService).getBookById("fallback-id");
+    }
+
+    @Test
+    @DisplayName("GET /api/books/authors/search returns fallback IDs when missing from Postgres")
+    void searchAuthors_returnsFallbackIds() throws Exception {
+        List<BookSearchService.AuthorResult> authorResults = List.of(
+            new BookSearchService.AuthorResult("db-1", "Known Author", 5, 0.92),
+            new BookSearchService.AuthorResult(null, "Mystery Author", 1, 0.35)
+        );
+
+        when(bookDataOrchestrator.searchAuthors(eq("Mystery"), anyInt())).thenReturn(Mono.just(authorResults));
+
+        performAsync(get("/api/books/authors/search")
+                .param("query", "Mystery"))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.results", hasSize(2)))
+            .andExpect(jsonPath("$.results[0].authorId", equalTo("db-1")))
+            .andExpect(jsonPath("$.results[1].authorId", containsString("external-author-")))
+            .andExpect(jsonPath("$.results[1].authorName", equalTo("Mystery Author")));
     }
 
     private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {

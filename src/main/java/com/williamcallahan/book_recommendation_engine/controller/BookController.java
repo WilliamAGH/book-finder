@@ -15,6 +15,7 @@ import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveControllerUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -178,8 +179,16 @@ public class BookController {
     }
 
     private AuthorHitDto toAuthorHit(BookSearchService.AuthorResult authorResult) {
+        String effectiveId = authorResult.authorId();
+        if (ValidationUtils.isNullOrBlank(effectiveId)) {
+            String slug = SlugGenerator.slugify(authorResult.authorName());
+            if (slug == null || slug.isBlank()) {
+                slug = "unknown";
+            }
+            effectiveId = "external-author-" + slug;
+        }
         return new AuthorHitDto(
-                authorResult.authorId(),
+                effectiveId,
                 authorResult.authorName(),
                 authorResult.bookCount(),
                 authorResult.relevanceScore()

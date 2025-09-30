@@ -7,9 +7,14 @@ import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
 import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
+import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,6 +46,7 @@ import reactor.core.scheduler.Schedulers;
 public class TieredBookSearchService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TieredBookSearchService.class);
+    private static final String EXTERNAL_AUTHOR_ID_PREFIX = "external:author:";
 
     private final BookSearchService bookSearchService;
     private final GoogleApiFetcher googleApiFetcher;
@@ -92,7 +98,7 @@ public class TieredBookSearchService {
                     LOGGER.error("TieredBookSearch: No external fallback allowed for '{}' after Postgres failure; streaming empty results.", query);
                     return Mono.just(List.<Book>of());
                 }
-                ExternalApiLogger.logTieredSearchStart(LOGGER, query, 0, desiredTotalResults);
+                ExternalApiLogger.logTieredSearchStart(LOGGER, query, 0, desiredTotalResults, desiredTotalResults);
                 return Mono.just(List.<Book>of());
             })
             .flatMapMany(postgresHits -> {
@@ -114,12 +120,13 @@ public class TieredBookSearchService {
                     return postgresFlux.take(desiredTotalResults);
                 }
 
-                int remaining = Math.max(desiredTotalResults - baseline.size(), desiredTotalResults);
-                ExternalApiLogger.logTieredSearchStart(LOGGER, query, baseline.size(), desiredTotalResults);
+                int missing = Math.max(desiredTotalResults - baseline.size(), 0);
+                int externalTarget = baseline.isEmpty() ? desiredTotalResults : missing;
+                ExternalApiLogger.logTieredSearchStart(LOGGER, query, baseline.size(), desiredTotalResults, externalTarget);
 
                 Duration externalTimeout = Duration.ofMillis(1200);
 
-                Flux<Book> externalFlux = performExternalSearchStream(query, langCode, remaining, orderBy, baseline.isEmpty())
+                Flux<Book> externalFlux = performExternalSearchStream(query, langCode, externalTarget, orderBy, baseline.isEmpty())
                     .timeout(externalTimeout)
                     .onErrorResume(error -> {
                         LOGGER.warn("TieredBookSearch: External fallback failed for '{}': {}", query, error.getMessage());
@@ -245,13 +252,249 @@ public class TieredBookSearchService {
     }
 
     Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
+        return searchAuthors(query, desiredTotalResults, false);
+    }
+
+    Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query,
+                                                            int desiredTotalResults,
+                                                            boolean bypassExternalApis) {
         if (bookSearchService == null) {
             return Mono.just(List.of());
         }
+
         int safeLimit = desiredTotalResults <= 0 ? 20 : PagingUtils.clamp(desiredTotalResults, 1, 100);
-        return Mono.fromCallable(() -> bookSearchService.searchAuthors(query, safeLimit))
-                .subscribeOn(Schedulers.boundedElastic())
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmptyList("TieredBookSearchService.searchAuthors(" + query + ")"));
+
+        Mono<List<BookSearchService.AuthorResult>> postgresMono = Mono.fromCallable(() -> bookSearchService.searchAuthors(query, safeLimit))
+            .subscribeOn(Schedulers.boundedElastic())
+            .map(results -> results == null ? List.<BookSearchService.AuthorResult>of() : results);
+
+        return postgresMono
+            .onErrorResume(postgresError -> {
+                LOGGER.warn("TieredBookSearch: Postgres author search failed for '{}': {}", query, postgresError.getMessage());
+                if (!externalFallbackEnabled || bypassExternalApis) {
+                    LOGGER.error("TieredBookSearch: Author fallback disabled or bypassed after Postgres error for '{}'. Returning empty set.", query);
+                    return Mono.just(List.<BookSearchService.AuthorResult>of());
+                }
+                return Mono.just(List.<BookSearchService.AuthorResult>of());
+            })
+            .flatMap(postgresResults -> {
+                List<BookSearchService.AuthorResult> baseline = postgresResults == null ? List.of() : postgresResults;
+
+                if (!externalFallbackEnabled || bypassExternalApis) {
+                    if (bypassExternalApis) {
+                        LOGGER.info("TieredBookSearch: Returning {} Postgres author result(s) for '{}' (external bypass)", baseline.size(), query);
+                    } else {
+                        LOGGER.info("TieredBookSearch: Returning {} Postgres author result(s) for '{}' (external fallback disabled)", baseline.size(), query);
+                    }
+                    return Mono.just(baseline);
+                }
+
+                if (!baseline.isEmpty() && baseline.size() >= safeLimit) {
+                    LOGGER.info("TieredBookSearch: Postgres author search satisfied '{}' with {} result(s).", query, baseline.size());
+                    return Mono.just(baseline);
+                }
+
+                int remaining = Math.max(safeLimit - baseline.size(), 1);
+                return performExternalAuthorSearch(query, safeLimit, remaining, baseline.isEmpty())
+                    .map(external -> mergeAuthorResults(baseline, external, safeLimit))
+                    .defaultIfEmpty(baseline)
+                    .onErrorResume(externalError -> {
+                        LOGGER.warn("TieredBookSearch: External author fallback failed for '{}': {}", query, externalError.getMessage());
+                        return Mono.just(baseline);
+                    });
+            })
+            .defaultIfEmpty(List.of());
+    }
+
+    private Mono<List<BookSearchService.AuthorResult>> performExternalAuthorSearch(String query,
+                                                                                   int safeLimit,
+                                                                                   int remaining,
+                                                                                   boolean postgresWasEmpty) {
+        int fetchTarget = Math.max(Math.max(remaining * 2, safeLimit * 2), 5);
+
+        return performExternalSearchStream(query, null, fetchTarget, "relevance", postgresWasEmpty)
+            .collectList()
+            .map(books -> aggregateBooksToAuthorResults(books, safeLimit))
+            .doOnSuccess(results -> {
+                if (!results.isEmpty()) {
+                    LOGGER.info("TieredBookSearch: External author fallback found {} candidate(s) for '{}'", results.size(), query);
+                } else {
+                    LOGGER.info("TieredBookSearch: External author fallback returned no candidates for '{}'", query);
+                }
+            });
+    }
+
+    private List<BookSearchService.AuthorResult> aggregateBooksToAuthorResults(List<Book> books, int limit) {
+        if (books == null || books.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, AuthorAggregation> byNormalized = new LinkedHashMap<>();
+
+        for (Book book : books) {
+            if (book == null || ValidationUtils.isNullOrEmpty(book.getAuthors())) {
+                continue;
+            }
+
+            double relevance = extractRelevanceScore(book);
+
+            for (String authorName : book.getAuthors()) {
+                String normalized = normalizeAuthorName(authorName);
+                if (normalized.isEmpty()) {
+                    continue;
+                }
+
+                AuthorAggregation aggregation = byNormalized.computeIfAbsent(
+                    normalized,
+                    key -> new AuthorAggregation(authorName, generateFallbackAuthorId(authorName, normalized))
+                );
+                aggregation.incrementBookCount();
+                aggregation.updateRelevance(relevance);
+            }
+        }
+
+        if (byNormalized.isEmpty()) {
+            return List.of();
+        }
+
+        return byNormalized.values().stream()
+            .sorted(Comparator.comparingDouble(AuthorAggregation::topRelevance).reversed()
+                .thenComparing(AuthorAggregation::displayName))
+            .limit(Math.max(limit, 1))
+            .map(AuthorAggregation::toResult)
+            .collect(Collectors.toList());
+    }
+
+    private List<BookSearchService.AuthorResult> mergeAuthorResults(List<BookSearchService.AuthorResult> postgresResults,
+                                                                    List<BookSearchService.AuthorResult> externalResults,
+                                                                    int maxTotal) {
+        if ((postgresResults == null || postgresResults.isEmpty()) && (externalResults == null || externalResults.isEmpty())) {
+            return List.of();
+        }
+
+        LinkedHashMap<String, BookSearchService.AuthorResult> merged = new LinkedHashMap<>();
+
+        if (postgresResults != null) {
+            for (BookSearchService.AuthorResult result : postgresResults) {
+                if (result == null) {
+                    continue;
+                }
+                String key = dedupeKeyForAuthor(result.authorName(), result.authorId());
+                if (!key.isEmpty()) {
+                    merged.putIfAbsent(key, result);
+                }
+            }
+        }
+
+        if (externalResults != null) {
+            for (BookSearchService.AuthorResult result : externalResults) {
+                if (result == null) {
+                    continue;
+                }
+                String key = dedupeKeyForAuthor(result.authorName(), result.authorId());
+                if (key.isEmpty() || merged.containsKey(key)) {
+                    continue;
+                }
+                merged.put(key, result);
+                if (merged.size() >= maxTotal) {
+                    break;
+                }
+            }
+        }
+
+        return merged.values().stream()
+            .limit(Math.max(maxTotal, 1))
+            .collect(Collectors.toList());
+    }
+
+    private double extractRelevanceScore(Book book) {
+        if (book == null || book.getQualifiers() == null) {
+            return 0.0;
+        }
+        Object qualifier = book.getQualifiers().get("search.relevanceScore");
+        if (qualifier instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (qualifier != null) {
+            try {
+                return Double.parseDouble(qualifier.toString());
+            } catch (NumberFormatException ignored) {
+                return 0.0;
+            }
+        }
+        return 0.0;
+    }
+
+    private String normalizeAuthorName(String name) {
+        if (ValidationUtils.isNullOrBlank(name)) {
+            return "";
+        }
+        String normalized = name.trim().toLowerCase(Locale.ROOT);
+        normalized = normalized.replaceAll("[^a-z0-9\\s]", "");
+        normalized = normalized.replaceAll("\\s+", " ").trim();
+        return normalized;
+    }
+
+    private String generateFallbackAuthorId(String displayName, String normalized) {
+        String slug = SlugGenerator.slugify(displayName);
+        String suffix = !ValidationUtils.isNullOrBlank(slug)
+            ? slug
+            : normalized.replace(' ', '-');
+        if (ValidationUtils.isNullOrBlank(suffix)) {
+            suffix = UUID.randomUUID().toString();
+        }
+        return EXTERNAL_AUTHOR_ID_PREFIX + suffix;
+    }
+
+    private String dedupeKeyForAuthor(String authorName, String authorId) {
+        String normalized = normalizeAuthorName(authorName);
+        if (!normalized.isEmpty()) {
+            return normalized;
+        }
+        if (!ValidationUtils.isNullOrBlank(authorId)) {
+            return authorId.trim();
+        }
+        return "";
+    }
+
+    private static final class AuthorAggregation {
+        private final String displayName;
+        private final String authorId;
+        private long bookCount;
+        private double topRelevance;
+
+        AuthorAggregation(String displayName, String authorId) {
+            this.displayName = displayName;
+            this.authorId = authorId;
+            this.bookCount = 0L;
+            this.topRelevance = 0.0;
+        }
+
+        void incrementBookCount() {
+            this.bookCount++;
+            double baseline = Math.min(1.0, this.bookCount * 0.1);
+            if (baseline > this.topRelevance) {
+                this.topRelevance = baseline;
+            }
+        }
+
+        void updateRelevance(double candidate) {
+            if (Double.isFinite(candidate) && candidate > this.topRelevance) {
+                this.topRelevance = candidate;
+            }
+        }
+
+        double topRelevance() {
+            return topRelevance;
+        }
+
+        String displayName() {
+            return displayName;
+        }
+
+        BookSearchService.AuthorResult toResult() {
+            return new BookSearchService.AuthorResult(authorId, displayName, bookCount, topRelevance);
+        }
     }
 
     /**
