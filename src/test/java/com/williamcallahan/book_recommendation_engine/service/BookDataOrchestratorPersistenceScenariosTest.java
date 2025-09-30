@@ -22,13 +22,18 @@ import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
 
+import reactor.core.publisher.Flux;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -212,5 +217,118 @@ class BookDataOrchestratorPersistenceScenariosTest {
         when(resultSet.getString("id")).thenReturn(id);
         when(resultSet.getObject("edition_number")).thenReturn(editionNumber);
         return resultSet;
+    }
+}
+
+@ExtendWith(MockitoExtension.class)
+class TieredBookSearchServiceAuthorSearchTest {
+
+    @Mock
+    private BookSearchService bookSearchService;
+
+    @Mock
+    private GoogleApiFetcher googleApiFetcher;
+
+    @Mock
+    private GoogleBooksService googleBooksService;
+
+    @Mock
+    private OpenLibraryBookDataService openLibraryBookDataService;
+
+    private TieredBookSearchService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new TieredBookSearchService(
+            bookSearchService,
+            googleApiFetcher,
+            googleBooksService,
+            openLibraryBookDataService,
+            null,
+            true
+        );
+
+        lenient().when(googleApiFetcher.isGoogleFallbackEnabled()).thenReturn(true);
+        lenient().when(googleApiFetcher.isApiKeyAvailable()).thenReturn(false);
+        lenient().when(googleBooksService.streamBooksReactive(anyString(), any(), anyInt(), anyString()))
+            .thenReturn(Flux.empty());
+        lenient().when(openLibraryBookDataService.searchBooks(anyString(), anyBoolean())).thenReturn(Flux.empty());
+    }
+
+    @Test
+    void searchAuthors_returnsPostgresResultsWhenSufficient() {
+        List<BookSearchService.AuthorResult> postgres = List.of(
+            new BookSearchService.AuthorResult("db-1", "First Author", 4, 0.91),
+            new BookSearchService.AuthorResult("db-2", "Second Author", 3, 0.74)
+        );
+
+        when(bookSearchService.searchAuthors(eq("Query"), any())).thenReturn(postgres);
+
+        List<BookSearchService.AuthorResult> results = service.searchAuthors("Query", 2).block();
+
+        assertThat(results).isNotNull();
+        assertThat(results).containsExactlyElementsOf(postgres);
+        verify(googleBooksService, never()).streamBooksReactive(anyString(), any(), anyInt(), anyString());
+        verify(openLibraryBookDataService, never()).searchBooks(anyString(), anyBoolean());
+    }
+
+    @Test
+    void searchAuthors_fallsBackToExternalWhenPostgresEmpty() {
+        when(bookSearchService.searchAuthors(eq("Ann Patchett"), any())).thenReturn(List.of());
+
+        when(googleBooksService.streamBooksReactive(eq("inauthor:Ann Patchett"), any(), anyInt(), anyString()))
+            .thenReturn(Flux.just(
+                buildExternalBook("g-1", "Ann Patchett", 0.82),
+                buildExternalBook("g-2", "Another Author", 0.58)
+            ));
+
+        when(openLibraryBookDataService.searchBooks(eq("Ann Patchett"), anyBoolean()))
+            .thenReturn(Flux.just(buildExternalBook("ol-1", "Third Author", 0.42)));
+
+        List<BookSearchService.AuthorResult> results = service.searchAuthors("Ann Patchett", 3).block();
+
+        assertThat(results).isNotNull();
+        assertThat(results).isNotEmpty();
+        assertThat(results).extracting(BookSearchService.AuthorResult::authorName)
+            .contains("Ann Patchett", "Another Author", "Third Author");
+        assertThat(results).extracting(BookSearchService.AuthorResult::authorId)
+            .allSatisfy(id -> assertThat(id).isNotBlank());
+    }
+
+    @Test
+    void searchAuthors_mergesExternalWithoutDuplicatingPostgresAuthors() {
+        List<BookSearchService.AuthorResult> postgres = List.of(
+            new BookSearchService.AuthorResult("db-1", "Shared Author", 6, 0.95)
+        );
+
+        when(bookSearchService.searchAuthors(eq("Shared Author"), any())).thenReturn(postgres);
+
+        when(googleBooksService.streamBooksReactive(eq("Shared Author"), any(), anyInt(), anyString()))
+            .thenReturn(Flux.just(
+                buildExternalBook("g-3", "Shared Author", 0.41),
+                buildExternalBook("g-4", "New Contributor", 0.63)
+            ));
+
+        List<BookSearchService.AuthorResult> results = service.searchAuthors("Shared Author", 3).block();
+
+        assertThat(results).isNotNull();
+        assertThat(results).extracting(BookSearchService.AuthorResult::authorName)
+            .contains("Shared Author", "New Contributor");
+        assertThat(results).filteredOn(r -> r.authorName().equals("Shared Author"))
+            .singleElement()
+            .extracting(BookSearchService.AuthorResult::authorId)
+            .isEqualTo("db-1");
+        assertThat(results).filteredOn(r -> r.authorName().equals("New Contributor"))
+            .singleElement()
+            .satisfies(author -> assertThat(author.authorId()).startsWith("external:author:"));
+    }
+
+    private Book buildExternalBook(String id, String authorName, double relevance) {
+        Book book = new Book();
+        book.setId(id);
+        book.setTitle("Title " + id);
+        book.setAuthors(List.of(authorName));
+        book.addQualifier("search.relevanceScore", relevance);
+        return book;
     }
 }

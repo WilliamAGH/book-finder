@@ -16,6 +16,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -93,6 +94,7 @@ public class GoogleApiFetcher {
             // Check circuit breaker first
             if (!circuitBreakerService.isApiCallAllowed()) {
                 log.info("Circuit breaker is OPEN - skipping authenticated fetch for book ID: {}. Caller should try unauthenticated fallback.", bookId);
+                ExternalApiLogger.logCircuitBreakerBlocked(log, "GoogleBooks", bookId);
                 return Mono.empty();
             }
             if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
@@ -104,6 +106,7 @@ public class GoogleApiFetcher {
         String url = buildVolumeUrl(bookId, authenticated);
         String endpoint = "volumes/get/" + bookId + "/" + (authenticated ? "authenticated" : "unauthenticated");
         log.debug("Making {} Google Books API GET call for book ID: {}, endpoint: {}", authenticated ? "Authenticated" : "Unauthenticated", bookId, endpoint);
+        ExternalApiLogger.logHttpRequest(log, "GET", url, authenticated);
         return performGetJson(url, endpoint, authenticated);
     }
 
@@ -120,7 +123,7 @@ public class GoogleApiFetcher {
         return webClient.get()
                 .uri(url)
                 .retrieve()
-                .bodyToMono(JsonNode.class)
+                .toEntity(JsonNode.class)
                 .doOnSubscribe(s -> log.debug("Fetching from Google API: {}", url))
                 .timeout(Duration.ofSeconds(5))
                 .retryWhen(Retry.backoff(1, Duration.ofSeconds(1))
@@ -147,12 +150,21 @@ public class GoogleApiFetcher {
                             apiRequestMonitor.recordFailedRequest(endpoint, "All retries failed: " + retrySignal.failure().getMessage());
                             return retrySignal.failure();
                         }))
-                .doOnSuccess(response -> {
-                    apiRequestMonitor.recordSuccessfulRequest(endpoint);
+                .doOnSuccess(responseEntity -> {
+                    if (responseEntity != null) {
+                        JsonNode body = responseEntity.getBody();
+                        int responseSize = body == null ? 0 : body.toString().length();
+                        ExternalApiLogger.logHttpResponse(log,
+                            responseEntity.getStatusCode().value(),
+                            url,
+                            responseSize);
+                        apiRequestMonitor.recordSuccessfulRequest(endpoint);
+                    }
                     if (authenticated) {
                         circuitBreakerService.recordSuccess();
                     }
                 })
+                .map(responseEntity -> responseEntity != null ? responseEntity.getBody() : null)
                 .onErrorResume(e -> {
                     if (e instanceof PrematureCloseException) {
                         // Treat premature close as transient/cancellation; do not trip the circuit breaker
@@ -177,6 +189,7 @@ public class GoogleApiFetcher {
                             circuitBreakerService.recordGeneralFailure();
                         }
                     }
+                    ExternalApiLogger.logApiCallFailure(log, "GoogleBooks", "FETCH_VOLUME", url, e.getMessage());
                     apiRequestMonitor.recordFailedRequest(endpoint, e.getMessage());
                     return Mono.empty();
                 });
