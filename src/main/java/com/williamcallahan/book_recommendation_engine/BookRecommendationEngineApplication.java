@@ -141,6 +141,7 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
     private com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator;
 
     @Override
