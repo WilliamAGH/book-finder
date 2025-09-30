@@ -92,18 +92,22 @@ function generateNanoId(size = 10) {
 
 function generateUUIDv7() {
   const unixMillis = BigInt(Date.now());
-  const timeHigh = Number((unixMillis >> 20n) & 0xffffffffn);
-  const timeMid = Number((unixMillis >> 4n) & 0xffffn);
-  const timeLow = Number(unixMillis & 0xfn);
-  const random = crypto.randomBytes(10);
   const bytes = Buffer.alloc(16);
 
-  bytes.writeUInt32BE(timeHigh, 0);
-  bytes.writeUInt16BE(timeMid, 4);
-  bytes[6] = ((timeLow & 0x0f) | 0x70);
-  bytes[7] = random[0];
-  bytes[8] = (random[1] & 0x3f) | 0x80;
-  random.copy(bytes, 9, 2);
+  // 48-bit Unix millisecond timestamp (big-endian) occupies bytes 0-5
+  bytes[0] = Number((unixMillis >> 40n) & 0xffn);
+  bytes[1] = Number((unixMillis >> 32n) & 0xffn);
+  bytes[2] = Number((unixMillis >> 24n) & 0xffn);
+  bytes[3] = Number((unixMillis >> 16n) & 0xffn);
+  bytes[4] = Number((unixMillis >> 8n) & 0xffn);
+  bytes[5] = Number(unixMillis & 0xffn);
+
+  // Remaining bytes are random; overlay version/variant bits as required by RFC 9562 draft
+  const random = crypto.randomBytes(10);
+  random.copy(bytes, 6);
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x70; // version 7 in high nibble
+  bytes[7] = (bytes[7] & 0x3f) | 0x80; // variant 2 (RFC 4122)
 
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
@@ -568,7 +572,8 @@ class BookMigrator {
       // Sale/Access info
       saleability: saleInfo.saleability || 'NOT_FOR_SALE',
       isEbook: saleInfo.isEbook || false,
-      listPrice: saleInfo.listPrice?.amount || saleInfo.retailPrice?.amount || null,
+      listPriceAmount: saleInfo.listPrice?.amount ?? null,
+      retailPriceAmount: saleInfo.retailPrice?.amount ?? null,
       currencyCode: saleInfo.listPrice?.currencyCode || saleInfo.retailPrice?.currencyCode || null,
       country: saleInfo.country || accessInfo.country || null,
 
@@ -792,10 +797,16 @@ class BookMigrator {
         $29, NOW()
       )
       ON CONFLICT (source, external_id) DO UPDATE SET
+        book_id = EXCLUDED.book_id,
+        info_link = COALESCE(EXCLUDED.info_link, book_external_ids.info_link),
+        preview_link = COALESCE(EXCLUDED.preview_link, book_external_ids.preview_link),
+        web_reader_link = COALESCE(EXCLUDED.web_reader_link, book_external_ids.web_reader_link),
+        canonical_volume_link = COALESCE(EXCLUDED.canonical_volume_link, book_external_ids.canonical_volume_link),
         average_rating = COALESCE(EXCLUDED.average_rating, book_external_ids.average_rating),
         ratings_count = COALESCE(EXCLUDED.ratings_count, book_external_ids.ratings_count),
         list_price = COALESCE(EXCLUDED.list_price, book_external_ids.list_price),
-        retail_price = COALESCE(EXCLUDED.retail_price, book_external_ids.retail_price)`,
+        retail_price = COALESCE(EXCLUDED.retail_price, book_external_ids.retail_price),
+        currency_code = COALESCE(EXCLUDED.currency_code, book_external_ids.currency_code)`,
       [
         generateNanoId(10), bookId, 'GOOGLE_BOOKS', googleBooksId,
         providerIsbn10, providerIsbn13, 
@@ -809,7 +820,7 @@ class BookMigrator {
         fields.viewability, fields.textReadable, fields.imageReadable,
         fields.printType, fields.maturityRating, fields.contentVersion,
         fields.textToSpeechPermission, fields.saleability, fields.country,
-        fields.listPrice, fields.listPrice, fields.currencyCode
+        fields.listPriceAmount, fields.retailPriceAmount, fields.currencyCode
       ]
     );
 
@@ -1482,13 +1493,41 @@ function parsePostgresUrl(pgUrl) {
   if (!pgUrl) throw new Error('SPRING_DATASOURCE_URL not set');
 
   const parsed = new URL(pgUrl);
+  const sslMode = (parsed.searchParams.get('sslmode') || '').toLowerCase();
+  const allowInsecure = process.env.PGSSL_ALLOW_INSECURE === 'true';
+
+  const buildSecureSslConfig = () => {
+    const sslConfig = { rejectUnauthorized: true };
+    const rootCertPath = process.env.PGSSLROOTCERT;
+    if (rootCertPath) {
+      try {
+        sslConfig.ca = fs.readFileSync(rootCertPath);
+      } catch (err) {
+        console.warn(`[DB] Failed to load PGSSLROOTCERT from ${rootCertPath}: ${err.message}`);
+      }
+    }
+    return sslConfig;
+  };
+
+  let ssl;
+  if (['require', 'verify-full', 'verify-ca'].includes(sslMode)) {
+    ssl = buildSecureSslConfig();
+  } else if (sslMode === 'disable') {
+    ssl = allowInsecure ? false : buildSecureSslConfig();
+  } else if (sslMode === 'prefer' || sslMode === 'allow') {
+    ssl = allowInsecure ? false : buildSecureSslConfig();
+  } else {
+    // Default to secure unless explicitly opted out for local development
+    ssl = allowInsecure ? false : buildSecureSslConfig();
+  }
+
   return {
     host: parsed.hostname,
-    port: parsed.port || 5432,
+    port: parsed.port ? Number(parsed.port) : 5432,
     database: parsed.pathname.slice(1) || 'postgres',
     user: parsed.username,
     password: parsed.password,
-    ssl: parsed.searchParams.get('sslmode') === 'require' ? { rejectUnauthorized: false } : false
+    ssl
   };
 }
 
