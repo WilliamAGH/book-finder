@@ -1,6 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
+import com.williamcallahan.book_recommendation_engine.repository.SitemapRepository;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.AuthorListingXmlItem;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService.AuthorSection;
@@ -46,6 +47,9 @@ class SitemapControllerTest {
 
     @BeforeEach
     void setUp() {
+        Instant fallbackInstant = Instant.parse("2024-01-01T00:00:00Z");
+        SitemapRepository.DatasetFingerprint fallbackFingerprint = new SitemapRepository.DatasetFingerprint(0, fallbackInstant);
+
         when(sitemapProperties.getBaseUrl()).thenReturn("https://findmybook.net");
         when(sitemapProperties.getHtmlPageSize()).thenReturn(100);
         when(sitemapProperties.getXmlPageSize()).thenReturn(5000);
@@ -57,6 +61,10 @@ class SitemapControllerTest {
             String arg = invocation.getArgument(0);
             return arg == null ? "A" : arg.toUpperCase();
         });
+        when(sitemapService.currentBookFingerprint()).thenReturn(fallbackFingerprint);
+        when(sitemapService.currentAuthorFingerprint()).thenReturn(fallbackFingerprint);
+        when(sitemapService.getBookSitemapPageMetadata()).thenReturn(List.of());
+        when(sitemapService.getAuthorSitemapPageMetadata()).thenReturn(List.of());
     }
 
     @Test
@@ -99,6 +107,13 @@ class SitemapControllerTest {
     void sitemapIndexReturnsXml() throws Exception {
         when(sitemapService.getBooksXmlPageCount()).thenReturn(2);
         when(sitemapService.getAuthorXmlPageCount()).thenReturn(1);
+        when(sitemapService.getBookSitemapPageMetadata()).thenReturn(List.of(
+                new SitemapService.SitemapPageMetadata(1, Instant.parse("2024-02-01T00:00:00Z")),
+                new SitemapService.SitemapPageMetadata(2, Instant.parse("2024-02-02T00:00:00Z"))
+        ));
+        when(sitemapService.getAuthorSitemapPageMetadata()).thenReturn(List.of(
+                new SitemapService.SitemapPageMetadata(1, Instant.parse("2024-02-03T00:00:00Z"))
+        ));
 
         mockMvc.perform(get("/sitemap.xml"))
                 .andExpect(status().isOk())
@@ -152,5 +167,57 @@ class SitemapControllerTest {
 
         mockMvc.perform(get("/sitemap-xml/authors/4.xml"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /sitemap-xml/books/1.xml handles books with special characters in slugs")
+    void booksSitemapHandlesSpecialCharacterSlugs() throws Exception {
+        when(sitemapService.getBooksXmlPageCount()).thenReturn(1);
+        when(sitemapService.getBooksForXmlPage(1)).thenReturn(List.of(
+                new BookSitemapItem("book-1", "harry-potter-stone", "Harry Potter", Instant.parse("2024-01-01T00:00:00Z")),
+                new BookSitemapItem("book-2", "book-with-numbers-123", "Book 123", Instant.parse("2024-01-02T00:00:00Z"))
+        ));
+
+        mockMvc.perform(get("/sitemap-xml/books/1.xml"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_XML))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/book/harry-potter-stone")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/book/book-with-numbers-123")));
+    }
+
+    @Test
+    @DisplayName("GET /sitemap-xml/books/1.xml skips books without slugs")
+    void booksSitemapSkipsNullSlugs() throws Exception {
+        when(sitemapService.getBooksXmlPageCount()).thenReturn(1);
+        when(sitemapService.getBooksForXmlPage(1)).thenReturn(List.of(
+                new BookSitemapItem("book-1", "valid-slug", "Valid Book", Instant.parse("2024-01-01T00:00:00Z")),
+                new BookSitemapItem("book-2", null, "No Slug Book", Instant.parse("2024-01-02T00:00:00Z")),
+                new BookSitemapItem("book-3", "", "Empty Slug Book", Instant.parse("2024-01-03T00:00:00Z"))
+        ));
+
+        mockMvc.perform(get("/sitemap-xml/books/1.xml"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_XML))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/book/valid-slug")))
+                // Should only have one <url> entry
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("/book/null"))));
+    }
+
+    @Test
+    @DisplayName("GET /sitemap.xml handles XML escaping correctly")
+    void sitemapIndexHandlesXmlEscaping() throws Exception {
+        when(sitemapService.getBooksXmlPageCount()).thenReturn(1);
+        when(sitemapService.getAuthorXmlPageCount()).thenReturn(0);
+        when(sitemapService.getBookSitemapPageMetadata()).thenReturn(List.of(
+                new SitemapService.SitemapPageMetadata(1, Instant.parse("2024-01-01T12:34:56Z"))
+        ));
+
+        mockMvc.perform(get("/sitemap.xml"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_XML))
+                // Should properly escape XML and contain valid structure
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("</sitemapindex>")));
     }
 }

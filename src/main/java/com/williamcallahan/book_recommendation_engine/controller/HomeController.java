@@ -412,8 +412,11 @@ public class HomeController {
                     .trim()
                     .replaceAll("\\s+", " ");
 
-                return Mono.just("redirect:/search?query=" + URLEncoder.encode(processedQuery, StandardCharsets.UTF_8)
-                    + "&year=" + extractedYear);
+                if (!ValidationUtils.hasText(processedQuery)) {
+                    return Mono.just("redirect:/search?year=" + extractedYear);
+                }
+                return Mono.just("redirect:/search?query="
+                    + URLEncoder.encode(processedQuery, StandardCharsets.UTF_8) + "&year=" + extractedYear);
             }
         }
 
@@ -440,20 +443,29 @@ public class HomeController {
             int maxResults = 12; // Default page size
             
             return bookDataOrchestrator.searchBooksTiered(query, null, maxResults, sort, false)
-                .timeout(Duration.ofMillis(2000))
+                .timeout(Duration.ofSeconds(8))
                 .flatMap(books -> bookCoverManagementService.prepareBooksForDisplay(books))
                 .map(books -> {
                     model.addAttribute("initialResults", books);
                     model.addAttribute("hasInitialResults", !books.isEmpty());
                     model.addAttribute("totalResults", books.size());
+                    model.addAttribute("initialResultsError", null);
                     log.info("Server-rendered {} search results for query '{}'", books.size(), query);
                     return books;
                 })
                 .onErrorResume(e -> {
-                    log.warn("Error server-rendering search results for '{}': {}", query, e.getMessage());
+                    String reason;
+                    if (e instanceof java.util.concurrent.TimeoutException) {
+                        reason = "Server-side search timed out before results were ready";
+                        log.warn("Timeout server-rendering search results for '{}': {}", query, e.getMessage());
+                    } else {
+                        reason = e.getMessage() != null ? e.getMessage() : e.toString();
+                        log.warn("Error server-rendering search results for '{}': {}", query, reason, e);
+                    }
                     model.addAttribute("initialResults", List.of());
                     model.addAttribute("hasInitialResults", false);
                     model.addAttribute("totalResults", 0);
+                    model.addAttribute("initialResultsError", reason);
                     return Mono.just(List.of());
                 })
                 .thenReturn("search");

@@ -19,10 +19,14 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Controller responsible for generating the server-rendered sitemap page and XML sitemap feeds.
@@ -72,22 +76,31 @@ public class SitemapController {
         int totalBookPages = sitemapService.getBooksXmlPageCount();
         int totalAuthorPages = sitemapService.getAuthorXmlPageCount();
         String baseUrl = sitemapProperties.getBaseUrl();
-        Instant now = Instant.now();
+
+        Map<Integer, Instant> bookLastModified = sitemapService.getBookSitemapPageMetadata().stream()
+                .collect(Collectors.toMap(SitemapService.SitemapPageMetadata::page, SitemapService.SitemapPageMetadata::lastModified));
+        Map<Integer, Instant> authorLastModified = sitemapService.getAuthorSitemapPageMetadata().stream()
+                .collect(Collectors.toMap(SitemapService.SitemapPageMetadata::page, SitemapService.SitemapPageMetadata::lastModified));
+
+        Instant bookFallback = sitemapService.currentBookFingerprint().lastModified();
+        Instant authorFallback = sitemapService.currentAuthorFingerprint().lastModified();
 
         StringBuilder xml = new StringBuilder();
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.append("<sitemapindex xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
         for (int i = 1; i <= totalBookPages; i++) {
+            Instant lastModified = bookLastModified.getOrDefault(i, bookFallback);
             xml.append("  <sitemap>\n");
             xml.append("    <loc>").append(escapeXml(baseUrl + "/sitemap-xml/books/" + i + ".xml")).append("</loc>\n");
-            xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(now)).append("</lastmod>\n");
+            xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(lastModified)).append("</lastmod>\n");
             xml.append("  </sitemap>\n");
         }
 
         for (int i = 1; i <= totalAuthorPages; i++) {
+            Instant lastModified = authorLastModified.getOrDefault(i, authorFallback);
             xml.append("  <sitemap>\n");
             xml.append("    <loc>").append(escapeXml(baseUrl + "/sitemap-xml/authors/" + i + ".xml")).append("</loc>\n");
-            xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(now)).append("</lastmod>\n");
+            xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(lastModified)).append("</lastmod>\n");
             xml.append("  </sitemap>\n");
         }
         xml.append("</sitemapindex>");
@@ -124,10 +137,16 @@ public class SitemapController {
         StringBuilder xml = new StringBuilder();
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+        Instant fallback = sitemapService.currentBookFingerprint().lastModified();
         for (BookSitemapItem item : items) {
-            Instant lastModified = item.updatedAt() != null ? item.updatedAt() : Instant.now();
+            if (item.slug() == null || item.slug().isBlank()) {
+                continue; // Skip items without valid slugs
+            }
+            Instant lastModified = item.updatedAt() != null ? item.updatedAt() : fallback;
             xml.append("  <url>\n");
-            xml.append("    <loc>").append(escapeXml(baseUrl + "/book/" + item.slug())).append("</loc>\n");
+            // Slugs should already be URL-safe, but ensure proper encoding
+            String safeSlug = validateAndEncodeSlug(item.slug());
+            xml.append("    <loc>").append(escapeXml(baseUrl + "/book/" + safeSlug)).append("</loc>\n");
             xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(lastModified)).append("</lastmod>\n");
             xml.append("    <changefreq>weekly</changefreq>\n");
             xml.append("    <priority>0.8</priority>\n");
@@ -142,16 +161,36 @@ public class SitemapController {
         StringBuilder xml = new StringBuilder();
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+        Instant fallback = sitemapService.currentAuthorFingerprint().lastModified();
         for (AuthorListingXmlItem item : items) {
             xml.append("  <url>\n");
             xml.append("    <loc>").append(escapeXml(baseUrl + item.toPath())).append("</loc>\n");
-            xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(item.lastModified())).append("</lastmod>\n");
+            Instant lastModified = item.lastModified() != null ? item.lastModified() : fallback;
+            xml.append("    <lastmod>").append(LAST_MODIFIED_FORMATTER.format(lastModified)).append("</lastmod>\n");
             xml.append("    <changefreq>daily</changefreq>\n");
             xml.append("    <priority>0.6</priority>\n");
             xml.append("  </url>\n");
         }
         xml.append("</urlset>");
         return xml.toString();
+    }
+
+    private String validateAndEncodeSlug(String slug) {
+        if (slug == null || slug.isBlank()) {
+            return "unknown";
+        }
+        // Slugs should already be URL-safe (lowercase, hyphens, alphanumeric)
+        // But handle edge cases where encoding is needed
+        try {
+            // Only encode if it contains characters that need encoding
+            if (slug.matches("[a-z0-9-]+")) {
+                return slug; // Already safe
+            }
+            return URLEncoder.encode(slug, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            // Fallback to basic sanitization
+            return slug.replaceAll("[^a-zA-Z0-9-]", "-");
+        }
     }
 
     private String escapeXml(String value) {

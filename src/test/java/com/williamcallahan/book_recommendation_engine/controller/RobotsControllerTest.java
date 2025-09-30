@@ -119,6 +119,25 @@ class RobotsControllerTest {
     }
 
     /**
+     * Insecure scheme with production host must remain restrictive
+     */
+    @Nested
+    @WebMvcTest(RobotsController.class)
+    @Import(TestSecurityConfig.class)
+    @TestPropertySource(properties = {"coolify.url=http://findmybook.net", "coolify.branch=main"})
+    class InsecureScheme {
+        @Autowired
+        private MockMvc mockMvc;
+
+        @Test
+        void shouldReturnRestrictiveRobotsTxt() throws Exception {
+            mockMvc.perform(get("/robots.txt"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(RESTRICTIVE_ROBOTS_TXT));
+        }
+    }
+
+    /**
      * Production domain + non-main branch test scenario
      * 
      */
