@@ -35,9 +35,6 @@ import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
-import java.util.Arrays;
-import java.util.stream.Collectors;
-
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
@@ -112,34 +109,16 @@ public class SecurityConfig {
             headers.referrerPolicy(referrer -> referrer.policy(policy));
 
             if (cspEnabled) { // Check if CSP is enabled first
-                StringBuilder imgSrcDirective = new StringBuilder("'self' data: blob: ");
+                // Allow HTTPS images from any source - book covers come from many external sources
+                // (Google Books, Open Library, Goodreads, Amazon, etc.)
+                StringBuilder imgSrcDirective = new StringBuilder("'self' data: blob: https: ");
                 StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline' blob:");
                 StringBuilder connectSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com");
 
                 if (clickyEnabled) {
-                    // Add Clicky Analytics domains for img-src, script-src, and connect-src
-                    imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
+                    // Add Clicky Analytics domains for script-src and connect-src
                     scriptSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
                     connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
-                }
-
-                // Add Google Books domain for cover images
-                imgSrcDirective.append("https://books.google.com ");
-
-                // Add book covers CDN domain
-                if (bookCoversCdnDomain != null && !bookCoversCdnDomain.isEmpty()) {
-                    imgSrcDirective.append(bookCoversCdnDomain).append(" ");
-                }
-
-                // Add additional domains if specified
-                if (bookCoversAdditionalDomains != null && !bookCoversAdditionalDomains.isEmpty()) {
-                    String formattedDomains = Arrays.stream(bookCoversAdditionalDomains.split(","))
-                        .map(String::trim)
-                        .filter(s -> !s.isEmpty())
-                        .collect(Collectors.joining(" "));
-                    if (!formattedDomains.isEmpty()) {
-                        imgSrcDirective.append(formattedDomains);
-                    }
                 }
 
                 // Add Content Security Policy header with dynamic directives
