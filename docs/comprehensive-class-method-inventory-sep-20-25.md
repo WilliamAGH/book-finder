@@ -1,8 +1,10 @@
 # Comprehensive Class and Method Inventory
+
 **Date:** September 20, 2025
 **Purpose:** Identify duplicate code/logic for DRY improvements and centralization opportunities
 
 ## Table of Contents
+
 1. [Main Application](#main-application)
 2. [Configuration Classes](#configuration-classes)
 3. [Controllers](#controllers)
@@ -12,15 +14,16 @@
 7. [Models & DTOs](#models--dtos)
 8. [Repositories](#repositories)
 9. [Filters & Support](#filters--support)
-10. [Test Classes](#test-classes)
-11. [Duplication Analysis](#duplication-analysis)
+10. [Comprehensive Duplication Analysis](#comprehensive-duplication-analysis)
 
 ---
 
 ## Main Application
 
 ### BookRecommendationEngineApplication
+
 **Path:** `src/main/java/.../BookRecommendationEngineApplication.java`
+
 - **Purpose:** Spring Boot application entry point
 - **Methods:**
   - `main(String[] args)` - Application startup
@@ -31,7 +34,9 @@
 ## Configuration Classes
 
 ### AppRateLimiterConfig
+
 **Path:** `src/main/java/.../config/AppRateLimiterConfig.java`
+
 - **Purpose:** Rate limiter configuration for external APIs (production only)
 - **Profile:** `!dev`
 - **Methods:**
@@ -42,7 +47,9 @@
 - **Duplication:** Repetitive rate limiter creation pattern
 
 ### AsyncConfig
+
 **Path:** `src/main/java/.../config/AsyncConfig.java`
+
 - **Purpose:** Configure async request handling and thread pools
 - **Implements:** WebMvcConfigurer
 - **Methods:**
@@ -53,7 +60,9 @@
 - **Duplication:** Similar thread pool setup pattern in both executor methods
 
 ### CacheComponentsConfig
+
 **Path:** `src/main/java/.../config/CacheComponentsConfig.java`
+
 - **Purpose:** Cache infrastructure configuration
 - **Methods:**
   - `bookDetailCache()` - Caffeine cache for Book objects (20k max, 6hr expiry)
@@ -63,7 +72,9 @@
 - **Duplication:** Cache configuration duplicated between bookDetailCache and cacheManager
 
 ### CacheFactory
+
 **Path:** `src/main/java/.../config/CacheFactory.java`
+
 - **Purpose:** Factory for creating Caffeine caches with consistent configuration
 - **Annotations:** @Component, @Configuration
 - **Methods:**
@@ -80,7 +91,9 @@
 - **Duplication:** Factory methods duplicate Caffeine builder pattern
 
 ### CustomBasicAuthenticationEntryPoint
+
 **Path:** `src/main/java/.../config/CustomBasicAuthenticationEntryPoint.java`
+
 - **Purpose:** Custom HTTP Basic authentication entry point with JSON error responses
 - **Extends:** BasicAuthenticationEntryPoint
 - **Methods:**
@@ -90,7 +103,9 @@
 - **Duplication:** Standard authentication entry point pattern
 
 ### DatabaseUrlEnvironmentPostProcessor
+
 **Path:** `src/main/java/.../config/DatabaseUrlEnvironmentPostProcessor.java`
+
 - **Purpose:** Converts postgres:// URLs to JDBC format, extracts credentials
 - **Implements:** EnvironmentPostProcessor, Ordered
 - **Inner Class:** `JdbcParseResult` - holds jdbcUrl, username, password
@@ -102,7 +117,9 @@
 - **Duplication:** None identified
 
 ### DevModeConfig
+
 **Path:** `src/main/java/.../config/DevModeConfig.java`
+
 - **Purpose:** Development mode configuration to minimize API calls and enhance caching
 - **Profile:** dev
 - **Dependencies:** Caffeine, Resilience4j RateLimiter
@@ -114,7 +131,9 @@
 - **Duplication:** Cache configuration patterns similar to CacheComponentsConfig
 
 ### FeatureFlagConfig
+
 **Path:** `src/main/java/.../config/FeatureFlagConfig.java`
+
 - **Purpose:** Centralized feature flag configuration for runtime toggles
 - **Methods:**
   - `isYearFilteringEnabled()` - @Bean for year filtering feature state
@@ -123,7 +142,9 @@
 - **Duplication:** Simple bean factory pattern
 
 ### GoogleBooksConfig
+
 **Path:** `src/main/java/.../config/GoogleBooksConfig.java`
+
 - **Purpose:** Google Books API WebClient configuration
 - **Methods:**
   - `googleBooksWebClient()` - Configured WebClient with 16MB buffer
@@ -135,14 +156,18 @@
 - **Duplication:** Similar WebClient configuration to WebClientConfig
 
 ### NoDatabaseConfig
+
 **Path:** `src/main/java/.../config/NoDatabaseConfig.java`
+
 - **Purpose:** Disables database auto-configuration when no datasource URL is present
 - **Conditional:** @ConditionalOnExpression checking empty datasource URL
 - **Features:** Excludes DataSource, JPA, Hibernate auto-configuration
 - **Duplication:** Standard conditional configuration pattern
 
 ### S3Config
+
 **Path:** `src/main/java/.../config/S3Config.java`
+
 - **Purpose:** S3 client configuration for book cover storage
 - **Conditional:** S3EnvironmentCondition
 - **Fields:** accessKeyId, secretAccessKey, s3ServerUrl, s3Region (us-west-2 default)
@@ -152,7 +177,9 @@
 - **Duplication:** None identified
 
 ### S3EnvironmentCondition
+
 **Path:** `src/main/java/.../config/S3EnvironmentCondition.java`
+
 - **Purpose:** Custom condition checking for S3 environment variables
 - **Implements:** Condition
 - **Methods:**
@@ -161,7 +188,9 @@
 - **Duplication:** Standard Spring condition pattern
 
 ### S3HealthIndicator
+
 **Path:** `src/main/java/.../config/S3HealthIndicator.java`
+
 - **Purpose:** Reactive health indicator for S3 bucket accessibility
 - **Implements:** ReactiveHealthIndicator
 - **Dependencies:** S3Client (optional)
@@ -171,7 +200,9 @@
 - **Duplication:** Standard health indicator pattern
 
 ### SearchPageHealthIndicator
+
 **Path:** `src/main/java/.../config/SearchPageHealthIndicator.java`
+
 - **Purpose:** Health indicator for search page availability with dynamic configuration
 - **Implements:** ReactiveHealthIndicator, ApplicationListener<WebServerInitializedEvent>
 - **Dependencies:** WebPageHealthIndicator delegate
@@ -182,7 +213,9 @@
 - **Duplication:** Similar pattern to other health indicators
 
 ### SecurityConfig
+
 **Path:** `src/main/java/.../config/SecurityConfig.java`
+
 - **Purpose:** Spring Security configuration with role-based access
 - **Annotations:** @EnableWebSecurity, @EnableMethodSecurity
 - **Conditional:** WebApplication.Type.SERVLET
@@ -195,7 +228,9 @@
 - **Duplication:** CSP directive building logic is complex and repetitive
 
 ### SitemapProperties
+
 **Path:** `src/main/java/.../config/SitemapProperties.java`
+
 - **Purpose:** Configuration properties for sitemap generation
 - **Annotations:** @ConfigurationProperties(prefix = "sitemap")
 - **Properties:** baseUrl, htmlPageSize, xmlPageSize, schedulerEnabled, schedulerCron, schedulerCoverSampleSize, schedulerExternalHydrationSize, s3AccumulatedIdsKey
@@ -204,7 +239,9 @@
 - **Duplication:** Standard configuration properties pattern
 
 ### WebClientConfig
+
 **Path:** `src/main/java/.../config/WebClientConfig.java`
+
 - **Purpose:** WebClient configuration with timeouts
 - **Methods:**
   - `webClientBuilder()` - Creates WebClient.Builder with 5sec timeouts, 10MB buffer
@@ -212,7 +249,9 @@
 - **Duplication:** Timeout values could be externalized, similar to GoogleBooksConfig
 
 ### WebConfig
+
 **Path:** `src/main/java/.../config/WebConfig.java`
+
 - **Purpose:** Web MVC configuration for static resource handling
 - **Implements:** WebMvcConfigurer
 - **Methods:**
@@ -221,7 +260,9 @@
 - **Duplication:** Standard resource handler configuration
 
 ### WebPageHealthIndicator
+
 **Path:** `src/main/java/.../config/WebPageHealthIndicator.java`
+
 - **Purpose:** Reusable health indicator for web page availability checks
 - **Classes:** WebPageHealthIndicator, HomepageHealthIndicator, BookDetailPageHealthIndicator
 - **Methods:**
@@ -230,7 +271,9 @@
 - **Duplication:** Health indicator pattern reused across multiple page types
 
 ### WebSocketConfig
+
 **Path:** `src/main/java/.../config/WebSocketConfig.java`
+
 - **Purpose:** WebSocket configuration for real-time communication
 - **Implements:** WebSocketMessageBrokerConfigurer
 - **Annotations:** @EnableWebSocketMessageBroker
@@ -245,7 +288,9 @@
 ## Controllers
 
 ### HomeController
+
 **Path:** `src/main/java/.../controller/HomeController.java`
+
 - **Purpose:** Main web controller for user-facing pages (home, search, book details)
 - **Fields:**
   - 15+ service dependencies (bookDataOrchestrator, googleBooksService, recentlyViewedService, etc.)
@@ -275,7 +320,9 @@
   - ISBN validation patterns could be centralized
 
 ### BookController
+
 **Path:** `src/main/java/.../controller/BookController.java`
+
 - **Purpose:** REST API for book operations (Postgres-first)
 - **Base Path:** `/api/books`
 - **Dependencies:** BookDataOrchestrator, RecommendationService
@@ -295,7 +342,9 @@
 - **Duplication:** fetchBook logic similar to HomeController's fetchCanonicalBook
 
 ### AdminController
+
 **Path:** `src/main/java/.../controller/AdminController.java`
+
 - **Purpose:** REST Controller for administrative operations (S3 cleanup, scheduler triggers, circuit breaker management)
 - **Dependencies:** S3CoverCleanupService, NewYorkTimesBestsellerScheduler, BookCacheWarmingScheduler, ApiCircuitBreakerService
 - **Endpoints:**
@@ -309,7 +358,9 @@
 - **Duplication:** Similar error handling patterns across endpoints, parameter validation repeated
 
 ### BookCoverController
+
 **Path:** `src/main/java/.../controller/BookCoverController.java`
+
 - **Purpose:** REST API for book cover image operations and retrieval
 - **Dependencies:** BookDataOrchestrator, GoogleBooksService, BookImageOrchestrationService
 - **Endpoints:**
@@ -322,7 +373,9 @@
 - **Duplication:** Cover URL fallback logic could be centralized, timeout handling patterns repeated
 
 ### BookCoverPreferenceController
+
 **Path:** `src/main/java/.../controller/BookCoverPreferenceController.java`
+
 - **Purpose:** Global controller advice for managing book cover image source preferences
 - **Annotations:** @ControllerAdvice
 - **Methods:**
@@ -332,7 +385,9 @@
 - **Duplication:** Similar pattern to ImageResolutionPreferenceController
 
 ### ApiMetricsController
+
 **Path:** `src/main/java/.../controller/ApiMetricsController.java`
+
 - **Purpose:** REST controller for exposing API usage metrics (admin access only)
 - **Dependencies:** ApiRequestMonitor
 - **Security:** @PreAuthorize("hasRole('ADMIN')")
@@ -346,7 +401,9 @@
 - **Duplication:** Simple delegation to service methods
 
 ### ErrorDiagnosticsController
+
 **Path:** `src/main/java/.../controller/ErrorDiagnosticsController.java`
+
 - **Purpose:** Global error controller implementing Spring Boot's ErrorController interface
 - **Dependencies:** ErrorAttributes
 - **Methods:**
@@ -356,7 +413,9 @@
 - **Duplication:** Standard Spring Boot error controller pattern
 
 ### ImageResolutionPreferenceController
+
 **Path:** `src/main/java/.../controller/ImageResolutionPreferenceController.java`
+
 - **Purpose:** Global controller advice for managing image resolution preferences
 - **Annotations:** @ControllerAdvice
 - **Methods:**
@@ -366,7 +425,9 @@
 - **Duplication:** Nearly identical pattern to BookCoverPreferenceController
 
 ### RobotsController
+
 **Path:** `src/main/java/.../controller/RobotsController.java`
+
 - **Purpose:** Serves robots.txt with dynamic content based on environment
 - **Methods:**
   - `getRobotsTxt()` - Returns environment-specific robots.txt content
@@ -376,7 +437,9 @@
 - **Duplication:** Environment detection logic could be centralized
 
 ### SitemapController
+
 **Path:** `src/main/java/.../controller/SitemapController.java`
+
 - **Purpose:** Serves sitemap pages and XML sitemap feeds
 - **Dependencies:** SitemapService, SitemapProperties
 - **Endpoints:**
@@ -395,7 +458,9 @@
 - **Duplication:** XML building patterns could be abstracted, URL normalization logic
 
 ### ThemePreferenceController
+
 **Path:** `src/main/java/.../controller/ThemePreferenceController.java`
+
 - **Purpose:** REST controller for managing user theme preferences (light/dark mode)
 - **Base Path:** `/api/theme`
 - **Methods:**
@@ -411,6 +476,7 @@
 ## Services
 
 ### BookDataOrchestrator
+
 - **Path:** `src/main/java/.../service/BookDataOrchestrator.java`
 - **Purpose:** Orchestrates book data retrieval through a tiered fetch strategy (DB → S3 → APIs)
 - **Dependencies:** S3RetryService, GoogleApiFetcher, ObjectMapper, OpenLibraryBookDataService, BookDataAggregatorService, BookCollectionPersistenceService, BookSearchService, BookS3CacheService, PostgresBookRepository, CanonicalBookPersistenceService, TieredBookSearchService
@@ -434,7 +500,9 @@
 - **Duplication:** Similar tiered patterns across different lookup methods
 
 ### GoogleBooksService
+
 **Path:** `src/main/java/.../service/GoogleBooksService.java`
+
 - **Purpose:** Service for interacting with Google Books API with circuit breaking and rate limiting
 - **Dependencies:** ObjectMapper, ApiRequestMonitor, GoogleApiFetcher, BookDataOrchestrator
 - **Resilience:** @CircuitBreaker, @TimeLimiter, @RateLimiter annotations
@@ -456,6 +524,7 @@
 - **Duplication:** Similar fallback method patterns, resilience annotation patterns
 
 ### RecommendationService
+
 - **Path:** `src/main/java/.../service/RecommendationService.java`
 - **Purpose:** Generates book recommendations using multi-faceted similarity criteria
 - **Dependencies:** BookDataOrchestrator, BookRecommendationPersistenceService
@@ -478,7 +547,9 @@
 - **Duplication:** Similar tiered search patterns, scoring mechanisms
 
 ### BookSearchService
+
 **Path:** `src/main/java/.../service/BookSearchService.java`
+
 - **Purpose:** Direct PostgreSQL search service using database functions
 - **Dependencies:** JdbcTemplate
 - **Record Classes:** `SearchResult`, `AuthorResult`, `IsbnSearchResult`
@@ -495,6 +566,7 @@
 - **Duplication:** Similar normalization patterns, result limiting logic
 
 ### BookApiProxy
+
 - **Path:** `src/main/java/.../service/BookApiProxy.java`
 - **Purpose:** Smart API proxy with multi-level caching to minimize external calls
 - **Dependencies:** GoogleBooksService, BookDataOrchestrator, ObjectMapper, GoogleBooksMockService
@@ -515,7 +587,9 @@
 - **Duplication:** Similar caching patterns across book and search methods
 
 ### GoogleApiFetcher
+
 **Path:** `src/main/java/.../service/GoogleApiFetcher.java`
+
 - **Purpose:** Low-level Google Books API client with retry logic and circuit breaking
 - **Dependencies:** WebClient, ApiRequestMonitor, ApiCircuitBreakerService
 - **Key Methods:**
@@ -534,7 +608,9 @@
 - **Duplication:** Similar retry patterns across authenticated/unauthenticated methods
 
 ### RecentBookViewRepository
+
 **Path:** `src/main/java/.../service/RecentBookViewRepository.java`
+
 - **Purpose:** Repository for persisting and aggregating recent book view activity
 - **Dependencies:** JdbcTemplate (optional)
 - **Record Classes:** `ViewStats` - aggregated view statistics
@@ -548,7 +624,9 @@
 - **Duplication:** Similar database query patterns, null checking
 
 ### RecentlyViewedService
+
 **Path:** `src/main/java/.../service/RecentlyViewedService.java`
+
 - **Purpose:** Manages recently viewed books with in-memory storage and database integration
 - **Dependencies:** GoogleBooksService, BookDataOrchestrator, DuplicateBookService, RecentBookViewRepository
 - **Storage:** LinkedList for in-memory storage with size limits
@@ -569,7 +647,9 @@
 - **Duplication:** Similar tiered lookup patterns, thread safety patterns
 
 ### NewYorkTimesService
+
 **Path:** `src/main/java/.../service/NewYorkTimesService.java`
+
 - **Purpose:** Service for interacting with the New York Times Books API to fetch bestseller lists
 - **Dependencies:** WebClient, JdbcTemplate
 - **Key Methods:**
@@ -581,7 +661,9 @@
 - **Duplication:** Database query patterns similar to other services
 
 ### OpenLibraryBookDataService
+
 **Path:** `src/main/java/.../service/OpenLibraryBookDataService.java`
+
 - **Purpose:** Service for interacting with OpenLibrary API to fetch book information
 - **Dependencies:** WebClient
 - **Resilience:** @CircuitBreaker, @RateLimiter, @TimeLimiter annotations
@@ -598,7 +680,9 @@
 - **Duplication:** Similar resilience patterns to GoogleBooksService, date parsing logic could be centralized
 
 ### BookSitemapService
+
 **Path:** `src/main/java/.../service/BookSitemapService.java`
+
 - **Purpose:** Builds sitemap snapshots from Postgres and synchronizes supporting artifacts
 - **Dependencies:** SitemapService, SitemapProperties, ObjectMapper, BookDataOrchestrator, S3StorageService
 - **Record Classes:** `SitemapSnapshot`, `SnapshotSyncResult`, `ExternalHydrationSummary`
@@ -614,7 +698,9 @@
 - **Duplication:** S3 upload patterns, JSON serialization logic
 
 ### ApiRequestMonitor
+
 **Path:** `src/main/java/.../service/ApiRequestMonitor.java`
+
 - **Purpose:** Service for monitoring API request metrics and usage patterns
 - **Storage:** ConcurrentHashMap for thread-safe metrics storage
 - **Key Methods:**
@@ -624,8 +710,8 @@
   - `generateReport()` - Creates human-readable metrics report
   - `getMetricsMap()` - Returns metrics as structured map
 - **Scheduled Methods:**
-  - `resetHourlyCounters()` - @Scheduled hourly reset (cron: "0 0 * * * ?")
-  - `resetDailyCounters()` - @Scheduled daily reset (cron: "0 0 0 * * ?")
+  - `resetHourlyCounters()` - @Scheduled hourly reset (cron: "0 0 ** * ?")
+  - `resetDailyCounters()` - @Scheduled daily reset (cron: "0 0 0 ** ?")
 - **Private Methods:**
   - `checkAndUpdateTimePeriods()` - Hour/day boundary detection
 - **Features:** Thread-safe counters, time-windowed metrics, custom metric tracking with limits
@@ -633,7 +719,9 @@
 - **Duplication:** Time-based metric patterns could be abstracted
 
 ### BookLookupService
+
 **Path:** `src/main/java/.../service/BookLookupService.java`
+
 - **Purpose:** Centralized service for book lookup operations to eliminate duplicate ISBN query patterns
 - **Dependencies:** JdbcTemplate
 - **Source of Truth:** ISBN/external ID resolution (`findBookIdByIsbn*`, `resolveCanonicalBookId`).
@@ -650,7 +738,9 @@
 - **Duplication:** Centralizes common lookup patterns found throughout the codebase
 
 ### BookS3CacheService
+
 **Path:** `src/main/java/.../service/BookS3CacheService.java`
+
 - **Purpose:** Encapsulates S3 cache update heuristics for intelligent cache management
 - **Dependencies:** S3RetryService, ObjectMapper
 - **Key Methods:**
@@ -664,7 +754,9 @@
 - **Duplication:** Data quality assessment patterns could be reused
 
 ### CanonicalBookPersistenceService
+
 **Path:** `src/main/java/.../service/CanonicalBookPersistenceService.java`
+
 - **Purpose:** Handles canonical Book persistence into Postgres with comprehensive relationship management
 - **Dependencies:** JdbcTemplate, ObjectMapper, BookSupplementalPersistenceService, TransactionTemplate
 - **Record Classes:** `EditionLinkRecord`
@@ -685,7 +777,9 @@
 - **Duplication:** Similar ID resolution patterns to BookLookupService, UUID validation repeated
 
 ### PostgresBookRepository
+
 **Path:** `src/main/java/.../service/PostgresBookRepository.java`
+
 - **Purpose:** Repository for hydrating full Book aggregates directly from Postgres
 - **Dependencies:** JdbcTemplate, ObjectMapper
 - **Record Classes:** `CoverCandidate`
@@ -705,7 +799,9 @@
 - **Duplication:** Similar lookup patterns to other repository services, ISBN resolution logic
 
 ### S3StorageService
+
 **Path:** `src/main/java/.../service/S3StorageService.java`
+
 - **Purpose:** Service for handling file storage operations in S3 with async support
 - **Dependencies:** S3Client
 - **Conditional:** @Conditional(S3EnvironmentCondition.class)
@@ -723,7 +819,9 @@
 - **Duplication:** Compression logic, async patterns, S3 error handling
 
 ### SitemapService
+
 **Path:** `src/main/java/.../service/SitemapService.java`
+
 - **Purpose:** Coordinates Postgres-backed sitemap data access for both HTML and XML rendering
 - **Dependencies:** SitemapRepository, SitemapProperties
 - **Record Classes:** `SitemapOverview`, `PagedResult<T>`, `BookSitemapItem`, `AuthorSection`, `AuthorListingDescriptor`, `AuthorListingXmlItem`
@@ -742,7 +840,9 @@
 - **Duplication:** Pagination patterns, bucket counting logic
 
 ### ApiCircuitBreakerService
+
 **Path:** `src/main/java/.../service/ApiCircuitBreakerService.java`
+
 - **Purpose:** Circuit breaker service to prevent API calls when rate limits are exceeded
 - **State Management:** CircuitState enum (CLOSED, OPEN, HALF_OPEN)
 - **Storage:** AtomicReference and AtomicInteger for thread-safe state management
@@ -759,7 +859,9 @@
 - **Duplication:** Time-based logic, atomic operations patterns
 
 ### TieredBookSearchService
+
 **Path:** `src/main/java/.../service/TieredBookSearchService.java`
+
 - **Purpose:** Extracted tiered search orchestration handling DB-first search with multiple fallbacks
 - **Dependencies:** BookSearchService, GoogleApiFetcher, OpenLibraryBookDataService, PostgresBookRepository
 - **Conditional:** @ConditionalOnBean({BookSearchService.class, PostgresBookRepository.class})
@@ -777,7 +879,9 @@
 - **Duplication:** Similar tiered patterns to BookDataOrchestrator, search result processing
 
 ### BookRecommendationPersistenceService
+
 **Path:** `src/main/java/.../service/BookRecommendationPersistenceService.java`
+
 - **Purpose:** Persists recommendation relationships to Postgres for downstream similarity analysis
 - **Dependencies:** JdbcTemplate, BookDataOrchestrator
 - **Record Classes:** `RecommendationRecord`, `PersistableRecommendation`
@@ -793,7 +897,9 @@
 - **Duplication:** Similar UUID resolution patterns, reactive error handling
 
 ### BookSupplementalPersistenceService
+
 **Path:** `src/main/java/.../service/BookSupplementalPersistenceService.java`
+
 - **Purpose:** Handles supplemental book data persistence (authors, categories, tags, qualifiers)
 - **Dependencies:** JdbcTemplate, ObjectMapper, BookCollectionPersistenceService
 - **Key Methods:**
@@ -812,7 +918,9 @@
 - **Duplication:** Upsert patterns repeated, metadata serialization logic
 
 ### BookCollectionPersistenceService
+
 **Path:** `src/main/java/.../service/BookCollectionPersistenceService.java`
+
 - **Purpose:** Handles book collection and list persistence (categories, bestseller lists)
 - **Dependencies:** JdbcTemplate
 - **Key Methods:**
@@ -827,7 +935,9 @@
 - **Duplication:** Similar upsert patterns, name normalization logic
 
 ### BookCoverManagementService
+
 **Path:** `src/main/java/.../service/image/BookCoverManagementService.java`
+
 - **Purpose:** Orchestrates book cover retrieval, caching, and background processing
 - **Dependencies:** CoverCacheManager, CoverSourceFetchingService, S3BookCoverService, LocalDiskCoverCacheService, ApplicationEventPublisher, EnvironmentService
 - **Source of Truth:** Central pipeline for preparing covers (`prepareBook(s)ForDisplay`, async refresh) including provenance + placeholder decisions.
@@ -846,7 +956,9 @@
 - **Duplication:** URL pattern matching, cache management patterns, async processing patterns
 
 ### S3RetryService
+
 **Path:** `src/main/java/.../service/S3RetryService.java`
+
 - **Purpose:** Service for handling S3 operations with retry capabilities and exponential backoff
 - **Dependencies:** S3StorageService, ApiRequestMonitor
 - **Conditional:** @Conditional(S3EnvironmentCondition.class)
@@ -864,7 +976,9 @@
 - **Duplication:** Similar retry patterns across fetch/upload methods, exponential backoff calculation
 
 ### EnvironmentService
+
 **Path:** `src/main/java/.../service/EnvironmentService.java`
+
 - **Purpose:** Service for environment detection and configuration management
 - **Dependencies:** Spring Environment
 - **Key Methods:**
@@ -877,7 +991,9 @@
 - **Duplication:** Simple property checking patterns
 
 ### DuplicateBookService
+
 **Path:** `src/main/java/.../service/DuplicateBookService.java`
+
 - **Purpose:** Service for managing duplicate book detection and edition consolidation (DISABLED after Redis removal)
 - **Status:** All functionality disabled after Redis removal
 - **Key Methods:**
@@ -891,7 +1007,9 @@
 - **Duplication:** None (service is disabled)
 
 ### BookDataAggregatorService
+
 **Path:** `src/main/java/.../service/BookDataAggregatorService.java`
+
 - **Purpose:** Service for merging book data from multiple sources with intelligent conflict resolution
 - **Dependencies:** ObjectMapper
 - **Key Methods:**
@@ -914,7 +1032,9 @@
 - **Duplication:** Similar field extraction patterns, source detection logic
 
 ### S3BookMigrationService
+
 **Path:** `src/main/java/.../service/S3BookMigrationService.java`
+
 - **Purpose:** Handles heavy S3 migration logic extracted from BookDataOrchestrator
 - **Dependencies:** S3StorageService, ObjectMapper, BookCollectionPersistenceService
 - **Key Methods:**
@@ -940,10 +1060,12 @@
 ## Schedulers
 
 ### NewYorkTimesBestsellerScheduler
+
 **Path:** `src/main/java/.../scheduler/NewYorkTimesBestsellerScheduler.java`
+
 - **Purpose:** Scheduled ingestion of New York Times bestseller data directly into Postgres
 - **Dependencies:** NewYorkTimesService, BookDataOrchestrator, BookLookupService, ObjectMapper, JdbcTemplate, BookCollectionPersistenceService, BookSupplementalPersistenceService
-- **Schedule:** @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}") - Sundays at 4 AM
+- **Schedule:** @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 ** SUN}") - Sundays at 4 AM
 - **Key Methods:**
   - `processNewYorkTimesBestsellers()` - Main scheduled entry point
 - **Private Methods:**
@@ -959,10 +1081,12 @@
 - **Duplication:** Similar ID resolution patterns, tag assignment patterns
 
 ### BookCacheWarmingScheduler
+
 **Path:** `src/main/java/.../scheduler/BookCacheWarmingScheduler.java`
+
 - **Purpose:** Proactive cache warming for popular books during off-peak hours (cache warming disabled)
 - **Dependencies:** GoogleBooksService, BookDataOrchestrator, RecentlyViewedService, ApplicationContext
-- **Schedule:** @Scheduled(cron = "${app.cache.warming.cron:0 0 3 * * ?}") - Daily at 3 AM
+- **Schedule:** @Scheduled(cron = "${app.cache.warming.cron:0 0 3 ** ?}") - Daily at 3 AM
 - **Key Methods:**
   - `warmPopularBookCaches()` - Main cache warming orchestration
 - **Private Methods:**
@@ -975,10 +1099,12 @@
 - **Duplication:** Similar tiered lookup patterns, rate limiting patterns
 
 ### SitemapRefreshScheduler
+
 **Path:** `src/main/java/.../scheduler/SitemapRefreshScheduler.java`
+
 - **Purpose:** Consolidated sitemap refresh job for warming queries, S3 artifacts, and external data hydration
 - **Dependencies:** SitemapProperties, BookSitemapService, SitemapService, ObjectProvider<S3BookCoverService>
-- **Schedule:** @Scheduled(cron = "${sitemap.scheduler-cron:0 15 * * * *}") - Every hour at 15 minutes past
+- **Schedule:** @Scheduled(cron = "${sitemap.scheduler-cron:0 15 ****}") - Every hour at 15 minutes past
 - **Key Methods:**
   - `refreshSitemapArtifacts()` - Main scheduled orchestration
 - **Private Methods:**
@@ -993,7 +1119,9 @@
 ## Utilities
 
 ### ApplicationConstants
+
 **Path:** `src/main/java/.../util/ApplicationConstants.java`
+
 - **Purpose:** Central repository for shared literal values to reduce duplication
 - **Categories:**
   - **Cover:** Placeholder image paths
@@ -1009,7 +1137,9 @@
 - **Duplication:** Eliminates duplicate string literals across codebase
 
 ### JdbcUtils
+
 **Path:** `src/main/java/.../util/JdbcUtils.java`
+
 - **Purpose:** Shared JDBC helper methods for retrieving optional values without boilerplate
 - **Key Methods:**
   - `optionalString()` - Query for optional string with error callback support
@@ -1023,7 +1153,9 @@
 - **Duplication:** Eliminates repetitive JDBC boilerplate across services
 
 ### ValidationUtils
+
 **Path:** `src/main/java/.../util/ValidationUtils.java`
+
 - **Purpose:** Utility helpers for common null/blank/empty validation checks
 - **Key Methods:**
   - `isNullOrBlank()`, `hasText()`, `isNullOrEmpty()` - String validation
@@ -1040,7 +1172,9 @@
 - **Duplication:** Centralizes common validation patterns
 
 ### IsbnUtils
+
 **Path:** `src/main/java/.../util/IsbnUtils.java`
+
 - **Purpose:** Shared helpers for normalizing ISBN input before lookups or persistence
 - **Key Methods:**
   - `sanitize()` - ISBN normalization (removes non-numeric except X, uppercases)
@@ -1053,7 +1187,9 @@
 - **Duplication:** Eliminates duplicate ISBN handling logic
 
 ### BookJsonParser
+
 **Path:** `src/main/java/.../util/BookJsonParser.java`
+
 - **Purpose:** Utility for parsing Google Books API JSON responses into Book objects
 - **Key Methods:**
   - `convertJsonToBook()` - Main JSON to Book conversion
@@ -1075,7 +1211,9 @@
 - **Duplication:** Complex JSON parsing logic, date format handling
 
 ### PagingUtils
+
 **Path:** `src/main/java/.../util/PagingUtils.java`
+
 - **Purpose:** Lightweight helpers for common paging math with shared clamping semantics
 - **Key Methods:**
   - `clamp()` - Value clamping to range
@@ -1088,7 +1226,9 @@
 - **Duplication:** Eliminates repeated paging logic across controllers/services
 
 ### IdGenerator
+
 **Path:** `src/main/java/.../util/IdGenerator.java`
+
 - **Purpose:** Minimal ID utilities for NanoId and UUID v7 generation
 - **Key Methods:**
   - `generate()` - Default 10-char NanoId
@@ -1102,7 +1242,9 @@
 - **Duplication:** Centralizes ID generation patterns
 
 ### SlugGenerator
+
 **Path:** `src/main/java/.../util/SlugGenerator.java`
+
 - **Purpose:** Utility for generating SEO-friendly URL slugs from book titles and authors
 - **Key Methods:**
   - `generateBookSlug()` - Main book slug generation (multiple overloads)
@@ -1117,7 +1259,9 @@
 - **Duplication:** Centralized slug generation logic
 
 ### CompressionUtils
+
 **Path:** `src/main/java/.../util/CompressionUtils.java`
+
 - **Purpose:** Utility helpers for decoding byte arrays that may be gzip-compressed JSON
 - **Key Methods:**
   - `decodeUtf8WithOptionalGzip(byte[])` - Attempts gzip decompression with UTF-8 fallback
@@ -1130,7 +1274,9 @@
 - **Duplication:** Standard compression/decompression patterns
 
 ### SearchQueryUtils
+
 **Path:** `src/main/java/.../util/SearchQueryUtils.java`
+
 - **Purpose:** Utility methods for working with search queries to centralize normalization behavior
 - **Constants:** DEFAULT_QUERY ("*"), CACHE_KEY_SANITIZER pattern
 - **Key Methods:**
@@ -1143,7 +1289,9 @@
 - **Duplication:** Centralized normalization eliminates duplicate query handling
 
 ### S3Paths
+
 **Path:** `src/main/java/.../util/S3Paths.java`
+
 - **Purpose:** Centralized S3 path helpers for consistent cache prefixes across services
 - **Constants:** GOOGLE_BOOK_CACHE_PREFIX ("books/v1/")
 - **Key Methods:**
@@ -1154,7 +1302,9 @@
 - **Duplication:** Centralizes S3 path handling patterns
 
 ### EnumParsingUtils
+
 **Path:** `src/main/java/.../util/EnumParsingUtils.java`
+
 - **Purpose:** Shared helper for safely parsing user-provided strings into enum values
 - **Key Methods:**
   - `parseOrDefault(String, Class<E>, E)` - Parse enum with default fallback
@@ -1164,7 +1314,9 @@
 - **Duplication:** Centralizes enum parsing patterns
 
 ### LoggingUtils
+
 **Path:** `src/main/java/.../util/LoggingUtils.java`
+
 - **Purpose:** Lightweight helpers for consistent logging of warnings and errors with optional causes
 - **Inner Enum:** LogLevel (ERROR, WARN)
 - **Key Methods:**
@@ -1177,7 +1329,9 @@
 - **Duplication:** Centralizes logging patterns with exception handling
 
 ### ReactiveErrorUtils
+
 **Path:** `src/main/java/.../util/ReactiveErrorUtils.java`
+
 - **Purpose:** Reactive programming error handling utilities for consistent error responses
 - **Key Methods:**
   - `logAndReturnEmpty(String)` - Function that logs error and returns empty Mono
@@ -1198,7 +1352,9 @@
 ## Models & DTOs
 
 ### Book (Main Entity Model)
+
 **Path:** `src/main/java/.../model/Book.java`
+
 - **Purpose:** Core book entity containing all book metadata, cover image information, and edition data
 - **Features:** Comprehensive book representation from external sources (Google Books API), bibliographic data storage, cover image metadata tracking, edition relationships
 - **Key Fields:**
@@ -1223,7 +1379,9 @@
 ### Image Models
 
 #### CoverImages
+
 **Path:** `src/main/java/.../model/image/CoverImages.java`
+
 - **Purpose:** Immutable container for book cover image URLs with source tracking
 - **Features:** Preferred/fallback URL structure, source attribution, graceful fallback handling
 - **Fields:** preferredUrl, fallbackUrl, source (CoverImageSource)
@@ -1232,7 +1390,9 @@
 - **Duplication:** Similar container patterns across image models
 
 #### CoverImageSource (Enum)
+
 **Path:** `src/main/java/.../model/image/CoverImageSource.java`
+
 - **Purpose:** Enum for available external cover image sources and cache locations
 - **Values:** ANY, GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD, S3_CACHE, LOCAL_CACHE, NONE, MOCK, UNDEFINED
 - **Features:** Display names for UI, comprehensive source tracking, test support (MOCK)
@@ -1241,7 +1401,9 @@
 - **Duplication:** Standard enum pattern
 
 #### ImageResolutionPreference (Enum)
+
 **Path:** `src/main/java/.../model/image/ImageResolutionPreference.java`
+
 - **Purpose:** Enum for image resolution filtering and prioritization options
 - **Values:** ANY, HIGH_ONLY, HIGH_FIRST, LARGE, MEDIUM, SMALL, ORIGINAL, UNKNOWN
 - **Features:** Quality-based filtering, sorting preferences, bandwidth optimization
@@ -1250,7 +1412,9 @@
 - **Duplication:** Similar pattern to CoverImageSource
 
 #### ProcessedImage (Record)
+
 **Path:** `src/main/java/.../model/image/ProcessedImage.java`
+
 - **Purpose:** Immutable record for processed image data with metadata and success/failure status
 - **Parameters:** processedBytes, newFileExtension, newMimeType, width, height, processingSuccessful, processingError
 - **Features:** Defensive byte array copying, static factory methods, success/failure modeling
@@ -1261,7 +1425,9 @@
 - **Duplication:** Factory method pattern, defensive copying patterns
 
 #### ImageDetails
+
 **Path:** `src/main/java/.../model/image/ImageDetails.java`
+
 - **Purpose:** Book cover image metadata including source and dimension information
 - **Features:** Source attribution, dimension tracking, resolution preference, mutable properties
 - **Fields:** urlOrPath, sourceName, sourceSystemId, coverImageSource, resolutionPreference, width, height
@@ -1273,7 +1439,9 @@
 ### Controller DTOs
 
 #### BookDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/BookDto.java`
+
 - **Purpose:** Canonical API representation of a book assembled from Postgres-backed data
 - **Parameters:** id, slug, title, description, publication, authors, categories, collections, tags, cover, editions, recommendationIds, extras
 - **Features:** Comprehensive book representation, nested DTO structure, immutable record
@@ -1281,7 +1449,9 @@
 - **Duplication:** Standard DTO record pattern
 
 #### BookDtoMapper
+
 **Path:** `src/main/java/.../controller/dto/BookDtoMapper.java`
+
 - **Purpose:** Transforms domain Book objects into API-facing DTOs with centralized mapping logic
 - **Features:** Postgres-first data transformation, null-safe mapping, defensive copying
 - **Key Methods:**
@@ -1295,7 +1465,9 @@
 - **Duplication:** Similar mapping patterns could be abstracted
 
 #### CoverDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/CoverDto.java`
+
 - **Purpose:** DTO capturing cover metadata for API clients
 - **Parameters:** s3ImagePath, externalImageUrl, width, height, highResolution, preferredUrl, fallbackUrl, source
 - **Features:** Complete cover image representation, multiple URL sources
@@ -1303,7 +1475,9 @@
 - **Duplication:** Standard DTO pattern
 
 #### AuthorDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/AuthorDto.java`
+
 - **Purpose:** DTO representing an author in API responses
 - **Parameters:** id, name
 - **Features:** Simple author representation
@@ -1311,7 +1485,9 @@
 - **Duplication:** Standard simple DTO pattern
 
 #### CollectionDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/CollectionDto.java`
+
 - **Purpose:** DTO representing a normalized collection/list assignment
 - **Parameters:** id, name, type, rank, source
 - **Features:** Collection membership with ranking
@@ -1319,7 +1495,9 @@
 - **Duplication:** Standard DTO pattern
 
 #### PublicationDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/PublicationDto.java`
+
 - **Purpose:** DTO containing publication metadata for a book
 - **Parameters:** publishedDate, language, pageCount, publisher
 - **Features:** Publication-specific information grouping
@@ -1327,7 +1505,9 @@
 - **Duplication:** Standard DTO pattern
 
 #### TagDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/TagDto.java`
+
 - **Purpose:** DTO representing a qualifier/tag assignment
 - **Parameters:** key, attributes (Map<String, Object>)
 - **Features:** Flexible tag representation with key-value attributes
@@ -1335,7 +1515,9 @@
 - **Duplication:** Standard DTO pattern
 
 #### EditionDto (Record)
+
 **Path:** `src/main/java/.../controller/dto/EditionDto.java`
+
 - **Purpose:** DTO describing a related edition of a book
 - **Parameters:** googleBooksId, type, identifier, isbn10, isbn13, publishedDate, coverImageUrl
 - **Features:** Complete edition representation with multiple identifiers
@@ -1345,7 +1527,9 @@
 ### Additional Image Models
 
 #### ImageSourceName (Enum)
+
 **Path:** `src/main/java/.../model/image/ImageSourceName.java`
+
 - **Purpose:** Enum representing various sources of book cover images
 - **Values:** GOOGLE_BOOKS, OPEN_LIBRARY, LONGITOOD, LOCAL_CACHE, S3_CACHE, INTERNAL_PROCESSING, UNKNOWN
 - **Features:** Image source attribution, display names for UI, comprehensive source tracking
@@ -1354,7 +1538,9 @@
 - **Duplication:** Similar pattern to CoverImageSource (potential consolidation opportunity)
 
 #### ImageAttemptStatus (Enum)
+
 **Path:** `src/main/java/.../model/image/ImageAttemptStatus.java`
+
 - **Purpose:** Status codes for image fetch and processing attempts
 - **Values:** SUCCESS, FAILURE_404, FAILURE_NOT_FOUND, FAILURE_TIMEOUT, FAILURE_GENERIC, SKIPPED, SKIPPED_BAD_URL, FAILURE_PROCESSING, FAILURE_EMPTY_CONTENT, FAILURE_PLACEHOLDER_DETECTED, FAILURE_IO, FAILURE_GENERIC_DOWNLOAD, SUCCESS_NO_METADATA, PENDING, FAILURE_INVALID_DETAILS, FAILURE_NO_URL_IN_RESPONSE, FAILURE_CONTENT_REJECTED
 - **Features:** Comprehensive error categorization, retry strategy support, detailed failure tracking
@@ -1362,7 +1548,9 @@
 - **Duplication:** Status enum pattern (could be generalized)
 
 #### ImageProvenanceData
+
 **Path:** `src/main/java/.../model/image/ImageProvenanceData.java`
+
 - **Purpose:** Data class for tracking provenance of book cover images with attempt history
 - **Features:** Records attempted sources and results, tracks selected image attributes, preserves API responses for debugging, timestamp auditing
 - **Fields:** bookId, googleBooksApiResponse, attemptedImageSources, selectedImageInfo, timestamp
@@ -1378,7 +1566,9 @@
 ## Repositories
 
 ### SitemapRepository
+
 **Path:** `src/main/java/.../repository/SitemapRepository.java`
+
 - **Purpose:** Repository for Postgres-backed sitemap queries without S3 dependence
 - **Features:** Letter bucket counts, paginated slices for books and authors, HTML and XML sitemap payload support
 - **Key Methods:**
@@ -1404,7 +1594,9 @@
 ## Filters & Support
 
 ### RequestLoggingFilter
+
 **Path:** `src/main/java/.../RequestLoggingFilter.java`
+
 - **Purpose:** Request logging and timing filter for HTTP requests with selective filtering
 - **Features:** Request/response logging, timing measurement, static resource filtering, API endpoint prioritization
 - **Key Methods:**
@@ -1421,7 +1613,9 @@
 ### Event Classes
 
 #### BookCoverUpdatedEvent
+
 **Path:** `src/main/java/.../service/event/BookCoverUpdatedEvent.java`
+
 - **Purpose:** Event fired when book cover image is updated for cross-service notifications
 - **Features:** Cover image update notifications, cache invalidation metadata, WebSocket UI notifications, image source tracking
 - **Fields:** identifierKey (ISBN/Google Book ID), newCoverUrl, googleBookId, source (CoverImageSource)
@@ -1432,7 +1626,9 @@
 - **Duplication:** Standard event class pattern
 
 #### SearchProgressEvent
+
 **Path:** `src/main/java/.../service/event/SearchProgressEvent.java`
+
 - **Purpose:** Event for notifying clients about search progress and status updates
 - **Features:** Real-time search status, loading indicators support, multi-source tracking, WebSocket integration
 - **Inner Enum:** `SearchStatus` - STARTING, SEARCHING_CACHE, SEARCHING_GOOGLE, SEARCHING_OPENLIBRARY, RATE_LIMITED, DEDUPLICATING, COMPLETE, ERROR
@@ -1444,7 +1640,9 @@
 - **Duplication:** Similar event structure to other event classes
 
 #### SearchResultsUpdatedEvent
+
 **Path:** `src/main/java/.../service/event/SearchResultsUpdatedEvent.java`
+
 - **Purpose:** Event fired when new search results are available from background API calls
 - **Features:** Incremental search results, progressive result loading, WebSocket notifications, source attribution
 - **Fields:** searchQuery, newResults (List<Book>), source, totalResultsNow, queryHash, isComplete
@@ -1463,75 +1661,95 @@
 For each identified duplication area, the single source of truth (SSOT) is declared below. All follower usages have been updated where practical in this pass; any remaining edge sites are listed for follow-up.
 
 1) Database Query Patterns
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/JdbcUtils.java
 - Status: CanonicalBookPersistenceService / PostgresBookRepository / BookSupplementalPersistenceService continue to depend on JdbcTemplate directly for complex SQL; JdbcUtils is the shared helper for optionals, existence, typed queries. Further refactors can adopt JdbcUtils where trivial.
 
 2) ID Resolution and Lookup Patterns
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/BookLookupService.java
 - Status: In use across PostgresBookRepository, CanonicalBookPersistenceService, NewYorkTimesBestsellerScheduler.
 
 3) Tiered Data Access Patterns (DB → S3 → APIs)
+
 - SSOT (fetch-by-id/slug): src/main/java/com/williamcallahan/book_recommendation_engine/service/BookDataOrchestrator.java
 - SSOT (search): src/main/java/com/williamcallahan/book_recommendation_engine/service/TieredBookSearchService.java
 - Status: Controllers and proxies route through these. BookController now delegates canonical resolution to BookDataOrchestrator.fetchCanonicalBookReactive().
 
 4) Reactive Programming Patterns (error handling for controllers/services)
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/ReactiveErrorUtils.java and ReactiveControllerUtils.java
 - Status: BookController converted. Additional services continue to use onErrorResume/LoggingUtils; can be migrated incrementally.
 
 5) URL Pattern Matching and Source Detection
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/UrlPatternMatcher.java
 - Status: BookCoverManagementService updated to use UrlPatternMatcher for source inference. Other sites (if any) should use the same.
 
 6) Caching and Warming Patterns
+
 - SSOT: Cover caching managed by BookCoverManagementService; query warming handled within SitemapRefreshScheduler and BookCacheWarmingScheduler.
 - Status: No base class introduced; existing responsibilities retained. Consider WarmingUtils in future if patterns expand.
 
 7) Configuration and Environment Detection
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/ApplicationConstants.java and src/main/java/com/williamcallahan/book_recommendation_engine/service/EnvironmentService.java
 
 8) JSON Serialization and Parsing
+
 - SSOT (Google Books → Book): src/main/java/com/williamcallahan/book_recommendation_engine/util/BookJsonParser.java
 - SSOT (general date parsing shared): src/main/java/com/williamcallahan/book_recommendation_engine/util/DateParsingUtils.java
 - Status: BookJsonParser updated to use DateParsingUtils.parseFlexibleDate.
 
 9) Input Validation and Sanitization
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/ValidationUtils.java and IsbnUtils.java
 
 10) Pagination and Result Limiting
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/PagingUtils.java
 - Status: BookSearchService, controllers, and services use PagingUtils; normalization wrappers removed.
 
 11) Upsert and Persistence Patterns
+
 - SSOT helpers: JdbcUtils (query helpers), IdGenerator (ID creation)
 
 12) Circuit Breaker and Resilience Patterns
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/ApiCircuitBreakerService.java (+ Resilience4j annotations)
 
 13) Affiliate Link Generation
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/AffiliateLinkService.java
 
 14) Book Cover Processing
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/service/image/BookCoverManagementService.java
 
 15) SEO and Keywords Generation
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/SeoUtils.java
 
 16) Slug Generation
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/SlugGenerator.java
 
 17) Compression Utilities
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/CompressionUtils.java
 
 18) Date Parsing
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/DateParsingUtils.java
 - Status: Adopted in BookJsonParser, OpenLibraryBookDataService, and NYT scheduler.
 
 19) Retry Logic
+
 - SSOT: S3-specific: src/main/java/com/williamcallahan/book_recommendation_engine/service/S3RetryService.java
 - General retry utils: To be introduced if non-S3 sites proliferate.
 
 20) Search Query Normalization
+
 - SSOT: src/main/java/com/williamcallahan/book_recommendation_engine/util/SearchQueryUtils.java
 - Status: BookSearchService now calls SearchQueryUtils directly (wrappers removed).
 
@@ -1540,6 +1758,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 1. Database Query Patterns ✅ **CENTRALIZED**
 
 **Central Authority:** `JdbcUtils`
+
 - **Location:** `src/main/java/.../util/JdbcUtils.java`
 - **Provides:** `optionalString()`, `queryForUuid()`, `queryForInt()`, `exists()`, etc.
 - **Classes That Should Use It:**
@@ -1551,6 +1770,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 2. ID Resolution and Lookup Patterns ✅ **CENTRALIZED**
 
 **Central Authority:** `BookLookupService`
+
 - **Location:** `src/main/java/.../service/BookLookupService.java`
 - **Provides:** `findBookIdByIsbn()`, `findBookIdByIsbn13()`, `findBookIdByIsbn10()`, `findBookIdByExternalIdentifier()`, `resolveCanonicalBookId()`
 - **Already Using It:**
@@ -1562,12 +1782,14 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 3. Tiered Data Access Patterns ✅ **CENTRALIZED**
 
 **Central Authority:** BookDataOrchestrator (by-id/slug) & TieredBookSearchService (search)
+
 - **Status:** Centralized. Controllers and proxies route through these services. BookController now delegates canonical resolution to `BookDataOrchestrator.fetchCanonicalBookReactive()`.
 - **Optional Future:** Consider an abstract `TieredAccessPattern<T>` only if new tiers proliferate.
 
 ### 4. Reactive Programming Patterns ✅ **CENTRALIZED**
 
 **Central Authority:** `ReactiveErrorUtils` & `ReactiveControllerUtils`
+
 - **Source of Truth:** `ReactiveErrorUtils` (`src/main/java/.../util/ReactiveErrorUtils.java`) for service-level flows and `ReactiveControllerUtils` (`src/main/java/.../util/ReactiveControllerUtils.java`) for controller endpoints.
 - **Followers:** `GoogleBooksService`, `RecommendationService`, `BookDataOrchestrator`, `TieredBookSearchService`, `BookCoverManagementService`, any controller returning `Mono`/`Flux` responses.
 - **Next Adoption Batch:** Tighten `BookCoverManagementService` and `BookApiProxy` to delegate their `onErrorResume` blocks to the shared helpers so every tier emits consistent diagnostics.
@@ -1585,11 +1807,13 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 5. URL Pattern Matching and Source Detection ✅ **CENTRALIZED**
 
 **Central Authority:** `UrlPatternMatcher`
+
 - **Status:** Centralized. BookCoverManagementService now uses `UrlPatternMatcher.identifySource()` for source inference. Other sites should use `UrlPatternMatcher` where needed.
 
 ### 6. Caching and Warming Patterns ✅ **PARTIALLY CENTRALIZED**
 
 **Central Authorities:**
+
 - Cover caching: `BookCoverManagementService`
 - Warming jobs: `SitemapRefreshScheduler` and `BookCacheWarmingScheduler`
 - **Status:** Responsibilities are clearly owned. A shared `WarmingScheduler` base class can be introduced later if patterns expand, but is not required for compliance.
@@ -1597,6 +1821,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 7. Configuration and Environment Detection ✅ **CENTRALIZED**
 
 **Central Authority:** `ApplicationConstants` & `EnvironmentService`
+
 - **ApplicationConstants Location:** `src/main/java/.../util/ApplicationConstants.java`
 - **EnvironmentService Location:** `src/main/java/.../service/EnvironmentService.java`
 - **ApplicationConstants Provides:** All constants, URLs, SQL queries
@@ -1609,6 +1834,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 8. JSON Serialization and Parsing ✅ **PARTIALLY CENTRALIZED**
 
 **Central Authority:** `BookJsonParser` & `BookJsonWriter`
+
 - **Source of Truth:** `BookJsonParser` (`src/main/java/.../util/BookJsonParser.java`) for inbound JSON → `Book` hydration, qualifier extraction, and date parsing; `BookJsonWriter` (`src/main/java/.../util/BookJsonWriter.java`) for serialising books and merging qualifier updates before persistence.
 - **Followers:** `S3BookMigrationService`, `S3StorageService`, `NewYorkTimesBestsellerScheduler`, `BookCollectionPersistenceService`, `S3RetryService`, `BookApiProxy` caching.
 - **Tests:** `BookApiProxyFixtures` and cache-key specifications should instantiate proxies through the shared helper so writer/parser coverage remains aligned.
@@ -1617,6 +1843,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 9. Input Validation and Sanitization ✅ **CENTRALIZED**
 
 **Central Authority:** `ValidationUtils` & `IsbnUtils`
+
 - **Source of Truth:** `ValidationUtils` (`src/main/java/.../util/ValidationUtils.java`) for generic null/text checks and book validators; `IsbnUtils` (`src/main/java/.../util/IsbnUtils.java`) for ISBN cleaning/validation.
 - **Followers:** Controllers, schedulers, `BookSearchService`, persistence services, migration jobs.
 - **ValidationUtils Location:** `src/main/java/.../util/ValidationUtils.java`
@@ -1632,6 +1859,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 10. Pagination and Result Limiting ✅ **CENTRALIZED**
 
 **Central Authority:** `PagingUtils`
+
 - **Source of Truth:** `PagingUtils` (`src/main/java/.../util/PagingUtils.java`) for clamping, windowing, and result slicing.
 - **Followers:** Controllers, `BookSearchService`, `SitemapService`, `RecommendationService`, any repo/service imposing limits.
 - **Location:** `src/main/java/.../util/PagingUtils.java`
@@ -1645,6 +1873,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 11. Upsert and Persistence Patterns ✅ **PARTIALLY CENTRALIZED**
 
 **Central Authority:** `JdbcUtils` & `IdGenerator`
+
 - **JdbcUtils Location:** `src/main/java/.../util/JdbcUtils.java`
 - **IdGenerator Location:** `src/main/java/.../util/IdGenerator.java`
 - **JdbcUtils Provides:** Query helpers, could be extended with upsert templates
@@ -1658,6 +1887,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 12. Circuit Breaker and Resilience Patterns ✅ **PARTIALLY CENTRALIZED**
 
 **Central Authority:** `ApiCircuitBreakerService`
+
 - **Location:** `src/main/java/.../service/ApiCircuitBreakerService.java`
 - **Provides:** `isApiCallAllowed()`, `recordSuccess()`, `recordRateLimitFailure()`
 - **Classes That Should Use It:**
@@ -1669,6 +1899,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 13. Affiliate Link Generation ✅ **CENTRALIZED**
 
 **Central Authority:** `AffiliateLinkService`
+
 - **Location:** `src/main/java/.../service/AffiliateLinkService.java`
 - **Provides:** `generateLinks(Book)` - Creates all affiliate links
 - **Already Using It:**
@@ -1678,6 +1909,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 14. Book Cover Processing ✅ **CENTRALIZED**
 
 **Central Authority:** `BookCoverManagementService`
+
 - **Location:** `src/main/java/.../service/image/BookCoverManagementService.java`
 - **Provides:** `prepareBooksForDisplay()`, `prepareBookForDisplay()`, `getInitialCoverUrlAndTriggerBackgroundUpdate()`
 - **Shared Helpers:** `ExternalCoverFetchHelper` consolidates external source downloads/provenance for Google/OpenLibrary/Longitood services
@@ -1690,6 +1922,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 15. SEO and Keywords Generation ✅ **CENTRALIZED**
 
 **Central Authority:** `SeoUtils`
+
 - **Location:** `src/main/java/.../util/SeoUtils.java`
 - **Provides:** `truncateDescription()`, `generateKeywords()`
 - **Classes That Should Use It:**
@@ -1700,6 +1933,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 16. Slug Generation ✅ **CENTRALIZED**
 
 **Central Authority:** `SlugGenerator`
+
 - **Location:** `src/main/java/.../util/SlugGenerator.java`
 - **Provides:** `generateBookSlug()`, `slugify()`, `makeSlugUnique()`
 - **Classes That Should Use It:**
@@ -1710,6 +1944,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 17. Compression Utilities ✅ **CENTRALIZED**
 
 **Central Authority:** `CompressionUtils`
+
 - **Location:** `src/main/java/.../util/CompressionUtils.java`
 - **Provides:** GZIP compression/decompression methods
 - **Classes That Should Use It:**
@@ -1719,11 +1954,13 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 18. Date Parsing ✅ **CENTRALIZED**
 
 **Central Authority:** `DateParsingUtils`
+
 - **Status:** Centralized. Adopted in BookJsonParser, OpenLibraryBookDataService, and NewYorkTimesBestsellerScheduler.
 
 ### 19. Retry Logic ✅ **PARTIALLY CENTRALIZED**
 
 **Central Authority:** `S3RetryService` (S3-specific)
+
 - **Location:** `src/main/java/.../service/S3RetryService.java`
 - **Provides:** S3-specific retry with exponential backoff
 - **Classes Needing General Retry:**
@@ -1734,6 +1971,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### 20. Search Query Normalization ✅ **CENTRALIZED**
 
 **Central Authority:** `SearchQueryUtils`
+
 - **Source of Truth:** `SearchQueryUtils` (`src/main/java/.../util/SearchQueryUtils.java`) for normalization, cache key sanitization, and qualifier extraction.
 - **Followers:** `BookSearchService`, controllers, `BookApiProxy`, schedulers using search queries.
 - **Location:** `src/main/java/.../util/SearchQueryUtils.java`
@@ -1746,6 +1984,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 ### Updated Priority Recommendations for DRY Improvements
 
 #### ✅ **Already Centralized (Use Existing):**
+
 1. BookLookupService - ID resolution
 2. ReactiveErrorUtils/ReactiveControllerUtils - Reactive patterns
 3. AffiliateLinkService - Affiliate links
@@ -1760,6 +1999,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 12. JdbcUtils - Database queries
 
 #### 🔧 **Needs Better Adoption:**
+
 1. Ensure all ID resolution uses BookLookupService
 2. Replace custom reactive patterns with utility methods
 3. Use ValidationUtils.BookValidator consistently
@@ -1767,6 +2007,7 @@ Based on the complete class and method inventory, here are the key areas of dupl
 5. Use SearchQueryUtils for all query normalization
 
 #### ❌ **Actually Needs Creation (optional, future):**
+
 1. **TieredAccessPattern<T>** - Template for DB → S3 → API (only if new tiers proliferate)
 2. **WarmingScheduler** - Base class for cache warming (patterns are already owned; optional)
 3. **RetryUtils** - General retry patterns (S3-specific retry already centralized)
@@ -1785,6 +2026,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 13. Enum Display Name Patterns
 
 **Problem:** Similar enum patterns with display names
+
 - **Affected Classes:** CoverImageSource, ImageResolutionPreference, ImageSourceName, ImageAttemptStatus, SearchProgressEvent.SearchStatus
 - **Duplication:**
   - Enum constructors with displayName parameter
@@ -1796,6 +2038,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 14. Event Class Patterns
 
 **Problem:** Similar event class structures and patterns
+
 - **Affected Classes:** BookCoverUpdatedEvent, SearchProgressEvent, SearchResultsUpdatedEvent
 - **Duplication:**
   - Constructor overloads with default values
@@ -1807,6 +2050,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 15. Retry and Backoff Patterns
 
 **Problem:** Exponential backoff and retry logic duplication
+
 - **Affected Classes:** S3RetryService, various resilience configurations
 - **Duplication:**
   - Exponential backoff calculation
@@ -1818,6 +2062,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 16. JSON Processing and Error Recovery
 
 **Problem:** JSON parsing with error recovery patterns
+
 - **Affected Classes:** S3BookMigrationService, BookDataAggregatorService, various services with ObjectMapper
 - **Duplication:**
   - JSON sanitization (control character removal)
@@ -1829,6 +2074,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 17. Reactive Error Handling Standardization
 
 **Problem:** Reactive error handling patterns across services
+
 - **Affected Classes:** Multiple services using Mono/Flux
 - **Duplication:**
   - `.onErrorResume()` with logging patterns
@@ -1841,6 +2087,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 18. Model/DTO Mapping Patterns
 
 **Problem:** Similar model-to-DTO mapping logic
+
 - **Affected Classes:** BookDtoMapper, various service classes
 - **Duplication:**
   - Null-safe field copying
@@ -1852,6 +2099,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 19. S3 and Storage Patterns
 
 **Problem:** S3 operation patterns and path handling
+
 - **Affected Classes:** S3StorageService, S3RetryService, S3BookMigrationService
 - **Duplication:**
   - S3 error handling and status checking
@@ -1864,6 +2112,7 @@ This analysis provides a roadmap for reducing duplication while maintaining appr
 ### 20. Database Repository Patterns
 
 **Problem:** Similar database query and mapping patterns
+
 - **Affected Classes:** SitemapRepository, PostgresBookRepository, various persistence services
 - **Duplication:**
   - Null-safe query execution
