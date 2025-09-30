@@ -64,6 +64,7 @@ public class GoogleBooksService {
 
     private static final Duration STREAM_HYDRATION_TIMEOUT = Duration.ofSeconds(6);
     private final Set<String> inflightSearchHydrations = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final boolean persistSearchResults;
 
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
@@ -90,13 +91,15 @@ public class GoogleBooksService {
             GoogleApiFetcher googleApiFetcher,
             BookDataOrchestrator bookDataOrchestrator,
             ExternalCoverFetchHelper externalCoverFetchHelper,
-            GoogleCoverUrlEvaluator googleCoverUrlEvaluator) {
+            GoogleCoverUrlEvaluator googleCoverUrlEvaluator,
+            @Value("${app.features.persist-search-results:true}") boolean persistSearchResults) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
         this.bookDataOrchestrator = bookDataOrchestrator;
         this.externalCoverFetchHelper = externalCoverFetchHelper;
         this.googleCoverUrlEvaluator = googleCoverUrlEvaluator;
+        this.persistSearchResults = persistSearchResults;
     }
 
     /**
@@ -253,7 +256,7 @@ public class GoogleBooksService {
     }
 
     private void triggerSearchResultHydration(Book book) {
-        if (book == null) {
+        if (!persistSearchResults || book == null) {
             return;
         }
 
