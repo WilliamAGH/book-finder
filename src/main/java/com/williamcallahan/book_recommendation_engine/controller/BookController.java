@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Map;
@@ -159,12 +160,33 @@ public class BookController {
                 }
             });
 
-        return canonical
-            .switchIfEmpty(tieredById.switchIfEmpty(tieredBySlug))
-            .switchIfEmpty(Mono.defer(() -> {
-                ExternalApiLogger.logHydrationFailure(log, "DETAIL", identifier, "NOT_FOUND");
-                return Mono.empty();
-            }));
+
+return canonical
+    .switchIfEmpty(tieredById.switchIfEmpty(tieredBySlug))
+    .flatMap(book -> {
+        if (bookDataOrchestrator != null && book != null) {
+            LinkedHashSet<String> identifiers = new LinkedHashSet<>();
+            identifiers.add(identifier);
+            if (ValidationUtils.hasText(book.getId())) {
+                identifiers.add(book.getId());
+            }
+            if (ValidationUtils.hasText(book.getSlug())) {
+                identifiers.add(book.getSlug());
+            }
+            if (ValidationUtils.hasText(book.getIsbn13())) {
+                identifiers.add(book.getIsbn13());
+            }
+            if (ValidationUtils.hasText(book.getIsbn10())) {
+                identifiers.add(book.getIsbn10());
+            }
+            bookDataOrchestrator.hydrateIdentifiersAsync(identifiers, "DETAIL_BACKGROUND", identifier);
+        }
+        return Mono.justOrEmpty(book);
+    })
+    .switchIfEmpty(Mono.defer(() -> {
+        ExternalApiLogger.logHydrationFailure(log, "DETAIL", identifier, "NOT_FOUND");
+        return Mono.empty();
+    }));
     }
 
     private SearchResponse buildSearchResponse(String query,
