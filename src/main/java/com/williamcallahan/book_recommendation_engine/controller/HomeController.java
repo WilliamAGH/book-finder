@@ -325,6 +325,9 @@ public class HomeController {
                             .limit(6)
                             .collect(Collectors.toList());
                     })
+                    .doOnNext(finalList -> {
+                        try { if (bookDataOrchestrator != null) bookDataOrchestrator.persistBooksAsync(finalList, "DETAIL_SIMILAR"); } catch (Exception ignored) {}
+                    })
                     .onErrorResume(e -> {
                         log.warn("Error fetching cover URLs for similar books of ID {}: {}", bookId, e.getMessage());
                         return Mono.just(books.stream().limit(6).collect(Collectors.toList()));
