@@ -14,10 +14,14 @@ import java.time.LocalDate;
 import java.util.Optional;
 import java.util.Locale;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 @Slf4j
 public class BookCollectionPersistenceService {
+
+    private static final Logger log = LoggerFactory.getLogger(BookCollectionPersistenceService.class);
 
     private final JdbcTemplate jdbcTemplate;
 
