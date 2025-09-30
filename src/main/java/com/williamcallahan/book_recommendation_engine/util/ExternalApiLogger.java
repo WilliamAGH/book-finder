@@ -125,4 +125,79 @@ public class ExternalApiLogger {
         log.debug(message);
         System.out.println(message);
     }
+    /**
+     * Log start of a background hydration attempt for a specific context (search, recommendations, detail, etc.)
+     */
+    public static void logHydrationStart(Logger log, String context, String identifier, String correlationId) {
+        String correlation = correlationId != null && !correlationId.isBlank()
+            ? ", correlation='" + correlationId + "'"
+            : "";
+        String message = String.format("%s [HYDRATION] %s START: identifier='%s'%s",
+            PREFIX,
+            context,
+            identifier,
+            correlation);
+        log.info(message);
+        System.out.println(message);
+    }
+
+    /**
+     * Log success of a hydration attempt, including the canonical identifier that was materialized.
+     */
+    public static void logHydrationSuccess(Logger log, String context, String identifier, String canonicalId, String tier) {
+        String tierInfo = tier != null && !tier.isBlank()
+            ? ", tier='" + tier + "'"
+            : "";
+        String message = String.format("%s [HYDRATION] %s SUCCESS: identifier='%s', canonicalId='%s'%s",
+            PREFIX,
+            context,
+            identifier,
+            canonicalId,
+            tierInfo);
+        log.info(message);
+        System.out.println(message);
+    }
+
+    /**
+     * Log failure of a hydration attempt.
+     */
+    public static void logHydrationFailure(Logger log, String context, String identifier, String reason) {
+        String message = String.format("%s [HYDRATION] %s FAILURE: identifier='%s' - %s",
+            PREFIX,
+            context,
+            identifier,
+            reason);
+        log.warn(message);
+        System.err.println(message);
+    }
+
+    /**
+     * Log persistence success (upsert) for a canonical book record.
+     */
+    public static void logPersistenceSuccess(Logger log, String context, String canonicalId, boolean created, String title) {
+        String state = created ? "CREATED" : "UPDATED";
+        String safeTitle = title != null ? title : "";
+        String message = String.format("%s [PERSISTENCE] %s %s: canonicalId='%s', title='%s'",
+            PREFIX,
+            context,
+            state,
+            canonicalId,
+            safeTitle);
+        log.info(message);
+        System.out.println(message);
+    }
+
+    /**
+     * Log persistence failure for a canonical book record.
+     */
+    public static void logPersistenceFailure(Logger log, String context, String identifier, String reason) {
+        String message = String.format("%s [PERSISTENCE] %s FAILURE: identifier='%s' - %s",
+            PREFIX,
+            context,
+            identifier,
+            reason);
+        log.warn(message);
+        System.err.println(message);
+    }
+
 }
