@@ -58,3 +58,4 @@ build/
 ### Temporary Files and Logs ###
 tmp/
 migration-logs/
+.DS_Store
