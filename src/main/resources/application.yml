@@ -138,12 +138,12 @@ sitemap:
 # Affiliate link configuration
 affiliate:
   amazon:
-    associate-tag: ${AMAZON_ASSOCIATE_TAG:}
+    associate-tag: ${AMAZON_ASSOCIATE_TAG:williamagh-20}
   barnesandnoble:
     publisher-id: ${BARNES_NOBLE_PUBLISHER_ID:}
     website-id: ${BARNES_NOBLE_WEBSITE_ID:}
   bookshop:
-    affiliate-id: ${BOOKSHOP_AFFILIATE_ID:}
+    affiliate-id: ${BOOKSHOP_AFFILIATE_ID:113888}
 
 # Common Logging - Production-safe defaults (minimal verbosity)
 logging:
