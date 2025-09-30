@@ -22,6 +22,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
+import org.springframework.context.ApplicationEventPublisher;
+import com.williamcallahan.book_recommendation_engine.service.event.BookUpsertEvent;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -40,16 +42,19 @@ public class CanonicalBookPersistenceService {
     private final ObjectMapper objectMapper;
     private final BookSupplementalPersistenceService supplementalPersistenceService;
     private final BookLookupService bookLookupService;
+    private final ApplicationEventPublisher eventPublisher;
     private TransactionTemplate transactionTemplate;
 
     public CanonicalBookPersistenceService(JdbcTemplate jdbcTemplate,
                                            ObjectMapper objectMapper,
                                            BookSupplementalPersistenceService supplementalPersistenceService,
-                                           BookLookupService bookLookupService) {
+                                           BookLookupService bookLookupService,
+                                           ApplicationEventPublisher eventPublisher) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.supplementalPersistenceService = supplementalPersistenceService;
         this.bookLookupService = bookLookupService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Autowired
@@ -190,6 +195,11 @@ public class CanonicalBookPersistenceService {
         supplementalPersistenceService.assignQualifierTags(canonicalId, book.getQualifiers());
         synchronizeEditionRelationships(canonicalId, book);
         ExternalApiLogger.logPersistenceSuccess(LOGGER, "CANONICAL", canonicalId, isNew, book.getTitle());
+        try {
+            if (eventPublisher != null) {
+                eventPublisher.publishEvent(new BookUpsertEvent(canonicalId, slug, book.getTitle(), isNew, "CANONICAL"));
+            }
+        } catch (Exception ignored) {}
     }
 
     private String extractGoogleId(JsonNode sourceJson, Book book) {
