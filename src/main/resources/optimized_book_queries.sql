@@ -40,7 +40,7 @@ BEGIN
         b.title,
         -- Aggregate authors in order
         COALESCE(
-            ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL),
+            ARRAY_AGG(a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL),
             ARRAY[]::TEXT[]
         ) as authors,
         -- Get best cover image (prefer extraLarge → large → medium)
@@ -104,12 +104,12 @@ BEGIN
         b.description,
         -- Aggregate authors in order
         COALESCE(
-            ARRAY_AGG(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL),
+            ARRAY_AGG(a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL),
             ARRAY[]::TEXT[]
         ) as authors,
         -- Aggregate categories (from CATEGORY collections)
         COALESCE(
-            ARRAY_AGG(DISTINCT bc.display_name ORDER BY bc.display_name) 
+            ARRAY_AGG(bc.display_name ORDER BY bc.display_name) 
             FILTER (WHERE bc.display_name IS NOT NULL AND bc.collection_type = 'CATEGORY'),
             ARRAY[]::TEXT[]
         ) as categories,
@@ -189,13 +189,13 @@ BEGIN
         b.page_count,
         -- Aggregate authors in order (respecting position if available)
         COALESCE(
-            ARRAY_AGG(DISTINCT a.name ORDER BY COALESCE(baj.position, 9999), a.name) 
+            ARRAY_AGG(a.name ORDER BY COALESCE(baj.position, 9999), a.name) 
             FILTER (WHERE a.name IS NOT NULL),
             ARRAY[]::TEXT[]
         ) as authors,
         -- Aggregate categories
         COALESCE(
-            ARRAY_AGG(DISTINCT bc.display_name ORDER BY bc.display_name) 
+            ARRAY_AGG(bc.display_name ORDER BY bc.display_name) 
             FILTER (WHERE bc.display_name IS NOT NULL AND bc.collection_type = 'CATEGORY'),
             ARRAY[]::TEXT[]
         ) as categories,
