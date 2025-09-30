@@ -372,11 +372,18 @@ public class BookDataOrchestrator {
     }
     
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
+        logger.info("[EXTERNAL-API] [SEARCH] searchBooksTiered CALLED: query='{}', bypass={}, desired={}", query, bypassExternalApis, desiredTotalResults);
         return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis))
             .doOnSuccess(results -> {
+                logger.info("[EXTERNAL-API] [SEARCH] searchBooksTiered doOnSuccess TRIGGERED: bypass={}, results={}", 
+                    bypassExternalApis, results != null ? results.size() : "null");
                 if (!bypassExternalApis && results != null && !results.isEmpty()) {
+                    logger.info("[EXTERNAL-API] [SEARCH] CALLING persistBooksAsync with {} books", results.size());
                     // Persist search results opportunistically to Postgres
                     persistBooksAsync(results, "SEARCH");
+                } else {
+                    logger.warn("[EXTERNAL-API] [SEARCH] NOT calling persistBooksAsync: bypass={}, resultsNull={}, resultsEmpty={}", 
+                        bypassExternalApis, results == null, results != null && results.isEmpty());
                 }
             });
     }
@@ -442,20 +449,29 @@ public class BookDataOrchestrator {
      */
     public void persistBooksAsync(List<Book> books, String context) {
         if (books == null || books.isEmpty()) {
+            logger.info("[EXTERNAL-API] [{}] persistBooksAsync called but books list is null or empty", context);
             return;
         }
         
+        logger.info("[EXTERNAL-API] [{}] persistBooksAsync INVOKED with {} books", context, books.size());
+        
         Mono.fromRunnable(() -> {
-            logger.info("[EXTERNAL-API] [{}] Persisting {} books to Postgres", context, books.size());
+            logger.info("[EXTERNAL-API] [{}] Persisting {} books to Postgres - RUNNABLE EXECUTING", context, books.size());
             int successCount = 0;
             int failureCount = 0;
             
             for (Book book : books) {
-                if (book == null || book.getId() == null) {
+                if (book == null) {
+                    logger.warn("[EXTERNAL-API] [{}] Skipping null book in persistence", context);
+                    continue;
+                }
+                if (book.getId() == null) {
+                    logger.warn("[EXTERNAL-API] [{}] Skipping book with null ID: title={}", context, book.getTitle());
                     continue;
                 }
                 
                 try {
+                    logger.debug("[EXTERNAL-API] [{}] Attempting to persist book: id={}, title={}", context, book.getId(), book.getTitle());
                     ExternalApiLogger.logHydrationStart(logger, context, book.getId(), context);
                     
                     // Convert book to JSON for storage
@@ -463,15 +479,17 @@ public class BookDataOrchestrator {
                         ? objectMapper.readTree(book.getRawJsonResponse())
                         : objectMapper.valueToTree(book);
                     
+                    logger.debug("[EXTERNAL-API] [{}] Calling persistBook for id={}", context, book.getId());
                     // Persist using the same method as individual fetches
                     persistBook(book, bookJson, false);
                     
                     ExternalApiLogger.logHydrationSuccess(logger, context, book.getId(), book.getId(), "POSTGRES_UPSERT");
                     successCount++;
+                    logger.debug("[EXTERNAL-API] [{}] Successfully persisted book id={}", context, book.getId());
                 } catch (Exception ex) {
                     ExternalApiLogger.logHydrationFailure(logger, context, book.getId(), ex.getMessage());
                     failureCount++;
-                    logger.warn("Failed to persist book {} from {}: {}", book.getId(), context, ex.getMessage());
+                    logger.error("[EXTERNAL-API] [{}] Failed to persist book {} from {}: {}", context, book.getId(), context, ex.getMessage(), ex);
                 }
             }
             
@@ -479,10 +497,13 @@ public class BookDataOrchestrator {
                 context, successCount, failureCount);
         })
         .subscribeOn(Schedulers.boundedElastic())
+        .doOnSubscribe(sub -> logger.info("[EXTERNAL-API] [{}] Mono subscribed for persistence", context))
         .subscribe(
-            ignored -> { },
-            error -> logger.error("Background persistence failed for context {}: {}", context, error.getMessage())
+            ignored -> logger.info("[EXTERNAL-API] [{}] Persistence Mono completed successfully", context),
+            error -> logger.error("[EXTERNAL-API] [{}] Background persistence failed: {}", context, error.getMessage(), error)
         );
+        
+        logger.info("[EXTERNAL-API] [{}] persistBooksAsync setup complete, async execution scheduled", context);
     }
 
     public void hydrateIdentifiersAsync(Collection<String> identifiers, String context, String correlationId) {
