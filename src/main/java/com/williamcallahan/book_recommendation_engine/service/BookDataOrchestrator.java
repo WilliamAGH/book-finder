@@ -143,8 +143,21 @@ public class BookDataOrchestrator {
         return result != null ? result : Optional.empty();
     }
 
+    /**
+     * Fetches book data from external APIs when not found in DB or S3.
+     * This is a TRUE FALLBACK - only called when Postgres has no data.
+     * 
+     * Gracefully degrades across multiple API sources:
+     * 1. Google Books authenticated (if API key + circuit breaker allows)
+     * 2. Google Books unauthenticated (always available as fallback)
+     * 3. Google Books ISBN search (for ISBN lookups)
+     * 4. OpenLibrary (final fallback for ISBNs)
+     * 
+     * All API sources are aggregated to provide the most complete data.
+     */
     private Mono<Book> fetchFromApisAndAggregate(String bookId) {
         if (!externalFallbackEnabled) {
+            logger.debug("External API fallback disabled. Skipping API fetch for {}", bookId);
             return Mono.empty();
         }
         final boolean looksLikeIsbn13 = IsbnUtils.isValidIsbn13(bookId);

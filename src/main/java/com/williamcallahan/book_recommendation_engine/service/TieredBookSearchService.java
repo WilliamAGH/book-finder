@@ -27,6 +27,12 @@ import reactor.core.scheduler.Schedulers;
  * Extracted tiered search orchestration from {@link BookDataOrchestrator}. Handles DB-first search
  * with Google and OpenLibrary fallbacks while keeping the orchestrator slim.
  * 
+ * ARCHITECTURE:
+ * 1. PRIMARY: Postgres search (always tried first, never replaced)
+ * 2. SUPPLEMENT: If Postgres returns insufficient results, external APIs supplement via server-side streaming
+ * 3. GRACEFUL DEGRADATION: Authenticated → Unauthenticated → OpenLibrary fallbacks
+ * 
+ * Circuit breaker protects authenticated calls but allows unauthenticated fallbacks to continue.
  * Uses BookQueryRepository as THE SINGLE SOURCE OF TRUTH for optimized queries.
  */
 @Component
@@ -63,20 +69,36 @@ public class TieredBookSearchService {
     }
     
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
-        LOGGER.debug("TieredBookSearch: Starting search for query: '{}', lang: {}, total: {}, order: {}, bypassExternal: {}", 
+        LOGGER.debug("TieredBookSearch: Starting search for query: '{}', lang: {}, total: {}, order: {}, bypassExternal: {}",
             query, langCode, desiredTotalResults, orderBy, bypassExternalApis);
 
         // ALWAYS try Postgres first - baseline results
+        // FIX BUG #1: Handle Postgres errors separately so they don't prevent external fallback
         return searchPostgresFirstReactive(query, desiredTotalResults)
+            .onErrorResume(postgresError -> {
+                // Log Postgres failure but continue to external search if enabled
+                LOGGER.warn("TieredBookSearch: Postgres search failed for query '{}': {}. Attempting external fallback.",
+                    query, postgresError.getMessage());
+
+                // If external fallback disabled/bypassed, fail now
+                if (!externalFallbackEnabled || bypassExternalApis) {
+                    LOGGER.error("TieredBookSearch: Postgres failed and external fallback disabled/bypassed for query '{}'.", query);
+                    return Mono.just(List.<Book>of());
+                }
+
+                // Otherwise, try external search as if Postgres returned empty
+                LOGGER.info("TieredBookSearch: Proceeding to external search after Postgres failure for query '{}'", query);
+                return Mono.just(List.<Book>of()); // Empty list to trigger external search in flatMap
+            })
             .flatMap(postgresHits -> {
                 LOGGER.info("TieredBookSearch: Postgres returned {} results for query '{}'", postgresHits.size(), query);
-                
+
                 // If we have enough results from Postgres, return them immediately
                 if (!postgresHits.isEmpty() && postgresHits.size() >= desiredTotalResults) {
                     LOGGER.info("TieredBookSearch: Postgres fully satisfied query '{}' with {} results.", query, postgresHits.size());
                     return Mono.just(postgresHits);
                 }
-                
+
                 // If external fallback disabled OR explicitly bypassed (e.g., for homepage), return what Postgres gave us
                 if (!externalFallbackEnabled || bypassExternalApis) {
                     if (bypassExternalApis) {
@@ -86,18 +108,31 @@ public class TieredBookSearchService {
                     }
                     return Mono.just(postgresHits);
                 }
-                
+
                 // Otherwise, augment Postgres results with external APIs
                 int needed = Math.max(0, desiredTotalResults - postgresHits.size());
                 LOGGER.debug("TieredBookSearch: Augmenting {} Postgres results with up to {} external results", postgresHits.size(), needed);
-                
+
+                // FIX BUG #2 & #3: Handle external search errors gracefully, preserve Postgres results
                 return performExternalSearch(query, langCode, needed, orderBy)
-                    .map(externalHits -> mergeResults(postgresHits, externalHits, desiredTotalResults))
-                    .defaultIfEmpty(postgresHits); // On external failure, return Postgres results
+                    .map(externalHits -> {
+                        List<Book> merged = mergeResults(postgresHits, externalHits, desiredTotalResults);
+                        LOGGER.info("TieredBookSearch: Merged {} Postgres + {} external = {} total results for query '{}'",
+                            postgresHits.size(), externalHits.size(), merged.size(), query);
+                        return merged;
+                    })
+                    .onErrorResume(externalError -> {
+                        // If external search fails, return Postgres results we already have
+                        LOGGER.warn("TieredBookSearch: External search failed for query '{}': {}. Returning {} Postgres results.",
+                            query, externalError.getMessage(), postgresHits.size());
+                        return Mono.just(postgresHits);
+                    })
+                    .defaultIfEmpty(postgresHits); // If external returns empty (not error), still return Postgres results
             })
-            .onErrorResume(e -> {
-                LOGGER.error("TieredBookSearch: Error during search for '{}': {}", query, e.getMessage());
-                // On error, try to return empty instead of failing completely
+            .defaultIfEmpty(List.of()) // Final safety net
+            .onErrorResume(unexpectedError -> {
+                // This should rarely be hit now that we handle errors at each tier
+                LOGGER.error("TieredBookSearch: Unexpected error during search for '{}': {}", query, unexpectedError.getMessage());
                 return Mono.just(List.of());
             });
     }
@@ -131,21 +166,36 @@ public class TieredBookSearchService {
             ? executePagedSearch(query, langCode, desiredTotalResults, orderBy, false, queryQualifiers)
             : Mono.just(Collections.emptyList());
 
+        // FIX BUG #4: Ensure errors in primary search don't prevent fallback attempts
         return primarySearchMono
+            .onErrorResume(primaryError -> {
+                // If primary search errors (not just empty), log and proceed to fallback
+                LOGGER.warn("TieredBookSearch: Primary Google search ({}) error for query '{}': {}. Attempting fallback.",
+                    (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query, primaryError.getMessage());
+                return Mono.just(Collections.<Book>emptyList()); // Treat error as empty to trigger fallback
+            })
             .flatMap(googleResults1 -> {
                 if (!googleResults1.isEmpty()) {
                     LOGGER.info("TieredBookSearch: Primary Google search ({}) successful for query '{}', found {} books.", (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query, googleResults1.size());
                     return Mono.just(googleResults1);
                 }
                 LOGGER.info("TieredBookSearch: Primary Google search ({}) for query '{}' yielded no results. Proceeding to fallback Google search.", (apiKeyAvailable ? "Authenticated" : "Unauthenticated"), query);
-                return fallbackSearchMono.flatMap(googleResults2 -> {
-                    if (!googleResults2.isEmpty()) {
-                        LOGGER.info("TieredBookSearch: Fallback Google search successful for query '{}', found {} books.", query, googleResults2.size());
-                        return Mono.just(googleResults2);
-                    }
-                    LOGGER.info("TieredBookSearch: Fallback Google search for query '{}' yielded no results. Proceeding to OpenLibrary search.", query);
-                    return openLibrarySearchMono;
-                });
+
+                return fallbackSearchMono
+                    .onErrorResume(fallbackError -> {
+                        // If fallback search errors, log and proceed to OpenLibrary
+                        LOGGER.warn("TieredBookSearch: Fallback Google search error for query '{}': {}. Attempting OpenLibrary.",
+                            query, fallbackError.getMessage());
+                        return Mono.just(Collections.<Book>emptyList());
+                    })
+                    .flatMap(googleResults2 -> {
+                        if (!googleResults2.isEmpty()) {
+                            LOGGER.info("TieredBookSearch: Fallback Google search successful for query '{}', found {} books.", query, googleResults2.size());
+                            return Mono.just(googleResults2);
+                        }
+                        LOGGER.info("TieredBookSearch: Fallback Google search for query '{}' yielded no results. Proceeding to OpenLibrary search.", query);
+                        return openLibrarySearchMono;
+                    });
             })
             .doOnSuccess(books -> {
                 if (!books.isEmpty()) {

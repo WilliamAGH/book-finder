@@ -92,11 +92,12 @@ public class GoogleApiFetcher {
         if (authenticated) {
             // Check circuit breaker first
             if (!circuitBreakerService.isApiCallAllowed()) {
-                log.warn("Circuit breaker is OPEN - blocking authenticated API call for book ID: {}", bookId);
+                log.info("Circuit breaker is OPEN - skipping authenticated fetch for book ID: {}. Caller should try unauthenticated fallback.", bookId);
                 return Mono.empty();
             }
             if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
-                log.warn("Authenticated API call attempted for bookId {} without an API key. This call will likely fail or be rate-limited.", bookId);
+                log.debug("No API key configured - skipping authenticated fetch for bookId {}", bookId);
+                return Mono.empty();
             }
         }
 
@@ -197,12 +198,13 @@ public class GoogleApiFetcher {
         }
         // Check circuit breaker first
         if (!circuitBreakerService.isApiCallAllowed()) {
-            log.warn("Circuit breaker is OPEN - blocking authenticated search API call for query: {}", query);
+            log.info("Circuit breaker is OPEN - skipping authenticated search for query '{}'. Caller should try unauthenticated fallback.", query);
             return Mono.empty();
         }
         
         if (googleBooksApiKey == null || googleBooksApiKey.isEmpty()) {
-            log.warn("Authenticated search API call attempted for query '{}' without an API key.", query);
+            log.debug("No API key configured - skipping authenticated search for query '{}'", query);
+            return Mono.empty();
         }
         return searchVolumesInternal(query, startIndex, orderBy, langCode, true);
     }
@@ -252,7 +254,8 @@ public class GoogleApiFetcher {
                     ? searchVolumesAuthenticated(query, startIndex, orderBy, langCode)
                     : searchVolumesUnauthenticated(query, startIndex, orderBy, langCode);
 
-                return apiCall.flatMapMany(responseNode -> {
+                return apiCall
+                    .flatMapMany(responseNode -> {
                         if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
                             return Flux.fromIterable(responseNode.get("items"));
                         }
@@ -260,9 +263,15 @@ public class GoogleApiFetcher {
                                 authenticated ? "Authenticated" : "Unauthenticated", query, startIndex);
                         return Flux.empty();
                     })
+                    .switchIfEmpty(Flux.defer(() -> {
+                        // If authenticated call returned empty (e.g., circuit breaker), gracefully end stream
+                        log.debug("GoogleApiFetcher: {} search returned empty for query '{}' at startIndex {}. Stream ending gracefully.",
+                                authenticated ? "Authenticated" : "Unauthenticated", query, startIndex);
+                        return Flux.empty();
+                    }))
                     .onErrorResume(e -> {
-                        LoggingUtils.error(log, e,
-                                "GoogleApiFetcher: Error during {} search page for query '{}' at startIndex {}",
+                        LoggingUtils.warn(log, e,
+                                "GoogleApiFetcher: Error during {} search page for query '{}' at startIndex {}. Continuing stream.",
                                 authenticated ? "authenticated" : "unauthenticated", query, startIndex);
                         return Flux.empty();
                     });

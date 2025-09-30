@@ -63,9 +63,9 @@ spring:
 app:
   features:
     external-fallback:
-      enabled: ${APP_FEATURE_EXTERNAL_FALLBACK_ENABLED:false}
+      enabled: ${APP_FEATURE_EXTERNAL_FALLBACK_ENABLED:true}
     google-fallback:
-      enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:false}
+      enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:true}
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}
@@ -190,7 +190,7 @@ app:
     mode: development
   features:
     external-fallback:
-      enabled: false # DEV OVERRIDE: Disable external API fallbacks in local dev
+      enabled: true # DEV: Enable fallbacks for testing tiered search
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD:devAdminPass}
