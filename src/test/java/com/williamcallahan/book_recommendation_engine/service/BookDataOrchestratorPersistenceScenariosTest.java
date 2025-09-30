@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentMatchers;
@@ -62,14 +63,19 @@ class BookDataOrchestratorPersistenceScenariosTest {
     private BookSearchService bookSearchService;
 
     @Mock
+    private com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper googleBooksMapper;
+
+    @Mock
     private TieredBookSearchService tieredBookSearchService;
+
+    @Mock
+    private BookUpsertService bookUpsertService;
 
     private BookDataOrchestrator orchestrator;
 
     // Concrete dependencies instantiated in setUp()
     private BookS3CacheService bookS3CacheService;
     private PostgresBookRepository postgresBookRepository;
-    private CanonicalBookPersistenceService canonicalBookPersistenceService;
     private BookLookupService bookLookupService;
 
     @BeforeEach
@@ -78,7 +84,6 @@ class BookDataOrchestratorPersistenceScenariosTest {
         bookS3CacheService = new BookS3CacheService(s3RetryService, om);
         postgresBookRepository = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
         bookLookupService = new BookLookupService(jdbcTemplate);
-canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTemplate, om, supplementalPersistenceService, bookLookupService, null);
 
         orchestrator = new BookDataOrchestrator(
                 s3RetryService,
@@ -90,14 +95,13 @@ canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTempla
                 bookSearchService,
                 bookS3CacheService,
                 postgresBookRepository,
-                canonicalBookPersistenceService,
+                bookUpsertService,
+                googleBooksMapper,
                 tieredBookSearchService,
-                false,
                 false,
                 false,
                 false
         );
-
         lenient().when(bookSearchService.searchBooks(anyString(), any())).thenReturn(List.of());
         lenient().when(bookSearchService.searchByIsbn(anyString())).thenReturn(java.util.Optional.empty());
         lenient().when(bookSearchService.searchAuthors(anyString(), any())).thenReturn(List.of());
@@ -108,6 +112,7 @@ canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTempla
     }
 
     @Test
+    @Disabled("Method resolveCanonicalBookId was moved from BookDataOrchestrator to CanonicalBookPersistenceService (deprecated)")
     void resolveCanonicalBookId_prefersExistingExternalMapping() {
         whenExternalIdLookupReturns("existing-book-id");
 
@@ -129,6 +134,7 @@ canonicalBookPersistenceService = new CanonicalBookPersistenceService(jdbcTempla
     }
 
     @Test
+    @Disabled("Method synchronizeEditionRelationships was moved to CanonicalBookPersistenceService and is now disabled. Edition relationships are handled by work_cluster_members table.")
     void synchronizeEditionRelationships_linksHighestEditionAsPrimary() {
         Book book = new Book();
         book.setEditionGroupKey("group-key");

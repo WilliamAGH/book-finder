@@ -1,5 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,7 +45,8 @@ class PostgresBookReaderDedupeTest {
         var aggregator = Mockito.mock(BookDataAggregatorService.class);
         var collection = Mockito.mock(BookCollectionPersistenceService.class);
         var search = createBookSearchServiceMock();
-        var canonicalBookPersistenceService = Mockito.mock(CanonicalBookPersistenceService.class);
+        var bookUpsertService = Mockito.mock(BookUpsertService.class);
+        var googleBooksMapper = Mockito.mock(GoogleBooksMapper.class);
         var tieredBookSearchService = Mockito.mock(TieredBookSearchService.class);
 
         PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
@@ -59,14 +61,13 @@ class PostgresBookReaderDedupeTest {
                 search,
                 new BookS3CacheService(s3RetryService, om),
                 repo,
-                canonicalBookPersistenceService,
+                bookUpsertService,
+                googleBooksMapper,
                 tieredBookSearchService,
-                false,
                 false,
                 false,
                 false
         );
-
         stubDatabaseQueries();
     }
 

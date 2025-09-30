@@ -6,10 +6,11 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
 import com.williamcallahan.book_recommendation_engine.service.BookCollectionPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.BookLookupService;
 import com.williamcallahan.book_recommendation_engine.service.BookSupplementalPersistenceService;
-import com.williamcallahan.book_recommendation_engine.service.CanonicalBookPersistenceService;
+import com.williamcallahan.book_recommendation_engine.service.BookUpsertService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
@@ -56,7 +57,7 @@ public class NewYorkTimesBestsellerScheduler {
     private final JdbcTemplate jdbcTemplate;
     private final BookCollectionPersistenceService collectionPersistenceService;
     private final BookSupplementalPersistenceService supplementalPersistenceService;
-    private final CanonicalBookPersistenceService canonicalBookPersistenceService;
+    private final BookUpsertService bookUpsertService;
 
     @Value("${app.nyt.scheduler.cron:0 0 4 * * SUN}")
     private String cronExpression;
@@ -73,14 +74,14 @@ public class NewYorkTimesBestsellerScheduler {
                                            JdbcTemplate jdbcTemplate,
                                            BookCollectionPersistenceService collectionPersistenceService,
                                            BookSupplementalPersistenceService supplementalPersistenceService,
-                                           @Nullable CanonicalBookPersistenceService canonicalBookPersistenceService) {
+                                           BookUpsertService bookUpsertService) {
         this.newYorkTimesService = newYorkTimesService;
         this.bookLookupService = bookLookupService;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
         this.collectionPersistenceService = collectionPersistenceService;
         this.supplementalPersistenceService = supplementalPersistenceService;
-        this.canonicalBookPersistenceService = canonicalBookPersistenceService;
+        this.bookUpsertService = bookUpsertService;
     }
 
     @Scheduled(cron = "${app.nyt.scheduler.cron:0 0 4 * * SUN}")
@@ -232,95 +233,87 @@ public class NewYorkTimesBestsellerScheduler {
     }
 
     private String createCanonicalFromNyt(JsonNode bookNode, String listCode, String isbn13, String isbn10) {
-        if (canonicalBookPersistenceService == null) {
+        BookAggregate aggregate = buildBookAggregateFromNyt(bookNode, listCode, isbn13, isbn10);
+        if (aggregate == null) {
             return null;
         }
 
-        Book stub = buildBookFromNyt(bookNode, listCode, isbn13, isbn10);
-        if (stub == null) {
+        try {
+            BookUpsertService.UpsertResult result = bookUpsertService.upsert(aggregate);
+            return result.getBookId().toString();
+        } catch (Exception e) {
+            log.error("Failed to create book from NYT data: {}", e.getMessage(), e);
             return null;
         }
-
-        boolean saved = canonicalBookPersistenceService.saveMinimalBook(stub, bookNode);
-        if (!saved) {
-            return null;
-        }
-        return stub.getId();
     }
 
-    private Book buildBookFromNyt(JsonNode bookNode, String listCode, String isbn13, String isbn10) {
+    private BookAggregate buildBookAggregateFromNyt(JsonNode bookNode, String listCode, String isbn13, String isbn10) {
         String title = firstNonEmptyText(bookNode, "book_title", "title");
         if (!ValidationUtils.hasText(title)) {
             return null;
         }
 
-        Book book = new Book();
         // Normalize title to proper case
-        book.setTitle(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(title));
+        String normalizedTitle = com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(title);
 
         String description = firstNonEmptyText(bookNode, "description", "summary");
-        if (ValidationUtils.hasText(description)) {
-            book.setDescription(description);
-        }
-
         String publisher = firstNonEmptyText(bookNode, "publisher");
-        if (ValidationUtils.hasText(publisher)) {
-            book.setPublisher(publisher);
-        }
-
-        if (ValidationUtils.hasText(isbn13)) {
-            book.setIsbn13(isbn13);
-        }
-        if (ValidationUtils.hasText(isbn10)) {
-            book.setIsbn10(isbn10);
-        }
 
         Date published = parsePublishedDate(bookNode);
+        java.time.LocalDate publishedDate = null;
         if (published != null) {
-            book.setPublishedDate(published);
+            publishedDate = new java.sql.Date(published.getTime()).toLocalDate();
         }
 
         List<String> authors = extractAuthors(bookNode);
-        if (!authors.isEmpty()) {
-            // Normalize author names to proper case
-            List<String> normalizedAuthors = authors.stream()
-                .map(com.williamcallahan.book_recommendation_engine.util.TextUtils::normalizeAuthorName)
-                .collect(java.util.stream.Collectors.toList());
-            book.setAuthors(normalizedAuthors);
+        List<String> normalizedAuthors = authors.stream()
+            .map(com.williamcallahan.book_recommendation_engine.util.TextUtils::normalizeAuthorName)
+            .collect(java.util.stream.Collectors.toList());
+
+        List<String> categories = null;
+        if (ValidationUtils.hasText(listCode)) {
+            categories = new ArrayList<>();
+            categories.add("NYT " + listCode.replace('-', ' '));
         }
 
+        // Build image links map
+        Map<String, String> imageLinks = new java.util.HashMap<>();
         String imageUrl = firstNonEmptyText(bookNode, "book_image", "book_image_url");
         if (ValidationUtils.hasText(imageUrl)) {
-            book.setExternalImageUrl(imageUrl);
-            book.setS3ImagePath(imageUrl);
-            CoverImages coverImages = new CoverImages();
-            coverImages.setPreferredUrl(imageUrl);
-            coverImages.setFallbackUrl(imageUrl);
-            coverImages.setSource(CoverImageSource.UNDEFINED);
-            book.setCoverImages(coverImages);
+            imageLinks.put("thumbnail", imageUrl);
         }
 
         String purchaseUrl = firstNonEmptyText(bookNode, "amazon_product_url");
+
+        // Build external identifiers
+        BookAggregate.ExternalIdentifiers.ExternalIdentifiersBuilder identifiersBuilder = 
+            BookAggregate.ExternalIdentifiers.builder()
+                .source("NEW_YORK_TIMES")
+                .externalId(isbn13 != null ? isbn13 : isbn10)
+                .providerIsbn13(isbn13)
+                .providerIsbn10(isbn10)
+                .imageLinks(imageLinks);
+
         if (ValidationUtils.hasText(purchaseUrl)) {
-            book.setPurchaseLink(purchaseUrl);
+            identifiersBuilder.purchaseLink(purchaseUrl);
         }
 
-        Map<String, Object> qualifiers = new HashMap<>();
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("list_code", listCode);
-        if (bookNode.has("rank") && bookNode.get("rank").canConvertToInt()) {
-            metadata.put("rank", bookNode.get("rank").asInt());
-        }
-        qualifiers.put("nytBestseller", metadata);
-        book.setQualifiers(qualifiers);
+        // Generate slug base
+        String slugBase = com.williamcallahan.book_recommendation_engine.util.SlugGenerator
+            .generateBookSlug(normalizedTitle, normalizedAuthors);
 
-        if (ValidationUtils.hasText(listCode)) {
-            List<String> categories = new ArrayList<>();
-            categories.add("NYT " + listCode.replace('-', ' '));
-            book.setCategories(categories);
-        }
-
-        return book;
+        return BookAggregate.builder()
+            .title(normalizedTitle)
+            .description(ValidationUtils.hasText(description) ? description : null)
+            .publisher(ValidationUtils.hasText(publisher) ? publisher : null)
+            .isbn13(ValidationUtils.hasText(isbn13) ? isbn13 : null)
+            .isbn10(ValidationUtils.hasText(isbn10) ? isbn10 : null)
+            .publishedDate(publishedDate)
+            .authors(normalizedAuthors.isEmpty() ? null : normalizedAuthors)
+            .categories(categories)
+            .identifiers(identifiersBuilder.build())
+            .slugBase(slugBase)
+            .build();
     }
 
     private Date parsePublishedDate(JsonNode bookNode) {
