@@ -158,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const originalSrc = img.getAttribute('data-original-src');
             if (originalSrc && originalSrc !== img.src) {
                 console.log('Retrying cover: ' + (img.alt || 'Unknown book'));
-                img.src = originalSrc;
+                img.src = ensureHttpsForGoogleBooks(originalSrc);
             }
         });
         return 'Attempted to reload ' + covers.length + ' book covers';
@@ -242,17 +242,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         tempImg.onload = function() {
                             // Apply normalized dimensions through the shared function
                             applyConsistentDimensions(img, tempImg.naturalWidth, tempImg.naturalHeight);
-                            
+
                             // Set the source last, after all dimension adjustments are applied
-                            img.src = payload.newCoverUrl;
+                            img.src = ensureHttpsForGoogleBooks(payload.newCoverUrl);
                             console.log('WebSocket updated cover for book ' + id + ' with normalized dimensions (' + tempImg.naturalWidth + 'x' + tempImg.naturalHeight + ')');
                         };
                         tempImg.onerror = function() {
                             console.warn('Failed to preload WebSocket updated cover for book ' + id);
                             // Still update the src on error, but without dimension normalization
-                            img.src = payload.newCoverUrl;
+                            img.src = ensureHttpsForGoogleBooks(payload.newCoverUrl);
                         };
-                        tempImg.src = payload.newCoverUrl;
+                        tempImg.src = ensureHttpsForGoogleBooks(payload.newCoverUrl);
                     }
                 });
             });
@@ -513,13 +513,13 @@ function initializeBookCovers() {
 
         if (preferredUrl && preferredUrl !== "null" && preferredUrl.trim() !== "") {
             console.log('[Cover ' + index + '] Attempting preferred URL: ' + preferredUrl);
-            cover.src = preferredUrl;
+            cover.src = ensureHttpsForGoogleBooks(preferredUrl);
         } else if (fallbackUrl && fallbackUrl !== "null" && fallbackUrl.trim() !== "") {
             console.log('[Cover ' + index + '] No preferred URL, attempting fallback URL: ' + fallbackUrl);
-            cover.src = fallbackUrl;
+            cover.src = ensureHttpsForGoogleBooks(fallbackUrl);
         } else {
             console.log('[Cover ' + index + '] No preferred or fallback URL, using ultimate fallback: ' + ultimateFallback);
-            cover.src = ultimateFallback;
+            cover.src = ensureHttpsForGoogleBooks(ultimateFallback);
             // If it's already the placeholder, the load event might not fire consistently if src doesn't change
             // Manually trigger if it's already the placeholder and not loading
             if (cover.complete && ultimateFallback.includes(LOCAL_PLACEHOLDER)) {
@@ -556,6 +556,21 @@ function handleImageSuccess() {
         // Successfully loaded a real image or the intended local placeholder
         cover.onerror = null; // Prevent future errors on this now successfully loaded image (e.g. if removed from DOM then re-added by mistake)
     }
+}
+
+/**
+ * Converts HTTP Google Books URLs to HTTPS to comply with CSP
+ * @param {string} url - The image URL to fix
+ * @returns {string} - The fixed HTTPS URL
+ */
+function ensureHttpsForGoogleBooks(url) {
+    if (!url) return url;
+    // Convert HTTP Google Books URLs to HTTPS for CSP compliance
+    if (url.startsWith('http://books.google.com/') || url.startsWith('http://books.googleapis.com/')) {
+        console.log('[CSP Fix] Converting HTTP to HTTPS for Google Books URL:', url);
+        return url.replace('http://', 'https://');
+    }
+    return url;
 }
 
 function handleImageFailure() {
@@ -608,7 +623,7 @@ function handleImageFailure() {
 
 
     if (nextSrc) {
-        cover.src = nextSrc;
+        cover.src = ensureHttpsForGoogleBooks(nextSrc);
         if (nextSrc === ultimate) {
             // If we're falling back to the ultimate (local) placeholder,
             // it should ideally not error. If it does, stop trying.
@@ -628,7 +643,7 @@ function handleImageFailure() {
         const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
         if (placeholderDiv) placeholderDiv.style.display = 'none';
         cover.style.opacity = '1';
-        cover.src = ultimate;
+        cover.src = ensureHttpsForGoogleBooks(ultimate);
         cover.onerror = null;
         cover.classList.remove('loading');
         cover.classList.add('failed');

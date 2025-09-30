@@ -1403,7 +1403,9 @@ section {
     overflow: visible;
 }
 .affiliate-dropdown .dropdown-menu {
-    width: 100% !important;
+    min-width: 200px !important;
+    width: auto !important;
+    max-width: 300px !important;
     left: 0 !important;
     right: auto !important;
     z-index: 1050 !important;
@@ -1412,6 +1414,15 @@ section {
     background-color: rgba(255,255,255,0.85);
     border: 1px solid rgba(0,0,0,0.1);
     border-radius: .5rem;
+    white-space: nowrap;
+}
+
+/* Responsive sizing for dropdown on mobile */
+@media (max-width: 767.98px) {
+    .affiliate-dropdown .dropdown-menu {
+        min-width: 180px !important;
+        max-width: calc(100vw - 2rem) !important;
+    }
 }
 
 /* Dark mode reinterpretation */
@@ -1423,6 +1434,9 @@ section {
 /* Consistent colors for dropdown items */
 .affiliate-dropdown .dropdown-item {
     color: var(--text-color-primary) !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .affiliate-dropdown .dropdown-item:hover,
 .affiliate-dropdown .dropdown-item:focus {
@@ -1436,5 +1450,10 @@ section {
 
 /* Allow affiliate dropdown menu to overflow main book card */
 .book-details > .card.shadow.border-0.mb-5 {
+    overflow: visible !important;
+}
+
+/* Ensure tab content allows dropdown overflow */
+.tab-content {
     overflow: visible !important;
 }

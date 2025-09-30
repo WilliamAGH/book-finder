@@ -1,9 +1,25 @@
 /**
  * Cover Source Handler
- * 
+ *
  * This script handles the loading of book covers from different sources
  * without blocking the initial display of search results.
  */
+
+/**
+ * Converts HTTP Google Books URLs to HTTPS to comply with CSP
+ * @param {string} url - The image URL to fix
+ * @returns {string} - The fixed HTTPS URL
+ */
+function ensureHttpsForGoogleBooks(url) {
+    if (!url) return url;
+    // Convert HTTP Google Books URLs to HTTPS for CSP compliance
+    if (url.startsWith('http://books.google.com/') || url.startsWith('http://books.googleapis.com/')) {
+        console.log('[CSP Fix] Converting HTTP to HTTPS for Google Books URL:', url);
+        return url.replace('http://', 'https://');
+    }
+    return url;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize cover source preference
     let currentCoverSource = 'ANY';
@@ -85,7 +101,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     }
                                     
                                     // Apply source after dimensions are normalized
-                                    img.src = data.coverUrl;
+                                    img.src = ensureHttpsForGoogleBooks(data.coverUrl);
                                     console.log(`Cover source updated for book ${bookId}`);
                                 }
                             };
@@ -93,10 +109,10 @@ document.addEventListener('DOMContentLoaded', function() {
                                 console.warn(`Failed to load preferred cover for book ${bookId}`);
                                 // Revert to original source on error
                                 if (img.getAttribute('data-loading-source') === currentCoverSource) {
-                                    img.src = originalSrc;
+                                    img.src = ensureHttpsForGoogleBooks(originalSrc);
                                 }
                             };
-                            newImg.src = data.coverUrl;
+                            newImg.src = ensureHttpsForGoogleBooks(data.coverUrl);
                         }
                     })
                     .catch(error => {
