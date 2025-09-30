@@ -678,11 +678,11 @@
             const bookUrl = `/book/${identifierForUrl}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForCard = card.querySelector('.book-cover');
-            const preferredUrl = (book.coverImages && book.coverImages.preferredUrl)
-                ? book.coverImages.preferredUrl
-                : (book.s3ImagePath || book.externalImageUrl || null);
-            const fallbackUrl = (book.coverImages && book.coverImages.fallbackUrl)
-                ? book.coverImages.fallbackUrl
+            const preferredUrl = (book.cover && book.cover.preferredUrl)
+                ? book.cover.preferredUrl
+                : (book.cover?.s3ImagePath || book.cover?.externalImageUrl || null);
+            const fallbackUrl = (book.cover && book.cover.fallbackUrl)
+                ? book.cover.fallbackUrl
                 : '/images/placeholder-book-cover.svg';
 
             imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
@@ -720,9 +720,9 @@
                 }
 
                 // Add dev source indicator if in development mode
-                if (isDevelopmentMode && book.coverImages && book.coverImages.source && book.coverImages.source.name) {
+                if (isDevelopmentMode && book.cover && book.cover.source) {
                     const devIndicator = document.createElement('div');
-                    devIndicator.className = 'position-absolute bottom-0 start-0 m-2 dev-source-indicator dev-source-' + book.coverImages.source.name;
+                    devIndicator.className = 'position-absolute bottom-0 start-0 m-2 dev-source-indicator dev-source-' + book.cover.source;
                     devIndicator.style.zIndex = '10';
                     devIndicator.style.width = '20px';
                     devIndicator.style.height = '20px';
@@ -730,9 +730,9 @@
                     devIndicator.style.alignItems = 'center';
                     devIndicator.style.justifyContent = 'center';
                     
-                    let titleText = 'Source: ' + (book.coverImages.source.displayName || 'Unknown');
-                    if (book.coverImages.preferredUrl) {
-                        let preferredUrlAbbreviated = book.coverImages.preferredUrl.length > 70 ? book.coverImages.preferredUrl.substring(0, 70) + '...' : book.coverImages.preferredUrl;
+                    let titleText = 'Source: ' + (book.cover.source || 'Unknown');
+                    if (book.cover.preferredUrl) {
+                        let preferredUrlAbbreviated = book.cover.preferredUrl.length > 70 ? book.cover.preferredUrl.substring(0, 70) + '...' : book.cover.preferredUrl;
                         titleText += ' | URL: ' + preferredUrlAbbreviated;
                     }
                     devIndicator.setAttribute('title', titleText);
@@ -793,11 +793,11 @@
             const bookUrl = `/book/${identifierForUrl}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
-            const preferredUrlListItem = (book.coverImages && book.coverImages.preferredUrl)
-                ? book.coverImages.preferredUrl
-                : (book.s3ImagePath || book.externalImageUrl || null);
-            const fallbackUrlListItem = (book.coverImages && book.coverImages.fallbackUrl)
-                ? book.coverImages.fallbackUrl
+            const preferredUrlListItem = (book.cover && book.cover.preferredUrl)
+                ? book.cover.preferredUrl
+                : (book.cover?.s3ImagePath || book.cover?.externalImageUrl || null);
+            const fallbackUrlListItem = (book.cover && book.cover.fallbackUrl)
+                ? book.cover.fallbackUrl
                 : '/images/placeholder-book-cover.svg';
 
             imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src
@@ -835,9 +835,9 @@
                 }
 
                 // Add dev source indicator if in development mode (for list view)
-                if (isDevelopmentMode && book.coverImages && book.coverImages.source && book.coverImages.source.name) {
+                if (isDevelopmentMode && book.cover && book.cover.source) {
                     const devIndicator = document.createElement('div');
-                    devIndicator.className = 'position-absolute bottom-0 start-0 m-1 dev-source-indicator dev-source-' + book.coverImages.source.name; // m-1 for smaller margin in list
+                    devIndicator.className = 'position-absolute bottom-0 start-0 m-1 dev-source-indicator dev-source-' + book.cover.source; // m-1 for smaller margin in list
                     devIndicator.style.zIndex = '10';
                     devIndicator.style.width = '18px'; // Slightly smaller for list view
                     devIndicator.style.height = '18px';
@@ -845,9 +845,9 @@
                     devIndicator.style.alignItems = 'center';
                     devIndicator.style.justifyContent = 'center';
 
-                    let titleText = 'Source: ' + (book.coverImages.source.displayName || 'Unknown');
-                    if (book.coverImages.preferredUrl) {
-                         let preferredUrlAbbreviated = book.coverImages.preferredUrl.length > 70 ? book.coverImages.preferredUrl.substring(0, 70) + '...' : book.coverImages.preferredUrl;
+                    let titleText = 'Source: ' + (book.cover.source || 'Unknown');
+                    if (book.cover.preferredUrl) {
+                         let preferredUrlAbbreviated = book.cover.preferredUrl.length > 70 ? book.cover.preferredUrl.substring(0, 70) + '...' : book.cover.preferredUrl;
                         titleText += ' | URL: ' + preferredUrlAbbreviated;
                     }
                     devIndicator.setAttribute('title', titleText);
