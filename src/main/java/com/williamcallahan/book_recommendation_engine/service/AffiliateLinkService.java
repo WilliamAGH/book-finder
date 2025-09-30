@@ -77,16 +77,22 @@ public class AffiliateLinkService {
 
     /**
      * Build Amazon link (with affiliate tag if configured, direct link otherwise).
+     * Uses Amazon's search format with full affiliate parameters for better tracking.
      */
     public String buildAmazonLink(String isbn) {
         if (isbn == null) {
             return null;
         }
-        // If affiliate tag is configured, use it; otherwise, direct link
+        // If affiliate tag is configured, use Amazon's search format with full affiliate params
         if (amazonAssociateTag != null) {
-            return String.format("https://www.amazon.com/dp/%s?tag=%s", isbn, amazonAssociateTag);
+            return String.format(
+                "https://www.amazon.com/s?k=%s&linkCode=ll2&tag=%s&linkId=%s&language=en_US&ref_=as_li_ss_tl",
+                isbn,
+                amazonAssociateTag,
+                "book_" + isbn.hashCode()
+            );
         }
-        return String.format("https://www.amazon.com/dp/%s", isbn);
+        return String.format("https://www.amazon.com/s?k=%s", isbn);
     }
 
     /**
