@@ -14,11 +14,19 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
+import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
+import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonWriter;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
@@ -30,10 +38,14 @@ import org.springframework.lang.Nullable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -50,7 +62,9 @@ import java.util.stream.Collectors;
 public class BookApiProxy {
         
     private final GoogleBooksService googleBooksService;
-    private final BookViewService bookViewService;
+    private final BookSearchService bookSearchService;
+    private final BookQueryRepository bookQueryRepository;
+    private final BookIdentifierResolver bookIdentifierResolver;
     private final @Nullable BookDataOrchestrator bookDataOrchestrator;
     private final ObjectMapper objectMapper;
     private static final int SEARCH_RESULT_LIMIT = 40;
@@ -73,14 +87,16 @@ public class BookApiProxy {
      * @param objectMapper ObjectMapper for JSON processing
      * @param mockService Optional mock service for testing
      */
-    public BookApiProxy(GoogleBooksService googleBooksService, 
+    public BookApiProxy(GoogleBooksService googleBooksService,
                        ObjectMapper objectMapper,
                        Optional<GoogleBooksMockService> mockService,
                        @Value("${app.local-cache.enabled:false}") boolean localCacheEnabled,
                        @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
                        @Value("${app.api-client.log-calls:true}") boolean logApiCalls,
                        @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
-                       BookViewService bookViewService,
+                       BookSearchService bookSearchService,
+                       BookQueryRepository bookQueryRepository,
+                       BookIdentifierResolver bookIdentifierResolver,
                        @Nullable BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
         this.objectMapper = objectMapper;
@@ -89,7 +105,9 @@ public class BookApiProxy {
         this.localCacheDirectory = localCacheDirectory;
         this.logApiCalls = logApiCalls;
         this.externalFallbackEnabled = externalFallbackEnabled;
-        this.bookViewService = bookViewService;
+        this.bookSearchService = bookSearchService;
+        this.bookQueryRepository = bookQueryRepository;
+        this.bookIdentifierResolver = bookIdentifierResolver;
         this.bookDataOrchestrator = bookDataOrchestrator;
         
         // Create local cache directory if needed
@@ -166,23 +184,27 @@ public class BookApiProxy {
         
         java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        if (bookViewService != null) {
-            bookViewService.fetchBook(bookId)
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.fetchBook(" + bookId + ")"))
-                .subscribe(book -> {
+        if (bookQueryRepository != null) {
+            CompletableFuture
+                .supplyAsync(() -> fetchBookFromProjections(bookId))
+                .whenComplete((book, ex) -> {
+                    if (ex != null) {
+                        LoggingUtils.warn(log, ex, "BookApiProxy: Projection lookup error for {}", bookId);
+                        if (resolved.compareAndSet(false, true)) {
+                            resolveViaExternalFallback(bookId, future);
+                        }
+                        return;
+                    }
+
                     if (book != null && resolved.compareAndSet(false, true)) {
-                        log.debug("BookApiProxy: Retrieved {} via Postgres tier.", bookId);
+                        log.debug("BookApiProxy: Retrieved {} via Postgres projections.", bookId);
                         if (localCacheEnabled) {
                             saveBookToLocalCache(bookId, book);
                         }
                         future.complete(book);
+                        return;
                     }
-                }, ex -> {
-                    LoggingUtils.warn(log, ex, "BookApiProxy: Repository lookup error for {}", bookId);
-                    if (resolved.compareAndSet(false, true)) {
-                        future.complete(null);
-                    }
-                }, () -> {
+
                     if (resolved.compareAndSet(false, true)) {
                         resolveViaExternalFallback(bookId, future);
                     }
@@ -311,23 +333,26 @@ public class BookApiProxy {
         }
         java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        if (bookViewService != null) {
-            bookViewService.searchBooks(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.searchBooks(" + normalizedQuery + "," + langCode + ")"))
-                .subscribe(results -> {
-                    List<Book> sanitized = sanitizeSearchResults(results);
-                    if (!sanitized.isEmpty() && resolved.compareAndSet(false, true)) {
-                        if (localCacheEnabled) {
-                            saveSearchToLocalCache(originalQuery, langCode, sanitized);
+        if (bookSearchService != null && bookQueryRepository != null) {
+            CompletableFuture
+                .supplyAsync(() -> sanitizeSearchResults(searchBooksViaProjections(normalizedQuery)))
+                .whenComplete((results, ex) -> {
+                    if (ex != null) {
+                        LoggingUtils.warn(log, ex, "BookApiProxy: Projection search error for '{}' (lang {})", normalizedQuery, langCode);
+                        if (resolved.compareAndSet(false, true)) {
+                            continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
                         }
-                        future.complete(sanitized);
+                        return;
                     }
-                }, ex -> {
-                    LoggingUtils.warn(log, ex, "BookApiProxy: Repository search error for '{}' (lang {})", normalizedQuery, langCode);
-                    if (resolved.compareAndSet(false, true)) {
-                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
+
+                    if (results != null && !results.isEmpty() && resolved.compareAndSet(false, true)) {
+                        if (localCacheEnabled) {
+                            saveSearchToLocalCache(originalQuery, langCode, results);
+                        }
+                        future.complete(results);
+                        return;
                     }
-                }, () -> {
+
                     if (resolved.compareAndSet(false, true)) {
                         continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
                     }
@@ -383,6 +408,113 @@ public class BookApiProxy {
                 }
                 future.complete(results);
             }, future::completeExceptionally);
+    }
+
+    private Book fetchBookFromProjections(String identifier) {
+        if (!ValidationUtils.hasText(identifier) || bookQueryRepository == null) {
+            return null;
+        }
+
+        String trimmed = identifier.trim();
+
+        Optional<BookDetail> bySlug = bookQueryRepository.fetchBookDetailBySlug(trimmed);
+        if (bySlug.isPresent()) {
+            return BookDomainMapper.fromDetail(bySlug.get());
+        }
+
+        Optional<UUID> maybeUuid = bookIdentifierResolver != null
+            ? bookIdentifierResolver.resolveToUuid(trimmed)
+            : Optional.ofNullable(UuidUtils.parseUuidOrNull(trimmed));
+
+        if (maybeUuid.isEmpty()) {
+            return null;
+        }
+
+        UUID uuid = maybeUuid.get();
+
+        return bookQueryRepository.fetchBookDetail(uuid)
+            .map(BookDomainMapper::fromDetail)
+            .or(() -> bookQueryRepository.fetchBookCard(uuid).map(BookDomainMapper::fromCard))
+            .orElse(null);
+    }
+
+    private List<Book> searchBooksViaProjections(String query) {
+        if (!ValidationUtils.hasText(query) || bookSearchService == null || bookQueryRepository == null) {
+            return List.of();
+        }
+
+        List<BookSearchService.SearchResult> results = bookSearchService.searchBooks(query, SEARCH_RESULT_LIMIT);
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> orderedIds = results.stream()
+            .map(BookSearchService.SearchResult::bookId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .limit(SEARCH_RESULT_LIMIT)
+            .toList();
+
+        if (orderedIds.isEmpty()) {
+            return List.of();
+        }
+
+        List<BookListItem> items = bookQueryRepository.fetchBookListItems(orderedIds);
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+
+        return orderBooksBySearchResults(results, items, SEARCH_RESULT_LIMIT);
+    }
+
+    private List<Book> orderBooksBySearchResults(List<BookSearchService.SearchResult> results,
+                                                 List<BookListItem> items,
+                                                 int limit) {
+        Map<String, Book> booksById = items.stream()
+            .filter(Objects::nonNull)
+            .map(BookDomainMapper::fromListItem)
+            .filter(Objects::nonNull)
+            .peek(book -> {
+                book.setRetrievedFrom("POSTGRES");
+                book.setInPostgres(true);
+            })
+            .collect(Collectors.toMap(
+                Book::getId,
+                Function.identity(),
+                (first, second) -> first,
+                LinkedHashMap::new
+            ));
+
+        if (booksById.isEmpty()) {
+            return List.of();
+        }
+
+        List<Book> ordered = new ArrayList<>(Math.min(limit, booksById.size()));
+
+        for (BookSearchService.SearchResult result : results) {
+            UUID bookId = result.bookId();
+            if (bookId == null) {
+                continue;
+            }
+            Book book = booksById.remove(bookId.toString());
+            if (book != null) {
+                ordered.add(book);
+                if (ordered.size() == limit) {
+                    return ordered;
+                }
+            }
+        }
+
+        if (ordered.size() < limit && !booksById.isEmpty()) {
+            for (Book remaining : booksById.values()) {
+                ordered.add(remaining);
+                if (ordered.size() == limit) {
+                    break;
+                }
+            }
+        }
+
+        return ordered;
     }
 
     /**

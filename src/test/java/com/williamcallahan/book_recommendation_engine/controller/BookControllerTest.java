@@ -297,6 +297,11 @@ class BookControllerTest {
     }
 
     private BookDetail buildDetailFromBook(Book book) {
+        Map<String, Object> tags = Map.of("nytBestseller", Map.of("rank", 1));
+
+        String preferredCover = book.getS3ImagePath() != null ? book.getS3ImagePath() : book.getExternalImageUrl();
+        String fallbackCover = book.getExternalImageUrl();
+
         return new BookDetail(
             book.getId(),
             book.getSlug(),
@@ -308,8 +313,8 @@ class BookControllerTest {
             book.getPageCount(),
             book.getAuthors(),
             book.getCategories(),
-            book.getS3ImagePath(),
-            book.getExternalImageUrl(),
+            preferredCover,
+            fallbackCover,
             book.getCoverImageWidth(),
             book.getCoverImageHeight(),
             book.getIsCoverHighResolution(),
@@ -320,7 +325,7 @@ class BookControllerTest {
             "1234567890123",
             "https://preview",
             "https://info",
-            Map.of("nytBestseller", Map.of("rank", 1)),
+            tags,
             List.of()
         );
     }
