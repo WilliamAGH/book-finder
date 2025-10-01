@@ -110,7 +110,7 @@ public class CoverSourceFetchingService {
             provenanceData.setBookId(bookIdForLog);
         }
         if (provenanceData.getAttemptedImageSources() == null) {
-            provenanceData.setAttemptedImageSources(new ArrayList<>());
+            provenanceData.setAttemptedImageSources(java.util.Collections.synchronizedList(new ArrayList<>()));
         }
 
         CompletableFuture<List<ImageDetails>> hintProcessingChain = processProvisionalHintAsync(book, provisionalUrlHint, bookIdForLog, provenanceData);
