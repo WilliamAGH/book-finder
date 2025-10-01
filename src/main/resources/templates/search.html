@@ -231,8 +231,25 @@
         let publishedYear = initialYear; // Published year filter from server or URL params
 
         const searchCache = new Map();
+        const SEARCH_CACHE_LIMIT = 6;
+
+        const enforceCacheLimit = () => {
+            if (searchCache.size <= SEARCH_CACHE_LIMIT) {
+                return;
+            }
+            const oldestEntry = searchCache.keys().next();
+            if (!oldestEntry.done) {
+                searchCache.delete(oldestEntry.value);
+            }
+        };
+
+        const cacheResponse = (cacheKey, payload) => {
+            searchCache.set(cacheKey, payload);
+            enforceCacheLimit();
+        };
         const prefetchInFlight = new Set();
         let lastSearchSignature = null;
+        let activeCacheKey = null;
 
         const buildSearchSignature = (queryValue, sortBy, coverSource, resolutionPref, yearFilter) => {
             return [
@@ -550,7 +567,7 @@
                     return response.json();
                 })
                 .then(data => {
-                    searchCache.set(cacheKey, data);
+                    cacheResponse(cacheKey, data);
                     console.log(`[prefetch] cached startIndex=${nextStartIndex}`, data);
                 })
                 .catch(err => console.warn('Prefetch error', err))
@@ -558,6 +575,9 @@
         };
 
         const applySearchResponse = (data, context) => {
+            if (context.cacheKey && context.cacheKey !== activeCacheKey) {
+                return;
+            }
             loadingIndicator.classList.add('d-none');
             resultsContainer.style.display = 'block';
             window.lastSearchResults = data;
@@ -632,13 +652,15 @@
             if (searchCache.has(cacheKey)) {
                 console.log('[cache] hit for', cacheKey);
                 const cached = searchCache.get(cacheKey);
+                activeCacheKey = cacheKey;
                 applySearchResponse(cached, {
                     query,
                     sortBy,
                     coverSource,
                     resolution,
                     year,
-                    pageSize: currentMaxResults
+                    pageSize: currentMaxResults,
+                    cacheKey
                 });
                 return;
             }
@@ -688,6 +710,8 @@
                 }
             } catch (e) { console.warn('Search WS subscribe failed:', e); }
             
+            activeCacheKey = cacheKey;
+
             fetch(apiUrl)
                 .then(response => {
                     if (!response.ok) {
@@ -696,14 +720,15 @@
                     return response.json();
                 })
                 .then(data => {
-                    searchCache.set(cacheKey, data);
+                    cacheResponse(cacheKey, data);
                     applySearchResponse(data, {
                         query,
                         sortBy,
                         coverSource,
                         resolution,
                         year,
-                        pageSize: currentMaxResults
+                        pageSize: currentMaxResults,
+                        cacheKey
                     });
                 })
                 .catch(error => {
