@@ -117,10 +117,16 @@ public class BookCacheWarmingScheduler {
         AtomicInteger existingCount = new AtomicInteger(0);
         
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
-        
+
         try {
+            // Validate rate limit configuration
+            if (rateLimit <= 0) {
+                log.warn("Invalid rateLimit configuration: {}. Skipping cache warming run.", rateLimit);
+                return;
+            }
+
             // Calculate delay between books based on rate limit
-            final long delayMillis = (60 * 1000) / rateLimit;
+            final long delayMillis = (60_000L) / rateLimit;
             
             // Check current API call count from metrics if possible
             // Inject ApiRequestMonitor if available
