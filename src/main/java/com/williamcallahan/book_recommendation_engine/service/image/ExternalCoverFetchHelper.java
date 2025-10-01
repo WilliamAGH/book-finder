@@ -4,8 +4,8 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptSt
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.cover.ImageDimensionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -25,11 +25,23 @@ public class ExternalCoverFetchHelper {
     private static final Logger log = LoggerFactory.getLogger(ExternalCoverFetchHelper.class);
 
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
+    private final ImageProvenanceHandler imageProvenanceHandler;
+    private final S3BookCoverService s3BookCoverService;
 
-    public ExternalCoverFetchHelper(LocalDiskCoverCacheService localDiskCoverCacheService) {
+    public ExternalCoverFetchHelper(LocalDiskCoverCacheService localDiskCoverCacheService,
+                                    ImageProvenanceHandler imageProvenanceHandler,
+                                    S3BookCoverService s3BookCoverService) {
         this.localDiskCoverCacheService = localDiskCoverCacheService;
+        this.imageProvenanceHandler = imageProvenanceHandler;
+        this.s3BookCoverService = s3BookCoverService;
     }
 
+    /**
+     * @deprecated The cover orchestration now flows through
+     * {@link com.williamcallahan.book_recommendation_engine.service.image.CoverSourceFetchingService}
+     * and {@link com.williamcallahan.book_recommendation_engine.service.image.CoverPersistenceService}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public CompletableFuture<ImageDetails> fetchAndCache(
             String cacheKey,
             Predicate<String> isKnownBad,
@@ -59,7 +71,7 @@ public class ExternalCoverFetchHelper {
             ValidationHooks validationHooks) {
 
         if (cacheKey != null && isKnownBad != null && isKnownBad.test(cacheKey)) {
-            ImageCacheUtils.addAttemptToProvenance(
+            imageProvenanceHandler.recordAttempt(
                 provenanceData,
                 sourceName,
                 attemptDescriptor,
@@ -88,7 +100,7 @@ public class ExternalCoverFetchHelper {
                 if (cacheKey != null && markKnownBad != null) {
                     markKnownBad.accept(cacheKey);
                 }
-                ImageCacheUtils.addAttemptToProvenance(
+                imageProvenanceHandler.recordAttempt(
                     provenanceData,
                     sourceName,
                     attemptDescriptor,
@@ -100,6 +112,11 @@ public class ExternalCoverFetchHelper {
             });
     }
 
+    /**
+     * @deprecated Legacy response handling retained only for backwards compatibility with
+     * {@link #fetchAndCache}. Prefer the CoverSourceFetchingService pipeline.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private CompletableFuture<ImageDetails> handleRemoteResponse(
             String cacheKey,
             Consumer<String> markKnownBad,
@@ -116,7 +133,7 @@ public class ExternalCoverFetchHelper {
             if (cacheKey != null && markKnownBad != null) {
                 markKnownBad.accept(cacheKey);
             }
-            ImageCacheUtils.addAttemptToProvenance(
+            imageProvenanceHandler.recordAttempt(
                 provenanceData,
                 sourceName,
                 attemptDescriptor,
@@ -132,7 +149,7 @@ public class ExternalCoverFetchHelper {
             if (cacheKey != null && markKnownBad != null) {
                 markKnownBad.accept(cacheKey);
             }
-            ImageCacheUtils.addAttemptToProvenance(
+            imageProvenanceHandler.recordAttempt(
                 provenanceData,
                 sourceName,
                 attemptDescriptor,
@@ -148,7 +165,7 @@ public class ExternalCoverFetchHelper {
             if (cacheKey != null && markKnownBad != null) {
                 markKnownBad.accept(cacheKey);
             }
-            ImageCacheUtils.addAttemptToProvenance(
+            imageProvenanceHandler.recordAttempt(
                 provenanceData,
                 sourceName,
                 attemptDescriptor,
@@ -159,13 +176,12 @@ public class ExternalCoverFetchHelper {
             return CompletableFuture.completedFuture(createPlaceholder(bookIdForLog, placeholderReasonPrefix + "-invalid-url"));
         }
 
-        return localDiskCoverCacheService.downloadAndStoreImageLocallyAsync(
-                url,
-                bookIdForLog,
-                provenanceData,
-                downloadLabel)
+        return cacheImageLocally(url, bookIdForLog, provenanceData, downloadLabel)
             .thenApply(cachedDetails -> {
-                if (ImageCacheUtils.isValidImageDetails(cachedDetails, localDiskCoverCacheService.getLocalPlaceholderPath())) {
+                if (cachedDetails != null
+                    && ImageDimensionUtils.hasAcceptableDimensions(cachedDetails)
+                    && cachedDetails.getUrlOrPath() != null
+                    && !localDiskCoverCacheService.getLocalPlaceholderPath().equals(cachedDetails.getUrlOrPath())) {
                     return cachedDetails;
                 }
 
@@ -174,7 +190,7 @@ public class ExternalCoverFetchHelper {
                 }
                 if (hooks != null && hooks.postDownloadValidator() != null
                         && !hooks.postDownloadValidator().test(cachedDetails)) {
-                    ImageCacheUtils.addAttemptToProvenance(
+                    imageProvenanceHandler.recordAttempt(
                         provenanceData,
                         sourceName,
                         attemptDescriptor,
@@ -184,7 +200,7 @@ public class ExternalCoverFetchHelper {
                     );
                     return createPlaceholder(bookIdForLog, placeholderReasonPrefix + "-custom-invalid");
                 }
-                ImageCacheUtils.addAttemptToProvenance(
+                imageProvenanceHandler.recordAttempt(
                     provenanceData,
                     sourceName,
                     attemptDescriptor,
@@ -196,13 +212,21 @@ public class ExternalCoverFetchHelper {
             });
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverImagesFactory#createPlaceholder(String)}
+     * and persist via {@link com.williamcallahan.book_recommendation_engine.service.image.CoverPersistenceService}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private ImageDetails createPlaceholder(String bookIdForLog, String reason) {
-        ImageDetails placeholder = localDiskCoverCacheService.createPlaceholderImageDetails(bookIdForLog, reason);
-        if (placeholder == null) {
-            log.warn("Placeholder creation returned null for book {} with reason {}", bookIdForLog, reason);
-            return new ImageDetails(localDiskCoverCacheService.getLocalPlaceholderPath(), "LOCAL", null, null, null, 0, 0);
-        }
-        return placeholder;
+        // Use unified placeholder path; avoid local disk cache dependency for placeholders
+        return localDiskCoverCacheService.placeholderImageDetails(bookIdForLog, reason);
+    }
+
+    private CompletableFuture<ImageDetails> cacheImageLocally(String url,
+                                                               String bookIdForLog,
+                                                               ImageProvenanceData provenanceData,
+                                                               String downloadLabel) {
+        return s3BookCoverService.uploadCoverToS3Async(url, bookIdForLog, downloadLabel, provenanceData).toFuture();
     }
 
     public static final class ValidationHooks {

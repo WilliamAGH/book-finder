@@ -19,7 +19,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanc
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
-import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverIdentifierResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -51,7 +51,7 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
     @Override
     @RateLimiter(name = "openLibraryServiceRateLimiter", fallbackMethod = "fetchCoverRateLimitFallback")
     public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
-        String isbn = BookValidator.getPreferredIsbn(book);
+        String isbn = CoverIdentifierResolver.getPreferredIsbn(book);
 
         if (!ValidationUtils.hasText(isbn)) {
             logger.warn("No ISBN found for book ID: {}, cannot fetch cover from OpenLibrary.", book.getId());
@@ -133,7 +133,8 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
             "OpenLibrary-" + sizeSuffix,
             "ol-" + sizeSuffix,
             provenanceData,
-            bookIdForLog
+            bookIdForLog,
+            null
         );
     }
     
@@ -148,7 +149,7 @@ public class OpenLibraryServiceImpl implements OpenLibraryService {
      * @return Empty Optional wrapped in CompletableFuture
      */
     public CompletableFuture<Optional<ImageDetails>> fetchCoverRateLimitFallback(Book book, Throwable t) {
-        String isbn = BookValidator.getPreferredIsbn(book);
+        String isbn = CoverIdentifierResolver.getPreferredIsbn(book);
         logger.warn("OpenLibraryService rate limit exceeded for book ID: {}, ISBN: {}. Error: {}", 
             book.getId(), isbn, t.getMessage());
         return CompletableFuture.completedFuture(Optional.empty());

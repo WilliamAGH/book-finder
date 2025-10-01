@@ -14,6 +14,10 @@ package com.williamcallahan.book_recommendation_engine.model.image;
  */
 public class ImageDetails {
 
+    public static final String STORAGE_S3 = "S3";
+    public static final String STORAGE_LOCAL = "LOCAL";
+    public static final String STORAGE_DATABASE = "DATABASE";
+
     private String urlOrPath;
     private String sourceName; // e.g., "GOOGLE_BOOKS_API", "OPEN_LIBRARY", "LOCAL_CACHE", "S3_CACHE"
     private String sourceSystemId; // e.g., Google Volume ID, ISBN, local filename, S3 key
@@ -21,6 +25,21 @@ public class ImageDetails {
     private ImageResolutionPreference resolutionPreference;
     private Integer width;
     private Integer height;
+    
+    /**
+     * Storage location for cached images. Separate from data source.
+     * - "S3" = Stored in Amazon S3 bucket
+     * - "LOCAL" = Stored on local filesystem
+     * - "DATABASE" = Stored in database
+     * - null = Direct URL, not cached
+     */
+    private String storageLocation;
+    
+    /**
+     * Storage-specific key or path (S3 key, local path, etc.)
+     * Only populated when storageLocation is set.
+     */
+    private String storageKey;
 
     /**
      * Constructor for placeholder/failed images (no dimensions)
@@ -39,6 +58,12 @@ public class ImageDetails {
         this.resolutionPreference = resolutionPreference;
         this.width = 0;
         this.height = 0;
+        // Infer storage location for deprecated cache-based sources (backward compatibility)
+        if (isLegacyS3Source(coverImageSource)) {
+            this.storageLocation = STORAGE_S3;
+        } else if (isLegacyLocalSource(coverImageSource)) {
+            this.storageLocation = STORAGE_LOCAL;
+        }
     }
 
     /**
@@ -60,6 +85,12 @@ public class ImageDetails {
         this.resolutionPreference = resolutionPreference;
         this.width = width;
         this.height = height;
+        // Infer storage location for deprecated cache-based sources (backward compatibility)
+        if (isLegacyS3Source(coverImageSource)) {
+            this.storageLocation = STORAGE_S3;
+        } else if (isLegacyLocalSource(coverImageSource)) {
+            this.storageLocation = STORAGE_LOCAL;
+        }
     }
 
     /**
@@ -189,6 +220,66 @@ public class ImageDetails {
     }
 
     /**
+     * Gets the storage location for cached images
+     * 
+     * @return Storage location ("S3", "LOCAL", "DATABASE") or null if not cached
+     */
+    public String getStorageLocation() {
+        return storageLocation;
+    }
+
+    /**
+     * Sets the storage location for cached images
+     * 
+     * @param storageLocation The storage location ("S3", "LOCAL", "DATABASE", or null)
+     */
+    public void setStorageLocation(String storageLocation) {
+        this.storageLocation = storageLocation;
+    }
+
+    public boolean isStoredInS3() {
+        return STORAGE_S3.equals(storageLocation);
+    }
+
+    public boolean isStoredLocally() {
+        return STORAGE_LOCAL.equals(storageLocation);
+    }
+
+    public boolean isStoredInDatabase() {
+        return STORAGE_DATABASE.equals(storageLocation);
+    }
+
+    /**
+     * Gets the storage-specific key or path
+     * 
+     * @return Storage key (S3 key, local path, etc.) or null
+     */
+    public String getStorageKey() {
+        return storageKey;
+    }
+
+    /**
+     * Sets the storage-specific key or path
+     * 
+     * @param storageKey The storage key or path
+     */
+    public void setStorageKey(String storageKey) {
+        this.storageKey = storageKey;
+    }
+
+    private static boolean isLegacyS3Source(CoverImageSource source) {
+        if (source == null) {
+            return false;
+        }
+        String name = source.name();
+        return "S3_CACHE".equals(name) || "S3".equals(name);
+    }
+
+    private static boolean isLegacyLocalSource(CoverImageSource source) {
+        return source != null && "LOCAL_CACHE".equals(source.name());
+    }
+
+    /**
      * Returns a string representation of this ImageDetails
      *
      * @return A string representation of the object
@@ -203,6 +294,8 @@ public class ImageDetails {
                ", resolutionPreference=" + resolutionPreference +
                ", width=" + width +
                ", height=" + height +
+               ", storageLocation='" + storageLocation + "'" +
+               ", storageKey='" + storageKey + "'" +
                '}';
     }
 } 

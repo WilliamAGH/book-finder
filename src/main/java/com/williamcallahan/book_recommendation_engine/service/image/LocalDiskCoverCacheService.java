@@ -1,447 +1,196 @@
-/**
- * Service for managing the local disk cache of book cover images
- *
- * @author William Callahan
- *
- * Features:
- * - Handles downloading images from URLs
- * - Stores images on the local filesystem
- * - Performs hash checks against known placeholder images
- * - Manages cache directory creation and cleanup of old files
- * - Detects and handles placeholder or invalid images
- * - Tracks image provenance for debugging and quality auditing
- */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData.AttemptedSourceInfo;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
-import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverSourceMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
+/**
+ * Legacy compatibility shim that used to cache covers on local disk.
+ *
+ * <p>The modern pipeline persists downloaded covers straight to S3 via
+ * {@link S3BookCoverService}. This class now delegates every legacy entry point
+ * to that pipeline while still providing placeholder helpers and cache naming
+ * utilities needed by existing callers.</p>
+ */
 @Service
 public class LocalDiskCoverCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(LocalDiskCoverCacheService.class);
-    private static final String LOCAL_PLACEHOLDER_PATH = "/images/placeholder-book-cover.svg";
-    // Try Spring Boot resource locations in order (classpath), then legacy path
-    private static final String[] GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES = new String[] {
-            "/static/images/image-not-available.png",
-            "/public/images/image-not-available.png",
-            "/resources/images/image-not-available.png",
-            "/META-INF/resources/images/image-not-available.png",
-            "/images/image-not-available.png"
-    };
-
-    @Value("${app.cover-cache.enabled:true}")
-    private boolean cacheEnabled;
+    private static final String DEFAULT_CACHE_DIR = "book-covers";
 
     @Value("${app.cover-cache.dir:/tmp/book-covers}")
     private String cacheDirString;
 
-    @Value("${app.cover-cache.max-age-days:30}")
-    private int maxCacheAgeDays;
+    private final S3BookCoverService s3BookCoverService;
 
-    private Path cacheDir;
-    private String cacheDirName;
-    private byte[] googlePlaceholderHash;
+    public LocalDiskCoverCacheService(S3BookCoverService s3BookCoverService) {
+        this.s3BookCoverService = s3BookCoverService;
+    }
 
-    private final WebClient webClient;
-    private final CoverCacheManager coverCacheManager;
-    private final ImageProcessingService imageProcessingService;
-    private final ScheduledExecutorService scheduler;
-
-    /**
-     * Constructs the LocalDiskCoverCacheService
-     * @param webClientBuilder WebClient Builder
-     * @param coverCacheManager Manager for in-memory caches
-     * @param imageProcessingService Service for image processing
-     */
-    public LocalDiskCoverCacheService(WebClient.Builder webClientBuilder, CoverCacheManager coverCacheManager, ImageProcessingService imageProcessingService) {
-        this.webClient = webClientBuilder.build();
-        this.coverCacheManager = coverCacheManager;
-        this.imageProcessingService = imageProcessingService;
-        this.scheduler = Executors.newScheduledThreadPool(1, r -> {
-            Thread t = Executors.defaultThreadFactory().newThread(r);
-            t.setDaemon(true);
-            t.setName("LocalDiskCoverCache-CleanupScheduler");
-            return t;
-        });
+    public CompletableFuture<ImageDetails> cacheRemoteImageAsync(String imageUrl,
+                                                                 String bookIdForLog,
+                                                                 ImageProvenanceData provenanceData,
+                                                                 String sourceNameString) {
+        return cacheRemoteImageInternal(imageUrl, bookIdForLog, provenanceData, sourceNameString);
     }
 
     /**
-     * Initializes the service
-     * - Creates cache directory if it doesn't exist
-     * - Loads placeholder image hashes for comparison
-     * - Schedules cleanup of old cached covers
-     * - Disables caching if initialization fails
+     * @deprecated Local disk caching has been retired. Delegates to the S3 pipeline.
      */
-    @PostConstruct
-    public void init() {
-        if (!cacheEnabled) {
-            logger.info("Local disk cover caching is disabled by configuration");
-            return;
-        }
-        try {
-            this.cacheDir = Paths.get(cacheDirString);
-            this.cacheDirName = this.cacheDir.getFileName().toString();
-
-            if (!Files.exists(cacheDir)) {
-                Files.createDirectories(cacheDir);
-                logger.info("Created book cover cache directory: {}", cacheDir);
-            } else {
-                logger.info("Using existing book cover cache directory: {}", cacheDir);
-            }
-
-            // Load Google placeholder image for hash comparison (try common Spring Boot resource locations)
-            boolean loadedPlaceholderHash = false;
-            for (String candidate : GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES) {
-                try (InputStream placeholderStream = getClass().getResourceAsStream(candidate)) {
-                    if (placeholderStream == null) {
-                        continue;
-                    }
-                    byte[] placeholderBytes = placeholderStream.readAllBytes();
-                    if (placeholderBytes.length > 0) {
-                        googlePlaceholderHash = ImageCacheUtils.computeImageHash(placeholderBytes);
-                        logger.info("Loaded Google Books placeholder image hash from classpath: {}", candidate);
-                        loadedPlaceholderHash = true;
-                        break;
-                    } else {
-                        logger.warn("Google Books placeholder image from classpath {} was empty; trying next candidate", candidate);
-                    }
-                } catch (IOException e) {
-                    logger.warn("IOException while loading Google Books placeholder from {}: {}", candidate, e.getMessage());
-                } catch (NoSuchAlgorithmException e) {
-                    LoggingUtils.error(logger, e, "Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.");
-                } catch (Exception e) {
-                    logger.warn("Unexpected error loading Google Books placeholder from {}: {}", candidate, e.getMessage());
-                }
-            }
-            if (!loadedPlaceholderHash) {
-                logger.info("Google Books placeholder image not found in classpath (searched {} candidates). Hash-based detection disabled.", GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES.length);
-            }
-
-            // Schedule cleanup task
-            long initialDelayDays = PagingUtils.clamp(maxCacheAgeDays, 0, 1); // Run quickly on startup, but not less than 0
-            long periodDays = PagingUtils.atLeast(maxCacheAgeDays, 1); // Ensure period is at least 1 day
-
-            scheduler.scheduleAtFixedRate(this::safeCleanupOldCachedCovers, initialDelayDays, periodDays, TimeUnit.DAYS);
-            logger.info("Scheduled cleanup of old cached covers (older than {} days) to run with initial delay of {} day(s) and then every {} days", maxCacheAgeDays, initialDelayDays, periodDays);
-
-        } catch (IOException e) { // For Files.createDirectories
-            LoggingUtils.error(logger, e, "Failed to create or access book cover cache directory: {}. Disabling local disk caching.", cacheDirString);
-            cacheEnabled = false;
-        }
-        // The NoSuchAlgorithmException from computeImageHash inside the try-with-resources is handled locally.
-        // If cacheDir creation fails, the service is disabled, so subsequent operations won't run.
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    public CompletableFuture<ImageDetails> downloadAndStoreImageLocallyAsync(String imageUrl,
+                                                                             String bookIdForLog,
+                                                                             ImageProvenanceData provenanceData,
+                                                                             String sourceNameString) {
+        return cacheRemoteImageInternal(imageUrl, bookIdForLog, provenanceData, sourceNameString);
     }
 
-    /**
-     * Downloads an image from a URL and caches it locally
-     * - Tracks download attempts and outcomes in provenanceData
-     * - Skips known bad URLs
-     * - Compares downloaded image hash against known placeholder hashes
-     * - Saves valid images to the local disk cache
-     * - Updates in-memory URL-to-path cache
-     * @param imageUrl URL of the image to download
-     * @param bookIdForLog Identifier for logging (e.g., book ID or ISBN)
-     * @param provenanceData Container for tracking image source attempts
-     * @param sourceNameString String representation of the image source for provenance
-     * @return CompletableFuture containing ImageDetails of the downloaded image, or a placeholder
-     */
-    public CompletableFuture<ImageDetails> downloadAndStoreImageLocallyAsync(
-            String imageUrl, String bookIdForLog,
-            ImageProvenanceData provenanceData, String sourceNameString) {
+    private CompletableFuture<ImageDetails> cacheRemoteImageInternal(String imageUrl,
+                                                                     String bookIdForLog,
+                                                                     ImageProvenanceData provenanceData,
+                                                                     String sourceNameString) {
+        String logContext = String.format("BookID: %s, URL: %s, Source: %s", bookIdForLog, imageUrl, sourceNameString);
+        logger.debug("Delegating legacy disk cache call to S3 pipeline. Context: {}", logContext);
 
-        final String logContext = String.format("BookID: %s, URL: %s, Source: %s", bookIdForLog, imageUrl, sourceNameString);
-        logger.info("downloadAndStoreImageLocallyAsync started. Context: {}", logContext);
+        ImageSourceName sourceNameEnum = CoverSourceMapper.fromString(sourceNameString);
+        AttemptedSourceInfo attemptInfo = registerAttempt(provenanceData, sourceNameEnum, imageUrl);
 
-        if (!cacheEnabled) {
-            logger.warn("Local disk cache is disabled. Returning placeholder. Context: {}", logContext);
-            return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "diskcache-disabled"));
+        if (!ValidationUtils.hasText(imageUrl)) {
+            markAttemptFailure(attemptInfo, ImageAttemptStatus.FAILURE_INVALID_DETAILS, "Blank image URL");
+            return CompletableFuture.completedFuture(buildPlaceholderImageDetails(bookIdForLog, "missing-url"));
         }
 
-        Path destinationPath;
-        try {
-            destinationPath = cacheDir.resolve(ImageCacheUtils.generateFilenameFromUrl(imageUrl));
-            logger.debug("Generated destination path: {}. Context: {}", destinationPath, logContext);
-        } catch (NoSuchAlgorithmException e) {
-            LoggingUtils.error(logger, e, "CRITICAL: SHA-256 algorithm not found for generating filename. Context: {}", logContext);
-            return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "hash-algo-filename"));
-        }
+        String normalizedSource = ValidationUtils.hasText(sourceNameString)
+            ? sourceNameString
+            : sourceNameEnum.name();
 
-        ImageSourceName sourceNameEnum = ImageCacheUtils.mapStringToImageSourceName(sourceNameString);
-        ImageProvenanceData.AttemptedSourceInfo attemptInfo = null;
+        Mono<ImageDetails> upload = s3BookCoverService
+            .uploadCoverToS3Async(imageUrl, bookIdForLog, normalizedSource, provenanceData)
+            .doOnSuccess(details -> handleSuccessfulUpload(details, attemptInfo, sourceNameEnum))
+            .onErrorResume(ex -> {
+                LoggingUtils.error(logger, ex, "Failed to persist cover via S3 pipeline. Context: {}", logContext);
+                markAttemptFailure(attemptInfo, ImageAttemptStatus.FAILURE_GENERIC_DOWNLOAD, ex.getMessage());
+                return Mono.just(buildPlaceholderImageDetails(bookIdForLog, "s3-upload-failed"));
+            })
+            .switchIfEmpty(Mono.fromCallable(() -> {
+                markAttemptFailure(attemptInfo, ImageAttemptStatus.FAILURE_NOT_FOUND, "S3 pipeline returned empty result");
+                return buildPlaceholderImageDetails(bookIdForLog, "s3-upload-empty");
+            }));
 
-        if (provenanceData != null) {
-            attemptInfo = new ImageProvenanceData.AttemptedSourceInfo(sourceNameEnum, imageUrl, ImageAttemptStatus.PENDING);
-            if (provenanceData.getAttemptedImageSources() == null) {
-                provenanceData.setAttemptedImageSources(new ArrayList<>());
-            }
-            provenanceData.getAttemptedImageSources().add(attemptInfo);
-            logger.debug("Added PENDING attempt to provenance. Context: {}", logContext);
-        }
-
-        if (coverCacheManager.isKnownBadImageUrl(imageUrl)) {
-            logger.info("Skipping download for known bad URL. Context: {}", logContext);
-            if (attemptInfo != null) attemptInfo.setStatus(ImageAttemptStatus.SKIPPED_BAD_URL);
-            return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "badurl-skip"));
-        }
-        
-        if (Files.exists(destinationPath)) {
-            try {
-                logger.info("Image already exists locally at {}. Attempting to read dimensions. Context: {}", destinationPath, logContext);
-                byte[] existingBytes = Files.readAllBytes(destinationPath);
-                BufferedImage existingImage = ImageIO.read(new ByteArrayInputStream(existingBytes));
-                if (existingImage != null) {
-                    int width = existingImage.getWidth();
-                    int height = existingImage.getHeight();
-                    logger.info("Successfully read dimensions from existing local image: {}x{}. Context: {}", width, height, logContext);
-                    if (attemptInfo != null) {
-                        attemptInfo.setStatus(ImageAttemptStatus.SUCCESS);
-                        attemptInfo.setFetchedUrl(destinationPath.toString());
-                        attemptInfo.setDimensions(width + "x" + height);
-                    }
-                    String webSafePath = "/" + this.cacheDirName + "/" + destinationPath.getFileName().toString();
-                    return CompletableFuture.completedFuture(
-                        new ImageDetails(webSafePath, sourceNameEnum.getDisplayName(), destinationPath.getFileName().toString(), 
-                                       CoverImageSource.LOCAL_CACHE, ImageResolutionPreference.ORIGINAL, width, height)
-                    );
-                } else {
-                    logger.info("Existing file {} could not be read as an image (ImageIO.read returned null). Will attempt re-download. Context: {}", destinationPath, logContext);
-                }
-            } catch (IOException e) {
-                logger.info("IOException reading existing file {} or its dimensions. Will attempt re-download. Error: {}. Context: {}", destinationPath, e.getMessage(), logContext, e);
-            }
-        }
-
-
-        // Construct web-safe path relative to web server root (assuming cacheDir is served)
-        String webSafeCachedPath = "/" + this.cacheDirName + "/" + destinationPath.getFileName().toString();
-        final ImageProvenanceData.AttemptedSourceInfo finalAttemptInfo = attemptInfo;
-        final String finalLogContext = logContext; // For use in lambdas
-
-        logger.debug("Attempting to download image. Context: {}", finalLogContext);
-        return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
-                .timeout(Duration.ofSeconds(10))
-                .toFuture()
-                .thenComposeAsync(imageBytes -> {
-                    logger.info("Successfully downloaded {} bytes. Context: {}", imageBytes.length, finalLogContext);
-                    try {
-                        if (googlePlaceholderHash != null) {
-                            byte[] downloadedHash = ImageCacheUtils.computeImageHash(imageBytes);
-                            if (java.util.Arrays.equals(downloadedHash, googlePlaceholderHash)) {
-                                logger.info("Downloaded image is a known Google placeholder. Marking as bad URL and returning placeholder. Context: {}", finalLogContext);
-                                coverCacheManager.addKnownBadImageUrl(imageUrl);
-                                if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_PLACEHOLDER_DETECTED);
-                                return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "google-placeholder-match"));
-                            }
-                            logger.debug("Downloaded image is not the Google placeholder. Context: {}", finalLogContext);
-                        }
-                    } catch (NoSuchAlgorithmException e) {
-                        LoggingUtils.error(logger, e, "NoSuchAlgorithmException (SHA-256) during hash computation for placeholder check. Context: {}", finalLogContext);
-                        if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_PROCESSING);
-                        return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "hash-algo-placeholder-check"));
-                    }
-
-                    // Chain the asynchronous image processing
-                    return imageProcessingService.processImageForS3(imageBytes, bookIdForLog)
-                        .thenApplyAsync(processedImage -> { // Inner thenApplyAsync to handle ProcessedImage
-                            try {
-                                if (!processedImage.processingSuccessful()) {
-                                    logger.warn("Book ID {}: Image processing failed for URL: {}. Error: {}. Context: {}", bookIdForLog, imageUrl, processedImage.processingError(), finalLogContext);
-                                    if (finalAttemptInfo != null) {
-                                        if ("LikelyNotACover_DominantColor".equals(processedImage.processingError())) {
-                                            finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_CONTENT_REJECTED);
-                                        } else {
-                                            finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_PROCESSING);
-                                        }
-                                        finalAttemptInfo.setFailureReason(processedImage.processingError());
-                                    }
-                                    coverCacheManager.addKnownBadImageUrl(imageUrl);
-                                    return createPlaceholderImageDetails(bookIdForLog, "processing-failed-" + processedImage.processingError());
-                                }
-                                
-                                Files.write(destinationPath, processedImage.processedBytes());
-                                logger.info("Successfully processed, content-checked, and saved image to {}. Dimensions: {}x{}. Context: {}", 
-                                            destinationPath, processedImage.width(), processedImage.height(), finalLogContext);
-                                coverCacheManager.putPathToUrlCache(imageUrl, webSafeCachedPath);
-
-                                if (finalAttemptInfo != null) {
-                                    finalAttemptInfo.setStatus(ImageAttemptStatus.SUCCESS);
-                                    finalAttemptInfo.setFetchedUrl(webSafeCachedPath);
-                                    finalAttemptInfo.setDimensions(processedImage.width() + "x" + processedImage.height());
-                                }
-                                return new ImageDetails(webSafeCachedPath, sourceNameEnum.getDisplayName(), destinationPath.getFileName().toString(),
-                                        CoverImageSource.LOCAL_CACHE, ImageResolutionPreference.ORIGINAL,
-                                        processedImage.width(), processedImage.height());
-                            } catch (IOException e) { // Handles IOException from Files.write
-                                LoggingUtils.error(logger, e, "IOException during saving processed image. Context: {}", finalLogContext);
-                                if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_IO);
-                                return createPlaceholderImageDetails(bookIdForLog, "io-exception-saving");
-                            } catch (Exception e) { // Catch any other unexpected error from this inner block
-                                LoggingUtils.error(logger, e, "Unexpected exception during post-processing or saving. Context: {}", finalLogContext);
-                                if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_GENERIC);
-                                return createPlaceholderImageDetails(bookIdForLog, "generic-post-processing-ex");
-                            }
-                        }); // Consider adding a specific executor if needed
-                })
-                .exceptionally(ex -> {
-                    // Check if the cause is WebClientResponseException.NotFound
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    if (cause instanceof org.springframework.web.reactive.function.client.WebClientResponseException.NotFound) {
-                        logger.info("Failed to download image (404 Not Found). URL: {}. Context: {}", imageUrl, finalLogContext);
-                    } else {
-                        logger.warn("Failed to download or process image. Error: {}. Context: {}", cause.getMessage(), finalLogContext, cause);
-                    }
-                    coverCacheManager.addKnownBadImageUrl(imageUrl);
-                    if (finalAttemptInfo != null) {
-                        finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_GENERIC_DOWNLOAD);
-                        finalAttemptInfo.setFailureReason(cause.getMessage());
-                    }
-                    return createPlaceholderImageDetails(bookIdForLog, "download-or-process-ex");
-                });
+        return upload.toFuture();
     }
 
-    /**
-     * Creates standardized ImageDetails for a placeholder image
-     * @param bookIdForLog Identifier for logging
-     * @param reasonSuffix Suffix for the placeholder reason, used in sourceSystemId
-     * @return ImageDetails object representing the local placeholder
-     */
-    public ImageDetails createPlaceholderImageDetails(String bookIdForLog, String reasonSuffix) {
-        String cleanReasonSuffix = reasonSuffix != null ? reasonSuffix.replaceAll("[^a-zA-Z0-9-]", "_") : "unknown";
-        return new ImageDetails(
-                LOCAL_PLACEHOLDER_PATH,
-                "SYSTEM_PLACEHOLDER",
-                "placeholder-" + cleanReasonSuffix + "-" + bookIdForLog,
-                CoverImageSource.LOCAL_CACHE,
-                ImageResolutionPreference.UNKNOWN
+    private AttemptedSourceInfo registerAttempt(ImageProvenanceData provenanceData,
+                                                ImageSourceName sourceName,
+                                                String attemptedUrl) {
+        if (provenanceData == null) {
+            return null;
+        }
+        if (provenanceData.getAttemptedImageSources() == null) {
+            provenanceData.setAttemptedImageSources(new ArrayList<>());
+        }
+        AttemptedSourceInfo attemptInfo = new AttemptedSourceInfo(sourceName, attemptedUrl, ImageAttemptStatus.PENDING);
+        provenanceData.getAttemptedImageSources().add(attemptInfo);
+        return attemptInfo;
+    }
+
+    private void handleSuccessfulUpload(ImageDetails details,
+                                        AttemptedSourceInfo attemptInfo,
+                                        ImageSourceName sourceNameEnum) {
+        if (attemptInfo != null) {
+            attemptInfo.setStatus(ImageAttemptStatus.SUCCESS);
+            attemptInfo.setFetchedUrl(details.getUrlOrPath());
+            if (details.getWidth() != null && details.getHeight() != null
+                && details.getWidth() > 0 && details.getHeight() > 0) {
+                attemptInfo.setDimensions(details.getWidth() + "x" + details.getHeight());
+            }
+        }
+
+        // Normalize cover source metadata so downstream callers do not see legacy storage enums.
+        CoverImageSource sanitizedSource = CoverSourceMapper.sanitize(
+            CoverSourceMapper.toCoverImageSource(sourceNameEnum)
         );
-    }
-    
-    /**
-     * Gets the web path to the local placeholder image
-     * @return Web-accessible path to the placeholder image
-     */
-    public String getLocalPlaceholderPath() {
-        return LOCAL_PLACEHOLDER_PATH;
-    }
-
-    /**
-     * Gets the configured cache directory name
-     * @return The name of the cache directory
-     */
-    public String getCacheDirName() {
-        return cacheDirName;
-    }
-
-    /**
-     * Gets the configured cache directory string (full path)
-     * @return The string representation of the cache directory path
-     */
-    public String getCacheDirString() {
-        return cacheDirString;
-    }
-
-    /**
-     * Wrapper for cleanupOldCachedCovers to ensure exceptions are caught.
-     */
-    private void safeCleanupOldCachedCovers() {
-        try {
-            cleanupOldCachedCovers();
-        } catch (Throwable t) {
-            LoggingUtils.error(logger, t, "Uncaught exception in LocalDiskCoverCacheService cleanup task. Scheduler thread might have died if not for this catch.");
+        details.setCoverImageSource(sanitizedSource);
+        details.setSourceName(sourceNameEnum.name());
+        if (details.getStorageLocation() == null) {
+            details.setStorageLocation(ImageDetails.STORAGE_S3);
         }
     }
 
-    /**
-     * Periodically cleans up old cached cover files from the local disk
-     * - Files older than maxCacheAgeDays are deleted
-     * - Runs on a schedule defined by scheduler
-     */
-    private void cleanupOldCachedCovers() {
-        if (!cacheEnabled || cacheDir == null) {
-            logger.debug("Cleanup: Local disk cache disabled or directory not set, skipping cleanup");
+    private void markAttemptFailure(AttemptedSourceInfo attemptInfo,
+                                    ImageAttemptStatus status,
+                                    String reason) {
+        if (attemptInfo == null) {
             return;
         }
-        logger.info("Starting cleanup of old cached book covers in {} older than {} days", cacheDir, maxCacheAgeDays);
-        try {
-            long cutoffTime = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxCacheAgeDays);
-            final int[] deleteCount = {0};
+        attemptInfo.setStatus(status);
+        attemptInfo.setFailureReason(reason);
+    }
 
-            Files.list(cacheDir)
-                    .filter(Files::isRegularFile)
-                    .filter(p -> {
-                        try {
-                            return Files.getLastModifiedTime(p).toMillis() < cutoffTime;
-                        } catch (IOException e) {
-                            logger.warn("Could not get last modified time for {}, skipping in cleanup", p, e);
-                            return false;
-                        }
-                    })
-                    .forEach(p -> {
-                        try {
-                            Files.delete(p);
-                            deleteCount[0]++;
-                            logger.debug("Deleted old cached cover: {}", p.getFileName());
-                        } catch (IOException e) {
-                            logger.warn("Failed to delete old cached cover: {}", p.getFileName(), e);
-                        }
-                    });
-            logger.info("Completed cleanup of old cached book covers. Deleted {} files", deleteCount[0]);
-        } catch (IOException e) {
-            LoggingUtils.error(logger, e, "Error during cleanup of cached book covers in {}", cacheDir);
-        }
+    public ImageDetails placeholderImageDetails(String bookIdForLog, String reasonSuffix) {
+        String cleanReasonSuffix = reasonSuffix != null
+            ? reasonSuffix.replaceAll("[^a-zA-Z0-9-]", "_")
+            : "unknown";
+        String placeholderPath = ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH;
+
+        ImageDetails details = new ImageDetails(
+            placeholderPath,
+            "SYSTEM_PLACEHOLDER",
+            "placeholder-" + cleanReasonSuffix + "-" + bookIdForLog,
+            CoverImageSource.NONE,
+            ImageResolutionPreference.UNKNOWN
+        );
+        details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+        details.setStorageKey(placeholderPath);
+        return details;
+    }
+
+    public ImageDetails buildPlaceholderImageDetails(String bookIdForLog, String reasonSuffix) {
+        return placeholderImageDetails(bookIdForLog, reasonSuffix);
     }
 
     /**
-     * Shuts down the scheduled executor service on bean destruction.
+     * @deprecated Use {@link #placeholderImageDetails(String, String)}.
      */
-    @PreDestroy
-    public void destroy() {
-        if (scheduler != null && !scheduler.isShutdown()) {
-            logger.info("Shutting down LocalDiskCoverCacheService scheduler...");
-            scheduler.shutdown();
-            try {
-                if (!scheduler.awaitTermination(60, TimeUnit.SECONDS)) {
-                    scheduler.shutdownNow();
-                    if (!scheduler.awaitTermination(60, TimeUnit.SECONDS)) {
-                        logger.error("LocalDiskCoverCacheService scheduler did not terminate.");
-                    }
-                }
-            } catch (InterruptedException ie) {
-                scheduler.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-            logger.info("LocalDiskCoverCacheService scheduler shut down.");
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    public ImageDetails createPlaceholderImageDetails(String bookIdForLog, String reasonSuffix) {
+        return placeholderImageDetails(bookIdForLog, reasonSuffix);
+    }
+
+    public String getLocalPlaceholderPath() {
+        return ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH;
+    }
+
+    public String getCacheDirName() {
+        if (!ValidationUtils.hasText(cacheDirString)) {
+            return DEFAULT_CACHE_DIR;
         }
+        Path path = Paths.get(cacheDirString);
+        Path fileName = path.getFileName();
+        return fileName != null ? fileName.toString() : DEFAULT_CACHE_DIR;
+    }
+
+    public String getCacheDirString() {
+        return ValidationUtils.hasText(cacheDirString)
+            ? cacheDirString
+            : "/tmp/" + DEFAULT_CACHE_DIR;
     }
 }

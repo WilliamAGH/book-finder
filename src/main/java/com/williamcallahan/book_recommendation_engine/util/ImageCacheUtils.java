@@ -20,8 +20,8 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSour
 import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
-import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector;
 import org.slf4j.Logger;
 
 import java.security.MessageDigest;
@@ -57,6 +57,24 @@ public final class ImageCacheUtils {
     /**
      * Computes SHA-256 hash for given image data
      * 
+     * @deprecated This is a generic hashing utility, not image-specific.
+     * Consider creating HashUtils.computeSha256(byte[]) for broader reusability.
+     * This method belongs in a general-purpose hashing utility, not image-specific utils.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * byte[] hash = ImageCacheUtils.computeImageHash(imageData);
+     * 
+     * // New (future):
+     * byte[] hash = HashUtils.computeSha256(imageData);
+     * 
+     * // Or inline:
+     * MessageDigest digest = MessageDigest.getInstance("SHA-256");
+     * byte[] hash = digest.digest(imageData);
+     * }</pre>
+     * 
      * @param imageData Byte array of the image
      * @return SHA-256 hash byte array
      * @throws NoSuchAlgorithmException If SHA-256 algorithm is not available
@@ -64,6 +82,7 @@ public final class ImageCacheUtils {
      * @implNote Uses standard MessageDigest implementation for secure hashing
      * Useful for deduplication and content-based caching of images
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static byte[] computeImageHash(byte[] imageData) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         return digest.digest(imageData);
@@ -71,6 +90,20 @@ public final class ImageCacheUtils {
 
     /**
      * Compares two byte arrays for similarity (equality)
+     * 
+     * @deprecated Use {@link java.util.Arrays#equals(byte[], byte[])} directly.
+     * This method just wraps Arrays.equals() with no added value.
+     * The standard Java API is clearer and more maintainable.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * boolean similar = ImageCacheUtils.isHashSimilar(hash1, hash2);
+     * 
+     * // New:
+     * boolean similar = java.util.Arrays.equals(hash1, hash2);
+     * }</pre>
      * 
      * @param hash1 First byte array
      * @param hash2 Second byte array
@@ -80,6 +113,7 @@ public final class ImageCacheUtils {
      * for more explicit control and clarity -- returns false immediately on length
      * mismatch or when any corresponding bytes differ
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static boolean isHashSimilar(byte[] hash1, byte[] hash2) {
         if (hash1 == null || hash2 == null || hash1.length != hash2.length) {
             return false;
@@ -95,6 +129,20 @@ public final class ImageCacheUtils {
     /**
      * Extracts file extension from a URL string
      * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.UrlUtils#extractFileExtension(String)} instead.
+     * This URL parsing logic belongs in UrlUtils, not image-specific utilities.
+     * UrlUtils provides centralized URL manipulation with consistent behavior.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * String ext = ImageCacheUtils.getFileExtensionFromUrl(url);
+     * 
+     * // New:
+     * String ext = UrlUtils.extractFileExtension(url);
+     * }</pre>
+     * 
      * @param url The URL string
      * @return File extension (e.g., .jpg, .png)
      * 
@@ -102,6 +150,7 @@ public final class ImageCacheUtils {
      * Handles URLs with query parameters by truncating them before extraction
      * Validates that the extension is a known image format to prevent invalid extensions
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static String getFileExtensionFromUrl(String url) {
         String extension = ".jpg"; // Default extension
         if (url != null && url.contains(".")) {
@@ -122,6 +171,20 @@ public final class ImageCacheUtils {
     /**
      * Generates a filename from a URL using SHA-256 hash
      * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.S3KeyGenerator#generateFromUrl(String)} instead.
+     * This method duplicates S3 key generation logic. S3KeyGenerator is the canonical implementation
+     * that provides consistent filename generation for storage systems.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * String filename = ImageCacheUtils.generateFilenameFromUrl(url);
+     * 
+     * // New:
+     * String filename = S3KeyGenerator.generateFromUrl(url);
+     * }</pre>
+     * 
      * @param url The URL string
      * @return Generated filename string
      * @throws NoSuchAlgorithmException If SHA-256 algorithm is not available
@@ -130,6 +193,7 @@ public final class ImageCacheUtils {
      * Truncates hash to 32 characters maximum for brevity and file system compatibility
      * Appends the original file extension to maintain MIME type information
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static String generateFilenameFromUrl(String url) throws NoSuchAlgorithmException {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         byte[] hash = digest.digest(url.getBytes(StandardCharsets.UTF_8));
@@ -142,6 +206,9 @@ public final class ImageCacheUtils {
     /**
      * Determines the best identifier to use as a cache key for a book
      * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverIdentifierResolver#resolve(Book)} instead.
+     * Will be removed in version 1.0.0.
+     * 
      * @param book The book object
      * @return The most specific available identifier, or null if no valid identifiers exist
      * 
@@ -151,6 +218,7 @@ public final class ImageCacheUtils {
      * 3. Google Books ID (platform-specific but unique)
      * Returns null if book is null or has no valid identifiers
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static String getIdentifierKey(Book book) {
         if (book == null) {
             return null;
@@ -165,6 +233,9 @@ public final class ImageCacheUtils {
     /**
      * Maps a string representation of a source name to ImageSourceName enum
      * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverSourceMapper#fromString(String)} instead.
+     * Will be removed in version 1.0.0.
+     * 
      * @param sourceNameString The string name of the source
      * @return Corresponding ImageSourceName enum, or UNKNOWN if no match found
      * 
@@ -174,6 +245,7 @@ public final class ImageCacheUtils {
      * 3. Falls back to UNKNOWN if no match is found or input is null
      * Designed to be flexible with different string formats from various sources
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static ImageSourceName mapStringToImageSourceName(String sourceNameString) {
         if (sourceNameString == null) {
             return ImageSourceName.UNKNOWN;
@@ -183,8 +255,8 @@ public final class ImageCacheUtils {
         if (lowerSourceName.contains("openlibrary")) return ImageSourceName.OPEN_LIBRARY;
         if (lowerSourceName.contains("google") || lowerSourceName.contains("googlebooks")) return ImageSourceName.GOOGLE_BOOKS;
         if (lowerSourceName.contains("longitood")) return ImageSourceName.LONGITOOD;
-        if (lowerSourceName.contains("s3")) return ImageSourceName.S3_CACHE;
-        if (lowerSourceName.contains("local")) return ImageSourceName.LOCAL_CACHE;
+        if (lowerSourceName.contains("s3")) return ImageSourceName.UNKNOWN;
+        if (lowerSourceName.contains("local")) return ImageSourceName.UNKNOWN;
         if (lowerSourceName.equalsIgnoreCase("ProvisionalHint")) return ImageSourceName.UNKNOWN;
 
         try {
@@ -198,6 +270,9 @@ public final class ImageCacheUtils {
     /**
      * Maps CoverImageSource enum to ImageSourceName enum
      * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverSourceMapper#toImageSourceName(CoverImageSource)} instead.
+     * Will be removed in version 1.0.0.
+     * 
      * @param coverImageSource The CoverImageSource enum value
      * @return Corresponding ImageSourceName enum, or UNKNOWN if no match found
      * 
@@ -205,6 +280,7 @@ public final class ImageCacheUtils {
      * Falls back to explicit case-by-case mapping if direct conversion fails
      * Handles special cases and ensures all CoverImageSource values have a mapping
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static ImageSourceName mapCoverImageSourceToImageSourceName(CoverImageSource coverImageSource) {
         if (coverImageSource == null) {
             return ImageSourceName.UNKNOWN;
@@ -217,8 +293,6 @@ public final class ImageCacheUtils {
                 case GOOGLE_BOOKS: return ImageSourceName.GOOGLE_BOOKS;
                 case OPEN_LIBRARY: return ImageSourceName.OPEN_LIBRARY;
                 case LONGITOOD: return ImageSourceName.LONGITOOD;
-                case S3_CACHE: return ImageSourceName.S3_CACHE;
-                case LOCAL_CACHE: return ImageSourceName.LOCAL_CACHE;
                 case ANY: // Fall-through
                 case NONE: // Fall-through
                 case UNDEFINED: // Fall-through
@@ -227,6 +301,21 @@ public final class ImageCacheUtils {
         }
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.GoogleBooksUrlEnhancer#enhanceUrl(String, int)} instead.
+     * This method contains Google Books-specific logic that belongs in a dedicated utility.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(baseUrl, "zoom=2");
+     * 
+     * // New:
+     * String enhanced = GoogleBooksUrlEnhancer.enhanceUrl(baseUrl, 2);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static String enhanceGoogleCoverUrl(String baseUrl, String zoomParam) {
         if (baseUrl == null) {
             return null;
@@ -234,6 +323,9 @@ public final class ImageCacheUtils {
 
         // Use shared UrlUtils instead of inline duplication
         String enhancedUrl = UrlUtils.normalizeToHttps(baseUrl);
+        if (enhancedUrl == null || enhancedUrl.isEmpty()) {
+            return null;
+        }
 
         if (enhancedUrl.contains("&fife=")) {
             enhancedUrl = enhancedUrl.replaceAll("&fife=w\\d+(-h\\d+)?", "");
@@ -264,6 +356,21 @@ public final class ImageCacheUtils {
         return enhancedUrl;
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.GoogleBooksUrlEnhancer#isGoogleBooksUrl(String)} instead.
+     * This method contains Google Books-specific logic that belongs in a dedicated utility.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * boolean isGoogle = ImageCacheUtils.isLikelyGoogleCoverUrl(url);
+     * 
+     * // New:
+     * boolean isGoogle = GoogleBooksUrlEnhancer.isGoogleBooksUrl(url);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static boolean isLikelyGoogleCoverUrl(String url) {
         if (url == null || url.isEmpty()) {
             return false;
@@ -277,6 +384,21 @@ public final class ImageCacheUtils {
         return true; // default optimistic assumption when no negative indicators are present
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.GoogleBooksUrlEnhancer#hasFrontCoverHint(String)} instead.
+     * This method contains Google Books-specific logic that belongs in a dedicated utility.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * boolean isFrontCover = ImageCacheUtils.hasGoogleFrontCoverHint(url);
+     * 
+     * // New:
+     * boolean isFrontCover = GoogleBooksUrlEnhancer.hasFrontCoverHint(url);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static boolean hasGoogleFrontCoverHint(String url) {
         if (url == null || url.isEmpty()) {
             return false;
@@ -284,6 +406,11 @@ public final class ImageCacheUtils {
         return GOOGLE_PRINTSEC_FRONTCOVER_PATTERN.matcher(url).find();
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.ImageDimensionUtils#normalize(Integer)} instead.
+     * Will be removed in version 1.0.0.
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static Integer normalizeImageDimension(Integer value) {
         if (value == null || value <= 1) {
             return 512;
@@ -291,6 +418,21 @@ public final class ImageCacheUtils {
         return value;
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.StringUtils#coalesce(String...)} instead.
+     * This method duplicates string coalescing logic that is now centralized in StringUtils.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * String result = ImageCacheUtils.firstNonBlank(url1, url2, url3);
+     * 
+     * // New:
+     * String result = StringUtils.coalesce(url1, url2, url3);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static String firstNonBlank(String... values) {
         if (values == null) {
             return null;
@@ -303,6 +445,24 @@ public final class ImageCacheUtils {
         return null;
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.ImageDimensionUtils#hasAcceptableDimensions(ImageDetails)} instead,
+     * combined with explicit placeholder checking. This method mixes dimension validation with placeholder detection,
+     * violating single responsibility principle.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * boolean valid = ImageCacheUtils.isValidImageDetails(details, placeholderPath);
+     * 
+     * // New:
+     * boolean valid = ImageDimensionUtils.hasAcceptableDimensions(details)
+     *     && details.getUrlOrPath() != null
+     *     && !details.getUrlOrPath().equals(placeholderPath);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static boolean isValidImageDetails(ImageDetails imageDetails, String placeholderPath) {
         return imageDetails != null
             && imageDetails.getUrlOrPath() != null
@@ -311,6 +471,22 @@ public final class ImageCacheUtils {
             && imageDetails.getHeight() != null && imageDetails.getHeight() > 1;
     }
 
+    /**
+     * @deprecated This complex selection logic should be moved to a dedicated service.
+     * Consider creating ImageSelectionService or moving to CoverSourceFetchingService.
+     * This utility method has grown too complex and violates utility class principles.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Path:</b></p>
+     * <pre>{@code
+     * // Future: Create ImageSelectionService
+     * ImageDetails best = imageSelectionService.selectBest(candidates, criteria);
+     * 
+     * // Or move to existing service:
+     * ImageDetails best = coverSourceFetchingService.selectBestCandidate(candidates);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static ImageSelectionResult selectBestImageDetails(
         List<ImageDetails> candidates,
         String placeholderPath,
@@ -338,17 +514,18 @@ public final class ImageCacheUtils {
 
         Comparator<ImageDetails> comparator = Comparator
             .<ImageDetails>comparingInt(details -> {
-                // Priority 0: Our own images (local disk or S3 CDN) with reasonable dimensions
-                // LOCAL_CACHE = server's local disk cache (book-covers/ directory) - fastest
-                // S3_CACHE = permanent CDN storage - second fastest
-                // Both get priority over external API calls
-                CoverImageSource src = details.getCoverImageSource();
-                if ((src == CoverImageSource.LOCAL_CACHE || src == CoverImageSource.S3_CACHE)
+                // Priority 0: Our own cached images (local disk or S3 CDN) with reasonable dimensions
+                // Check storageLocation field (new way) OR deprecated cache source enums (backward compat)
+                String storage = details.getStorageLocation();
+                
+                boolean isCached = storage != null && !storage.isBlank();
+                
+                if (isCached
                     && details.getWidth() != null && details.getWidth() > 150
                     && details.getHeight() != null && details.getHeight() > 150
                     && details.getUrlOrPath() != null
                     && !details.getUrlOrPath().equals(placeholderPath)) {
-                    return 0; // Highest priority for our own images
+                    return 0; // Highest priority for cached images
                 }
                 return 1; // Lower priority for external API sources
             })
@@ -359,19 +536,22 @@ public final class ImageCacheUtils {
                 return (long) details.getWidth() * details.getHeight();
             }).reversed())
             .thenComparingInt(details -> {
-                // Final tiebreaker by source quality:
-                // 1. LOCAL_CACHE (fastest - server disk)
-                // 2. S3_CACHE (fast - CDN)
-                // 3. GOOGLE_BOOKS (external API - reliable)
-                // 4. OPEN_LIBRARY (external API - free)
-                // 5. LONGITOOD (external API - fallback)
+                // Final tiebreaker by storage location and source quality:
+                // Priority order:
+                // 1. LOCAL storage (fastest - server disk)
+                // 2. S3 storage (fast - CDN)
+                // 3-5. External API sources (by data source quality, not cache status)
+                String storage = details.getStorageLocation();
                 CoverImageSource src = details.getCoverImageSource();
-                if (src == CoverImageSource.LOCAL_CACHE
-                    && details.getUrlOrPath() != null
+                
+                // Check storage location first (new way)
+                if (ImageDetails.STORAGE_LOCAL.equals(storage) && details.getUrlOrPath() != null 
                     && !details.getUrlOrPath().equals(placeholderPath)) {
                     return 0;
                 }
-                if (src == CoverImageSource.S3_CACHE) return 1;
+                if (ImageDetails.STORAGE_S3.equals(storage)) return 1;
+                
+                // Actual data sources (not cache)
                 if (src == CoverImageSource.GOOGLE_BOOKS) return 2;
                 if (src == CoverImageSource.OPEN_LIBRARY) return 3;
                 if (src == CoverImageSource.LONGITOOD) return 4;
@@ -404,6 +584,19 @@ public final class ImageCacheUtils {
         return new ImageSelectionResult(bestImage, null);
     }
 
+    /**
+     * @deprecated Provenance data manipulation should be encapsulated in a dedicated handler.
+     * Consider creating ImageProvenanceHandler.updateSelection() method.
+     * This utility method violates encapsulation by directly manipulating complex domain objects.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Path:</b></p>
+     * <pre>{@code
+     * // Future: Create ImageProvenanceHandler
+     * imageProvenanceHandler.recordSelection(provenanceData, sourceName, imageDetails, reason);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static void updateSelectedImageInfo(
         ImageProvenanceData provenanceData,
         ImageSourceName sourceName,
@@ -427,12 +620,23 @@ public final class ImageCacheUtils {
             + (imageDetails.getHeight() != null ? imageDetails.getHeight() : "N/A"));
         selectedInfo.setSelectionReason(selectionReason);
 
-        if (imageDetails.getUrlOrPath() != null
-            && imageDetails.getUrlOrPath().startsWith("/" + cacheDirName)) {
-            selectedInfo.setStorageLocation("LocalCache");
-        } else if (imageDetails.getCoverImageSource() == CoverImageSource.S3_CACHE) {
-            selectedInfo.setStorageLocation("S3");
-            selectedInfo.setS3Key(imageDetails.getSourceSystemId());
+        // Determine storage location - prefer new storageLocation field, fall back to inference
+        String storage = imageDetails.getStorageLocation();
+        if (storage != null && !storage.isBlank()) {
+            selectedInfo.setStorageLocation(storage);
+            if (ImageDetails.STORAGE_S3.equals(storage)) {
+                selectedInfo.setS3Key(imageDetails.getStorageKey() != null
+                    ? imageDetails.getStorageKey()
+                    : imageDetails.getSourceSystemId());
+            }
+        } else if (imageDetails.getUrlOrPath() != null) {
+            UrlSourceDetector.detectStorageLocation(imageDetails.getUrlOrPath())
+                .ifPresentOrElse(detected -> {
+                    selectedInfo.setStorageLocation(detected);
+                    if (ImageDetails.STORAGE_S3.equals(detected)) {
+                        selectedInfo.setS3Key(imageDetails.getSourceSystemId());
+                    }
+                }, () -> selectedInfo.setStorageLocation("Remote"));
         } else {
             selectedInfo.setStorageLocation("Remote");
         }
@@ -450,6 +654,19 @@ public final class ImageCacheUtils {
         }
     }
 
+    /**
+     * @deprecated Provenance tracking should be encapsulated in a dedicated handler.
+     * Consider creating ImageProvenanceHandler.recordAttempt() method.
+     * This utility method violates encapsulation by directly manipulating tracking data.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Path:</b></p>
+     * <pre>{@code
+     * // Future: Create ImageProvenanceHandler
+     * imageProvenanceHandler.recordAttempt(provenanceData, sourceName, url, status, failureReason);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static void addAttemptToProvenance(
         ImageProvenanceData provenanceData,
         ImageSourceName sourceName,
@@ -518,6 +735,13 @@ public final class ImageCacheUtils {
      * Falls back to explicit switch statement for handling special cases
      * Returns UNDEFINED for ImageSourceName values that have no CoverImageSource equivalent
      */
+    /**
+     * Maps ImageSourceName enum back to CoverImageSource enum
+     *
+     * @deprecated Deprecated 2025-10-01. Use {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverSourceMapper#toCoverImageSource(com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName)} instead.
+     *             This logic is centralized in CoverSourceMapper to avoid duplication.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static CoverImageSource mapImageSourceNameEnumToCoverImageSource(ImageSourceName sourceNameEnum) {
         if (sourceNameEnum == null) {
             return CoverImageSource.UNDEFINED;
@@ -529,8 +753,6 @@ public final class ImageCacheUtils {
                 case GOOGLE_BOOKS: return CoverImageSource.GOOGLE_BOOKS;
                 case OPEN_LIBRARY: return CoverImageSource.OPEN_LIBRARY;
                 case LONGITOOD: return CoverImageSource.LONGITOOD;
-                case S3_CACHE: return CoverImageSource.S3_CACHE;
-                case LOCAL_CACHE: return CoverImageSource.LOCAL_CACHE;
                 // case INTERNAL_PROCESSING: // No direct CoverImageSource, map to UNDEFINED
                 // case UNKNOWN: // Fall-through
                 default: return CoverImageSource.UNDEFINED;
