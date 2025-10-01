@@ -3,11 +3,16 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
 import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
-import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
-import io.github.resilience4j.bulkhead.annotation.Bulkhead;
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -42,6 +47,8 @@ public class BackfillCoordinator {
     private final GoogleApiFetcher googleApiFetcher;
     private final GoogleBooksMapper googleBooksMapper;
     private final BookUpsertService bookUpsertService;
+    private final RateLimiter rateLimiter;
+    private final Bulkhead bulkhead;
     
     private static final int MAX_RETRIES = 3;
     
@@ -52,12 +59,18 @@ public class BackfillCoordinator {
         BackfillQueueService queueService,
         GoogleApiFetcher googleApiFetcher,
         GoogleBooksMapper googleBooksMapper,
-        BookUpsertService bookUpsertService
+        BookUpsertService bookUpsertService,
+        ObjectProvider<RateLimiterRegistry> rateLimiterRegistryProvider,
+        ObjectProvider<BulkheadRegistry> bulkheadRegistryProvider
     ) {
         this.queueService = queueService;
         this.googleApiFetcher = googleApiFetcher;
         this.googleBooksMapper = googleBooksMapper;
         this.bookUpsertService = bookUpsertService;
+        RateLimiterRegistry rlRegistry = rateLimiterRegistryProvider.getIfAvailable();
+        this.rateLimiter = rlRegistry != null ? rlRegistry.rateLimiter("googleBooksServiceRateLimiter") : null;
+        BulkheadRegistry bhRegistry = bulkheadRegistryProvider.getIfAvailable();
+        this.bulkhead = bhRegistry != null ? bhRegistry.bulkhead("googleBooksServiceBulkhead") : null;
     }
     
     @PostConstruct
@@ -110,7 +123,7 @@ public class BackfillCoordinator {
             try {
                 // BLOCKS until task available (no polling!)
                 BackfillQueueService.BackfillTask task = queueService.take();
-                processTask(task);
+                processTaskWithGuards(task);
             } catch (InterruptedException e) {
                 log.info("Backfill worker interrupted");
                 Thread.currentThread().interrupt();
@@ -129,9 +142,23 @@ public class BackfillCoordinator {
      * <p>
      * Fetch → Map → Upsert, with retry logic on failure.
      */
-    @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "processTaskFallback")
-    @Bulkhead(name = "googleBooksServiceBulkhead", fallbackMethod = "processTaskFallback")
-    private void processTask(BackfillQueueService.BackfillTask task) {
+    private void processTaskWithGuards(BackfillQueueService.BackfillTask task) {
+        Runnable action = () -> processTaskInternal(task);
+        Runnable decorated = action;
+        if (bulkhead != null) {
+            decorated = Bulkhead.decorateRunnable(bulkhead, decorated);
+        }
+        if (rateLimiter != null) {
+            decorated = RateLimiter.decorateRunnable(rateLimiter, decorated);
+        }
+        try {
+            decorated.run();
+        } catch (RequestNotPermitted | BulkheadFullException guardException) {
+            processTaskFallback(task, guardException);
+        }
+    }
+
+    private void processTaskInternal(BackfillQueueService.BackfillTask task) {
         try {
             log.info("Processing: {} {} (attempt {}/{})",
                 task.source(), task.sourceId(), task.attempts() + 1, MAX_RETRIES);
