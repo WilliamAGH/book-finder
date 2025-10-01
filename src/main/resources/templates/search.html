@@ -1060,9 +1060,6 @@
 
             if (paginationNav) paginationNav.classList.remove('d-none');
 
-            const ul = document.createElement('ul');
-            ul.className = 'pagination';
-
             // Previous button
             const prevLi = document.createElement('li');
             prevLi.className = `page-item ${currentPage === 0 ? 'disabled' : ''}`;
@@ -1078,7 +1075,7 @@
                 prevLink.href = '#';
             }
             prevLi.appendChild(prevLink);
-            ul.appendChild(prevLi);
+            paginationContainer.appendChild(prevLi);
 
             // Page numbers (simplified: show current and a few around it)
             let startPage = Math.max(0, currentPage - 2);
@@ -1097,7 +1094,7 @@
                 pageLink.href = pageUrl.toString();
                 pageLink.textContent = i + 1;
                 pageLi.appendChild(pageLink);
-                ul.appendChild(pageLi);
+                paginationContainer.appendChild(pageLi);
             }
 
             // Next button
@@ -1115,9 +1112,7 @@
                 nextLink.href = '#';
             }
             nextLi.appendChild(nextLink);
-            ul.appendChild(nextLi);
-
-            paginationContainer.appendChild(ul);
+            paginationContainer.appendChild(nextLi);
         }
         
         /**
