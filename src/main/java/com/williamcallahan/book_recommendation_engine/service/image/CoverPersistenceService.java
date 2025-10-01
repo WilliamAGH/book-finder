@@ -160,11 +160,11 @@ public class CoverPersistenceService {
         }
         
         boolean highRes = ImageDimensionUtils.isHighResolution(width, height);
-        
+
         try {
-            // Upsert book_image_links with actual S3 URL and dimensions
-            upsertImageLink(bookId, "large", s3CdnUrl, source.name(), width, height, highRes);
-            
+            // Upsert book_image_links with actual S3 URL and dimensions, including S3 path
+            upsertImageLink(bookId, "large", s3CdnUrl, source.name(), width, height, highRes, s3Key);
+
             // Update books table with S3 CDN URL as primary cover
             updateBookCoverPath(bookId, s3CdnUrl);
             
@@ -237,18 +237,36 @@ public class CoverPersistenceService {
         Integer height,
         Boolean highRes
     ) {
+        upsertImageLink(bookId, imageType, url, source, width, height, highRes, null);
+    }
+
+    /**
+     * Internal method to upsert a row in book_image_links with optional S3 path.
+     * Handles conflict resolution with ON CONFLICT DO UPDATE.
+     */
+    private void upsertImageLink(
+        UUID bookId,
+        String imageType,
+        String url,
+        String source,
+        Integer width,
+        Integer height,
+        Boolean highRes,
+        String s3ImagePath
+    ) {
         jdbcTemplate.update("""
             INSERT INTO book_image_links (
                 id, book_id, image_type, url, source,
-                width, height, is_high_resolution, created_at
+                width, height, is_high_resolution, s3_image_path, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ON CONFLICT (book_id, image_type) DO UPDATE SET
                 url = EXCLUDED.url,
                 source = EXCLUDED.source,
                 width = EXCLUDED.width,
                 height = EXCLUDED.height,
                 is_high_resolution = EXCLUDED.is_high_resolution,
+                s3_image_path = EXCLUDED.s3_image_path,
                 created_at = NOW()
             """,
             IdGenerator.generate(),
@@ -258,7 +276,8 @@ public class CoverPersistenceService {
             source,
             width,
             height,
-            highRes
+            highRes,
+            s3ImagePath
         );
     }
     
