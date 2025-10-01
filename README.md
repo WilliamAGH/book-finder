@@ -53,6 +53,12 @@ Key variables in `.env`:
   - `GET /api/books/search?query={keyword}`
   - `GET /api/books/{id}`
 
+### Search Pagination Behavior
+
+- The `/api/books/search` endpoint now defaults to 12 results per page and returns cursor metadata: `hasMore`, `nextStartIndex`, and `prefetchedCount`.
+- Each request prefetches an additional page window to keep pagination deterministic across Postgres and external sources.
+- The web UI caches up to six prefetched pages in-memory (oldest entries evicted first) to prevent unbounded growth while preserving instant next-page loads.
+
 ## Troubleshooting
 
 **JVM Warnings:** `export MAVEN_OPTS="-XX:+EnableDynamicAgentLoading -Xshare:off"`
