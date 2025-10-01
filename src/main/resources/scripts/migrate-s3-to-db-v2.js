@@ -83,19 +83,8 @@ const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 
 function generateNanoId(size = 10) {
   let id = '';
-  const mask = 0xff - (0xff % ALPHABET.length);
-  let bytes = crypto.randomBytes(size);
-  let cursor = 0;
-
-  while (id.length < size) {
-    if (cursor >= bytes.length) {
-      bytes = crypto.randomBytes(size);
-      cursor = 0;
-    }
-    const random = bytes[cursor++] & 0xff;
-    if (random < mask) {
-      id += ALPHABET[random % ALPHABET.length];
-    }
+  for (let i = 0; i < size; i++) {
+    id += ALPHABET[crypto.randomInt(ALPHABET.length)];
   }
   return id;
 }
@@ -117,7 +106,7 @@ function generateUUIDv7() {
   random.copy(bytes, 6);
 
   bytes[6] = (bytes[6] & 0x0f) | 0x70; // version 7 in high nibble
-  bytes[7] = (bytes[7] & 0x3f) | 0x80; // variant 2 (RFC 4122)
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 2 (RFC 4122)
 
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
@@ -717,7 +706,6 @@ class BookMigrator {
 
     let slug = title.toLowerCase()
       .replace(/&/g, 'and')
-      .replace(/['"]/g, '')
       .replace(/[^a-z0-9\s-]/g, '')
       .replace(/[\s_]+/g, '-')
       .replace(/-+/g, '-')
@@ -884,8 +872,7 @@ class BookMigrator {
     for (const [imageType, url] of Object.entries(imageLinks)) {
       if (!url) continue;
       
-      // Normalize HTTP to HTTPS for Google Books URLs
-      const normalizedUrl = url.startsWith('http://') ? url.replace('http://', 'https://') : url;
+      const normalizedUrl = this.normalizeToHttps(url);
 
       const existingImage = await this.client.query(
         `SELECT id FROM book_image_links
@@ -1363,12 +1350,11 @@ async function migrateNytLists({ s3Client, bucket, batchSize, migrator }) {
   let errors = 0;
 
   do {
-    const command = new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: 'lists/nyt/',
-      MaxKeys: batchSize,
-      ContinuationToken: continuationToken
-    });
+    const listParams = { Bucket: bucket, Prefix: 'lists/nyt/', MaxKeys: batchSize };
+    if (continuationToken) {
+      listParams.ContinuationToken = continuationToken;
+    }
+    const command = new ListObjectsV2Command(listParams);
 
     const result = await s3Client.send(command);
     if (!result.Contents || result.Contents.length === 0) {
@@ -1556,12 +1542,11 @@ async function migrate() {
   let continuationToken = null;
 
   do {
-    const command = new ListObjectsV2Command({
-      Bucket: s3Bucket,
-      Prefix: CONFIG.PREFIX,
-      MaxKeys: CONFIG.BATCH_SIZE,
-      ContinuationToken: continuationToken
-    });
+    const listParams = { Bucket: s3Bucket, Prefix: CONFIG.PREFIX, MaxKeys: CONFIG.BATCH_SIZE };
+    if (continuationToken) {
+      listParams.ContinuationToken = continuationToken;
+    }
+    const command = new ListObjectsV2Command(listParams);
 
     const result = await s3Client.send(command);
     if (!result.Contents) break;
