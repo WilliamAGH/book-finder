@@ -16,6 +16,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -204,7 +205,10 @@ public final class BookDomainMapper {
     }
 
     private static Map<String, Object> copyMap(Map<String, Object> source) {
-        return (source == null || source.isEmpty()) ? Map.of() : Map.copyOf(source);
+        if (source == null || source.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        return new LinkedHashMap<>(source);
     }
 
     private static List<EditionInfo> toEditionInfo(List<EditionSummary> summaries) {
