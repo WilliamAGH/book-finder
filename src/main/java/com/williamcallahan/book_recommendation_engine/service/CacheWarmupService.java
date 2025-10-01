@@ -5,6 +5,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import reactor.core.Disposable;
 
 /**
  * Warms up critical caches on application startup to prevent first-request delays.
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 public class CacheWarmupService {
 
     private final NewYorkTimesService newYorkTimesService;
+    private volatile Disposable bestsellersSubscription;
 
     public CacheWarmupService(NewYorkTimesService newYorkTimesService) {
         this.newYorkTimesService = newYorkTimesService;
@@ -45,8 +47,13 @@ public class CacheWarmupService {
 
     private void warmupBestsellersCache() {
         try {
+            // Dispose of previous subscription to prevent memory leak
+            if (bestsellersSubscription != null && !bestsellersSubscription.isDisposed()) {
+                bestsellersSubscription.dispose();
+            }
+
             // Pre-load the most common list
-            newYorkTimesService.getCurrentBestSellersCards("hardcover-fiction", 8)
+            bestsellersSubscription = newYorkTimesService.getCurrentBestSellersCards("hardcover-fiction", 8)
                 .subscribe(
                     list -> log.info("Warmed bestsellers cache with {} bestsellers", list.size()),
                     error -> log.warn("Failed to warm bestsellers cache: {}", error.getMessage())
