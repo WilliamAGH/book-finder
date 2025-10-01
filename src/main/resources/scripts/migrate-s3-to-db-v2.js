@@ -1494,7 +1494,7 @@ function parsePostgresUrl(pgUrl) {
 
   const parsed = new URL(pgUrl);
   const sslMode = (parsed.searchParams.get('sslmode') || '').toLowerCase();
-  const allowInsecure = process.env.PGSSL_ALLOW_INSECURE === 'true';
+  const requireVerify = process.env.PGSSL_REQUIRE_VERIFY === 'true';
 
   const buildSecureSslConfig = () => {
     const sslConfig = { rejectUnauthorized: true };
@@ -1510,15 +1510,29 @@ function parsePostgresUrl(pgUrl) {
   };
 
   let ssl;
+  // Strict verification modes: always verify certificates
   if (['require', 'verify-full', 'verify-ca'].includes(sslMode)) {
     ssl = buildSecureSslConfig();
-  } else if (sslMode === 'disable') {
-    ssl = allowInsecure ? false : buildSecureSslConfig();
-  } else if (sslMode === 'prefer' || sslMode === 'allow') {
-    ssl = allowInsecure ? false : buildSecureSslConfig();
-  } else {
-    // Default to secure unless explicitly opted out for local development
-    ssl = allowInsecure ? false : buildSecureSslConfig();
+    console.log(`[DB] TLS mode: strict verification (sslmode=${sslMode})`);
+  } 
+  // Explicit disable: honor it (typically for local dev)
+  else if (sslMode === 'disable') {
+    ssl = false;
+    console.log('[DB] TLS mode: disabled (sslmode=disable)');
+  } 
+  // Permissive modes (prefer/allow) or no sslmode: relax by default, but allow opt-in to strict
+  else {
+    if (requireVerify) {
+      ssl = buildSecureSslConfig();
+      console.log(`[DB] TLS mode: strict verification (PGSSL_REQUIRE_VERIFY=true, sslmode=${sslMode || 'unset'})`);
+    } else {
+      // Use an object with rejectUnauthorized: false to enable TLS but not verify certs
+      // However, for prefer/allow modes when server doesn't support SSL, we need to disable it entirely
+      // The pg client doesn't support automatic fallback with ssl: { rejectUnauthorized: false }
+      // So for prefer/allow without PGSSL_REQUIRE_VERIFY, disable SSL to avoid connection failures
+      ssl = false;
+      console.log(`[DB] TLS mode: disabled for compatibility (sslmode=${sslMode || 'unset'}). Set PGSSL_REQUIRE_VERIFY=true to enable relaxed TLS.`);
+    }
   }
 
   return {

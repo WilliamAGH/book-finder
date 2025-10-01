@@ -5,10 +5,13 @@
  */
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 // Use fully-qualified names for image services to avoid import resolution issues in test slice
@@ -26,19 +29,18 @@ import org.mockito.Mockito;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Collections;
 import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.anyString; // For mocking getSimilarBooks
 import static org.mockito.ArgumentMatchers.anyInt; // For mocking getSimilarBooks
 import static org.mockito.ArgumentMatchers.any; // For mocking any objects
 import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
-import static org.mockito.ArgumentMatchers.isNull; // For mocking null argument
 import reactor.core.publisher.Mono; // For mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
-import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
-import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import java.util.Optional;
+import java.util.UUID;
 @WebFluxTest(value = HomeController.class,
     excludeAutoConfiguration = org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration.class)
 class HomeControllerTest {
@@ -47,15 +49,9 @@ class HomeControllerTest {
      */
     @Autowired
     private WebTestClient webTestClient;
-    /**
-     * Mock for RecommendationService dependency
-     */
     @org.springframework.beans.factory.annotation.Autowired
     private BookDataOrchestrator bookDataOrchestrator;
 
-    @org.springframework.beans.factory.annotation.Autowired
-    private GoogleBooksService googleBooksService;
-    
     @org.springframework.beans.factory.annotation.Autowired
     private RecentlyViewedService recentlyViewedService;
     
@@ -71,11 +67,12 @@ class HomeControllerTest {
     @org.springframework.beans.factory.annotation.Autowired
     private BookQueryRepository bookQueryRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private BookIdentifierResolver bookIdentifierResolver;
+
     @TestConfiguration
     static class MocksConfig {
-        @Bean RecommendationService recommendationService() { return Mockito.mock(RecommendationService.class); }
         @Bean BookDataOrchestrator bookDataOrchestrator() { return Mockito.mock(BookDataOrchestrator.class); }
-        @Bean GoogleBooksService googleBooksService() { return Mockito.mock(GoogleBooksService.class); }
         @Bean RecentlyViewedService recentlyViewedService() { return Mockito.mock(RecentlyViewedService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService bookImageOrchestrationService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService.class); }
         @Bean com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService bookCoverManagementService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService.class); }
@@ -85,6 +82,8 @@ class HomeControllerTest {
         @Bean com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService affiliateLinkService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService.class); }
         @Bean NewYorkTimesService newYorkTimesService() { return Mockito.mock(NewYorkTimesService.class); }
         @Bean BookQueryRepository bookQueryRepository() { return Mockito.mock(BookQueryRepository.class); }
+        @Bean BookSearchService bookSearchService() { return Mockito.mock(BookSearchService.class); }
+        @Bean BookIdentifierResolver bookIdentifierResolver() { return Mockito.mock(BookIdentifierResolver.class); }
     }
     
     /**
@@ -93,17 +92,16 @@ class HomeControllerTest {
      */
     @BeforeEach
     void setUp() {
-        // Configure GoogleBooksService to return empty results by default
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), isNull(), anyInt(), isNull()))
-            .thenReturn(Mono.just(java.util.Collections.emptyList()));
-
         // Configure NewYorkTimesService to return empty BookCard list by default (NEW OPTIMIZED METHOD)
         when(newYorkTimesService.getCurrentBestSellersCards(anyString(), anyInt()))
             .thenReturn(Mono.just(java.util.Collections.emptyList()));
-        
         // Configure BookQueryRepository to return empty BookCard list by default
         when(bookQueryRepository.fetchBookCards(org.mockito.ArgumentMatchers.anyList()))
             .thenReturn(java.util.Collections.emptyList());
+        when(bookQueryRepository.fetchBookDetailBySlug(anyString())).thenReturn(Optional.empty());
+        when(bookQueryRepository.fetchBookDetail(org.mockito.ArgumentMatchers.any(UUID.class))).thenReturn(Optional.empty());
+
+        when(bookIdentifierResolver.resolveToUuid(anyString())).thenReturn(Optional.empty());
 
         // Configure BookCoverManagementService with mock cover generation
         when(bookCoverManagementService.getInitialCoverUrlAndTriggerBackgroundUpdate(any(Book.class)))
@@ -113,24 +111,20 @@ class HomeControllerTest {
                 CoverImages coverImages = new CoverImages(
                     mockCoverUrl,
                     mockCoverUrl,
-                    CoverImageSource.S3_CACHE
+                    CoverImageSource.UNDEFINED
                 );
                 book.setCoverImages(coverImages);
-                book.setCoverImageUrl(mockCoverUrl);
+                book.setExternalImageUrl(mockCoverUrl);
                 return Mono.just(coverImages);
             });
 
         when(localDiskCoverCacheService.getLocalPlaceholderPath()).thenReturn(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
     
-        // Configure RecentlyViewedService with empty view history (reactive)
-        when(recentlyViewedService.getRecentlyViewedBooksReactive())
-            .thenReturn(Mono.just(java.util.Collections.emptyList()));
-        
         // Configure RecentlyViewedService to return empty BookCard IDs by default
         when(recentlyViewedService.getRecentlyViewedBookIds(anyInt()))
             .thenReturn(java.util.Collections.emptyList());
 
-        when(bookDataOrchestrator.getBookByIdTiered(anyString())).thenReturn(Mono.empty());
+        when(bookDataOrchestrator.fetchCanonicalBookReactive(anyString())).thenReturn(Mono.empty());
     }
 
     @Test
@@ -141,14 +135,41 @@ class HomeControllerTest {
         Book canonicalBook = createTestBook("123e4567-e89b-12d3-a456-426614174000", "Test Title", "Author A");
         canonicalBook.setSlug("test-title");
 
-        when(bookDataOrchestrator.getBookByIdTiered(eq(sanitizedIsbn))).thenReturn(Mono.just(canonicalBook));
+        UUID canonicalUuid = UUID.fromString(canonicalBook.getId());
+        BookDetail detail = new BookDetail(
+            canonicalBook.getId(),
+            canonicalBook.getSlug(),
+            canonicalBook.getTitle(),
+            canonicalBook.getDescription(),
+            "Test Publisher",
+            LocalDate.of(2024, 1, 1),
+            "en",
+            canonicalBook.getPageCount(),
+            canonicalBook.getAuthors(),
+            List.of(),
+            canonicalBook.getExternalImageUrl(),
+            canonicalBook.getExternalImageUrl(),
+            600,
+            900,
+            Boolean.TRUE,
+            "POSTGRES",
+            4.2,
+            128,
+            canonicalBook.getIsbn10(),
+            sanitizedIsbn,
+            "https://preview",
+            "https://info",
+            Collections.<String, Object>emptyMap(),
+            Collections.<com.williamcallahan.book_recommendation_engine.dto.EditionSummary>emptyList()
+        );
+
+        when(bookIdentifierResolver.resolveToUuid(eq(sanitizedIsbn))).thenReturn(Optional.of(canonicalUuid));
+        when(bookQueryRepository.fetchBookDetail(eq(canonicalUuid))).thenReturn(Optional.of(detail));
 
         webTestClient.get().uri("/book/isbn/" + isbn)
             .exchange()
             .expectStatus().isEqualTo(HttpStatus.SEE_OTHER)
             .expectHeader().valueEquals("Location", "/book/" + canonicalBook.getSlug());
-
-        verify(googleBooksService, never()).searchBooksByISBN(anyString());
     }
 
     @Test
@@ -156,14 +177,11 @@ class HomeControllerTest {
         String rawIsbn = "978-0307465351";
         String sanitizedIsbn = "9780307465351";
 
-        when(bookDataOrchestrator.getBookByIdTiered(eq(sanitizedIsbn))).thenReturn(Mono.empty());
-
         webTestClient.get().uri("/book/isbn/" + rawIsbn)
             .exchange()
             .expectStatus().isEqualTo(HttpStatus.SEE_OTHER)
             .expectHeader().valueEquals("Location", "/?info=bookNotFound&isbn=" + sanitizedIsbn);
 
-        verify(googleBooksService, never()).searchBooksByISBN(anyString());
     }
 
     @Test
@@ -188,13 +206,12 @@ class HomeControllerTest {
         book.setAuthors(List.of(author));
         book.setDescription("Test description for " + title);
         String coverUrl = "http://example.com/cover/" + (id != null ? id : "new") + ".jpg";
-        book.setCoverImageUrl(coverUrl);
-        book.setImageUrl("http://example.com/image/" + (id != null ? id : "new") + ".jpg");
+        book.setExternalImageUrl(coverUrl);
         
         CoverImages coverImages = new CoverImages(
             coverUrl,
             coverUrl,
-            CoverImageSource.S3_CACHE 
+            CoverImageSource.UNDEFINED 
         );
         book.setCoverImages(coverImages);
         return book;
@@ -269,9 +286,6 @@ class HomeControllerTest {
     @Test
     void shouldShowEmptyHomePageWhenServicesReturnEmptyLists() {
         // Default setUp mocks already return empty lists
-
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), isNull(), anyInt(), isNull(), eq(true)))
-            .thenReturn(Mono.just(java.util.Collections.emptyList()));
 
         // Act & Assert
         webTestClient.get().uri("/")

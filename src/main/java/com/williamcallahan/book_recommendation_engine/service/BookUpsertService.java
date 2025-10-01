@@ -2,10 +2,9 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
-import com.williamcallahan.book_recommendation_engine.service.image.CoverImageService;
+import com.williamcallahan.book_recommendation_engine.service.image.CoverPersistenceService;
 import com.williamcallahan.book_recommendation_engine.util.DimensionParser;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
-import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 import com.williamcallahan.book_recommendation_engine.util.UrlUtils;
 import lombok.Builder;
 import lombok.Value;
@@ -15,7 +14,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Date;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -58,18 +56,18 @@ public class BookUpsertService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final BookCollectionPersistenceService collectionPersistenceService;
-    private final CoverImageService coverImageService;
+    private final CoverPersistenceService coverPersistenceService;
     
     public BookUpsertService(
         JdbcTemplate jdbcTemplate,
         ObjectMapper objectMapper,
-        BookCollectionPersistenceService collectionPersistenceService,
-        CoverImageService coverImageService
+            BookCollectionPersistenceService collectionPersistenceService,
+            CoverPersistenceService coverPersistenceService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.collectionPersistenceService = collectionPersistenceService;
-        this.coverImageService = coverImageService;
+        this.coverPersistenceService = coverPersistenceService;
     }
     
     /**
@@ -511,35 +509,38 @@ public class BookUpsertService {
     /**
      * UPSERT book_image_links table with enhanced metadata.
      * 
-     * Uses CoverImageService (SSOT) to:
+     * Uses CoverPersistenceService (SSOT) to:
      * - Normalize URLs to HTTPS
      * - Estimate dimensions based on image type
      * - Detect high-resolution images
      * - Update books.s3_image_path with canonical cover
      * 
-     * Falls back to simple upsert if CoverImageService fails.
+     * Falls back to simple upsert if CoverPersistenceService fails or reports no change.
      */
     private void upsertImageLinksEnhanced(UUID bookId, BookAggregate.ExternalIdentifiers identifiers) {
         Map<String, String> imageLinks = identifiers.getImageLinks();
         String source = identifiers.getSource() != null ? identifiers.getSource() : "GOOGLE_BOOKS";
         
         try {
-            // Use CoverImageService for enhanced metadata persistence
-            CoverImageService.PersistedCover result = coverImageService.upsertAllAndSetPrimary(
-                bookId, 
-                imageLinks, 
+            CoverPersistenceService.PersistenceResult result = coverPersistenceService.persistFromGoogleImageLinks(
+                bookId,
+                imageLinks,
                 source
             );
-            
-            log.debug("Enhanced image metadata persisted for book {}: s3Key={}, dimensions={}x{}, highRes={}",
-                bookId, result.s3Key(), result.width(), result.height(), result.highRes());
-            
+
+            if (result.success()) {
+                log.debug("Enhanced image metadata persisted for book {}: s3Key={}, dimensions={}x{}, highRes={}",
+                    bookId, result.s3Key(), result.width(), result.height(), result.highRes());
+                return;
+            }
+
+            log.warn("CoverPersistenceService returned no canonical cover for book {}. Falling back to simple upsert.", bookId);
         } catch (Exception e) {
-            // Fallback to simple upsert if enhanced service fails
-            log.warn("CoverImageService failed for book {}, falling back to simple upsert: {}", 
+            log.warn("CoverPersistenceService failed for book {}, falling back to simple upsert: {}",
                 bookId, e.getMessage());
-            upsertImageLinksSimple(bookId, imageLinks, source);
         }
+
+        upsertImageLinksSimple(bookId, imageLinks, source);
     }
     
     /**
@@ -548,7 +549,7 @@ public class BookUpsertService {
      * 
      * @deprecated Use upsertImageLinksEnhanced instead
      */
-    @Deprecated(since = "2025-01-30", forRemoval = false)
+    @Deprecated(since = "2025-09-30", forRemoval = false)
     private void upsertImageLinksSimple(UUID bookId, Map<String, String> imageLinks, String source) {
         for (Map.Entry<String, String> entry : imageLinks.entrySet()) {
             String imageType = entry.getKey();
@@ -588,9 +589,10 @@ public class BookUpsertService {
             dimensions.getThickness()
         );
         
-        // Only insert if at least one dimension is valid
+        // Only insert if at least one dimension is valid; otherwise remove stale records
         if (!parsed.hasAnyDimension()) {
-            log.debug("No valid dimensions to upsert for book {}", bookId);
+            log.debug("No valid dimensions to upsert for book {} – removing existing record if present", bookId);
+            jdbcTemplate.update("DELETE FROM book_dimensions WHERE book_id = ?", bookId);
             return;
         }
         

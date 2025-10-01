@@ -52,7 +52,7 @@ public class DuplicateBookServiceTest {
         book.setTitle(title);
         book.setAuthors(author != null ? List.of(author) : Collections.emptyList());
         book.setDescription("Test desc");
-        book.setCoverImageUrl("http://example.com/cover.jpg");
+        book.setExternalImageUrl("http://example.com/cover.jpg");
         // Add other necessary fields if any
         return book;
     }

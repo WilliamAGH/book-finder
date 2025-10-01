@@ -2,7 +2,6 @@ package com.williamcallahan.book_recommendation_engine.scheduler;
 
 import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.service.BookSitemapService;
-import com.williamcallahan.book_recommendation_engine.service.BookSitemapService.ExternalHydrationSummary;
 import com.williamcallahan.book_recommendation_engine.service.BookSitemapService.SitemapSnapshot;
 import com.williamcallahan.book_recommendation_engine.service.BookSitemapService.SnapshotSyncResult;
 import com.williamcallahan.book_recommendation_engine.service.SitemapService;
@@ -59,12 +58,10 @@ class SitemapRefreshSchedulerTest {
         List<BookSitemapItem> items = List.of(new BookSitemapItem("book-1", "slug-1", "Title", Instant.now()));
         SitemapSnapshot snapshot = new SitemapSnapshot(Instant.now(), items);
         when(bookSitemapService.synchronizeSnapshot()).thenReturn(new SnapshotSyncResult(snapshot, true, "sitemaps/books.json"));
-        when(bookSitemapService.hydrateExternally(items, 3)).thenReturn(new ExternalHydrationSummary(3, 1, 1, 0));
 
         scheduler.refreshSitemapArtifacts();
 
         verify(bookSitemapService).synchronizeSnapshot();
-        verify(bookSitemapService).hydrateExternally(items, 3);
         verify(coverService).fetchCover(org.mockito.ArgumentMatchers.any());
     }
 }

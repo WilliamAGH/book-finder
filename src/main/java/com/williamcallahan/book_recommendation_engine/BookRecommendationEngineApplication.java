@@ -14,9 +14,6 @@ package com.williamcallahan.book_recommendation_engine;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
-
-import com.williamcallahan.book_recommendation_engine.util.S3Paths;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -58,21 +55,6 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(BookRecommendationEngineApplication.class);
 
-    private final com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator;
-
-    /**
-     * Constructor injection for BookDataOrchestrator
-     * Required for proper CGLIB proxy support when BookDataOrchestrator has @Async methods
-     *
-     * @param bookDataOrchestrator The book data orchestrator service (optional, lazy-loaded)
-     */
-    public BookRecommendationEngineApplication(
-            @org.springframework.beans.factory.annotation.Autowired(required = false)
-            @org.springframework.context.annotation.Lazy
-            com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator bookDataOrchestrator) {
-        this.bookDataOrchestrator = bookDataOrchestrator;
-    }
-
     /**
      * Main method that starts the Spring Boot application
      *
@@ -108,12 +90,13 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
 
     private static void normalizeDatasourceUrlFromEnv() {
         try {
-            // Check environment variable first, then system property (from .env)
-            String url = System.getenv("SPRING_DATASOURCE_URL");
-            if (ValidationUtils.isNullOrBlank(url)) {
-                url = System.getProperty("SPRING_DATASOURCE_URL");
+            String url = firstText(
+                System.getenv("SPRING_DATASOURCE_URL"),
+                System.getProperty("SPRING_DATASOURCE_URL")
+            );
+            if (!ValidationUtils.hasText(url)) {
+                return;
             }
-            if (ValidationUtils.isNullOrBlank(url)) return;
 
             java.util.Optional<com.williamcallahan.book_recommendation_engine.config.DatabaseUrlEnvironmentPostProcessor.JdbcParseResult> parsed =
                 com.williamcallahan.book_recommendation_engine.config.DatabaseUrlEnvironmentPostProcessor.normalizePostgresUrl(url);
@@ -128,29 +111,25 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
             System.setProperty("spring.datasource.driver-class-name", "org.postgresql.Driver");
 
             // Set username and password if extracted and not already provided
-            String existingUser = System.getenv("SPRING_DATASOURCE_USERNAME");
-            if (ValidationUtils.isNullOrBlank(existingUser)) {
-                existingUser = System.getProperty("SPRING_DATASOURCE_USERNAME");
-            }
-            if (ValidationUtils.isNullOrBlank(existingUser)) {
-                existingUser = System.getProperty("spring.datasource.username");
-            }
+            String existingUser = firstText(
+                System.getenv("SPRING_DATASOURCE_USERNAME"),
+                System.getProperty("SPRING_DATASOURCE_USERNAME"),
+                System.getProperty("spring.datasource.username")
+            );
 
-            String existingPass = System.getenv("SPRING_DATASOURCE_PASSWORD");
-            if (ValidationUtils.isNullOrBlank(existingPass)) {
-                existingPass = System.getProperty("SPRING_DATASOURCE_PASSWORD");
-            }
-            if (ValidationUtils.isNullOrBlank(existingPass)) {
-                existingPass = System.getProperty("spring.datasource.password");
-            }
+            String existingPass = firstText(
+                System.getenv("SPRING_DATASOURCE_PASSWORD"),
+                System.getProperty("SPRING_DATASOURCE_PASSWORD"),
+                System.getProperty("spring.datasource.password")
+            );
 
             String decodedUser = decodeUrlComponent(result.username);
             String decodedPass = decodeUrlComponent(result.password);
 
-            if (ValidationUtils.isNullOrBlank(existingUser) && ValidationUtils.hasText(decodedUser)) {
+            if (!ValidationUtils.hasText(existingUser) && ValidationUtils.hasText(decodedUser)) {
                 System.setProperty("spring.datasource.username", decodedUser);
             }
-            if (ValidationUtils.isNullOrBlank(existingPass) && ValidationUtils.hasText(decodedPass)) {
+            if (!ValidationUtils.hasText(existingPass) && ValidationUtils.hasText(decodedPass)) {
                 System.setProperty("spring.datasource.password", decodedPass);
             }
 
@@ -163,38 +142,28 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
         }
     }
 
+    private static String firstText(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (ValidationUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     @Override
     public void run(ApplicationArguments args) {
         if (args.containsOption("migrate.s3.books")) {
-            assertOrchestratorAvailable("--migrate.s3.books");
-
-            String rawPrefix = firstOptionValue(args, "migrate.prefix");
-            String prefix = S3Paths.ensureTrailingSlash(rawPrefix);
-            int max = parseIntArg(args, "migrate.max", 0);
-            int skip = parseIntArg(args, "migrate.skip", 0);
-            bookDataOrchestrator.migrateBooksFromS3(prefix, max, skip);
+            log.error("--migrate.s3.books has been removed. Run the manual SQL migration instead (see AGENTS.md manual)." );
+            throw new IllegalStateException("S3-backed book migrations are no longer automated; run manual SQL steps instead.");
         }
 
         if (args.containsOption("migrate.s3.lists")) {
-            assertOrchestratorAvailable("--migrate.s3.lists");
-
-            String provider = java.util.Optional.ofNullable(firstOptionValue(args, "migrate.lists.provider"))
-                    .filter(ValidationUtils::hasText)
-                    .orElse("NYT");
-            String defaultPrefix = "lists/" + provider.toLowerCase(Locale.ROOT) + "/";
-            String rawListPrefix = firstOptionValue(args, "migrate.lists.prefix");
-            String listPrefix = S3Paths.ensureTrailingSlash(rawListPrefix, defaultPrefix);
-            int maxLists = parseIntArg(args, "migrate.lists.max", 0);
-            int skipLists = parseIntArg(args, "migrate.lists.skip", 0);
-            bookDataOrchestrator.migrateListsFromS3(provider, listPrefix, maxLists, skipLists);
-        }
-    }
-
-    private void assertOrchestratorAvailable(String triggerOption) {
-        if (bookDataOrchestrator == null) {
-            String message = "BookDataOrchestrator bean is required for " + triggerOption + " but is not initialized.";
-            log.error(message);
-            throw new IllegalStateException(message);
+            log.error("--migrate.s3.lists has been removed. Run the manual SQL migration instead (see AGENTS.md manual)." );
+            throw new IllegalStateException("S3-backed list migrations are no longer automated; run manual SQL steps instead.");
         }
     }
 
@@ -202,26 +171,21 @@ public class BookRecommendationEngineApplication implements ApplicationRunner {
         if (value == null) {
             return null;
         }
+        // Only attempt URL decoding if the value contains percent-encoded sequences
+        // This prevents corruption of passwords with literal '+' characters
+        if (!value.contains("%")) {
+            return value;
+        }
         try {
-            return java.net.URLDecoder.decode(value, StandardCharsets.UTF_8);
+            // Pre-escape literal '+' characters to preserve them during decoding
+            // URLDecoder treats '+' as space, but in passwords it should be literal
+            String prepared = value.replace("+", "%2B");
+            return java.net.URLDecoder.decode(prepared, StandardCharsets.UTF_8);
         } catch (IllegalArgumentException ex) {
-            log.warn("Failed to URL-decode datasource credential component; using raw value", ex);
+            // Bail out to original value if decoding fails (malformed % sequences)
+            log.warn("Failed to URL-decode datasource credential component (malformed encoding); using raw value", ex);
             return value;
         }
     }
 
-    private String firstOptionValue(ApplicationArguments args, String name) {
-        java.util.List<String> values = args.getOptionValues(name);
-        return (values == null || values.isEmpty()) ? null : values.get(0);
-    }
-
-    private int parseIntArg(ApplicationArguments args, String name, int defaultValue) {
-        try {
-            String value = firstOptionValue(args, name);
-            if (ValidationUtils.hasText(value)) {
-                return Integer.parseInt(value);
-            }
-        } catch (Exception ignored) { }
-        return defaultValue;
-    }
 }

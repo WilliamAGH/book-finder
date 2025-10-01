@@ -12,7 +12,6 @@
  */
 package com.williamcallahan.book_recommendation_engine.config;
 
-import com.williamcallahan.book_recommendation_engine.config.SitemapProperties;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Cache;

@@ -6,9 +6,7 @@
  * - Applying rate limiting (via Resilience4j {@code @RateLimiter}) and circuit breaking ({@code @CircuitBreaker})
  *   to protect the application and the external API
  * - Converting JSON responses from the Google Books API into {@link Book} domain objects
- * - Caching API responses in S3 via the {@link S3RetryService} for GET requests for individual books
- *   (Note: The {@link GoogleBooksCachingStrategy} is expected to be used by this service or a higher-level proxy
- *    to provide more comprehensive caching including S3, database, and in-memory layers before hitting this service)
+ * - Providing normalized output for the Postgres-first caching pipeline
  * - Monitoring API usage and performance via {@link ApiRequestMonitor}
  * - Transforming cover image URLs for optimal quality and display
  *
@@ -18,44 +16,45 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
+import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
+import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
-import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
+import com.williamcallahan.book_recommendation_engine.util.SearchQueryQualifierExtractor;
 import com.williamcallahan.book_recommendation_engine.service.image.GoogleCoverUrlEvaluator;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
-import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import com.williamcallahan.book_recommendation_engine.service.image.ExternalCoverFetchHelper;
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverIdentifierResolver;
+import com.williamcallahan.book_recommendation_engine.util.GoogleBooksUrlEnhancer;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletableFuture;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.function.Function;
-import java.util.function.BinaryOperator;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.service.image.CoverCacheManager;
 
-@SuppressWarnings("unused")
 @Service
 @Slf4j
 public class GoogleBooksService {
@@ -63,11 +62,21 @@ public class GoogleBooksService {
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
-    private final BookDataOrchestrator bookDataOrchestrator; // Added for fetchMultipleBooksByIds
     private final ExternalCoverFetchHelper externalCoverFetchHelper;
     private final GoogleCoverUrlEvaluator googleCoverUrlEvaluator;
+    private final GoogleBooksMapper googleBooksMapper;
+
+    private BookSearchService bookSearchService;
+    private BookQueryRepository bookQueryRepository;
 
     private static final int ISBN_BATCH_QUERY_SIZE = 5; // Reduced batch size for ISBN OR queries
+    private static final List<String> GOOGLE_ID_TAG_KEYS = List.of(
+        "google_canonical_id",
+        "googleVolumeId",
+        "google_volume_id",
+        "google_volume",
+        "google_book_id"
+    );
     
     @Value("${app.nyt.scheduler.google.books.api.batch-delay-ms:200}") // Configurable delay
     private long isbnBatchDelayMs;
@@ -83,15 +92,15 @@ public class GoogleBooksService {
             ObjectMapper objectMapper,
             ApiRequestMonitor apiRequestMonitor,
             GoogleApiFetcher googleApiFetcher,
-            @Lazy BookDataOrchestrator bookDataOrchestrator,
             ExternalCoverFetchHelper externalCoverFetchHelper,
-            GoogleCoverUrlEvaluator googleCoverUrlEvaluator) {
+            GoogleCoverUrlEvaluator googleCoverUrlEvaluator,
+            GoogleBooksMapper googleBooksMapper) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
-        this.bookDataOrchestrator = bookDataOrchestrator;
         this.externalCoverFetchHelper = externalCoverFetchHelper;
         this.googleCoverUrlEvaluator = googleCoverUrlEvaluator;
+        this.googleBooksMapper = googleBooksMapper;
     }
 
     /**
@@ -135,23 +144,44 @@ public class GoogleBooksService {
      * @param desiredTotalResults The desired maximum number of total results to fetch across all pages
      * @param orderBy The order to sort results by (e.g., "relevance", "newest")
      * @return Mono containing a list of {@link Book} objects retrieved from the API
+     *
+     * @deprecated Use {@link BookSearchService} with {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository}
+     * DTO projections, invoking {@link GoogleApiFetcher#streamSearchItems(String, int, String, String, boolean)} directly when
+     * external fallback is absolutely required.
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode, int desiredTotalResults, String orderBy) {
-        return streamBooksReactive(query, langCode, desiredTotalResults, orderBy)
-            .collectList()
-            .map(books -> {
-                log.info("GoogleBooksService.searchBooksAsyncReactive completed for query '{}'. Retrieved {} books total.",
-                    query, books.size());
-                return books;
-            })
-            .onErrorResume(e -> {
-                LoggingUtils.error(log, e, "Error in searchBooksAsyncReactive for query '{}'", query);
-                apiRequestMonitor.recordFailedRequest(
-                    "volumes/search/reactive/" + query,
-                    e.getMessage()
-                );
-                return Mono.just(Collections.<Book>emptyList());
-            });
+        if (bookSearchService == null || bookQueryRepository == null) {
+            return Mono.just(List.of());
+        }
+
+        final int safeDesired = desiredTotalResults > 0 ? desiredTotalResults : 20;
+
+        return Mono.fromCallable(() -> bookSearchService.searchBooks(query, safeDesired))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(results -> assembleBaselineResults(results)
+                .flatMap(baseline -> {
+                    if (baseline.size() >= safeDesired || !googleApiFetcher.isGoogleFallbackEnabled()) {
+                        return Mono.just(baseline);
+                    }
+
+                    int remaining = Math.max(safeDesired - baseline.size(), 0);
+                    if (remaining == 0) {
+                        return Mono.just(baseline);
+                    }
+
+                    return streamBooksReactive(query, langCode, remaining, orderBy)
+                        .collectList()
+                        .map(fallback -> mergeSearchResults(baseline, fallback, safeDesired))
+                        .defaultIfEmpty(baseline)
+                        .onErrorResume(ex -> {
+                            log.warn("Google fallback search failed for query '{}': {}", query, ex.getMessage());
+                            return Mono.just(baseline);
+                        });
+                }))
+            .defaultIfEmpty(List.of())
+            .doOnError(ex -> log.warn("Postgres search failed for query '{}': {}", query, ex.getMessage(), ex))
+            .onErrorReturn(List.of());
     }
 
     /**
@@ -159,6 +189,11 @@ public class GoogleBooksService {
      * unauthenticated calls when the authenticated path is blocked or unavailable. Results are
      * deduplicated by volume ID and capped to the desired total.
      */
+    /**
+     * @deprecated Stream `BookCard` DTOs via {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository}
+     * and call {@link GoogleApiFetcher#streamSearchItems(String, int, String, String, boolean)} directly for raw payloads.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Flux<Book> streamBooksReactive(String query,
                                           String langCode,
                                           int desiredTotalResults,
@@ -170,7 +205,7 @@ public class GoogleBooksService {
 
         final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
         final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
-        final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
+        final Map<String, Object> queryQualifiers = SearchQueryQualifierExtractor.extract(query);
 
         final boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
 
@@ -184,7 +219,7 @@ public class GoogleBooksService {
                     "STREAM_AUTH",
                     query,
                     true))
-                .map(BookJsonParser::convertJsonToBook)
+                .map(this::convertJsonToBook)
                 .filter(Objects::nonNull)
                 .map(book -> applyQualifiers(book, queryQualifiers))
                 .onErrorResume(error -> {
@@ -206,7 +241,7 @@ public class GoogleBooksService {
                 "STREAM_UNAUTH",
                 query,
                 false))
-            .map(BookJsonParser::convertJsonToBook)
+            .map(this::convertJsonToBook)
             .filter(Objects::nonNull)
             .map(book -> applyQualifiers(book, queryQualifiers))
             .onErrorResume(error -> {
@@ -251,6 +286,10 @@ public class GoogleBooksService {
      * @param langCode Optional language code to restrict results (e.g., "en", "fr")
      * @return Mono containing a list of Book objects retrieved from the API
      */
+    /**
+     * @deprecated See {@link #searchBooksAsyncReactive(String, String, int, String)}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode) {
         return searchBooksAsyncReactive(query, langCode, 200, "newest"); 
     }
@@ -261,99 +300,58 @@ public class GoogleBooksService {
      * @param query Search query string to send to the API
      * @return Mono containing a list of Book objects retrieved from the API
      */
+    /**
+     * @deprecated See {@link #searchBooksAsyncReactive(String, String, int, String)}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> searchBooksAsyncReactive(String query) {
         return searchBooksAsyncReactive(query, null, 200, "newest");
     }
 
-    public Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit, boolean allowExternalFallback) {
-        Mono<List<Book>> postgres = bookDataOrchestrator.searchBooksTiered(query, null, limit, null)
-            .onErrorResume(e -> {
-                log.warn("Postgres-first homepage filler lookup failed for query '{}': {}", query, e.getMessage());
-                return Mono.just(Collections.<Book>emptyList());
-            });
-
-        if (!allowExternalFallback) {
-            return postgres.defaultIfEmpty(List.of());
-        }
-
-        Mono<List<Book>> fallback = searchBooksAsyncReactive(query, null, limit, null)
-            .onErrorResume(e -> {
-                log.error("Google fallback for homepage filler failed for query '{}': {}", query, e.getMessage());
-                return Mono.just(Collections.<Book>emptyList());
-            });
-
-        return postgres.flatMap(results -> (results != null && !results.isEmpty()) ? Mono.just(results) : fallback)
-            .defaultIfEmpty(List.of());
-    }
-
     /**
-     * Searches books by title using the 'intitle:' Google Books API qualifier
-     * 
-     * @param title Book title to search for
-     * @param langCode Optional language code to restrict results
-     * @return Mono containing a list of Book objects matching the title
+     * @deprecated Populate homepage content from Postgres via
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookCards(java.util.List)}
+     * and only consult {@link GoogleApiFetcher} within the orchestrator layer.
      */
-    public Mono<List<Book>> searchBooksByTitle(String title, String langCode) {
-        return searchBooksAsyncReactive("intitle:" + title, langCode);
-    }
-
-    /**
-     * Overloaded version without language filtering
-     * 
-     * @param title Book title to search for
-     * @return Mono containing a list of Book objects matching the title
-     */
-    public Mono<List<Book>> searchBooksByTitle(String title) {
-        return searchBooksByTitle(title, null);
-    }
-
-    /**
-     * Searches books by author using the 'inauthor:' Google Books API qualifier
-     * 
-     * @param author Author name to search for
-     * @param langCode Optional language code to restrict results
-     * @return Mono containing a list of Book objects by the specified author
-     */
-    public Mono<List<Book>> searchBooksByAuthor(String author, String langCode) {
-        return searchBooksAsyncReactive("inauthor:" + author, langCode);
-    }
-
-    /**
-     * Overloaded version without language filtering
-     * 
-     * @param author Author name to search for
-     * @return Mono containing a list of Book objects by the specified author
-     */
-    public Mono<List<Book>> searchBooksByAuthor(String author) {
-        return searchBooksByAuthor(author, null);
-    }
-
-    /**
-     * Searches books by ISBN using the 'isbn:' Google Books API qualifier 
-     * 
-     * @param isbn ISBN identifier to search for
-     * @param langCode Optional language code to restrict results
-     * @return Mono containing a list of Book objects matching the ISBN
-     */
-    public Mono<List<Book>> searchBooksByISBN(String isbn, String langCode) {
-        return searchBooksAsyncReactive("isbn:" + isbn, langCode);
-    }
-
-    /**
-     * Overloaded version without language filtering
-     * 
-     * @param isbn ISBN identifier to search for
-     * @return Mono containing a list of Book objects matching the ISBN
-     */
-    public Mono<List<Book>> searchBooksByISBN(String isbn) {
-        return searchBooksByISBN(isbn, null);
-    }
-
     private Book applyQualifiers(Book book, Map<String, Object> queryQualifiers) {
         if (book != null && queryQualifiers != null && !queryQualifiers.isEmpty()) {
             queryQualifiers.forEach(book::addQualifier);
         }
         return book;
+    }
+
+    /**
+     * Searches for books by ISBN using Google Books API
+     * @param isbn The ISBN (10 or 13) to search for
+     * @return Mono containing a list of books matching the ISBN
+     * @deprecated Use {@link BookDataOrchestrator#fetchCanonicalBookReactive(String)} for ISBN lookups
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    public Mono<List<Book>> searchBooksByISBN(String isbn) {
+        if (!ValidationUtils.hasText(isbn) || bookSearchService == null || bookQueryRepository == null) {
+            return Mono.just(List.of());
+        }
+
+        String normalized = isbn.trim();
+
+        return Mono.fromCallable(() -> bookSearchService.searchByIsbn(normalized))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(optional -> optional
+                .map(result -> Mono.fromCallable(() -> bookQueryRepository.fetchBookDetail(result.bookId()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .map(detailOpt -> detailOpt
+                        .map(BookDomainMapper::fromDetail)
+                        .map(List::of)
+                        .orElse(List.of()))
+                    .onErrorResume(ex -> {
+                        log.warn("Postgres ISBN detail lookup failed for '{}': {}", normalized, ex.getMessage());
+                        return Mono.just(List.<Book>of());
+                    }))
+                .orElseGet(() -> Mono.just(List.<Book>of())))
+            .onErrorResume(ex -> {
+                log.warn("GoogleBooksService.searchBooksByISBN failed for '{}': {}", normalized, ex.getMessage());
+                return Mono.just(List.<Book>of());
+            });
     }
 
     /**
@@ -400,10 +398,21 @@ public class GoogleBooksService {
     @CircuitBreaker(name = "googleBooksService", fallbackMethod = "getBookByIdFallback")
     @TimeLimiter(name = "googleBooksService")
     @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "getBookByIdRateLimitFallback")
+    /**
+     * @deprecated Fetch canonical records via {@link BookDataOrchestrator#fetchCanonicalBookReactive(String)} or
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository} DTOs; direct
+     * Google volumes access should go through {@link GoogleApiFetcher} utilities.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public CompletionStage<Book> getBookById(String bookId) {
         log.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheFacadeService/GoogleBooksCachingStrategy.", bookId);
+        // Prevent misuse: do not call volumes/{id} for slugs or unsafe identifiers
+        if (!com.williamcallahan.book_recommendation_engine.util.IdentifierClassifier.isSafeForGoogleBooksVolumesApi(bookId)) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
         return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
-            .map(BookJsonParser::convertJsonToBook)
+            .switchIfEmpty(googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId))
+            .map(this::convertJsonToBook)
             .filter(Objects::nonNull)
             // Record successful API fetch for the book
             .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest(
@@ -432,6 +441,12 @@ public class GoogleBooksService {
      * @param book Book to find similar books for
      * @return Mono containing a list of similar Book objects, limited to 5 results
      */
+    /**
+     * @deprecated Use {@link RecommendationService} /
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookCards(java.util.List)}
+     * based pipelines to surface similar titles.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> getSimilarBooks(Book book) {
         if (book == null || book.getAuthors() == null || book.getAuthors().isEmpty() || book.getTitle() == null) {
             return Mono.just(Collections.emptyList());
@@ -552,6 +567,12 @@ public class GoogleBooksService {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * @deprecated Route Google cover hydration through
+     * {@link com.williamcallahan.book_recommendation_engine.service.image.CoverSourceFetchingService}
+     * so results are persisted via {@link com.williamcallahan.book_recommendation_engine.service.image.CoverPersistenceService}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public CompletableFuture<ImageDetails> fetchCoverByIsbn(
         String isbn,
         String bookIdForLog,
@@ -582,7 +603,7 @@ public class GoogleBooksService {
                     if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
                         return Optional.empty();
                     }
-                    String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
+                    String enhanced = GoogleBooksUrlEnhancer.enhanceUrl(googleUrl, 0);
                     return Optional.of(new ImageDetails(
                         enhanced,
                         "GOOGLE_BOOKS",
@@ -598,12 +619,17 @@ public class GoogleBooksService {
             provenanceData,
             bookIdForLog,
             new ExternalCoverFetchHelper.ValidationHooks(
-                url -> ImageCacheUtils.isLikelyGoogleCoverUrl(url),
-                details -> ImageCacheUtils.isLikelyGoogleCoverUrl(details.getUrlOrPath())
+                googleCoverUrlEvaluator::isAcceptableUrl,
+                details -> googleCoverUrlEvaluator.isAcceptableUrl(details.getUrlOrPath())
             )
         );
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.service.image.CoverSourceFetchingService}
+     * for Google volume lookups persisted via {@link com.williamcallahan.book_recommendation_engine.service.image.CoverPersistenceService}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public CompletableFuture<ImageDetails> fetchCoverByVolumeId(
         String googleVolumeId,
         String bookIdForLog,
@@ -630,7 +656,7 @@ public class GoogleBooksService {
                     if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
                         return Optional.empty();
                     }
-                    String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
+                    String enhanced = GoogleBooksUrlEnhancer.enhanceUrl(googleUrl, 0);
                     return Optional.of(new ImageDetails(
                         enhanced,
                         "GOOGLE_BOOKS",
@@ -646,10 +672,151 @@ public class GoogleBooksService {
             provenanceData,
             bookIdForLog,
             new ExternalCoverFetchHelper.ValidationHooks(
-                url -> ImageCacheUtils.isLikelyGoogleCoverUrl(url),
-                details -> ImageCacheUtils.isLikelyGoogleCoverUrl(details.getUrlOrPath())
+                googleCoverUrlEvaluator::isAcceptableUrl,
+                details -> googleCoverUrlEvaluator.isAcceptableUrl(details.getUrlOrPath())
             )
         );
+    }
+
+    @Autowired(required = false)
+    public void setBookSearchService(BookSearchService bookSearchService) {
+        this.bookSearchService = bookSearchService;
+    }
+
+    @Autowired(required = false)
+    public void setBookQueryRepository(BookQueryRepository bookQueryRepository) {
+        this.bookQueryRepository = bookQueryRepository;
+    }
+
+    private List<Book> assembleOrderedLegacyBooks(LinkedHashMap<UUID, Integer> orderedIds,
+                                                  List<BookListItem> items) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+
+        Map<UUID, Book> mapped = new HashMap<>();
+        for (BookListItem item : items) {
+            if (item == null) {
+                continue;
+            }
+            UUID uuid = UuidUtils.parseUuidOrNull(item.id());
+            if (uuid == null || mapped.containsKey(uuid)) {
+                continue;
+            }
+            Book legacy = BookDomainMapper.fromListItem(item);
+            if (legacy != null) {
+                mapped.put(uuid, legacy);
+            }
+        }
+
+        if (mapped.isEmpty()) {
+            return List.of();
+        }
+
+        List<Book> ordered = new ArrayList<>(mapped.size());
+        for (UUID id : orderedIds.keySet()) {
+            Book book = mapped.get(id);
+            if (book != null) {
+                ordered.add(book);
+            }
+        }
+        return ordered.isEmpty() ? List.of() : ordered;
+    }
+
+    private Book convertJsonToBook(JsonNode item) {
+        if (item == null) {
+            return null;
+        }
+
+        try {
+            BookAggregate aggregate = googleBooksMapper.map(item);
+            Book book = BookDomainMapper.fromAggregate(aggregate);
+            if (book != null) {
+                book.setRawJsonResponse(item.toString());
+            }
+            return book;
+        } catch (Exception ex) {
+            log.debug("Failed to map Google Books JSON node: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    private Mono<List<Book>> assembleBaselineResults(List<BookSearchService.SearchResult> results) {
+        if (results == null || results.isEmpty()) {
+            return Mono.just(List.of());
+        }
+
+        LinkedHashMap<UUID, Integer> orderedIds = new LinkedHashMap<>();
+        for (BookSearchService.SearchResult result : results) {
+            if (result != null && result.bookId() != null) {
+                orderedIds.putIfAbsent(result.bookId(), orderedIds.size());
+            }
+        }
+
+        if (orderedIds.isEmpty() || bookQueryRepository == null) {
+            return Mono.just(List.of());
+        }
+
+        List<UUID> lookupOrder = new ArrayList<>(orderedIds.keySet());
+
+        return Mono.fromCallable(() -> bookQueryRepository.fetchBookListItems(lookupOrder))
+            .subscribeOn(Schedulers.boundedElastic())
+            .map(items -> assembleOrderedLegacyBooks(orderedIds, items))
+            .onErrorResume(ex -> {
+                log.warn("Failed to fetch Postgres list items for search ({} ids): {}", lookupOrder.size(), ex.getMessage());
+                return Mono.just(List.<Book>of());
+            });
+    }
+
+    private List<Book> mergeSearchResults(List<Book> baseline, List<Book> fallback, int limit) {
+        if ((baseline == null || baseline.isEmpty()) && (fallback == null || fallback.isEmpty())) {
+            return List.of();
+        }
+
+        LinkedHashMap<String, Book> ordered = new LinkedHashMap<>();
+
+        if (baseline != null) {
+            baseline.stream()
+                .filter(Objects::nonNull)
+                .forEach(book -> ordered.putIfAbsent(searchResultKey(book), book));
+        }
+
+        if (fallback != null) {
+            for (Book book : fallback) {
+                if (book == null) {
+                    continue;
+                }
+                String key = searchResultKey(book);
+                if (!ordered.containsKey(key)) {
+                    ordered.put(key, book);
+                }
+                if (ordered.size() >= limit) {
+                    break;
+                }
+            }
+        }
+
+        if (ordered.isEmpty()) {
+            return List.of();
+        }
+
+        return new ArrayList<>(ordered.values());
+    }
+
+    private String searchResultKey(Book book) {
+        if (book == null) {
+            return "__null__";
+        }
+        if (ValidationUtils.hasText(book.getSlug())) {
+            return book.getSlug();
+        }
+        if (ValidationUtils.hasText(book.getId())) {
+            return book.getId();
+        }
+        if (book.getTitle() != null && book.getAuthors() != null && !book.getAuthors().isEmpty()) {
+            return book.getTitle() + "::" + String.join("|", book.getAuthors());
+        }
+        return book.getTitle() != null ? book.getTitle() : Integer.toHexString(System.identityHashCode(book));
     }
 
     /**
@@ -688,42 +855,49 @@ public class GoogleBooksService {
                 })
                 .delayElement(java.time.Duration.ofMillis(isbnBatchDelayMs)) // Add delay between batch executions
             )
-            .flatMap(Flux::fromIterable) // Flatten List<Book> from each batch into a single Flux<Book>
-            .filter(book -> {
-                if (book == null) {
+            .flatMap(Flux::fromIterable)
+            .map(book -> Map.entry(book, resolveGoogleVolumeId(book)))
+            .filter(entry -> {
+                Book book = entry.getKey();
+                Optional<String> googleId = entry.getValue();
+                if (book == null || googleId.isEmpty()) {
                     return false;
                 }
-                String preferredIsbn = BookValidator.getPreferredIsbn(book);
-                return ValidationUtils.hasText(book.getId()) && ValidationUtils.hasText(preferredIsbn);
+                String preferredIsbn = CoverIdentifierResolver.getPreferredIsbn(book);
+                return ValidationUtils.hasText(preferredIsbn) && ValidationUtils.hasText(googleId.get());
             })
             .collect(Collectors.toMap(
-                BookValidator::getPreferredIsbn,
-                Book::getId,
-                mergeFunction // Merge Function: In case of duplicate ISBNs, take the first ID
+                entry -> CoverIdentifierResolver.getPreferredIsbn(entry.getKey()),
+                entry -> entry.getValue().orElseThrow(),
+                mergeFunction
             ))
             .doOnSuccess(idMap -> log.info("Successfully fetched {} Google Book IDs for {} initial ISBNs.", idMap.size(), isbns.size()))
             .onErrorReturn(Collections.<String, String>emptyMap());
     }
 
-    /**
-     * Fetches full book details for a list of Google Book IDs
-     * Uses BookDataOrchestrator to leverage its tiered fetching and S3 caching
-     *
-     * @param bookIds List of Google Book IDs
-     * @return Flux emitting Book objects
-     */
-    public Flux<Book> fetchMultipleBooksByIdsTiered(List<String> bookIds) {
-        if (bookIds == null || bookIds.isEmpty()) {
-            return Flux.empty();
+    private Optional<String> resolveGoogleVolumeId(Book book) {
+        if (book == null) {
+            return Optional.empty();
         }
-        log.info("Fetching full details for {} book IDs using BookDataOrchestrator.", bookIds.size());
-        return Flux.fromIterable(bookIds)
-            .publishOn(reactor.core.scheduler.Schedulers.parallel()) // Allow parallel execution of orchestrator calls
-            .flatMap(bookId -> bookDataOrchestrator.getBookByIdTiered(bookId)
-                                .doOnError(e -> LoggingUtils.warn(log, e, "Error fetching book ID {} via orchestrator in batch", bookId))
-                                .onErrorResume(e -> Mono.<Book>empty()),
-                        Math.min(bookIds.size(), 10) // Concurrency level, adjust as needed
-            )
-            .filter(Objects::nonNull);
+
+        String candidate = book.getId();
+        if (ValidationUtils.hasText(candidate) && UuidUtils.parseUuidOrNull(candidate) == null) {
+            return Optional.of(candidate);
+        }
+
+        Map<String, Object> qualifiers = book.getQualifiers();
+        if (qualifiers == null || qualifiers.isEmpty()) {
+            return Optional.empty();
+        }
+
+        for (String key : GOOGLE_ID_TAG_KEYS) {
+            Object value = qualifiers.get(key);
+            if (value instanceof String str && ValidationUtils.hasText(str)) {
+                return Optional.of(str);
+            }
+        }
+
+        return Optional.empty();
     }
+
 }

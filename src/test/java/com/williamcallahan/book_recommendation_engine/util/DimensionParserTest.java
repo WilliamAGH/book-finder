@@ -73,10 +73,21 @@ class DimensionParserTest {
     
     @Test
     void shouldHandleCaseInsensitiveUnits() {
-        assertEquals(24.0, DimensionParser.parseToCentimeters("24 CM"), 0.001);
-        assertEquals(24.0, DimensionParser.parseToCentimeters("24 Cm"), 0.001);
-        assertEquals(24.0, DimensionParser.parseToCentimeters("240 MM"), 0.001);
-        assertEquals(24.003, DimensionParser.parseToCentimeters("9.45 IN"), 0.001);
+        Double upperCase = DimensionParser.parseToCentimeters("24 CM");
+        assertNotNull(upperCase);
+        assertEquals(24.0, upperCase.doubleValue(), 0.001);
+
+        Double mixedCase = DimensionParser.parseToCentimeters("24 Cm");
+        assertNotNull(mixedCase);
+        assertEquals(24.0, mixedCase.doubleValue(), 0.001);
+
+        Double millimeters = DimensionParser.parseToCentimeters("240 MM");
+        assertNotNull(millimeters);
+        assertEquals(24.0, millimeters.doubleValue(), 0.001);
+
+        Double inches = DimensionParser.parseToCentimeters("9.45 IN");
+        assertNotNull(inches);
+        assertEquals(24.003, inches.doubleValue(), 0.001);
     }
     
     @Test
@@ -88,9 +99,15 @@ class DimensionParserTest {
         );
         
         assertNotNull(dimensions);
-        assertEquals(24.00, dimensions.height(), 0.001);
-        assertEquals(16.00, dimensions.width(), 0.001);
-        assertEquals(3.00, dimensions.thickness(), 0.001);
+        Double height = dimensions.height();
+        Double width = dimensions.width();
+        Double thickness = dimensions.thickness();
+        assertNotNull(height);
+        assertEquals(24.00, height.doubleValue(), 0.001);
+        assertNotNull(width);
+        assertEquals(16.00, width.doubleValue(), 0.001);
+        assertNotNull(thickness);
+        assertEquals(3.00, thickness.doubleValue(), 0.001);
         assertTrue(dimensions.hasAnyDimension());
     }
     
@@ -103,9 +120,13 @@ class DimensionParserTest {
         );
         
         assertNotNull(dimensions);
-        assertEquals(24.00, dimensions.height(), 0.001);
+        Double height = dimensions.height();
+        Double thickness = dimensions.thickness();
+        assertNotNull(height);
+        assertEquals(24.00, height.doubleValue(), 0.001);
         assertNull(dimensions.width());
-        assertEquals(3.00, dimensions.thickness(), 0.001);
+        assertNotNull(thickness);
+        assertEquals(3.00, thickness.doubleValue(), 0.001);
         assertTrue(dimensions.hasAnyDimension());
     }
     
@@ -125,7 +146,7 @@ class DimensionParserTest {
         // 240mm = 24cm
         Double result = DimensionParser.parseToCentimeters("240 mm");
         assertNotNull(result);
-        assertEquals(24.0, result, 0.001);
+        assertEquals(24.0, result.doubleValue(), 0.001);
     }
     
     @Test
@@ -133,12 +154,12 @@ class DimensionParserTest {
         // 1 inch = 2.54 cm
         Double result = DimensionParser.parseToCentimeters("1 in");
         assertNotNull(result);
-        assertEquals(2.54, result, 0.001);
+        assertEquals(2.54, result.doubleValue(), 0.001);
         
         // 10 inches = 25.4 cm
         result = DimensionParser.parseToCentimeters("10 inches");
         assertNotNull(result);
-        assertEquals(25.4, result, 0.001);
+        assertEquals(25.4, result.doubleValue(), 0.001);
     }
     
     @ParameterizedTest
@@ -157,9 +178,15 @@ class DimensionParserTest {
     @Test
     void shouldHandleDecimalPrecision() {
         // Test various decimal precisions
-        assertEquals(24.1, DimensionParser.parseToCentimeters("24.1 cm"), 0.0001);
-        assertEquals(24.12, DimensionParser.parseToCentimeters("24.12 cm"), 0.0001);
-        assertEquals(24.123, DimensionParser.parseToCentimeters("24.123 cm"), 0.0001);
+        Double first = DimensionParser.parseToCentimeters("24.1 cm");
+        Double second = DimensionParser.parseToCentimeters("24.12 cm");
+        Double third = DimensionParser.parseToCentimeters("24.123 cm");
+        assertNotNull(first);
+        assertNotNull(second);
+        assertNotNull(third);
+        assertEquals(24.1, first.doubleValue(), 0.0001);
+        assertEquals(24.12, second.doubleValue(), 0.0001);
+        assertEquals(24.123, third.doubleValue(), 0.0001);
     }
     
     @Test

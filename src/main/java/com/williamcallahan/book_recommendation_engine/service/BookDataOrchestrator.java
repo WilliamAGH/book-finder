@@ -6,8 +6,8 @@
  * Features:
  * - Implements multi-tiered data retrieval from cache and APIs
  * - Manages fetching of individual books by ID or search results  
- * - Coordinates between S3 storage and Google Books API
- * - Handles caching of API responses for performance
+ * - Coordinates between Postgres persistence and Google Books API
+ * - Handles persistence of API responses for performance
  * - Supports both authenticated and unauthenticated API usage
  */
 package com.williamcallahan.book_recommendation_engine.service;
@@ -16,16 +16,16 @@ import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.model.ExternalIdentifierType;
 import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
+import com.williamcallahan.book_recommendation_engine.util.IdentifierClassifier;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.lang.Nullable;
@@ -39,7 +39,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -49,67 +48,34 @@ public class BookDataOrchestrator {
 
     private static final Logger logger = LoggerFactory.getLogger(BookDataOrchestrator.class);
 
-    private final S3RetryService s3RetryService;
     private final GoogleApiFetcher googleApiFetcher;
     private final ObjectMapper objectMapper;
-    private final OpenLibraryBookDataService openLibraryBookDataService;
     // private final LongitoodBookDataService longitoodBookDataService; // Removed
-    private final BookDataAggregatorService bookDataAggregatorService;
-    private final BookCollectionPersistenceService collectionPersistenceService;
     private final BookSearchService bookSearchService;
-    private final BookS3CacheService bookS3CacheService;
     private final PostgresBookRepository postgresBookRepository;
     private final TieredBookSearchService tieredBookSearchService;
-    @Autowired(required = false)
-    private S3StorageService s3StorageService; // Optional S3 layer
     private final BookUpsertService bookUpsertService; // SSOT for all book writes
     private final com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper googleBooksMapper; // For Book->BookAggregate mapping
     private static final long SEARCH_VIEW_REFRESH_INTERVAL_MS = 60_000L;
     private final AtomicLong lastSearchViewRefresh = new AtomicLong(0L);
     private final boolean externalFallbackEnabled;
-    /**
-     * @deprecated S3 JSON fallback is deprecated. Use Postgres-first retrieval.
-     * Will be removed in version 1.0.
-     */
-    @Deprecated
-    private final boolean s3FallbackEnabled;
-    /**
-     * @deprecated S3 JSON cache writes are deprecated. Use Postgres as the source of truth.
-     * Will be removed in version 1.0.
-     */
-    @Deprecated
-    private final boolean s3JsonCacheEnabled;
 
-    public BookDataOrchestrator(S3RetryService s3RetryService,
-                                GoogleApiFetcher googleApiFetcher,
+    public BookDataOrchestrator(GoogleApiFetcher googleApiFetcher,
                                 ObjectMapper objectMapper,
-                                OpenLibraryBookDataService openLibraryBookDataService,
-                                BookDataAggregatorService bookDataAggregatorService,
-                                BookCollectionPersistenceService collectionPersistenceService,
                                 BookSearchService bookSearchService,
-                                BookS3CacheService bookS3CacheService,
                                 @Nullable PostgresBookRepository postgresBookRepository,
                                 BookUpsertService bookUpsertService,
                                 com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper googleBooksMapper,
                                 @Lazy @Nullable TieredBookSearchService tieredBookSearchService,
-                                @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
-                                @Value("${app.features.s3-fallback.enabled:false}") boolean s3FallbackEnabled,
-                                @Value("${app.features.s3-json-cache.enabled:false}") boolean s3JsonCacheEnabled) {
-        this.s3RetryService = s3RetryService;
+                                @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.googleApiFetcher = googleApiFetcher;
         this.objectMapper = objectMapper;
-        this.openLibraryBookDataService = openLibraryBookDataService;
-        this.bookDataAggregatorService = bookDataAggregatorService;
-        this.collectionPersistenceService = collectionPersistenceService;
         this.bookSearchService = bookSearchService;
-        this.bookS3CacheService = bookS3CacheService;
         this.postgresBookRepository = postgresBookRepository;
         this.bookUpsertService = bookUpsertService;
         this.googleBooksMapper = googleBooksMapper;
         this.tieredBookSearchService = tieredBookSearchService;
         this.externalFallbackEnabled = externalFallbackEnabled;
-        this.s3FallbackEnabled = s3FallbackEnabled;
-        this.s3JsonCacheEnabled = s3JsonCacheEnabled;
     }
 
     public void refreshSearchView() {
@@ -170,7 +136,7 @@ public class BookDataOrchestrator {
     }
 
     /**
-     * Fetches book data from external APIs when not found in DB or S3.
+     * Fetches book data from external APIs when not found in DB.
      * This is a TRUE FALLBACK - only called when Postgres has no data.
      * 
      * Gracefully degrades across multiple API sources:
@@ -186,23 +152,33 @@ public class BookDataOrchestrator {
             logger.debug("External API fallback disabled. Skipping API fetch for {}", bookId);
             return Mono.empty();
         }
+        
+        // Classify identifier to determine appropriate API strategy
+        final ExternalIdentifierType identifierType = IdentifierClassifier.classify(bookId);
         final boolean looksLikeIsbn13 = IsbnUtils.isValidIsbn13(bookId);
         final boolean looksLikeIsbn10 = IsbnUtils.isValidIsbn10(bookId);
         final boolean looksLikeIsbn = looksLikeIsbn13 || looksLikeIsbn10;
+        final boolean safeForVolumesApi = IdentifierClassifier.isSafeForGoogleBooksVolumesApi(bookId);
+
+        // Log identifier classification for diagnostics
+        logger.info("BookDataOrchestrator: Identifier '{}' classified as {}. Safe for volumes API: {}", 
+            bookId, identifierType, safeForVolumesApi);
 
         // This will collect JsonNodes from various API sources
         Mono<List<JsonNode>> apiResponsesMono = Mono.defer(() -> {
-            Mono<JsonNode> tier4Mono = looksLikeIsbn
-                ? Mono.empty() // volume-by-id won't work for ISBN; prefer search path below
-                : googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
-                    .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 4 Google Auth HIT for {}", bookId);})
-                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 4 Google Auth API error for {}", bookId); return Mono.<JsonNode>empty(); });
-
-            Mono<JsonNode> tier3Mono = looksLikeIsbn
-                ? Mono.empty()
-                : googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId)
-                    .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Tier 3 Google Unauth HIT for {}", bookId);})
-                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 3 Google Unauth API error for {}", bookId); return Mono.<JsonNode>empty(); });
+            // Only use volumes/{id} endpoint for valid Google Books IDs or ISBNs
+            // NEVER send slugs to volumes API
+            // Sequential policy: try authenticated once, then fall back to unauthenticated
+            Mono<JsonNode> tier4Mono;
+            Mono<JsonNode> tier3Mono = Mono.empty();
+            if (safeForVolumesApi && !looksLikeIsbn) {
+                tier4Mono = googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
+                    .switchIfEmpty(googleApiFetcher.fetchVolumeByIdUnauthenticated(bookId))
+                    .doOnSuccess(json -> { if (json != null) logger.info("BookDataOrchestrator: Google volumes HIT for {}", bookId);})
+                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Google volumes API error for {}", bookId); return Mono.<JsonNode>empty(); });
+            } else {
+                tier4Mono = Mono.empty();
+            }
 
             // Google Books search by ISBN for better coverage when identifier is an ISBN
             Mono<JsonNode> googleIsbnSearchMono = looksLikeIsbn
@@ -220,32 +196,9 @@ public class BookDataOrchestrator {
                     .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Google ISBN search error for {}", bookId); return Mono.<JsonNode>empty(); })
                 : Mono.empty();
 
-            Mono<JsonNode> olMono = looksLikeIsbn
-                ? openLibraryBookDataService.fetchBookByIsbn(bookId)
-                    .flatMap(book -> {
-                        try {
-                            logger.info("BookDataOrchestrator: Tier 5 OpenLibrary HIT for {}. Title: {}", bookId, book.getTitle());
-                            JsonNode bookNode = objectMapper.valueToTree(book);
-                            return Mono.just(bookNode);
-                        } catch (IllegalArgumentException e) {
-                            LoggingUtils.error(logger, e, "Error converting OpenLibrary Book to JsonNode for {}", bookId);
-                            return Mono.<JsonNode>empty();
-                        }
-                    })
-                    .onErrorResume(e -> { LoggingUtils.warn(logger, e, "Tier 5 OpenLibrary API error for {}", bookId); return Mono.<JsonNode>empty(); })
-                : Mono.empty();
-            
-            return Mono.zip(
-                    tier4Mono.defaultIfEmpty(objectMapper.createObjectNode()),
-                    tier3Mono.defaultIfEmpty(objectMapper.createObjectNode()),
-                    googleIsbnSearchMono.defaultIfEmpty(objectMapper.createObjectNode()),
-                    olMono.defaultIfEmpty(objectMapper.createObjectNode())
-                )
-                .map(tuple -> 
-                    java.util.stream.Stream.of(tuple.getT1(), tuple.getT2(), tuple.getT3(), tuple.getT4())
-                        .filter(jsonNode -> jsonNode != null && jsonNode.size() > 0)
-                        .collect(java.util.stream.Collectors.toList())
-                );
+            return Flux.merge(tier4Mono, tier3Mono, googleIsbnSearchMono)
+                .filter(jsonNode -> jsonNode != null && jsonNode.size() > 0)
+                .collectList();
         });
 
         return apiResponsesMono.flatMap(jsonList -> {
@@ -253,36 +206,38 @@ public class BookDataOrchestrator {
                 logger.info("BookDataOrchestrator: No data found from any API source for identifier: {}", bookId);
                 return Mono.<Book>empty();
             }
-            ObjectNode aggregatedJson = bookDataAggregatorService.aggregateBookDataSources(bookId, "id", jsonList.toArray(new JsonNode[0]));
-            Book finalBook = BookJsonParser.convertJsonToBook(aggregatedJson);
+            BookAggregate aggregate = jsonList.stream()
+                .map(googleBooksMapper::map)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
 
-            if (finalBook == null || finalBook.getId() == null) {
-                logger.error("BookDataOrchestrator: Aggregation resulted in null or invalid book for identifier: {}", bookId);
-                return Mono.<Book>empty(); 
+            if (aggregate == null) {
+                logger.warn("BookDataOrchestrator: Unable to map provider payloads to aggregate for identifier: {}", bookId);
+                return Mono.empty();
             }
-            // Use the canonical ID from the aggregated book for S3 storage
-            final String s3StorageKey = finalBook.getId();
-            final Book bookToReturn = finalBook;
-            logger.info("BookDataOrchestrator: Using s3StorageKey '{}' (from finalBook.getId()) instead of original bookId '{}' for S3 operations.", s3StorageKey, bookId);
-            
-            // Set retrieval metadata - determine which API provided the data
-            bookToReturn.setRetrievedFrom("GOOGLE_BOOKS_API"); // Primary API source
-            bookToReturn.setDataSource("GOOGLE_BOOKS"); // Data source
-            bookToReturn.setInPostgres(false); // Not yet persisted
-            
-            // Persist to DB first (and external ids) before any optional S3 cache
-            return Mono.fromCallable(() -> persistBook(bookToReturn, aggregatedJson))
+
+            return Mono.fromCallable(() -> bookUpsertService.upsert(aggregate))
                 .subscribeOn(Schedulers.boundedElastic())
-                .doOnNext(success -> bookToReturn.setInPostgres(Boolean.TRUE.equals(success)))
-                .then(Mono.defer(() -> s3JsonCacheEnabled
-                    ? bookS3CacheService.updateCache(bookToReturn, aggregatedJson, "Aggregated", s3StorageKey)
-                    : Mono.empty()))
-                .thenReturn(bookToReturn);
+                .flatMap(result -> Mono.fromCallable(() -> findInDatabaseById(result.getBookId().toString()))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .flatMap(optional -> optional.map(Mono::just).orElseGet(Mono::empty)))
+                .map(book -> {
+                    book.setRetrievedFrom("GOOGLE_BOOKS_API");
+                    book.setDataSource(googleBooksMapper.getSourceName());
+                    book.setInPostgres(true);
+                    return book;
+                });
         });
     }
 
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookDetail(java.util.UUID)}
+     * together with controller DTO mappers instead of hydrating legacy {@link Book} instances.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<Book> getBookByIdTiered(String bookId) {
-        logger.debug("BookDataOrchestrator: Starting tiered fetch (DB → S3 → APIs) for book ID: {}", bookId);
+        logger.debug("BookDataOrchestrator: Starting tiered fetch (DB → APIs) for book ID: {}", bookId);
 
         // Tier 1: Database (if configured)
         Mono<Book> dbFetchBookMono = Mono.fromCallable(() -> {
@@ -306,46 +261,9 @@ public class BookDataOrchestrator {
         .subscribeOn(Schedulers.boundedElastic())
         .flatMap(b -> b != null ? Mono.just(b) : Mono.empty());
 
-        // Tier 2: S3 (disabled by default post-migration)
-        Mono<Book> tier2Mono;
-        if (s3FallbackEnabled) {
-            tier2Mono = Mono.fromCompletionStage(s3RetryService.fetchJsonWithRetry(bookId))
-                .flatMap(s3Result -> {
-                    if (s3Result.isSuccess() && s3Result.getData().isPresent()) {
-                        try {
-                            JsonNode s3JsonNode = objectMapper.readTree(s3Result.getData().get());
-                            Book bookFromS3 = BookJsonParser.convertJsonToBook(s3JsonNode);
-                            if (bookFromS3 != null && bookFromS3.getId() != null) {
-                                logger.info("BookDataOrchestrator: Tier 2 S3 HIT for book ID: {}. Title: {}", bookId, bookFromS3.getTitle());
-                                // Set retrieval metadata
-                                bookFromS3.setRetrievedFrom("S3");
-                                bookFromS3.setDataSource("GOOGLE_BOOKS"); // S3 primarily stores Google Books data
-                                // Persist first, then set flag accurately
-                                boolean persisted = persistBook(bookFromS3, s3JsonNode);
-                                bookFromS3.setInPostgres(persisted);
-                                return Mono.just(bookFromS3);
-                            }
-                            logger.warn("BookDataOrchestrator: S3 data for {} parsed to null/invalid book.", bookId);
-                        } catch (Exception e) {
-                            logger.warn("BookDataOrchestrator: Failed to parse S3 JSON for bookId {}: {}. Proceeding to API.", bookId, e.getMessage());
-                        }
-                    } else if (s3Result.isNotFound()) {
-                        logger.info("BookDataOrchestrator: Tier 2 S3 MISS for book ID: {}.", bookId);
-                    } else if (s3Result.isServiceError()){
-                        logger.warn("BookDataOrchestrator: Tier 2 S3 Service ERROR for book ID: {}. Error: {}", bookId, s3Result.getErrorMessage().orElse("Unknown S3 Error"));
-                    } else if (s3Result.isDisabled()){
-                        logger.info("BookDataOrchestrator: Tier 2 S3 is disabled. Proceeding to API for book ID: {}", bookId);
-                    }
-                    return Mono.empty(); 
-                });
-        } else {
-            tier2Mono = Mono.empty();
-        }
-
         Mono<Book> tier3Mono = externalFallbackEnabled ? Mono.defer(() -> fetchFromApisAndAggregate(bookId)) : Mono.empty();
 
         return dbFetchBookMono
-            .switchIfEmpty(tier2Mono)
             .switchIfEmpty(tier3Mono)
             .doOnSuccess(book -> {
                 if (book != null) {
@@ -357,6 +275,11 @@ public class BookDataOrchestrator {
             .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookDataOrchestrator.getBookByIdTiered(" + bookId + ")"));
     }
 
+    /**
+     * @deprecated Resolve slugs directly via
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookDetailBySlug(String)}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<Book> getBookBySlugTiered(String slug) {
         if (slug == null || slug.isBlank()) {
             return Mono.empty();
@@ -375,7 +298,7 @@ public class BookDataOrchestrator {
         }
 
         // Optimized: Single Postgres query checks all possible lookups
-        // Prevents cascading fallbacks that could trigger S3/API calls
+        // Prevents cascading fallbacks that could trigger API calls unnecessarily
         return Mono.fromCallable(() -> {
             if (postgresBookRepository == null) {
                 return null;
@@ -404,10 +327,21 @@ public class BookDataOrchestrator {
         });
     }
 
+    /**
+     * @deprecated Retrieve search results through
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookCards(java.util.List)}
+     * fed by {@link BookSearchService} IDs instead of returning legacy {@link Book} entities.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy) {
         return searchBooksTiered(query, langCode, desiredTotalResults, orderBy, false);
     }
     
+    /**
+     * @deprecated Prefer DTO-centric search using {@link com.williamcallahan.book_recommendation_engine.dto.BookCard}
+     * projections from {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> searchBooksTiered(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
         logger.info("[EXTERNAL-API] [SEARCH] searchBooksTiered CALLED: query='{}', bypass={}, desired={}", query, bypassExternalApis, desiredTotalResults);
         return queryTieredSearch(service -> service.searchBooks(query, langCode, desiredTotalResults, orderBy, bypassExternalApis))
@@ -425,10 +359,19 @@ public class BookDataOrchestrator {
             });
     }
 
+    /**
+     * @deprecated Query authors via {@link BookSearchService#searchAuthors(String, Integer)} and surface
+     * results directly instead of routing through tiered legacy hydration.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
         return searchAuthors(query, desiredTotalResults, false);
     }
 
+    /**
+     * @deprecated See {@link #searchAuthors(String, int)}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query,
                                                                     int desiredTotalResults,
                                                                     boolean bypassExternalApis) {
@@ -443,6 +386,11 @@ public class BookDataOrchestrator {
         return result != null ? result : Mono.just(List.<T>of());
     }
 
+    /**
+     * @deprecated Trigger DTO hydration via background jobs that operate on
+     * {@link com.williamcallahan.book_recommendation_engine.controller.dto.BookDto} projections.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<Void> hydrateBooksReactive(List<Book> books, String context, String correlationId) {
         if (books == null || books.isEmpty()) {
             return Mono.empty();
@@ -455,6 +403,10 @@ public class BookDataOrchestrator {
         return hydrateIdentifiersReactive(identifiers, context, correlationId);
     }
 
+    /**
+     * @deprecated Replace with DTO-based hydration flows that use `BookQueryRepository` lookups.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<Void> hydrateIdentifiersReactive(Collection<String> identifiers, String context, String correlationId) {
         Set<String> normalized = normalizeIdentifiers(identifiers);
         if (normalized.isEmpty()) {
@@ -465,6 +417,10 @@ public class BookDataOrchestrator {
             .then();
     }
 
+    /**
+     * @deprecated Use {@link #hydrateBooksReactive(List, String, String)} or DTO-based background tasks.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public void hydrateBooksAsync(List<Book> books, String context, String correlationId) {
         if (books == null || books.isEmpty()) {
             return;
@@ -553,6 +509,10 @@ public class BookDataOrchestrator {
         logger.info("[EXTERNAL-API] [{}] persistBooksAsync setup complete, async execution scheduled", context);
     }
 
+    /**
+     * @deprecated Use {@link #hydrateIdentifiersReactive(Collection, String, String)} with DTO projections.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public void hydrateIdentifiersAsync(Collection<String> identifiers, String context, String correlationId) {
         Set<String> normalized = normalizeIdentifiers(identifiers);
         if (normalized.isEmpty()) {
@@ -665,124 +625,6 @@ public class BookDataOrchestrator {
     // Edition relationships are now handled by work_cluster_members table
     // See schema.sql for clustering logic
 
-    @SuppressWarnings("unused")
-    private java.util.List<com.fasterxml.jackson.databind.JsonNode> parseBookJsonPayload(String payload, String sourceName) {
-        java.util.List<com.fasterxml.jackson.databind.JsonNode> results = new java.util.ArrayList<>();
-        if (payload == null || payload.isBlank()) {
-            return results;
-        }
-        java.util.List<String> objects = splitConcatenatedJsonObjects(payload);
-        java.util.Map<String, com.fasterxml.jackson.databind.JsonNode> byId = new java.util.LinkedHashMap<>();
-        for (String obj : objects) {
-            try {
-                com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(obj);
-                com.fasterxml.jackson.databind.JsonNode effective = node;
-                // Unwrap rawJsonResponse if present and textual
-                if (node.has("rawJsonResponse") && node.get("rawJsonResponse").isTextual()) {
-                    String raw = node.get("rawJsonResponse").asText();
-                    if (raw != null && !raw.isBlank()) {
-                        try {
-                            effective = objectMapper.readTree(raw);
-                        } catch (Exception ignored) {
-                            // Keep original node if raw cannot be parsed
-                        }
-                    }
-                }
-                String id = null;
-                if (effective.has("id") && effective.get("id").isTextual()) {
-                    id = effective.get("id").asText();
-                } else if (node.has("id") && node.get("id").isTextual()) {
-                    id = node.get("id").asText();
-                }
-                if (id == null) {
-                    id = java.util.UUID.randomUUID().toString();
-                }
-                // Deduplicate by id (first wins)
-                byId.putIfAbsent(id, effective);
-            } catch (Exception e) {
-                // skip malformed chunk
-            }
-        }
-        results.addAll(byId.values());
-        return results;
-    }
-
-    private java.util.List<String> splitConcatenatedJsonObjects(String payload) {
-        java.util.List<String> parts = new java.util.ArrayList<>();
-        StringBuilder sb = new StringBuilder();
-        int braceDepth = 0;
-        boolean inString = false;
-        boolean escape = false;
-        for (int i = 0; i < payload.length(); i++) {
-            char c = payload.charAt(i);
-            sb.append(c);
-            if (escape) {
-                escape = false;
-                continue;
-            }
-            if (c == '\\') {
-                escape = true;
-                continue;
-            }
-            if (c == '"') {
-                inString = !inString;
-                continue;
-            }
-            if (inString) continue;
-            if (c == '{') braceDepth++;
-            else if (c == '}') braceDepth--;
-            if (braceDepth == 0 && sb.length() > 0) {
-                String part = sb.toString().trim();
-                if (!part.isEmpty()) {
-                    parts.add(part);
-                }
-                sb.setLength(0);
-            }
-        }
-        // Fallback: if nothing split, return whole payload
-        if (parts.isEmpty() && !payload.isBlank()) {
-            parts.add(payload.trim());
-        }
-        return parts;
-    }
-
-    // --- Bulk migration from S3 helpers ---
-    /**
-     * Bulk migrates previously cached book JSON files from S3 into the database.
-     * Enriches existing rows by matching on id/ISBNs/external ids; never creates duplicates.
-     *
-     * Triggered manually via CLI flags. This method is idempotent and safe to re-run.
-     *
-     * @param prefix S3 prefix to scan (e.g., "books/v1/")
-     * @param maxRecords Maximum number of records to process (<= 0 means no limit)
-     * @param skipRecords Number of objects to skip from the beginning (for manual batching)
-     */
-    public void migrateBooksFromS3(String prefix, int maxRecords, int skipRecords) {
-        buildS3BookMigrationService("S3→DB migration")
-            .ifPresent(service -> service.migrateBooksFromS3(prefix, maxRecords, skipRecords));
-    }
-
-    public void migrateListsFromS3(String provider, String prefix, int maxRecords, int skipRecords) {
-        buildS3BookMigrationService("S3→DB list migration")
-            .ifPresent(service -> {
-                service.migrateListsFromS3(provider, prefix, maxRecords, skipRecords);
-                logger.info("Migration complete. Work clustering will run automatically via WorkClusterScheduler, or manually run: SELECT * FROM cluster_books_by_isbn(); SELECT * FROM cluster_books_by_google_canonical();");
-            });
-    }
-
-    private Optional<S3BookMigrationService> buildS3BookMigrationService(String contextLabel) {
-        if (s3StorageService == null) {
-            logger.warn("{} skipped: S3 is not configured (S3StorageService is null).", contextLabel);
-            return Optional.empty();
-        }
-        return Optional.of(new S3BookMigrationService(
-            s3StorageService,
-            objectMapper,
-            collectionPersistenceService,
-            (book, json) -> persistBook(book, json)
-        ));
-    }
-
     /**
      * Persists book to database using BookUpsertService (SSOT for all writes).
      */
@@ -809,17 +651,26 @@ public class BookDataOrchestrator {
         }
     }
 
+    // Satisfy linter for private helpers referenced by annotations
     @SuppressWarnings("unused")
-    private boolean looksLikeUuid(String value) {
-        if (value == null || value.isBlank()) {
-            return false;
-        }
-        try {
-            UUID.fromString(value);
-            return true;
-        } catch (IllegalArgumentException ex) {
-            return false;
-        }
+    private static boolean looksLikeUuid(String value) {
+        if (value == null) return false;
+        return value.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
     }
 
+    @SuppressWarnings("unused")
+    private static com.fasterxml.jackson.databind.JsonNode parseBookJsonPayload(String payload, String fallbackId) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            try (com.fasterxml.jackson.core.JsonParser parser = mapper.createParser(payload)) {
+                com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(parser);
+                if (parser.nextToken() != null) {
+                    return null;
+                }
+                return node;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }

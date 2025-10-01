@@ -33,9 +33,11 @@ There are several ways to generate UML diagrams from the PlantUML files:
 
 1. Download the PlantUML JAR file from the [PlantUML website](https://plantuml.com/download)
 2. Run the following command:
-   ```
+
+   ```bash
    java -jar plantuml.jar book_recommendation_engine.puml
    ```
+
 3. This will generate a PNG file with the diagram
 
 ## Available UML Diagrams
@@ -47,11 +49,13 @@ There are several ways to generate UML diagrams from the PlantUML files:
 The UML class diagram for the Book Finder shows the following components:
 
 ### Model Classes
+
 - `Book`: Represents a book with properties like title, authors, description, etc.
 - `Book.EditionInfo`: Inner class of Book that represents different editions of a book.
 - `CachedBook`: JPA entity for caching book data in the database.
 
 ### Controller Classes
+
 - `BookController`: REST controller for handling book-related API requests.
 - `BookCoverController`: Controller for handling book cover images.
 - `BookCoverPreferenceController`: Controller for handling user preferences for book covers.
@@ -60,11 +64,13 @@ The UML class diagram for the Book Finder shows the following components:
 - `ImageResolutionPreferenceController`: Controller for handling image resolution preferences.
 
 ### Repository Classes
+
 - `CachedBookRepository`: Interface for accessing CachedBook entities.
 - `JpaCachedBookRepository`: JPA implementation of CachedBookRepository.
 - `NoOpCachedBookRepository`: No-operation implementation of CachedBookRepository.
 
 ### Service Classes
+
 - `GoogleBooksService`: Service for interacting with the Google Books API.
 - `BookCacheService`: Service for caching book data.
 - `RecentlyViewedService`: Service for tracking recently viewed books.
@@ -73,10 +79,12 @@ The UML class diagram for the Book Finder shows the following components:
 - `BookImageOrchestrationService`: Service for orchestrating book image retrieval.
 
 ### Types
+
 - `ImageResolutionPreference`: Enum for image resolution preferences.
 - `CoverImageSource`: Enum for cover image sources.
 
 The relationships between these components are shown with arrows in the diagram:
+
 - Solid lines with arrows indicate dependencies (one class uses another).
 - Dashed lines with arrows indicate implementations (a class implements an interface).
 - Lines with diamonds indicate composition (one class contains another).

@@ -1,9 +1,16 @@
 package com.williamcallahan.book_recommendation_engine.controller.dto;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
+import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
+import com.williamcallahan.book_recommendation_engine.dto.EditionSummary;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +67,174 @@ public final class BookDtoMapper {
                 recommendationIds,
                 book.getQualifiers() == null ? Map.of() : Map.copyOf(book.getQualifiers())
         );
+    }
+
+    public static BookDto fromDetail(BookDetail detail) {
+        return fromDetail(detail, Map.of());
+    }
+
+    public static BookDto fromDetail(BookDetail detail, Map<String, Object> extras) {
+        if (detail == null) {
+            return null;
+        }
+
+        PublicationDto publication = new PublicationDto(
+            toDate(detail.publishedDate()),
+            detail.language(),
+            detail.pageCount(),
+            detail.publisher()
+        );
+
+        CoverDto cover = new CoverDto(
+            detail.coverUrl(),
+            detail.coverUrl(),
+            null,
+            null,
+            null,
+            detail.coverUrl(),
+            ValidationUtils.hasText(detail.thumbnailUrl()) ? detail.thumbnailUrl() : detail.coverUrl(),
+            null
+        );
+
+        List<AuthorDto> authors = toAuthorDtos(detail.authors());
+        List<CollectionDto> collections = List.of();
+        List<TagDto> tags = toTagDtos(detail.tags());
+        List<EditionDto> editions = detail.editions().stream()
+            .map(BookDtoMapper::toEditionDto)
+            .toList();
+
+        return new BookDto(
+            detail.id(),
+            detail.slug(),
+            detail.title(),
+            detail.description(),
+            publication,
+            authors,
+            detail.categories(),
+            collections,
+            tags,
+            cover,
+            editions,
+            List.of(),
+            extras == null ? Map.of() : Map.copyOf(extras)
+        );
+    }
+
+    public static BookDto fromCard(BookCard card) {
+        return fromCard(card, Map.of());
+    }
+
+    public static BookDto fromCard(BookCard card, Map<String, Object> extras) {
+        if (card == null) {
+            return null;
+        }
+
+        CoverDto cover = new CoverDto(
+            card.coverUrl(),
+            card.coverUrl(),
+            null,
+            null,
+            null,
+            card.coverUrl(),
+            card.coverUrl(),
+            null
+        );
+
+        PublicationDto publication = new PublicationDto(null, null, null, null);
+
+        return new BookDto(
+            card.id(),
+            card.slug(),
+            card.title(),
+            null,
+            publication,
+            toAuthorDtos(card.authors()),
+            List.of(),
+            List.of(),
+            toTagDtos(card.tags()),
+            cover,
+            List.of(),
+            List.of(),
+            extras == null ? Map.of() : Map.copyOf(extras)
+        );
+    }
+
+    public static BookDto fromListItem(BookListItem item) {
+        return fromListItem(item, Map.of());
+    }
+
+    public static BookDto fromListItem(BookListItem item, Map<String, Object> extras) {
+        if (item == null) {
+            return null;
+        }
+
+        PublicationDto publication = new PublicationDto(null, null, null, null);
+
+        CoverDto cover = new CoverDto(
+            item.coverUrl(),
+            item.coverUrl(),
+            null,
+            null,
+            null,
+            item.coverUrl(),
+            item.coverUrl(),
+            null
+        );
+
+        return new BookDto(
+            item.id(),
+            item.slug(),
+            item.title(),
+            item.description(),
+            publication,
+            toAuthorDtos(item.authors()),
+            item.categories(),
+            List.of(),
+            toTagDtos(item.tags()),
+            cover,
+            List.of(),
+            List.of(),
+            extras == null ? Map.of() : Map.copyOf(extras)
+        );
+    }
+
+    private static List<AuthorDto> toAuthorDtos(List<String> authors) {
+        if (authors == null || authors.isEmpty()) {
+            return List.of();
+        }
+        return authors.stream()
+            .filter(Objects::nonNull)
+            .map(name -> new AuthorDto(null, name))
+            .toList();
+    }
+
+    private static List<TagDto> toTagDtos(Map<String, Object> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return List.of();
+        }
+        return tags.entrySet().stream()
+            .map(entry -> new TagDto(entry.getKey(), toAttributeMap(entry.getValue())))
+            .toList();
+    }
+
+    private static EditionDto toEditionDto(EditionSummary summary) {
+        if (summary == null) {
+            return null;
+        }
+        Date published = toDate(summary.publishedDate());
+        return new EditionDto(
+            summary.id(),
+            summary.slug(),
+            summary.title(),
+            null,
+            summary.isbn13(),
+            published,
+            summary.coverUrl()
+        );
+    }
+
+    private static Date toDate(LocalDate date) {
+        return date == null ? null : Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant());
     }
 
     private static String resolveSlug(Book book) {

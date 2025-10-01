@@ -14,28 +14,36 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Single Source of Truth (SSOT) for ALL cover image operations.
+ * @deprecated This class has been replaced by {@link CoverPersistenceService}.
  * 
- * Responsibilities:
- * - Pick best external image from API imageLinks
- * - Persist metadata to book_image_links (url, s3_image_path, width, height, is_high_resolution)
- * - Update books.s3_image_path with canonical cover
+ * All methods in this class are deprecated and will be removed in version 1.0.0.
  * 
- * Consolidates logic from:
- * - BookCoverManagementService (background triggering)
- * - CoverSourceFetchingService (external fetching)
- * - S3BookCoverService (S3 upload)
- * - ImageProcessingService (dimension detection)
+ * Migration guide:
+ * - {@link #pickBestExternal(Map)} → No direct replacement (internal logic in CoverPersistenceService)
+ * - {@link #upsertAllAndSetPrimary(UUID, Map, String)} → {@link CoverPersistenceService#persistFromGoogleImageLinks(UUID, Map, String)}
+ * - {@link #setPrimaryS3(UUID, String, Integer, Integer, Boolean)} → {@link CoverPersistenceService#updateAfterS3Upload(UUID, String, String, Integer, Integer, com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource)}
  * 
- * Phase 1 Implementation: Focus on metadata persistence
- * Future: Add actual image fetching and S3 upload delegation
+ * Reason for deprecation:
+ * This class mixed persistence logic with URL selection logic. The new CoverPersistenceService
+ * provides a cleaner separation of concerns and handles both initial persistence and post-S3-upload
+ * updates atomically.
+ * 
+ * @author William Callahan
+ * @see CoverPersistenceService
  */
+@Deprecated(since = "0.9.0", forRemoval = true)
 @Service
 @Slf4j
 public class CoverImageService {
     
     private final JdbcTemplate jdbcTemplate;
     
+    @org.springframework.beans.factory.annotation.Value("${s3.cdn-url:${S3_CDN_URL:}}")
+    private String s3CdnUrl;
+
+    @org.springframework.beans.factory.annotation.Value("${s3.public-cdn-url:${S3_PUBLIC_CDN_URL:}}")
+    private String s3PublicCdnUrl;
+
     public CoverImageService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
@@ -52,6 +60,9 @@ public class CoverImageService {
     /**
      * Picks the best external image from Google Books imageLinks map.
      * 
+     * @deprecated This method is now internal logic in {@link CoverPersistenceService#persistFromGoogleImageLinks(UUID, Map, String)}.
+     * There is no direct replacement as this logic is now encapsulated. Will be removed in version 1.0.0.
+     * 
      * Priority order:
      * 1. extraLarge (preferred)
      * 2. large
@@ -63,6 +74,7 @@ public class CoverImageService {
      * @param imageLinks Map from Google Books volumeInfo.imageLinks
      * @return Optional CoverPick with best image, or empty if none valid
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public Optional<CoverPick> pickBestExternal(Map<String, String> imageLinks) {
         if (imageLinks == null || imageLinks.isEmpty()) {
             return Optional.empty();
@@ -92,16 +104,27 @@ public class CoverImageService {
     /**
      * Complete pipeline: pick best image and persist metadata with estimated dimensions.
      * 
-     * Phase 1: Persists URL and estimated dimensions
-     * Future: Will fetch actual image, detect real dimensions, upload to S3
+     * @deprecated Use {@link CoverPersistenceService#persistFromGoogleImageLinks(UUID, Map, String)} instead.
+     * Will be removed in version 1.0.0.
      * 
-     * This is the method BookUpsertService should call.
+     * The new method provides the same functionality with better atomicity guarantees and cleaner
+     * separation between initial persistence and post-upload updates.
+     * 
+     * Migration example:
+     * <pre>{@code
+     * // OLD:
+     * coverImageService.upsertAllAndSetPrimary(bookId, imageLinks, "GOOGLE_BOOKS");
+     * 
+     * // NEW:
+     * coverPersistenceService.persistFromGoogleImageLinks(bookId, imageLinks, "GOOGLE_BOOKS");
+     * }</pre>
      * 
      * @param bookId Canonical book UUID
      * @param imageLinks Map from Google Books API
      * @param source Provider name ("GOOGLE_BOOKS")
      * @return PersistedCover with estimated metadata
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     @Transactional
     public PersistedCover upsertAllAndSetPrimary(
         UUID bookId, 
@@ -173,8 +196,8 @@ public class CoverImageService {
             }
         }
         
-        // Update books.s3_image_path with canonical cover URL
-        if (canonicalCoverUrl != null) {
+        // Update books.s3_image_path ONLY if the canonical URL is an S3/Spaces URL
+        if (canonicalCoverUrl != null && isS3Url(canonicalCoverUrl)) {
             try {
                 jdbcTemplate.update(
                     "UPDATE books SET s3_image_path = ? WHERE id = ?",
@@ -182,11 +205,13 @@ public class CoverImageService {
                     bookId
                 );
                 
-                log.info("Successfully persisted cover metadata for book {}: {}x{}, highRes={}", 
+                log.info("Successfully persisted S3 cover metadata for book {}: {}x{}, highRes={}", 
                     bookId, canonicalWidth, canonicalHeight, canonicalHighRes);
             } catch (Exception e) {
                 log.warn("Failed to update books.s3_image_path for book {}: {}", bookId, e.getMessage());
             }
+        } else if (canonicalCoverUrl != null) {
+            log.debug("Skipping books.s3_image_path update for book {} because URL is not S3: {}", bookId, canonicalCoverUrl);
         }
         
         return new PersistedCover(canonicalCoverUrl, canonicalWidth, canonicalHeight, canonicalHighRes);
@@ -194,9 +219,14 @@ public class CoverImageService {
     
     /**
      * Estimates dimensions based on Google Books image type.
+     * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.ImageDimensionUtils#estimateFromGoogleType(String)} instead.
+     * Will be removed in version 1.0.0.
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     private record ImageEstimate(int width, int height, boolean highRes) {}
     
+    @Deprecated(since = "0.9.0", forRemoval = true)
     private ImageEstimate estimateDimensions(String imageType) {
         return switch (imageType) {
             case "extraLarge" -> new ImageEstimate(800, 1200, true);
@@ -228,5 +258,66 @@ public class CoverImageService {
             case "smallThumbnail" -> 6;
             default -> 7;
         };
+    }
+
+    private boolean isS3Url(String url) {
+        if (url == null) return false;
+        String lower = url.toLowerCase();
+        if (s3CdnUrl != null && !s3CdnUrl.isBlank() && lower.contains(s3CdnUrl.toLowerCase())) return true;
+        if (s3PublicCdnUrl != null && !s3PublicCdnUrl.isBlank() && lower.contains(s3PublicCdnUrl.toLowerCase())) return true;
+        return lower.contains("digitaloceanspaces.com") || lower.contains("s3.amazonaws.com");
+    }
+
+    /**
+     * Assigns a given S3 URL as the primary cover for the book and persists basic metadata.
+     * 
+     * @deprecated Use {@link CoverPersistenceService#updateAfterS3Upload(UUID, String, String, Integer, Integer, com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource)} instead.
+     * Will be removed in version 1.0.0.
+     * 
+     * Migration example:
+     * <pre>{@code
+     * // OLD:
+     * coverImageService.setPrimaryS3(bookId, s3Url, width, height, highRes);
+     * 
+     * // NEW:
+     * coverPersistenceService.updateAfterS3Upload(
+     *     bookId, 
+     *     s3Key,  // S3 object key
+     *     s3Url,  // Full CDN URL
+     *     width, 
+     *     height, 
+     *     CoverImageSource.S3_CACHE
+     * );
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
+    @Transactional
+    public void setPrimaryS3(UUID bookId, String s3Url, Integer width, Integer height, Boolean highRes) {
+        if (bookId == null || s3Url == null || s3Url.isBlank()) {
+            return;
+        }
+        if (!isS3Url(s3Url)) {
+            log.debug("Refusing to set non-S3 URL as primary for {}: {}", bookId, s3Url);
+            return;
+        }
+        try {
+            jdbcTemplate.update("UPDATE books SET s3_image_path = ? WHERE id = ?", s3Url, bookId);
+            // Upsert a generic 's3' image link row for traceability
+            jdbcTemplate.update(
+                "INSERT INTO book_image_links (id, book_id, image_type, url, source, width, height, is_high_resolution, created_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW()) " +
+                "ON CONFLICT (book_id, image_type) DO UPDATE SET url = EXCLUDED.url, source = EXCLUDED.source, width = EXCLUDED.width, height = EXCLUDED.height, is_high_resolution = EXCLUDED.is_high_resolution",
+                IdGenerator.generate(),
+                bookId,
+                "s3",
+                s3Url,
+                "S3",
+                width,
+                height,
+                highRes != null ? highRes : Boolean.FALSE
+            );
+        } catch (Exception e) {
+            log.warn("Failed to set primary S3 cover for book {}: {}", bookId, e.getMessage());
+        }
     }
 }

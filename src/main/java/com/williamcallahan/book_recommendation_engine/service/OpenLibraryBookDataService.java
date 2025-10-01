@@ -26,8 +26,6 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.PrematureCloseException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
@@ -40,13 +38,11 @@ import java.time.Duration;
 @Slf4j
 public class OpenLibraryBookDataService {
 
-    private static final Logger log = LoggerFactory.getLogger(OpenLibraryBookDataService.class);
-
-        private final WebClient webClient;
+    private final WebClient webClient;
     private final boolean externalFallbackEnabled;
 
     public OpenLibraryBookDataService(WebClient.Builder webClientBuilder,
-                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl,
+                                   @Value("${openlibrary.data.api.url:https://openlibrary.org}") String openLibraryApiUrl,
                                    @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.webClient = webClientBuilder.baseUrl(openLibraryApiUrl).build();
         this.externalFallbackEnabled = externalFallbackEnabled;
@@ -58,6 +54,12 @@ public class OpenLibraryBookDataService {
      * @param isbn The ISBN of the book
      * @return A Mono emitting the Book object if found, or Mono.empty() otherwise
      */
+    /**
+     * @deprecated Prefer {@link BookSearchService#searchByIsbn(String)} combined with
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookDetail(java.util.UUID)}
+     * so consumers work with Postgres-backed DTOs instead of mutable {@link Book} entities.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     @RateLimiter(name = "openLibraryDataService")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "fetchBookFallback")
     public Mono<Book> fetchBookByIsbn(String isbn) {
@@ -109,6 +111,12 @@ public class OpenLibraryBookDataService {
      * @param title The title of the book
      * @return A Flux emitting Book objects matching the search query
      */
+    /**
+     * @deprecated Use {@link BookSearchService#searchBooks(String, Integer)} with
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookCards(java.util.List)}
+     * to return DTO projections.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     @RateLimiter(name = "openLibraryDataService")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
     public Flux<Book> searchBooksByTitle(String title) {
@@ -129,12 +137,16 @@ public class OpenLibraryBookDataService {
         // .bodyToFlux(Book.class) // This will need proper mapping and extraction from search results
         // .doOnError(e -> log.error("Error searching books by title '{}' from OpenLibrary: {}", title, e.getMessage()));
         // return Flux.empty(); // Placeholder
+        // Bug #6 Fix: OpenLibrary search URLs use only supported parameters
+        // We do NOT use sort=newest with q+author combination as it causes KeyError
+        // We use specific params (title or author) instead of generic q param
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/search.json")
                         .queryParam("title", title) // Using title parameter for more specific search
                         // .queryParam("q", title) // General query, 'title' is often more direct
                         .queryParam("limit", 20) // Limit results for now
+                        // NEVER add sort=newest here - it's unsupported with these params
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
@@ -162,6 +174,12 @@ public class OpenLibraryBookDataService {
                 });
     }
 
+    /**
+     * @deprecated Use {@link BookSearchService#searchAuthors(String, Integer)} together with
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookCards(java.util.List)}
+     * for DTOs instead of legacy {@link Book} models.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     @RateLimiter(name = "openLibraryDataService")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
     public Flux<Book> searchBooksByAuthor(String author) {
@@ -177,11 +195,13 @@ public class OpenLibraryBookDataService {
         log.info("Attempting to search OpenLibrary for author: {}", author);
         ExternalApiLogger.logApiCallAttempt(log, "OpenLibrary", "SEARCH_AUTHOR", author, false);
 
+        // Bug #6 Fix: Author search uses only author param, no sort parameter
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .path("/search.json")
                         .queryParam("author", author)
                         .queryParam("limit", 20)
+                        // NEVER add sort=newest here - it's unsupported with author param
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
@@ -218,6 +238,11 @@ public class OpenLibraryBookDataService {
 
     // --- Fallback Methods ---
 
+    /**
+     * @deprecated See {@link #fetchBookByIsbn(String)}; downstream code should no longer rely on legacy
+     * {@link Book} hydration from OpenLibrary.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<Book> fetchBookFallback(String isbn, Throwable t) {
         LoggingUtils.warn(log, t, "OpenLibraryBookDataService.fetchBookByIsbn fallback triggered for ISBN: {}", isbn);
         return Mono.empty();
@@ -407,7 +432,12 @@ public class OpenLibraryBookDataService {
 
 
         // Cover ID might be present, construct URL if needed
-        // Example: book.setCoverImageUrl("http://covers.openlibrary.org/b/id/" + docNode.path("cover_i").asText(null) + "-M.jpg");
+        if (docNode.has("cover_i") && !docNode.path("cover_i").isNull()) {
+            String coverId = docNode.path("cover_i").asText();
+            // OpenLibrary cover URL: -S (small), -M (medium), -L (large)
+            String coverUrl = "https://covers.openlibrary.org/b/id/" + coverId + "-L.jpg";
+            book.setExternalImageUrl(coverUrl);
+        }
 
         // Raw JSON for search result item might be useful for debugging or further processing
         book.setRawJsonResponse(docNode.toString());

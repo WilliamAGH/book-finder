@@ -18,9 +18,8 @@ import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
-import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverIdentifierResolver;
 // LongitoodService is in the same package; explicit import not required
 
 import org.slf4j.Logger;
@@ -71,7 +70,7 @@ public class LongitoodServiceImpl implements LongitoodService {
     @TimeLimiter(name = "longitoodService")
     @RateLimiter(name = "longitoodServiceRateLimiter", fallbackMethod = "fetchCoverRateLimitFallback")
     public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
-        String isbn = BookValidator.getPreferredIsbn(book);
+        String isbn = CoverIdentifierResolver.getPreferredIsbn(book);
         if (!ValidationUtils.hasText(isbn)) {
             logger.warn("No ISBN found for book ID: {}, cannot fetch cover from Longitood", book.getId());
             return CompletableFuture.completedFuture(Optional.empty());
@@ -120,7 +119,7 @@ public class LongitoodServiceImpl implements LongitoodService {
     }
 
     public CompletableFuture<ImageDetails> fetchAndCacheCover(Book book, String bookIdForLog, ImageProvenanceData provenanceData) {
-        String isbn = ImageCacheUtils.getIdentifierKey(book);
+        String isbn = CoverIdentifierResolver.resolve(book);
         if (!ValidationUtils.hasText(isbn)) {
             logger.warn("Longitood requires ISBN, not found for Book ID for log: {}", bookIdForLog);
             return externalCoverFetchHelper.fetchAndCache(
@@ -133,7 +132,8 @@ public class LongitoodServiceImpl implements LongitoodService {
                 "Longitood",
                 "longitood-no-isbn",
                 provenanceData,
-                bookIdForLog
+                bookIdForLog,
+                null
             );
         }
 
@@ -147,7 +147,8 @@ public class LongitoodServiceImpl implements LongitoodService {
             "Longitood",
             "longitood",
             provenanceData,
-            bookIdForLog
+            bookIdForLog,
+            null
         );
     }
 
@@ -161,7 +162,7 @@ public class LongitoodServiceImpl implements LongitoodService {
      * @return Empty Optional wrapped in CompletableFuture
      */
     public CompletableFuture<Optional<ImageDetails>> fetchCoverFallback(Book book, Throwable t) {
-        String isbn = BookValidator.getPreferredIsbn(book);
+        String isbn = CoverIdentifierResolver.getPreferredIsbn(book);
         logger.warn("LongitoodService.fetchCover circuit breaker opened for book ID: {}, ISBN: {}. Error: {}", 
             book.getId(), isbn, t.getMessage());
         return CompletableFuture.completedFuture(Optional.empty()); // Return empty Optional in CompletableFuture
@@ -178,7 +179,7 @@ public class LongitoodServiceImpl implements LongitoodService {
      * @return Empty Optional wrapped in CompletableFuture
      */
     public CompletableFuture<Optional<ImageDetails>> fetchCoverRateLimitFallback(Book book, Throwable t) {
-        String isbn = BookValidator.getPreferredIsbn(book);
+        String isbn = CoverIdentifierResolver.getPreferredIsbn(book);
         logger.warn("LongitoodService.fetchCover rate limit exceeded for book ID: {}, ISBN: {}. Error: {}", 
             book.getId(), isbn, t.getMessage());
         return CompletableFuture.completedFuture(Optional.empty());

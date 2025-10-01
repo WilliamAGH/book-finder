@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,13 +30,19 @@ public class BookSupplementalPersistenceService {
     }
 
     public void persistAuthors(String bookId, List<String> authors) {
-        if (jdbcTemplate == null || ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(authors)) {
+        if (jdbcTemplate == null || !ValidationUtils.hasText(bookId) || ValidationUtils.isNullOrEmpty(authors)) {
             return;
+        }
+
+        // Validate bookId is a valid UUID before attempting conversion
+        UUID bookUuid = UuidUtils.parseUuidOrNull(bookId);
+        if (bookUuid == null) {
+            throw new IllegalArgumentException("Invalid UUID format for bookId: " + bookId);
         }
 
         int position = 0;
         for (String author : authors) {
-            if (ValidationUtils.isNullOrBlank(author)) {
+            if (!ValidationUtils.hasText(author)) {
                 continue;
             }
             String normalized = author.toLowerCase().replaceAll("[^a-z0-9\\s]", "").trim();
@@ -45,7 +52,7 @@ public class BookSupplementalPersistenceService {
                 "INSERT INTO book_authors_join (id, book_id, author_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (book_id, author_id) DO UPDATE SET position = EXCLUDED.position, updated_at = NOW()",
                 IdGenerator.generateLong(),
-                UUID.fromString(bookId),
+                bookUuid,
                 authorId,
                 position++
             );
@@ -53,12 +60,12 @@ public class BookSupplementalPersistenceService {
     }
 
     public void persistCategories(String bookId, List<String> categories) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(categories)) {
+        if (!ValidationUtils.hasText(bookId) || ValidationUtils.isNullOrEmpty(categories)) {
             return;
         }
 
         for (String category : categories) {
-            if (ValidationUtils.isNullOrBlank(category)) {
+            if (!ValidationUtils.hasText(category)) {
                 continue;
             }
             collectionPersistenceService.upsertCategory(category)
@@ -67,12 +74,12 @@ public class BookSupplementalPersistenceService {
     }
 
     public void assignQualifierTags(String bookId, Map<String, Object> qualifiers) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(qualifiers)) {
+        if (!ValidationUtils.hasText(bookId) || ValidationUtils.isNullOrEmpty(qualifiers)) {
             return;
         }
 
         qualifiers.forEach((key, value) -> {
-            if (ValidationUtils.isNullOrBlank(key)) {
+            if (!ValidationUtils.hasText(key)) {
                 return;
             }
             Double confidence = (value instanceof Boolean && (Boolean) value) ? 1.0 : null;
@@ -94,7 +101,7 @@ public class BookSupplementalPersistenceService {
                            String source,
                            Double confidence,
                            Map<String, Object> metadata) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrBlank(key)) {
+        if (!ValidationUtils.hasText(bookId) || !ValidationUtils.hasText(key)) {
             return;
         }
         String resolvedDisplayName = displayName != null ? displayName : key;
@@ -156,6 +163,10 @@ public class BookSupplementalPersistenceService {
 
     private String serializeQualifierMetadata(Object value) {
         try {
+            // Map.of doesn't allow null values, handle null explicitly
+            if (value == null) {
+                return "{\"value\":null}";
+            }
             return objectMapper.writeValueAsString(Map.of("value", value));
         } catch (Exception e) {
             return "{\"value\":null}";
@@ -177,7 +188,7 @@ public class BookSupplementalPersistenceService {
                                                  String source,
                                                  Double confidence,
                                                  String metadataJson) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrBlank(key)) {
+        if (!ValidationUtils.hasText(bookId) || !ValidationUtils.hasText(key)) {
             return;
         }
 

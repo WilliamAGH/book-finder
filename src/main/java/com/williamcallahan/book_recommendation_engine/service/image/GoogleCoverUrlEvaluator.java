@@ -1,6 +1,6 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.GoogleBooksUrlEnhancer;
 import org.springframework.stereotype.Component;
 
 /**
@@ -10,10 +10,10 @@ import org.springframework.stereotype.Component;
 public class GoogleCoverUrlEvaluator {
 
     public boolean isAcceptableUrl(String url) {
-        return ImageCacheUtils.isLikelyGoogleCoverUrl(url);
+        return GoogleBooksUrlEnhancer.isGoogleBooksUrl(url);
     }
 
     public boolean hasFrontCoverHint(String url) {
-        return ImageCacheUtils.hasGoogleFrontCoverHint(url);
+        return GoogleBooksUrlEnhancer.hasFrontCoverHint(url);
     }
 }

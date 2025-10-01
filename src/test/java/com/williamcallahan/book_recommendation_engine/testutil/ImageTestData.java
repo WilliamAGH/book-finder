@@ -10,36 +10,44 @@ public final class ImageTestData {
     private ImageTestData() {}
 
     public static ImageDetails localCache(String cacheDirName, String fileName, int width, int height) {
-        return new ImageDetails(
+        ImageDetails details = new ImageDetails(
                 "/" + cacheDirName + "/" + fileName,
                 ApplicationConstants.Provider.GOOGLE_BOOKS,
                 fileName,
-                CoverImageSource.LOCAL_CACHE,
+                CoverImageSource.GOOGLE_BOOKS,  // Use actual data source, not cache
                 ImageResolutionPreference.ORIGINAL,
                 width,
                 height
         );
+        details.setStorageLocation(ImageDetails.STORAGE_LOCAL);  // Track storage separately
+        details.setStorageKey(fileName);
+        return details;
     }
 
     public static ImageDetails s3Cache(String publicUrl, String keyOrPath, int width, int height) {
-        return new ImageDetails(
+        ImageDetails details = new ImageDetails(
                 publicUrl,
-                "S3_CACHE",
+                "GOOGLE_BOOKS",  // Use actual data source
                 keyOrPath,
-                CoverImageSource.S3_CACHE,
+                CoverImageSource.GOOGLE_BOOKS,  // Not S3_CACHE
                 ImageResolutionPreference.ORIGINAL,
                 width,
                 height
         );
+        details.setStorageLocation(ImageDetails.STORAGE_S3);  // Track storage separately
+        details.setStorageKey(keyOrPath);
+        return details;
     }
 
     public static ImageDetails placeholder(String path) {
-        return new ImageDetails(
+        ImageDetails details = new ImageDetails(
                 path,
                 "SYSTEM_PLACEHOLDER",
                 "placeholder",
-                CoverImageSource.LOCAL_CACHE,
+                CoverImageSource.NONE,  // Use NONE, not LOCAL_CACHE
                 ImageResolutionPreference.UNKNOWN
         );
+        details.setStorageLocation(ImageDetails.STORAGE_LOCAL);  // Placeholders stored locally
+        return details;
     }
 }

@@ -6,6 +6,7 @@ import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
 import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
 import com.williamcallahan.book_recommendation_engine.dto.EditionSummary;
+import com.williamcallahan.book_recommendation_engine.dto.RecommendationCard;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,6 +70,24 @@ public class BookQueryRepository {
         } catch (DataAccessException ex) {
             log.error("Failed to fetch book cards for {} books: {}", bookIds.size(), ex.getMessage(), ex);
             return List.of();
+        }
+    }
+
+    /**
+     * Fetch a single book card by canonical UUID.
+     */
+    public Optional<BookCard> fetchBookCard(UUID bookId) {
+        if (bookId == null) {
+            return Optional.empty();
+        }
+        try {
+            String sql = "SELECT * FROM get_book_cards(?::UUID[])";
+            UUID[] idsArray = new UUID[] { bookId };
+            List<BookCard> cards = jdbcTemplate.query(sql, new BookCardRowMapper(), (Object) idsArray);
+            return cards.isEmpty() ? Optional.empty() : Optional.of(cards.get(0));
+        } catch (DataAccessException ex) {
+            log.error("Failed to fetch book card for {}: {}", bookId, ex.getMessage(), ex);
+            return Optional.empty();
         }
     }
 
@@ -145,6 +164,37 @@ public class BookQueryRepository {
             return fetchBookCardsByCollection(collectionIds.get(0), limit);
         } catch (DataAccessException ex) {
             log.error("Failed to fetch book cards for provider list '{}': {}", providerListCode, ex.getMessage(), ex);
+            return List.of();
+        }
+    }
+
+    /**
+     * Fetch recommendation cards for a canonical book from the persisted recommendation table.
+     */
+    public List<RecommendationCard> fetchRecommendationCards(UUID sourceBookId, int limit) {
+        if (sourceBookId == null || limit <= 0) {
+            return List.of();
+        }
+
+        try {
+            String sql = """
+                SELECT bc.*, br.score, br.reason
+                FROM book_recommendations br
+                JOIN LATERAL get_book_cards(ARRAY[br.recommended_book_id]) bc ON TRUE
+                WHERE br.source_book_id = ?::uuid
+                  AND (br.expires_at IS NULL OR br.expires_at > NOW())
+                ORDER BY br.score DESC NULLS LAST, br.generated_at DESC
+                LIMIT ?
+                """;
+            BookCardRowMapper mapper = new BookCardRowMapper();
+            return jdbcTemplate.query(sql, (rs, rowNum) -> {
+                BookCard card = mapper.mapRow(rs, rowNum);
+                Double score = getDoubleOrNull(rs, "score");
+                String reason = rs.getString("reason");
+                return new RecommendationCard(card, score, reason);
+            }, sourceBookId, limit);
+        } catch (DataAccessException ex) {
+            log.error("Failed to fetch recommendation cards for {}: {}", sourceBookId, ex.getMessage(), ex);
             return List.of();
         }
     }
@@ -319,6 +369,10 @@ public class BookQueryRepository {
                 parseTextArray(rs.getArray("categories")),
                 rs.getString("cover_url"),
                 rs.getString("thumbnail_url"),
+                getIntOrNull(rs, "cover_width"),
+                getIntOrNull(rs, "cover_height"),
+                getBooleanOrNull(rs, "cover_is_high_resolution"),
+                rs.getString("data_source"),
                 getDoubleOrNull(rs, "average_rating"),
                 getIntOrNull(rs, "ratings_count"),
                 rs.getString("isbn_10"),
@@ -394,6 +448,14 @@ public class BookQueryRepository {
      */
     private Integer getIntOrNull(ResultSet rs, String columnName) throws SQLException {
         int value = rs.getInt(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    /**
+     * Safely get nullable Boolean from ResultSet.
+     */
+    private Boolean getBooleanOrNull(ResultSet rs, String columnName) throws SQLException {
+        boolean value = rs.getBoolean(columnName);
         return rs.wasNull() ? null : value;
     }
 

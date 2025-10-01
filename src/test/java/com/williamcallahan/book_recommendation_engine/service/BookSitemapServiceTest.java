@@ -10,7 +10,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.HashSet;
@@ -21,8 +20,8 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -62,17 +61,23 @@ class BookSitemapServiceTest {
         when(sitemapService.getBooksXmlPageCount()).thenReturn(1);
         BookSitemapItem item = new BookSitemapItem("book-1", "slug-1", "Title", Instant.parse("2024-01-01T00:00:00Z"));
         when(sitemapService.getBooksForXmlPage(1)).thenReturn(List.of(item));
-        when(s3StorageService.uploadGenericJsonAsync(any(), any(), eq(true)))
-                .thenReturn(CompletableFuture.completedFuture(null));
+        when(s3StorageService.uploadFileAsync(any(), any(), anyLong(), eq("application/json")))
+                .thenReturn(CompletableFuture.completedFuture("https://example.com/sitemaps/books.json"));
 
         BookSitemapService.SnapshotSyncResult result = bookSitemapService.synchronizeSnapshot();
 
         assertThat(result.uploaded()).isTrue();
         assertThat(result.snapshot().books()).containsExactly(item);
 
-        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(s3StorageService).uploadGenericJsonAsync(eq("sitemaps/books.json"), payloadCaptor.capture(), eq(true));
-        String payload = payloadCaptor.getValue();
+        ArgumentCaptor<java.io.InputStream> streamCaptor = ArgumentCaptor.forClass(java.io.InputStream.class);
+        ArgumentCaptor<Long> lengthCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(s3StorageService).uploadFileAsync(eq("sitemaps/books.json"), streamCaptor.capture(), lengthCaptor.capture(), eq("application/json"));
+        byte[] bytes;
+        try (java.io.InputStream captured = streamCaptor.getValue()) {
+            bytes = captured.readAllBytes();
+        }
+        assertThat(lengthCaptor.getValue()).isEqualTo((long) bytes.length);
+        String payload = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         assertThat(payload).contains("\"slug\":\"slug-1\"");
 
         JsonNode root = new ObjectMapper().readTree(payload);
@@ -90,25 +95,6 @@ class BookSitemapServiceTest {
         assertThat(first.get("title").asText()).isEqualTo("Title");
         assertThat(first.get("updatedAt").asText()).isEqualTo("2024-01-01T00:00:00Z");
         assertThat(collectFieldNames(first)).containsExactlyInAnyOrder("id", "slug", "title", "updatedAt");
-    }
-
-    @Test
-    void hydrateExternally_invokesOrchestratorUpToLimit() {
-when(bookDataOrchestrator.getBookByIdTiered("book-1")).thenReturn(Mono.just(com.williamcallahan.book_recommendation_engine.testutil.BookTestData.minimalBook("book-1")));
-        when(bookDataOrchestrator.getBookByIdTiered("book-2")).thenReturn(Mono.empty());
-        List<BookSitemapItem> items = List.of(
-                new BookSitemapItem("book-1", "slug-1", "Title", Instant.now()),
-                new BookSitemapItem("book-2", "slug-2", "Title", Instant.now()),
-                new BookSitemapItem("book-3", "slug-3", "Title", Instant.now())
-        );
-
-        BookSitemapService.ExternalHydrationSummary summary = bookSitemapService.hydrateExternally(items, 2);
-
-        assertThat(summary.attempted()).isEqualTo(2);
-        assertThat(summary.succeeded()).isEqualTo(1);
-        assertThat(summary.failed()).isEqualTo(1);
-        verify(bookDataOrchestrator, times(1)).getBookByIdTiered("book-1");
-        verify(bookDataOrchestrator, times(1)).getBookByIdTiered("book-2");
     }
 
     private Set<String> collectFieldNames(JsonNode node) {

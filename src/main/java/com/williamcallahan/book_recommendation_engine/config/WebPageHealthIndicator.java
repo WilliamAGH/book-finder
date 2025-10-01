@@ -108,7 +108,6 @@ public class WebPageHealthIndicator {
                             .withDetail(healthCheckName + "_status", "client_error")
                             .withDetail("path", path)
                             .withDetail("http_status", ex.getStatusCode().value())
-                            .withDetail("error_body", ex.getResponseBodyAsString())
                             .build());
                 })
                 .onErrorResume(Exception.class, ex -> Mono.just(Health.down() // Always DOWN for other exceptions like connection errors or timeouts

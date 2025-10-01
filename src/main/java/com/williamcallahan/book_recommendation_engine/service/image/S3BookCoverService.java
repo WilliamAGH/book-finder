@@ -13,17 +13,15 @@
  */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 import com.williamcallahan.book_recommendation_engine.model.image.ProcessedImage;
-import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverIdentifierResolver;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverSourceMapper;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +37,6 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.ObjectCannedACL;
 
 import jakarta.annotation.PreDestroy;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -53,7 +50,6 @@ import java.util.Optional;
 public class S3BookCoverService implements ExternalCoverService {
     private static final Logger logger = LoggerFactory.getLogger(S3BookCoverService.class);
     private static final String COVER_IMAGES_DIRECTORY = "images/book-covers/";
-    private static final String PROVENANCE_DATA_DIRECTORY = "images/provenance-data/";
     private static final String LARGE_SUFFIX = "-lg";
     
     @Value("${s3.bucket-name}")
@@ -83,20 +79,15 @@ public class S3BookCoverService implements ExternalCoverService {
     private final S3Client s3Client;
     private final WebClient webClient;
     private final ImageProcessingService imageProcessingService;
-    private final EnvironmentService environmentService;
-    private final ObjectMapper objectMapper;
 
     private final Cache<String, Boolean> objectExistsCache;
 
     public S3BookCoverService(WebClient.Builder webClientBuilder,
                                ImageProcessingService imageProcessingService,
-                               EnvironmentService environmentService,
                                S3Client s3Client) {
         this.webClient = webClientBuilder.build();
         this.imageProcessingService = imageProcessingService;
-        this.environmentService = environmentService;
         this.s3Client = s3Client;
-        this.objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         this.objectExistsCache = Caffeine.newBuilder()
             .maximumSize(2000)
             .expireAfterWrite(1, TimeUnit.HOURS)
@@ -110,6 +101,90 @@ public class S3BookCoverService implements ExternalCoverService {
         } else {
             logger.info("S3BookCoverService: S3 is disabled by configuration.");
         }
+    }
+
+    /**
+     * SSRF protection: validates that an image URL is safe to download
+     * @param imageUrl the URL to validate
+     * @return true if the URL is allowed, false otherwise
+     */
+    private boolean isAllowedImageUrl(String imageUrl) {
+        try {
+            java.net.URI uri = java.net.URI.create(imageUrl);
+            return isAllowedImageHost(uri);
+        } catch (Exception e) {
+            logger.warn("Invalid image URL format, blocking: {}", imageUrl);
+            return false;
+        }
+    }
+
+    /**
+     * SSRF protection: validates that a URI points to an allowed image host
+     * and does not resolve to private/internal IP addresses
+     * @param uri the URI to validate
+     * @return true if the host is allowed and safe, false otherwise
+     */
+    private boolean isAllowedImageHost(java.net.URI uri) {
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) {
+            return false;
+        }
+        String host = uri.getHost();
+        if (host == null) {
+            return false;
+        }
+        // Allowlist of known safe image CDN hosts
+        String[] allowedHosts = {
+            "books.googleusercontent.com",
+            "covers.openlibrary.org",
+            "images-na.ssl-images-amazon.com",
+            "images-eu.ssl-images-amazon.com",
+            "m.media-amazon.com",
+            "images.amazon.com",
+            "d1w7fb2mkkr3kw.cloudfront.net", // Open Library CDN
+            "ia600100.us.archive.org",  // Internet Archive
+            "ia800100.us.archive.org",
+            "ia601400.us.archive.org",
+            "ia800200.us.archive.org",
+            "syndetics.com",
+            "cdn.penguin.com",
+            "images.penguinrandomhouse.com",
+            "longitood.com" // Longitood service
+        };
+
+        boolean inAllowlist = false;
+        for (String allowedHost : allowedHosts) {
+            if (host.equals(allowedHost) || host.endsWith("." + allowedHost)) {
+                inAllowlist = true;
+                break;
+            }
+        }
+        if (!inAllowlist) {
+            return false;
+        }
+
+        // Additional protection: block private/internal IP addresses
+        try {
+            java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+            if (addr.isAnyLocalAddress() || addr.isLoopbackAddress() || addr.isSiteLocalAddress()) {
+                logger.warn("Blocked private IP address for host: {}", host);
+                return false;
+            }
+            String ip = addr.getHostAddress();
+            // Block common private/reserved ranges
+            if (ip.startsWith("169.254.") || // Link-local
+                ip.startsWith("127.") ||      // Loopback
+                ip.startsWith("10.") ||        // Private Class A
+                ip.startsWith("192.168.") ||   // Private Class C
+                ip.matches("^172\\.(1[6-9]|2\\d|3[0-1])\\..*")) { // Private Class B
+                logger.warn("Blocked reserved IP range for host: {} -> {}", host, ip);
+                return false;
+            }
+        } catch (Exception e) {
+            logger.warn("Could not resolve host for validation, blocking: {}", host);
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -172,7 +247,10 @@ public class S3BookCoverService implements ExternalCoverService {
             if (!s3EnabledCheck || s3Client == null) logger.debug("S3 fetchCover skipped: S3 disabled or S3Client not available.");
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        String bookKey = ValidationUtils.BookValidator.getPreferredIsbn(book);
+        String bookKey = CoverIdentifierResolver.getPreferredIsbn(book);
+        if (!ValidationUtils.hasText(bookKey)) {
+            bookKey = CoverIdentifierResolver.resolve(book);
+        }
         if (!ValidationUtils.hasText(bookKey)) {
             bookKey = book.getId();
         }
@@ -186,10 +264,9 @@ public class S3BookCoverService implements ExternalCoverService {
         String fileExtension = ".jpg"; 
         
         String[] s3SourceStrings = {
-            getSourceString(CoverImageSource.GOOGLE_BOOKS),
-            getSourceString(CoverImageSource.OPEN_LIBRARY),
-            getSourceString(CoverImageSource.LONGITOOD),
-            getSourceString(CoverImageSource.LOCAL_CACHE),
+            CoverSourceMapper.toS3KeySegment(CoverImageSource.GOOGLE_BOOKS),
+            CoverSourceMapper.toS3KeySegment(CoverImageSource.OPEN_LIBRARY),
+            CoverSourceMapper.toS3KeySegment(CoverImageSource.LONGITOOD),
             "unknown"
         };
 
@@ -201,8 +278,13 @@ public class S3BookCoverService implements ExternalCoverService {
                         String s3Key = generateS3Key(finalBookKey, fileExtension, sourceForS3Key);
                         String cdnUrl = getS3CoverUrl(finalBookKey, fileExtension, sourceForS3Key);
                         logger.debug("Found existing S3 cover for book {} from source key '{}': {}", finalBookKey, sourceForS3Key, cdnUrl);
-                        // Assuming width/height are not known from S3 HEAD request alone, use constructor without them
-                        return Optional.of(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL));
+                        // S3 is storage location, not data source - use UNDEFINED for source
+                        com.williamcallahan.book_recommendation_engine.model.image.ImageDetails details = 
+                            new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(
+                                cdnUrl, "S3", s3Key, CoverImageSource.UNDEFINED, ImageResolutionPreference.ORIGINAL);
+                        details.setStorageLocation(ImageDetails.STORAGE_S3);
+                        details.setStorageKey(s3Key);
+                        return Optional.of(details);
                     })
                     .switchIfEmpty(Mono.just(Optional.empty()))
             )
@@ -310,7 +392,7 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     public Mono<Boolean> coverExistsInS3Async(String bookId, String fileExtension) {
-        String[] sourcesToTry = {"google-books", "open-library", "longitood", "local-cache", "unknown"};
+        String[] sourcesToTry = {"google-books", "open-library", "longitood", "unknown"};
         return Flux.fromArray(sourcesToTry)
             .concatMap(source -> coverExistsInS3Async(bookId, fileExtension, source))
             .any(exists -> exists); // Returns true if any source exists
@@ -323,9 +405,15 @@ public class S3BookCoverService implements ExternalCoverService {
     public Mono<ImageDetails> uploadCoverToS3Async(String imageUrl, String bookId, String source, ImageProvenanceData provenanceData) {
         if (!s3EnabledCheck || s3Client == null || imageUrl == null || imageUrl.isEmpty() || bookId == null || bookId.isEmpty()) {
             logger.debug("S3 upload skipped: S3 disabled/S3Client not available, or imageUrl/bookId is null/empty. ImageUrl: {}, BookId: {}", imageUrl, bookId);
-            return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
+            return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
         }
         final String s3Source = (source != null && !source.isEmpty()) ? source : "unknown";
+
+        // SSRF protection: validate URL before downloading
+        if (!isAllowedImageUrl(imageUrl)) {
+            logger.warn("Blocked non-allowed or potentially unsafe image URL for book {}: {}", bookId, imageUrl);
+            return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(imageUrl, source, "blocked-unsafe-url-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+        }
 
         return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
             .timeout(Duration.ofSeconds(10))
@@ -365,7 +453,13 @@ public class S3BookCoverService implements ExternalCoverService {
                                             if (headResponse.contentLength() == imageBytesForS3.length) {
                                                 logger.info("Processed cover for book {} already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Key);
                                                 String cdnUrl = getS3CoverUrl(bookId, fileExtensionForS3, s3Source);
-                                                return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight()));
+                                                com.williamcallahan.book_recommendation_engine.model.image.ImageDetails details = 
+                                                    new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(
+                                                        cdnUrl, "S3", s3Key, CoverImageSource.UNDEFINED, 
+                                                        ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight());
+                                                details.setStorageLocation(ImageDetails.STORAGE_S3);
+                                                details.setStorageKey(s3Key);
+                                                return Mono.just(details);
                                             }
                                             return uploadToS3Internal(s3Key, imageBytesForS3, mimeTypeForS3, bookId, fileExtensionForS3, s3Source, processedImage, provenanceData);
                                         })
@@ -404,22 +498,20 @@ public class S3BookCoverService implements ExternalCoverService {
             objectExistsCache.put(s3Key, true);
             logger.info("Successfully uploaded processed cover for book {} to S3. Key: {}", bookId, s3Key);
 
-            if (provenanceData != null && environmentService.isBookCoverDebugMode()) {
-                ImageProvenanceData.SelectedImageInfo selectedInfo = provenanceData.getSelectedImageInfo();
-                if (selectedInfo == null) selectedInfo = new ImageProvenanceData.SelectedImageInfo();
-                selectedInfo.setS3Key(s3Key);
-                selectedInfo.setStorageLocation("S3");
-                selectedInfo.setFinalUrl(cdnUrl);
-                provenanceData.setSelectedImageInfo(selectedInfo);
-                uploadProvenanceData(s3Key, provenanceData);
-            }
-            return new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(cdnUrl, "S3_UPLOAD", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight());
+            // Provenance JSON uploads to S3 are deprecated and disabled as of 2025-10-01.
+            com.williamcallahan.book_recommendation_engine.model.image.ImageDetails details = 
+                new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(
+                    cdnUrl, "S3", s3Key, CoverImageSource.UNDEFINED, 
+                    ImageResolutionPreference.ORIGINAL, processedImage.getWidth(), processedImage.getHeight());
+            details.setStorageLocation(ImageDetails.STORAGE_S3);
+            details.setStorageKey(s3Key);
+            return details;
         }).subscribeOn(Schedulers.boundedElastic());
     }
  
     /**
      * Synchronous version of cover upload with explicit source
-     * 
+     *
      * @param imageUrl URL of the image to upload
      * @param bookId Book identifier
      * @param source Source identifier
@@ -462,7 +554,7 @@ public class S3BookCoverService implements ExternalCoverService {
      * @return CDN URL for the first found cover or null if none exists
      */
     public String getS3CoverUrl(String bookId, String fileExtension) {
-        String[] sourcesToTry = {"google-books", "open-library", "longitood", "local-cache", "unknown"};
+        String[] sourcesToTry = {"google-books", "open-library", "longitood", "unknown"};
         for (String source : sourcesToTry) {
             if (coverExistsInS3(bookId, fileExtension, source)) { 
                 return getS3CoverUrl(bookId, fileExtension, source);
@@ -478,6 +570,10 @@ public class S3BookCoverService implements ExternalCoverService {
      * @param url Image URL to parse
      * @return File extension with leading dot or default (.jpg) if none found
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Use {@link com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils#getFileExtensionFromUrl(String)} instead.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public String getFileExtensionFromUrl(String url) {
         String extension = ".jpg"; 
         if (url != null && url.contains(".")) {
@@ -494,28 +590,6 @@ public class S3BookCoverService implements ExternalCoverService {
         return extension;
     }
 
-    /**
-     * Converts CoverImageSource enum to standardized string for S3 key generation
-     * - Maps enum values to consistent lowercase hyphenated strings
-     * - Returns "unknown" for null or unrecognized values
-     * 
-     * @param source CoverImageSource enum value to convert
-     * @return Standardized string representation of the source
-     */
-    private String getSourceString(CoverImageSource source) {
-        if (source == null) {
-            return "unknown";
-        }
-        switch (source) {
-            case GOOGLE_BOOKS: return "google-books";
-            case OPEN_LIBRARY: return "open-library";
-            case LONGITOOD: return "longitood";
-            case LOCAL_CACHE: return "local-cache";
-            case S3_CACHE: return "s3-cache";
-            default: return "unknown";
-        }
-    }
-    
     /**
      * Overloaded version without provenance data
      */
@@ -562,7 +636,13 @@ public class S3BookCoverService implements ExternalCoverService {
                                 if (headResponse.contentLength() == processedImageBytes.length) {
                                     logger.info("Processed cover for book {} (from source {}) already exists in S3 with same size, skipping upload. Key: {}", bookId, s3Source, s3Key);
                                     String cdnUrl = getS3CoverUrl(bookId, fileExtension, s3Source);
-                                    return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(cdnUrl, "S3_CACHE", s3Key, CoverImageSource.S3_CACHE, ImageResolutionPreference.ORIGINAL, width, height));
+                                    com.williamcallahan.book_recommendation_engine.model.image.ImageDetails details = 
+                                        new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(
+                                            cdnUrl, "S3", s3Key, CoverImageSource.UNDEFINED, 
+                                            ImageResolutionPreference.ORIGINAL, width, height);
+                                    details.setStorageLocation(ImageDetails.STORAGE_S3);
+                                    details.setStorageKey(s3Key);
+                                    return Mono.just(details);
                                 }
                                 return uploadToS3Internal(s3Key, processedImageBytes, mimeType, bookId, fileExtension, s3Source, new ProcessedImage(processedImageBytes, fileExtension, mimeType, width, height, true, null), provenanceData);
                             })
@@ -582,41 +662,4 @@ public class S3BookCoverService implements ExternalCoverService {
         }
     }
 
-    private void uploadProvenanceData(String imageS3Key, ImageProvenanceData provenanceData) {
-        if (s3Client == null || !s3EnabledCheck) {
-            logger.warn("S3 client not available or S3 disabled. Skipping provenance data upload for image key: {}", imageS3Key);
-            return;
-        }
-        if (provenanceData == null) {
-            logger.debug("Provenance data is null. Skipping upload for image key: {}", imageS3Key);
-            return;
-        }
-
-        // Extract filename from the original imageS3Key
-        String filename = imageS3Key.substring(imageS3Key.lastIndexOf('/') + 1);
-        // Replace image extension with .txt for provenance file
-        String provenanceFilename = filename.replaceAll("\\.(?i)(jpg|jpeg|png|gif|webp|svg)$", ".txt");
-        if (provenanceFilename.equals(filename)) { 
-            provenanceFilename = filename + ".txt";
-            logger.warn("Image S3 key {} (filename: {}) did not have a recognized image extension. Appending .txt for provenance: {}", imageS3Key, filename, provenanceFilename);
-        }
-        
-        String provenanceS3Key = PROVENANCE_DATA_DIRECTORY + provenanceFilename;
-        
-        try {
-            String jsonProvenance = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(provenanceData);
-            byte[] jsonDataBytes = jsonProvenance.getBytes(StandardCharsets.UTF_8);
-
-            PutObjectRequest putProvenanceRequest = PutObjectRequest.builder()
-                    .bucket(s3BucketName)
-                    .key(provenanceS3Key)
-                    .contentType("application/json; charset=utf-8")
-                    .acl(ObjectCannedACL.PUBLIC_READ) 
-                    .build();
-            s3Client.putObject(putProvenanceRequest, RequestBody.fromBytes(jsonDataBytes));
-            logger.info("Successfully uploaded provenance data for image {} to S3. Key: {}", imageS3Key, provenanceS3Key);
-        } catch (Exception e) {
-            LoggingUtils.error(logger, e, "Failed to upload provenance data for image {} to S3 key {}", imageS3Key, provenanceS3Key);
-        }
-    }
 }

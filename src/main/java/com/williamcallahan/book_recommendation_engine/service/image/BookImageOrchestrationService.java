@@ -35,7 +35,17 @@ public class BookImageOrchestrationService {
     private static final Logger logger = LoggerFactory.getLogger(BookImageOrchestrationService.class);
     
     /** Default placeholder image path to use when no cover is available */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private static final String DEFAULT_PLACEHOLDER_IMAGE = "/images/placeholder-book-cover.svg";
+    private static final CoverImageSource PLACEHOLDER_SOURCE = CoverImageSource.NONE;
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    private static final String DEPRECATED_S3_CACHE = "S3_CACHE";
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    private static final String DEPRECATED_LOCAL_CACHE = "LOCAL_CACHE";
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    private static final String DEPRECATED_S3 = "S3";
+    @Deprecated(since = "2025-10-01", forRemoval = true)
+    private static final String DEPRECATED_UNKNOWN = "UNKNOWN";
 
     /** Service for handling cover image caching and background processing */
     private final BookCoverManagementService bookCoverManagementService;
@@ -60,6 +70,56 @@ public class BookImageOrchestrationService {
      */
     public BookImageOrchestrationService(BookCoverManagementService bookCoverManagementService) {
         this.bookCoverManagementService = bookCoverManagementService;
+    }
+
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverSourceMapper#sanitize(CoverImageSource)} instead.
+     * This method duplicates source sanitization logic that is now centralized in CoverSourceMapper.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * CoverImageSource clean = sanitizeSource(source);
+     * 
+     * // New:
+     * CoverImageSource clean = CoverSourceMapper.sanitize(source);
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
+    private static CoverImageSource sanitizeSource(CoverImageSource source) {
+        if (source == null) {
+            return CoverImageSource.UNDEFINED;
+        }
+        String name = source.name();
+        if (DEPRECATED_S3_CACHE.equals(name) || DEPRECATED_LOCAL_CACHE.equals(name)
+            || DEPRECATED_S3.equals(name) || DEPRECATED_UNKNOWN.equals(name)) {
+            return CoverImageSource.UNDEFINED;
+        }
+        return source;
+    }
+
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.UrlUtils#isHttpUrl(String)} instead.
+     * This method duplicates URL validation logic that is now centralized in UrlUtils.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * if (isHttpUrl(url)) { ... }
+     * 
+     * // New:
+     * if (UrlUtils.isHttpUrl(url)) { ... }
+     * }</pre>
+     */
+    @Deprecated(since = "0.9.0", forRemoval = true)
+    private static boolean isHttpUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        String lower = url.toLowerCase();
+        return lower.startsWith("http://") || lower.startsWith("https://");
     }
 
     /**
@@ -118,7 +178,7 @@ public class BookImageOrchestrationService {
             placeholderBook.setId("null-book");
             placeholderBook.setTitle("Unknown Book");
             placeholderBook.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
-            placeholderBook.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, DEFAULT_PLACEHOLDER_IMAGE));
+            placeholderBook.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, DEFAULT_PLACEHOLDER_IMAGE, PLACEHOLDER_SOURCE));
             placeholderBook.setCoverImageWidth(0);
             placeholderBook.setCoverImageHeight(0);
             placeholderBook.setIsCoverHighResolution(false);
@@ -129,7 +189,7 @@ public class BookImageOrchestrationService {
             logger.warn("Book ID is null for book object title: '{}'. Setting defaults and using placeholder for cover images.", book.getTitle());
             // Modify the existing book object
             book.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
-            book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, DEFAULT_PLACEHOLDER_IMAGE));
+            book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, DEFAULT_PLACEHOLDER_IMAGE, PLACEHOLDER_SOURCE));
             book.setCoverImageWidth(0);
             book.setCoverImageHeight(0);
             book.setIsCoverHighResolution(false);
@@ -153,15 +213,17 @@ public class BookImageOrchestrationService {
                 String initialPreferredUrl = (coverImagesResult != null && coverImagesResult.getPreferredUrl() != null) ? coverImagesResult.getPreferredUrl() : DEFAULT_PLACEHOLDER_IMAGE;
 
                 // Populate CoverImages structure
-                CoverImageSource sourceFromResult = (coverImagesResult != null && coverImagesResult.getSource() != null) ? coverImagesResult.getSource() : CoverImageSource.UNDEFINED;
+                CoverImageSource sourceFromResult = coverImagesResult != null ? sanitizeSource(coverImagesResult.getSource()) : CoverImageSource.UNDEFINED;
                 
                 if (coverImagesResult == null) {
                     logger.warn("coverImagesResult was null for book ID {}. Using default placeholder.", book.getId());
-                    book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, CoverImageSource.LOCAL_CACHE));
-                    book.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
+                    book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, PLACEHOLDER_SOURCE));
+                    // Do not set s3ImagePath unless the source is S3
                 } else {
                     book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl, sourceFromResult));
-                    book.setS3ImagePath(initialPreferredUrl);
+                    if (isHttpUrl(initialPreferredUrl)) {
+                        book.setS3ImagePath(initialPreferredUrl);
+                    }
                 }
 
                 // Set resolution details to null for background processing
@@ -177,7 +239,7 @@ public class BookImageOrchestrationService {
             .exceptionally(ex -> {
                 logger.error("Error processing cover images for book ID {}: {}. Using placeholders.", book.getId(), ex.getMessage(), ex);
                 book.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
-                book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, CoverImageSource.LOCAL_CACHE));
+                book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, PLACEHOLDER_SOURCE));
                 book.setCoverImageWidth(null);
                 book.setCoverImageHeight(null);
                 book.setIsCoverHighResolution(null);

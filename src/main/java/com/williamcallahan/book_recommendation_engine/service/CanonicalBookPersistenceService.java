@@ -37,7 +37,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *             for a cleaner, more maintainable persistence layer. New code should use BookUpsertService.
  *             This class will be removed in a future version after full migration.
  */
-@Deprecated(since = "2025-01-30", forRemoval = true)
+@Deprecated(since = "2025-09-30", forRemoval = true)
 @Component
 @ConditionalOnBean(JdbcTemplate.class)
 public class CanonicalBookPersistenceService {
@@ -478,7 +478,7 @@ public class CanonicalBookPersistenceService {
      *             via {@link BookUpsertService} instead. This method only persists basic image URLs without
      *             enhanced metadata (width, height, resolution).
      */
-    @Deprecated(since = "2025-01-30", forRemoval = false)
+    @Deprecated(since = "2025-09-30", forRemoval = false)
     private void persistImageLinks(String bookId, Book book) {
         CoverImages images = book.getCoverImages();
         if (images == null) {
@@ -504,7 +504,7 @@ public class CanonicalBookPersistenceService {
      *             via {@link BookUpsertService} instead. This method only persists basic image URLs without
      *             enhanced metadata (width, height, resolution).
      */
-    @Deprecated(since = "2025-01-30", forRemoval = false)
+    @Deprecated(since = "2025-09-30", forRemoval = false)
     private void upsertImageLink(String bookId, String type, String url, String source) {
         // Use shared UrlUtils instead of inline duplication
         String normalizedUrl = UrlUtils.normalizeToHttps(url);

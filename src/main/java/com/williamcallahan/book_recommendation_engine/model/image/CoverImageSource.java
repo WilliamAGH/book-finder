@@ -42,20 +42,6 @@ public enum CoverImageSource {
     LONGITOOD("Longitood"),
     
     /**
-     * Amazon S3 cached images
-     * - Pre-processed and stored in S3 bucket
-     * - Optimized and resized versions
-     */
-    S3_CACHE("S3 Cache"),
-    
-    /**
-     * Local filesystem cached images
-     * - Stored on application server
-     * - Fastest access for repeated requests
-     */
-    LOCAL_CACHE("Local Cache"),
-    
-    /**
      * No cover image available
      * - Indicates book has no cover image
      * - Will use placeholder in UI
@@ -68,6 +54,12 @@ public enum CoverImageSource {
      * - Not used in production code
      */
     MOCK("Mock Source"),
+    
+    /**
+     * Deprecated alias for undefined source.
+     */
+    @Deprecated
+    UNKNOWN("Undefined Source"),
     
     /**
      * Source not yet determined

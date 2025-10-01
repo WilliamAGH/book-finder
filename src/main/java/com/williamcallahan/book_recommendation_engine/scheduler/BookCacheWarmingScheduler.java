@@ -9,11 +9,13 @@
  */
 package com.williamcallahan.book_recommendation_engine.scheduler;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
-import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
+import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import lombok.extern.slf4j.Slf4j;
@@ -25,15 +27,18 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import reactor.core.publisher.Mono;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 
 /**
  * Scheduler for book data pre-fetching (cache warming functionality disabled)
@@ -49,10 +54,10 @@ import reactor.core.publisher.Mono;
 public class BookCacheWarmingScheduler {
 
         
-    private final GoogleBooksService googleBooksService;
-    private final BookDataOrchestrator bookDataOrchestrator;
     private final RecentlyViewedService recentlyViewedService;
     private final ApplicationContext applicationContext;
+    private final BookQueryRepository bookQueryRepository;
+    private final BookIdentifierResolver bookIdentifierResolver;
     
     // Keep track of which books have been warmed recently to avoid duplicates
     private final Set<String> recentlyWarmedBooks = ConcurrentHashMap.newKeySet();
@@ -70,14 +75,14 @@ public class BookCacheWarmingScheduler {
     @Value("${app.cache.warming.recently-viewed-days:7}")
     private int recentlyViewedDays;
 
-    public BookCacheWarmingScheduler(GoogleBooksService googleBooksService,
-                                     RecentlyViewedService recentlyViewedService,
+    public BookCacheWarmingScheduler(RecentlyViewedService recentlyViewedService,
                                      ApplicationContext applicationContext,
-                                     BookDataOrchestrator bookDataOrchestrator) {
-        this.googleBooksService = googleBooksService;
+                                     BookQueryRepository bookQueryRepository,
+                                     BookIdentifierResolver bookIdentifierResolver) {
         this.recentlyViewedService = recentlyViewedService;
         this.applicationContext = applicationContext;
-        this.bookDataOrchestrator = bookDataOrchestrator;
+        this.bookQueryRepository = bookQueryRepository;
+        this.bookIdentifierResolver = bookIdentifierResolver;
     }
 
     /**
@@ -112,10 +117,16 @@ public class BookCacheWarmingScheduler {
         AtomicInteger existingCount = new AtomicInteger(0);
         
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
-        
+
         try {
+            // Validate rate limit configuration
+            if (rateLimit <= 0) {
+                log.warn("Invalid rateLimit configuration: {}. Skipping cache warming run.", rateLimit);
+                return;
+            }
+
             // Calculate delay between books based on rate limit
-            final long delayMillis = (60 * 1000) / rateLimit;
+            final long delayMillis = (60_000L) / rateLimit;
             
             // Check current API call count from metrics if possible
             // Inject ApiRequestMonitor if available
@@ -186,19 +197,7 @@ public class BookCacheWarmingScheduler {
     }
 
     private CompletionStage<Book> fetchBookForWarming(String bookId) {
-        return bookDataOrchestrator.getBookByIdTiered(bookId)
-            .onErrorResume(ex -> {
-                LoggingUtils.warn(log, ex, "Postgres warm lookup failed for {}", bookId);
-                return Mono.empty();
-            })
-            .switchIfEmpty(Mono.defer(() -> Mono.fromCompletionStage(googleBooksService.getBookById(bookId))
-                .onErrorResume(ex -> {
-                    LoggingUtils.error(log, ex, "Google fallback warm lookup failed for {}", bookId);
-                    return Mono.empty();
-                })
-                .flatMap(book -> book == null ? Mono.empty() : Mono.just(book))
-            ))
-            .toFuture();
+        return CompletableFuture.completedFuture(resolveBookForWarming(bookId));
     }
 
     /**
@@ -220,5 +219,28 @@ public class BookCacheWarmingScheduler {
         }
 
         return result;
+    }
+
+    private Book resolveBookForWarming(String identifier) {
+        if (!ValidationUtils.hasText(identifier)) {
+            return null;
+        }
+        String trimmed = identifier.trim();
+
+        Optional<BookDetail> bySlug = bookQueryRepository.fetchBookDetailBySlug(trimmed);
+        if (bySlug.isPresent()) {
+            return BookDomainMapper.fromDetail(bySlug.get());
+        }
+
+        Optional<UUID> maybeUuid = bookIdentifierResolver.resolveToUuid(trimmed);
+        if (maybeUuid.isEmpty()) {
+            return null;
+        }
+
+        UUID uuid = maybeUuid.get();
+        return bookQueryRepository.fetchBookDetail(uuid)
+            .map(BookDomainMapper::fromDetail)
+            .or(() -> bookQueryRepository.fetchBookCard(uuid).map(BookDomainMapper::fromCard))
+            .orElse(null);
     }
 }

@@ -64,9 +64,15 @@ public record ProcessedImage(
         return new ProcessedImage(null, null, null, 0, 0, false, processingError);
     }
 
+    // Override accessor to return a defensive copy for immutability
+    @Override
+    public byte[] processedBytes() {
+        return processedBytes == null ? null : Arrays.copyOf(processedBytes, processedBytes.length);
+    }
+
     // Getters might be useful for other services, though direct field access is fine for now in a simple DTO
     public byte[] getProcessedBytes() {
-        return processedBytes;
+        return processedBytes();
     }
 
     public String getNewFileExtension() {

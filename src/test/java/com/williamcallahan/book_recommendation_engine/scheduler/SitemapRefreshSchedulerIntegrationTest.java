@@ -19,8 +19,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.ObjectProvider;
-import reactor.core.publisher.Mono;
 
+import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -64,10 +65,8 @@ class SitemapRefreshSchedulerIntegrationTest {
         when(sitemapService.getAuthorsByLetter("A", 1)).thenReturn(new PagedResult<>(List.of(new AuthorSection("author-1", "Author Name", Instant.now(), List.of(sitemapItem))), 1, 1, 1));
         when(sitemapService.getBooksByLetter("A", 1)).thenReturn(new PagedResult<>(List.of(sitemapItem), 1, 1, 1));
 
-        when(s3StorageService.uploadGenericJsonAsync(eq("sitemaps/books.json"), any(), eq(true)))
-                .thenReturn(CompletableFuture.completedFuture(null));
-        when(bookDataOrchestrator.getBookByIdTiered("book-1"))
-                .thenReturn(Mono.just(new Book()));
+        when(s3StorageService.uploadFileAsync(eq("sitemaps/books.json"), any(), anyLong(), eq("application/json")))
+                .thenReturn(CompletableFuture.completedFuture("https://example.com/sitemaps/books.json"));
         when(coverService.fetchCover(any(Book.class)))
                 .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
 
@@ -110,10 +109,16 @@ class SitemapRefreshSchedulerIntegrationTest {
 
         scheduler.refreshSitemapArtifacts();
 
-        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
-        verify(s3StorageService).uploadGenericJsonAsync(eq("sitemaps/books.json"), payloadCaptor.capture(), eq(true));
-        verify(bookDataOrchestrator).getBookByIdTiered("book-1");
+        ArgumentCaptor<java.io.InputStream> streamCaptor = ArgumentCaptor.forClass(java.io.InputStream.class);
+        verify(s3StorageService).uploadFileAsync(eq("sitemaps/books.json"), streamCaptor.capture(), anyLong(), eq("application/json"));
+        byte[] bytes;
+        try (java.io.InputStream captured = streamCaptor.getValue()) {
+            bytes = captured.readAllBytes();
+        } catch (java.io.IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        String payload = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         verify(coverService).fetchCover(any(Book.class));
-        assertThat(payloadCaptor.getValue()).contains("\"slug\":\"slug-1\"");
+        assertThat(payload).contains("\"slug\":\"slug-1\"");
     }
 }

@@ -324,6 +324,11 @@ public class GoogleBooksMockService {
      * @param bookId The book ID to look up
      * @return CompletionStage containing the Book if found, completed with null otherwise
      */
+    /**
+     * @deprecated Supply DTO fixtures (e.g. {@link com.williamcallahan.book_recommendation_engine.dto.BookCard}) via
+     * repository-level mocks instead of hydrating legacy {@link Book} objects.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public CompletionStage<Book> getBookByIdAsync(String bookId) {
         Book book = getBookById(bookId);
         return CompletableFuture.completedFuture(book);
@@ -363,6 +368,10 @@ public class GoogleBooksMockService {
      * @param searchQuery The search query
      * @return Mono containing a list of Book objects if found, empty list otherwise
      */
+    /**
+     * @deprecated Replace with DTO-oriented mocks using `BookQueryRepository` fixtures.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> searchBooksReactive(String searchQuery) {
         List<Book> books = searchBooks(searchQuery);
         return Mono.just(books);

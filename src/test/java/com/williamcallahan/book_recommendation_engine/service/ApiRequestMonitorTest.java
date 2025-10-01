@@ -48,12 +48,13 @@ public class ApiRequestMonitorTest {
         assertEquals(1L, (Long) apiRequestMonitor.getMetricsMap().get("total_successful"));
         assertEquals(0L, (Long) apiRequestMonitor.getMetricsMap().get("total_failed"));
         
-        // Verify endpoint tracking
-        @SuppressWarnings("unchecked")
-        Map<String, Integer> endpointCalls = (Map<String, Integer>) apiRequestMonitor.getMetricsMap().get("endpoints");
-        assertNotNull(endpointCalls);
+        // Verify endpoint tracking without unchecked casts
+        Object endpointsObj = apiRequestMonitor.getMetricsMap().get("endpoints");
+        assertNotNull(endpointsObj);
+        assertTrue(endpointsObj instanceof Map);
+        Map<?, ?> endpointCalls = (Map<?, ?>) endpointsObj;
         assertTrue(endpointCalls.containsKey("test/endpoint"));
-        assertEquals(1, endpointCalls.get("test/endpoint").intValue());
+        assertEquals(1, ((Number) endpointCalls.get("test/endpoint")).intValue());
     }
 
     @Test
@@ -151,17 +152,18 @@ public class ApiRequestMonitorTest {
         assertEquals(totalExpectedCalls, ((Number) apiRequestMonitor.getMetricsMap().get("daily_requests")).intValue());
         assertEquals(totalExpectedCalls, apiRequestMonitor.getTotalRequests()); // Direct getter for total
         
-        // Check endpoint tracking
-        @SuppressWarnings("unchecked")
-        Map<String, Integer> endpointCalls = (Map<String, Integer>) apiRequestMonitor.getMetricsMap().get("endpoints");
-        assertNotNull(endpointCalls);
+        // Check endpoint tracking without unchecked casts
+        Object endpointsObj = apiRequestMonitor.getMetricsMap().get("endpoints");
+        assertNotNull(endpointsObj);
+        assertTrue(endpointsObj instanceof Map);
+        Map<?, ?> endpointCalls = (Map<?, ?>) endpointsObj;
         assertEquals(threadCount, endpointCalls.size());
         
         // Each endpoint should have 'callsPerThread' calls in total (success + failure)
         for (int i = 0; i < threadCount; i++) {
             String endpoint = "test/endpoint-" + i;
             assertTrue(endpointCalls.containsKey(endpoint));
-            assertEquals(callsPerThread, endpointCalls.get(endpoint).intValue());
+            assertEquals(callsPerThread, ((Number) endpointCalls.get(endpoint)).intValue());
         }
     }
     

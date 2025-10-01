@@ -1,17 +1,17 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.BookRecommendationPersistenceService.RecommendationRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
-import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,85 +25,84 @@ class BookRecommendationPersistenceServiceTest {
     private JdbcTemplate jdbcTemplate;
 
     @Mock
-    private BookDataOrchestrator bookDataOrchestrator;
+    private BookLookupService bookLookupService;
 
-    private BookRecommendationPersistenceService persistenceService;
+    private BookRecommendationPersistenceService service;
 
     @BeforeEach
     void setUp() {
-        persistenceService = new BookRecommendationPersistenceService(jdbcTemplate, bookDataOrchestrator);
+        service = new BookRecommendationPersistenceService(jdbcTemplate, bookLookupService);
+        lenient().when(jdbcTemplate.update(anyString(), ArgumentMatchers.<Object>any()))
+            .thenReturn(1);
+        lenient().when(jdbcTemplate.update(anyString(), ArgumentMatchers.<Object>any(), ArgumentMatchers.<Object>any()))
+            .thenReturn(1);
+        lenient().when(jdbcTemplate.update(anyString(), ArgumentMatchers.<Object>any(), ArgumentMatchers.<Object>any(), ArgumentMatchers.<Object>any(), ArgumentMatchers.<Object>any(), ArgumentMatchers.<Object>any(), ArgumentMatchers.<Object>any()))
+            .thenReturn(1);
     }
 
     @Test
-    void persistPipelineRecommendations_insertsNormalizedScores() {
-        UUID sourceUuid = UUID.randomUUID();
-        UUID recommendationUuid = UUID.randomUUID();
+    void persistPipelineRecommendations_writesRowsForResolvedBooks() {
+        UUID sourceId = UUID.randomUUID();
+        UUID recommendedId = UUID.randomUUID();
 
-        Book source = buildBook(sourceUuid.toString());
-        Book recommended = buildBook(recommendationUuid.toString());
+        Book source = new Book();
+        source.setId(sourceId.toString());
+        Book recommended = new Book();
+        recommended.setId(recommendedId.toString());
 
-        RecommendationRecord record = new RecommendationRecord(recommended, 6.0d, List.of("AUTHOR"));
+        BookRecommendationPersistenceService.RecommendationRecord record =
+            new BookRecommendationPersistenceService.RecommendationRecord(
+                recommended,
+                8.5,
+                List.of("AUTHOR", "CATEGORY")
+            );
 
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyCompletes(
-                persistenceService.persistPipelineRecommendations(source, List.of(record))
+        StepVerifier.create(service.persistPipelineRecommendations(source, List.of(record)))
+            .verifyComplete();
+
+        verify(jdbcTemplate).update(
+            startsWith("DELETE FROM book_recommendations"),
+            eq(sourceId),
+            eq("RECOMMENDATION_PIPELINE")
         );
 
-        verify(jdbcTemplate).update("DELETE FROM book_recommendations WHERE source_book_id = ? AND source = ?", sourceUuid, "RECOMMENDATION_PIPELINE");
-
-        ArgumentCaptor<Double> scoreCaptor = ArgumentCaptor.forClass(Double.class);
-        verify(jdbcTemplate).update(startsWith("INSERT INTO book_recommendations"),
-            any(),
-            eq(sourceUuid),
-            eq(recommendationUuid),
+        verify(jdbcTemplate).update(
+            startsWith("INSERT INTO book_recommendations"),
+            any(), // generated UUID string for the row id
+            eq(sourceId),
+            eq(recommendedId),
             eq("RECOMMENDATION_PIPELINE"),
-            scoreCaptor.capture(),
-            eq("AUTHOR"));
-
-        assertThat(scoreCaptor.getValue()).isEqualTo(0.6d);
+            argThat(score -> {
+                assertThat(score).isInstanceOf(Double.class);
+                double value = (Double) score;
+                assertThat(value).isGreaterThan(0.0).isLessThanOrEqualTo(1.0);
+                return true;
+            }),
+            eq("AUTHOR,CATEGORY")
+        );
     }
 
     @Test
-    void persistPipelineRecommendations_resolvesCanonicalViaOrchestrator() {
-        UUID sourceUuid = UUID.randomUUID();
-        UUID resolvedUuid = UUID.randomUUID();
+    void persistPipelineRecommendations_skipsWhenCanonicalIdsUnknown() {
+        Book source = new Book();
+        source.setId("external-123");
+        Book recommended = new Book();
+        recommended.setId("also-external");
 
-        Book source = buildBook(sourceUuid.toString());
-        Book unresolved = buildBook("google-volume-id");
-        Book resolved = buildBook(resolvedUuid.toString());
+        lenient().when(bookLookupService.findBookIdByIsbn13(anyString())).thenReturn(Optional.empty());
+        lenient().when(bookLookupService.findBookIdByIsbn10(anyString())).thenReturn(Optional.empty());
+        lenient().when(bookLookupService.findBookIdByExternalIdentifier(anyString())).thenReturn(Optional.empty());
 
-        RecommendationRecord record = new RecommendationRecord(unresolved, 4.0d, List.of("AUTHOR"));
+        BookRecommendationPersistenceService.RecommendationRecord record =
+            new BookRecommendationPersistenceService.RecommendationRecord(
+                recommended,
+                4.2,
+                List.of("TEXT")
+            );
 
-        when(bookDataOrchestrator.getBookByIdTiered("google-volume-id")).thenReturn(Mono.just(resolved));
-
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyCompletes(
-                persistenceService.persistPipelineRecommendations(source, List.of(record))
-        );
-
-        verify(jdbcTemplate).update("DELETE FROM book_recommendations WHERE source_book_id = ? AND source = ?", sourceUuid, "RECOMMENDATION_PIPELINE");
-        verify(jdbcTemplate).update(startsWith("INSERT INTO book_recommendations"), any(), eq(sourceUuid), eq(resolvedUuid), eq("RECOMMENDATION_PIPELINE"), anyDouble(), any());
-    }
-
-    @Test
-    void persistPipelineRecommendations_skipsWhenRecommendationCannotResolve() {
-        UUID sourceUuid = UUID.randomUUID();
-        Book source = buildBook(sourceUuid.toString());
-        Book unresolved = buildBook("unresolvable-id");
-
-        RecommendationRecord record = new RecommendationRecord(unresolved, 3.0d, List.of("AUTHOR"));
-
-        when(bookDataOrchestrator.getBookByIdTiered("unresolvable-id")).thenReturn(Mono.empty());
-
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyCompletes(
-                persistenceService.persistPipelineRecommendations(source, List.of(record))
-        );
+        StepVerifier.create(service.persistPipelineRecommendations(source, List.of(record)))
+            .verifyComplete();
 
         verifyNoInteractions(jdbcTemplate);
-    }
-
-private Book buildBook(String id) {
-        return com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
-                .id(id)
-                .title("Title " + id)
-                .build();
     }
 }

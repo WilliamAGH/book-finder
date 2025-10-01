@@ -41,7 +41,7 @@ public class RobotsController {
     private static final String PERMISSIVE_ROBOTS_TXT = String.join("\n",
             "User-agent: *",
             "Allow: /",
-            "Sitemap: https://findmybook.net/sitemap.xml"
+            "Sitemap: " + FINDMYBOOK_NET_URL + "/sitemap.xml"
     ) + "\n";
 
     private static final String RESTRICTIVE_ROBOTS_TXT = String.join("\n",

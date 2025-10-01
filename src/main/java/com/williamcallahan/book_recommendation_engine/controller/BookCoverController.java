@@ -1,13 +1,17 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
+import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import com.williamcallahan.book_recommendation_engine.util.EnumParsingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import com.williamcallahan.book_recommendation_engine.controller.support.ErrorResponseUtils;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +26,7 @@ import java.util.concurrent.CompletionException;
 
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Controller for book cover image operations and retrieval
@@ -39,25 +44,27 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/api/covers")
 @Slf4j
 public class BookCoverController {
-        private final BookDataOrchestrator bookDataOrchestrator;
 
-    private final GoogleBooksService googleBooksService;
     private final BookImageOrchestrationService bookImageOrchestrationService;
+    private final BookQueryRepository bookQueryRepository;
+    private final BookIdentifierResolver bookIdentifierResolver;
+    private final BookDataOrchestrator bookDataOrchestrator;
     
     /**
      * Constructs BookCoverController with required services
-     * - Injects GoogleBooksService for book metadata retrieval
-     * - Injects BookImageOrchestrationService for cover image processing
+ * - Resolves canonical book metadata from Postgres projections
+ * - Leverages BookImageOrchestrationService for cover image processing
      * 
      * @param googleBooksService Service for retrieving book information from Google Books API
      * @param bookImageOrchestrationService Service for orchestrating book cover image operations
      */
-    public BookCoverController(
-            GoogleBooksService googleBooksService,
-            BookImageOrchestrationService bookImageOrchestrationService,
-            BookDataOrchestrator bookDataOrchestrator) {
-        this.googleBooksService = googleBooksService;
+    public BookCoverController(BookImageOrchestrationService bookImageOrchestrationService,
+                               BookQueryRepository bookQueryRepository,
+                               BookIdentifierResolver bookIdentifierResolver,
+                               BookDataOrchestrator bookDataOrchestrator) {
         this.bookImageOrchestrationService = bookImageOrchestrationService;
+        this.bookQueryRepository = bookQueryRepository;
+        this.bookIdentifierResolver = bookIdentifierResolver;
         this.bookDataOrchestrator = bookDataOrchestrator;
     }
     
@@ -83,9 +90,11 @@ public class BookCoverController {
         DeferredResult<ResponseEntity<Map<String, Object>>> deferredResult = 
             new DeferredResult<>(timeoutValue);
 
-        Mono<Book> canonicalBookMono = bookDataOrchestrator.getBookByIdTiered(id)
-            .switchIfEmpty(Mono.defer(() -> Mono.fromCompletionStage(googleBooksService.getBookById(id))
-                .flatMap(book -> book == null ? Mono.empty() : Mono.just(book))));
+        Mono<Book> canonicalBookMono = locateBookForCover(id)
+            .switchIfEmpty(bookDataOrchestrator != null
+                ? bookDataOrchestrator.fetchCanonicalBookReactive(id)
+                    .doOnNext(book -> log.debug("Cover fallback hydrated via orchestrator for id {}", id))
+                : Mono.empty());
 
         Mono<ResponseEntity<Map<String, Object>>> responseMono = canonicalBookMono
             .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found")))
@@ -94,7 +103,13 @@ public class BookCoverController {
                 return Mono.fromFuture(bookImageOrchestrationService.getBestCoverUrlAsync(book, preferredSource))
                     .map(updatedBook -> {
                         Map<String, Object> response = new HashMap<>();
+
                         response.put("bookId", id);
+
+                        Map<String, Object> bookNode = new HashMap<>();
+                        bookNode.put("id", updatedBook.getId());
+                        bookNode.put("slug", updatedBook.getSlug());
+                        response.put("book", bookNode);
 
                         // Improved fallback logic with proper coalescing
                         String s3Path = updatedBook.getS3ImagePath();
@@ -107,17 +122,27 @@ public class BookCoverController {
 
                         // Priority: S3 > preferred > external > placeholder
                         String coverUrl = firstNonBlank(s3Path, preferredFromImages, externalUrl, placeholder);
-                        response.put("coverUrl", coverUrl);
+
+                        Map<String, Object> coverNode = new HashMap<>();
+                        coverNode.put("resolvedUrl", coverUrl);
 
                         if (updatedBook.getCoverImages() != null) {
-                            response.put("preferredUrl", firstNonBlank(preferredFromImages, coverUrl));
-                            response.put("fallbackUrl", firstNonBlank(fallbackFromImages, coverUrl));
+                            coverNode.put("preferredUrl", firstNonBlank(preferredFromImages, coverUrl));
+                            coverNode.put("fallbackUrl", firstNonBlank(fallbackFromImages, coverUrl));
+                            coverNode.put("source", updatedBook.getCoverImages().getSource());
                         } else {
                             String fallback = firstNonBlank(s3Path, externalUrl, placeholder);
-                            response.put("preferredUrl", fallback);
-                            response.put("fallbackUrl", fallback);
+                            coverNode.put("preferredUrl", fallback);
+                            coverNode.put("fallbackUrl", fallback);
                         }
+                        coverNode.put("requestedSourcePreference", preferredSource.name());
+                        response.put("cover", coverNode);
+
+                        response.put("coverUrl", coverUrl);
+                        response.put("preferredUrl", coverNode.get("preferredUrl"));
+                        response.put("fallbackUrl", coverNode.get("fallbackUrl"));
                         response.put("requestedSourcePreference", preferredSource.name());
+
                         return ResponseEntity.ok(response);
                     });
             })
@@ -195,6 +220,36 @@ public class BookCoverController {
         });
 
         return deferredResult;
+    }
+
+    private Mono<Book> locateBookForCover(String identifier) {
+        if (!ValidationUtils.hasText(identifier)) {
+            return Mono.empty();
+        }
+        String trimmed = identifier.trim();
+        return Mono.fromCallable(() -> findBookForCover(trimmed))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(book -> book == null ? Mono.empty() : Mono.just(book));
+    }
+
+    private Book findBookForCover(String identifier) {
+        BookDetail detail = findDetail(identifier);
+        if (detail != null) {
+            return BookDomainMapper.fromDetail(detail);
+        }
+        return bookIdentifierResolver.resolveToUuid(identifier)
+            .flatMap(uuid -> bookQueryRepository.fetchBookCard(uuid)
+                .map(BookDomainMapper::fromCard))
+            .orElse(null);
+    }
+
+    private BookDetail findDetail(String identifier) {
+        return bookQueryRepository.fetchBookDetailBySlug(identifier)
+            .or(() -> bookIdentifierResolver.resolveCanonicalId(identifier)
+                .map(UuidUtils::parseUuidOrNull)
+                .filter(uuid -> uuid != null)
+                .flatMap(uuid -> bookQueryRepository.fetchBookDetail(uuid)))
+            .orElse(null);
     }
 
     /**

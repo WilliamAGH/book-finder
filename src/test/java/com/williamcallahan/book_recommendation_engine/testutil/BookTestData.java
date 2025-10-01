@@ -32,7 +32,7 @@ public final class BookTestData {
         private String s3ImagePath = null;
         private Date publishedDate = Date.from(Instant.parse("2020-01-01T00:00:00Z"));
         private String isbn13 = "9781234567890";
-        private String coverImageUrl = "https://example.com/test-book-cover.jpg";
+        private String externalImageUrl = "https://example.com/test-book-cover.jpg";
 
         public BookBuilder id(String id) { this.id = id; return this; }
         public BookBuilder title(String title) { this.title = title; return this; }
@@ -43,7 +43,8 @@ public final class BookTestData {
         public BookBuilder s3ImagePath(String path) { this.s3ImagePath = path; return this; }
         public BookBuilder publishedDate(Date date) { this.publishedDate = date; return this; }
         public BookBuilder isbn13(String isbn13) { this.isbn13 = isbn13; return this; }
-        public BookBuilder coverImageUrl(String url) { this.coverImageUrl = url; return this; }
+        public BookBuilder coverImageUrl(String url) { this.externalImageUrl = url; return this; }
+        public BookBuilder externalImageUrl(String url) { this.externalImageUrl = url; return this; }
 
         public Book build() {
             Book b = new Book();
@@ -56,7 +57,9 @@ public final class BookTestData {
             b.setS3ImagePath(s3ImagePath);
             b.setPublishedDate(publishedDate);
             b.setIsbn13(isbn13);
-            b.setCoverImageUrl(coverImageUrl);
+            if (externalImageUrl != null) {
+                b.setExternalImageUrl(externalImageUrl);
+            }
             return b;
         }
     }

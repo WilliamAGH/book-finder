@@ -10,7 +10,12 @@ import java.util.List;
 /**
  * Data Transfer Object for Book entity.
  * Used for API responses and inter-service communication.
+ *
+ * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.controller.dto.BookDto}
+ * as the canonical API contract.
  */
+@Deprecated(since = "2025-10-01", forRemoval = true)
+// Lombok annotations retained for backwards compatibility during the sunset period.
 @Data
 @Builder
 @NoArgsConstructor

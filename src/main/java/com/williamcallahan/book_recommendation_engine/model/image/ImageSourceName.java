@@ -16,8 +16,6 @@ public enum ImageSourceName {
     GOOGLE_BOOKS("Google Books API"),
     OPEN_LIBRARY("OpenLibrary"),
     LONGITOOD("Longitood"),
-    LOCAL_CACHE("LocalCache"),
-    S3_CACHE("S3 Cache"),
     INTERNAL_PROCESSING("Internal Processing"),
     UNKNOWN("Unknown");
 

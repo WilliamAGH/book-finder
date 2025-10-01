@@ -36,6 +36,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.williamcallahan.book_recommendation_engine.service.BookCollectionPersistenceService;
 import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.TieredBookSearchService;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -84,6 +85,9 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
 
     @MockitoBean
     private BookDataOrchestrator bookDataOrchestrator;
+
+    @MockitoBean
+    private TieredBookSearchService mockTieredBookSearchService;
     
     // Mock NewYorkTimesService to prevent Spring from trying to instantiate it with missing dependencies
     @MockitoBean
@@ -118,7 +122,7 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
         
         // Configure behavior for placeholder creation
         ImageDetails placeholderDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.placeholder(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
-        when(localDiskCoverCacheService.createPlaceholderImageDetails(anyString(), anyString()))
+        when(localDiskCoverCacheService.placeholderImageDetails(anyString(), anyString()))
             .thenReturn(placeholderDetails);
         
         // Default S3 behavior - return empty (cache miss)
@@ -136,7 +140,7 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
         testBook.setTitle("Test Book Title");
         testBook.setAuthors(java.util.Collections.singletonList("Test Author"));
         testBook.setIsbn13("9781234567890");
-        testBook.setCoverImageUrl("https://example.com/testbook123-cover.jpg");
+        testBook.setExternalImageUrl("https://example.com/testbook123-cover.jpg");
     }
 
     /**
@@ -156,7 +160,7 @@ private BookCollectionPersistenceService bookCollectionPersistenceService;
         s3TestBook.setTitle("S3 Test Book");
         s3TestBook.setAuthors(java.util.Collections.singletonList("Test Author"));
         s3TestBook.setIsbn13("9780000000001");
-        s3TestBook.setCoverImageUrl("https://example.com/s3testbook-cover.jpg");
+        s3TestBook.setExternalImageUrl("https://example.com/s3testbook-cover.jpg");
         
         // Set up the S3 hit scenario
 ImageDetails s3ImageDetails = com.williamcallahan.book_recommendation_engine.testutil.ImageTestData.s3Cache(
@@ -177,10 +181,11 @@ ImageDetails s3ImageDetails = com.williamcallahan.book_recommendation_engine.tes
         StepVerifier.create(result)
             .assertNext(coverImages -> {
                 assertNotNull(coverImages);
-                // With the mock configuration, we should get S3_CACHE source
-                assertEquals(CoverImageSource.S3_CACHE, coverImages.getSource());
+                // With the mock configuration, we should get the actual data source (GOOGLE_BOOKS)
+                // Storage location is tracked separately now
+                assertEquals(CoverImageSource.GOOGLE_BOOKS, coverImages.getSource());
                 assertEquals(s3ImageDetails.getUrlOrPath(), coverImages.getPreferredUrl());
-                assertEquals(s3TestBook.getCoverImageUrl(), coverImages.getFallbackUrl());
+                assertEquals(s3TestBook.getExternalImageUrl(), coverImages.getFallbackUrl());
             })
             .verifyComplete();
 
@@ -250,11 +255,11 @@ ImageDetails s3ImageDetails = com.williamcallahan.book_recommendation_engine.tes
             "Expected either imageDetails.getUrlOrPath() or '" + ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH + "', but got: " + capturedEvent.getNewCoverUrl()
         );
         
-        // The source should be either GOOGLE_BOOKS or LOCAL_CACHE for the placeholder
+        // The source should be either GOOGLE_BOOKS or NONE for the placeholder
         assertTrue(
             CoverImageSource.GOOGLE_BOOKS.equals(capturedEvent.getSource()) || 
-            CoverImageSource.LOCAL_CACHE.equals(capturedEvent.getSource()),
-            "Expected either GOOGLE_BOOKS or LOCAL_CACHE, but got: " + capturedEvent.getSource()
+            CoverImageSource.NONE.equals(capturedEvent.getSource()),
+            "Expected either GOOGLE_BOOKS or NONE, but got: " + capturedEvent.getSource()
         );
     }
 
@@ -275,7 +280,7 @@ ImageDetails s3ImageDetails = com.williamcallahan.book_recommendation_engine.tes
         cacheMissBook.setTitle("Cache Miss Book");
         cacheMissBook.setAuthors(java.util.Collections.singletonList("Test Author"));
         cacheMissBook.setIsbn13("9780000000002");
-        cacheMissBook.setCoverImageUrl("https://example.com/cachemissbook-cover.jpg");
+        cacheMissBook.setExternalImageUrl("https://example.com/cachemissbook-cover.jpg");
         
         // Test when S3 and caches are empty, should return fallback and trigger background processing
         // S3 returns empty
@@ -295,7 +300,7 @@ ImageDetails backgroundImageDetails = com.williamcallahan.book_recommendation_en
             .assertNext(coverImages -> {
                 assertNotNull(coverImages);
                 // With cache miss, we should get the book's original cover URL or placeholder
-                boolean preferredIsExpected = coverImages.getPreferredUrl().equals(cacheMissBook.getCoverImageUrl())
+                boolean preferredIsExpected = coverImages.getPreferredUrl().equals(cacheMissBook.getExternalImageUrl())
                     || coverImages.getPreferredUrl().equals(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH)
                     || coverImages.getPreferredUrl().startsWith("/book-covers/");
                 assertTrue(
@@ -306,8 +311,8 @@ ImageDetails backgroundImageDetails = com.williamcallahan.book_recommendation_en
                 // The fallback URL should be either the placeholder or the book's URL
                 assertTrue(
                     coverImages.getFallbackUrl().equals(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH) || 
-                    coverImages.getFallbackUrl().equals(cacheMissBook.getCoverImageUrl()),
-                    "Expected either '" + ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH + "' or cacheMissBook.getCoverImageUrl(), but got: " + coverImages.getFallbackUrl()
+                    coverImages.getFallbackUrl().equals(cacheMissBook.getExternalImageUrl()),
+                    "Expected either '" + ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH + "' or cacheMissBook.getExternalImageUrl(), but got: " + coverImages.getFallbackUrl()
                 );
             })
             .verifyComplete();

@@ -62,7 +62,14 @@ public final class SearchQueryUtils {
     public static String cacheKey(String query, String langCode) {
         String canonical = Objects.requireNonNullElse(canonicalize(query), "");
         String sanitized = CACHE_KEY_SANITIZER.matcher(canonical).replaceAll("_");
-        String langPart = (langCode == null || langCode.isBlank()) ? "any" : langCode;
+        String normalizedLang = langCode == null ? "" : langCode.trim();
+        String langPart;
+        if (normalizedLang.isEmpty()) {
+            langPart = "any";
+        } else {
+            String sanitizedLang = CACHE_KEY_SANITIZER.matcher(normalizedLang.toLowerCase(Locale.ROOT)).replaceAll("");
+            langPart = sanitizedLang.isEmpty() ? "any" : sanitizedLang;
+        }
         return sanitized + "-" + langPart + ".json";
     }
 }

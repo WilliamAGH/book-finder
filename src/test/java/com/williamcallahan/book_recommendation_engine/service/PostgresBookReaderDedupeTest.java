@@ -2,10 +2,10 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -17,7 +17,6 @@ import reactor.test.StepVerifier;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -33,39 +32,23 @@ class PostgresBookReaderDedupeTest {
 
     @BeforeEach
     void setUp() {
-        S3RetryService s3RetryService = Mockito.mock(S3RetryService.class);
-        lenient().when(s3RetryService.fetchJsonWithRetry(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(S3FetchResult.disabled()));
-        lenient().when(s3RetryService.uploadJsonWithRetry(anyString(), anyString()))
-                .thenReturn(CompletableFuture.completedFuture(null));
-
         var om = new com.fasterxml.jackson.databind.ObjectMapper();
         var google = Mockito.mock(GoogleApiFetcher.class);
-        var openLibrary = Mockito.mock(OpenLibraryBookDataService.class);
-        var aggregator = Mockito.mock(BookDataAggregatorService.class);
-        var collection = Mockito.mock(BookCollectionPersistenceService.class);
         var search = createBookSearchServiceMock();
         var bookUpsertService = Mockito.mock(BookUpsertService.class);
         var googleBooksMapper = Mockito.mock(GoogleBooksMapper.class);
         var tieredBookSearchService = Mockito.mock(TieredBookSearchService.class);
 
-        PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om, new BookLookupService(jdbcTemplate));
+        PostgresBookRepository repo = new PostgresBookRepository(jdbcTemplate, om);
 
         orchestrator = new BookDataOrchestrator(
-                s3RetryService,
                 google,
                 om,
-                openLibrary,
-                aggregator,
-                collection,
                 search,
-                new BookS3CacheService(s3RetryService, om),
                 repo,
                 bookUpsertService,
                 googleBooksMapper,
                 tieredBookSearchService,
-                false,
-                false,
                 false
         );
         stubDatabaseQueries();
@@ -81,7 +64,7 @@ class PostgresBookReaderDedupeTest {
 
     @Test
     void returnsCanonicalBookWithEditionChainFromHydratedPostgresRows() {
-        StepVerifier.create(orchestrator.getBookByIdTiered(PRIMARY_ID))
+        StepVerifier.create(orchestrator.fetchCanonicalBookReactive(PRIMARY_ID))
                 .assertNext(book -> {
                     assertThat(book.getId()).isEqualTo(PRIMARY_ID);
                     assertThat(book.getSlug()).isEqualTo("primary-fixture-hardcover");
@@ -103,11 +86,10 @@ class PostgresBookReaderDedupeTest {
                 .verifyComplete();
     }
 
-    @SuppressWarnings("unchecked")
     private void stubDatabaseQueries() {
         Book canonical = buildCanonicalFixture();
 
-        lenient().when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(ResultSetExtractor.class)))
+        lenient().<Object>when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), ArgumentMatchers.<ResultSetExtractor<?>>any()))
                 .thenAnswer(invocation -> {
                     String sql = normalizeSql(invocation.getArgument(0));
                     if (sql.startsWith("SELECT id::text, slug, title")) {
@@ -119,7 +101,7 @@ class PostgresBookReaderDedupeTest {
                     return null;
                 });
 
-        lenient().when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), any(RowMapper.class)))
+        lenient().<java.util.List<?>>when(jdbcTemplate.query(anyString(), any(PreparedStatementSetter.class), ArgumentMatchers.<RowMapper<?>>any()))
                 .thenReturn(List.of());
 
         lenient().when(jdbcTemplate.queryForObject(anyString(), Mockito.eq(java.util.UUID.class), any()))
@@ -178,5 +160,4 @@ class PostgresBookReaderDedupeTest {
         clone.setOtherEditions(new java.util.ArrayList<>(original.getOtherEditions()));
         return clone;
     }
-
 }

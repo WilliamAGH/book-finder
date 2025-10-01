@@ -31,16 +31,16 @@ import java.net.URI;
 public class S3Config {
     private static final Logger logger = LoggerFactory.getLogger(S3Config.class);
 
-    @Value("${s3.access-key-id:}")
+    @Value("${s3.access-key-id:${S3_ACCESS_KEY_ID:}}")
     private String accessKeyId;
 
-    @Value("${s3.secret-access-key:}")
+    @Value("${s3.secret-access-key:${S3_SECRET_ACCESS_KEY:}}")
     private String secretAccessKey;
 
-    @Value("${s3.server-url:}")
+    @Value("${s3.server-url:${S3_SERVER_URL:}}")
     private String s3ServerUrl;
 
-    @Value("${s3.region:us-west-2}") // Default to us-west-2 if not specified
+    @Value("${s3.region:${AWS_REGION:us-west-2}}") // Default to us-west-2 if not specified
     private String s3Region;
 
     /**

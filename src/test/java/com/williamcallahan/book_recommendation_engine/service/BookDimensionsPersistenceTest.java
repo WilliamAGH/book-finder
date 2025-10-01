@@ -6,7 +6,6 @@ import com.williamcallahan.book_recommendation_engine.test.annotations.DbIntegra
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
@@ -34,7 +33,7 @@ class BookDimensionsPersistenceTest {
     private PostgresBookRepository postgresBookRepository;
     
     @Autowired
-    private CanonicalBookPersistenceService canonicalBookPersistenceService;
+    private BookUpsertService bookUpsertService;
 
     private UUID testBookId;
 
@@ -315,108 +314,84 @@ class BookDimensionsPersistenceTest {
     }
 
     @Test
-    void testCanonicalBookPersistenceService_persistDimensions() {
-        // Create a Book object with dimensions
-        Book book = new Book();
-        book.setId(testBookId.toString());
-        book.setHeightCm(24.0);
-        book.setWidthCm(16.0);
-        book.setThicknessCm(2.5);
-        book.setWeightGrams(450.0);
-        
-        // Use reflection to call private persistDimensions method
-        // (or make it package-private for testing)
-        try {
-            var method = CanonicalBookPersistenceService.class.getDeclaredMethod(
-                "persistDimensions", String.class, Book.class
-            );
-            method.setAccessible(true);
-            method.invoke(canonicalBookPersistenceService, testBookId.toString(), book);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to invoke persistDimensions", e);
-        }
-        
-        // Verify dimensions were persisted
-        Map<String, Object> result = jdbcTemplate.queryForMap(
-            "SELECT height, width, thickness, weight_grams FROM book_dimensions WHERE book_id = ?",
-            testBookId
+    void testBookUpsertService_persistDimensions() {
+        BookAggregate aggregate = buildAggregate(
+            "dim-full",
+            BookAggregate.Dimensions.builder()
+                .height("24.0 cm")
+                .width("16.0 cm")
+                .thickness("2.5 cm")
+                .build()
         );
-        
-        assertThat(result.get("height")).isEqualTo(new BigDecimal("24.0"));
-        assertThat(result.get("width")).isEqualTo(new BigDecimal("16.0"));
-        assertThat(result.get("thickness")).isEqualTo(new BigDecimal("2.5"));
-        assertThat(result.get("weight_grams")).isEqualTo(new BigDecimal("450.0"));
+
+        BookUpsertService.UpsertResult result = bookUpsertService.upsert(aggregate);
+
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+            "SELECT height, width, thickness, weight_grams FROM book_dimensions WHERE book_id = ?",
+            result.getBookId()
+        );
+
+        assertThat((BigDecimal) row.get("height")).isEqualByComparingTo("24.0");
+        assertThat((BigDecimal) row.get("width")).isEqualByComparingTo("16.0");
+        assertThat((BigDecimal) row.get("thickness")).isEqualByComparingTo("2.5");
+        assertThat(row.get("weight_grams")).isNull();
     }
 
     @Test
-    void testCanonicalBookPersistenceService_persistDimensionsWithNulls() {
-        // Create a Book object with only height
-        Book book = new Book();
-        book.setId(testBookId.toString());
-        book.setHeightCm(24.0);
-        book.setWidthCm(null);
-        book.setThicknessCm(null);
-        book.setWeightGrams(null);
-        
-        // Persist dimensions
-        try {
-            var method = CanonicalBookPersistenceService.class.getDeclaredMethod(
-                "persistDimensions", String.class, Book.class
-            );
-            method.setAccessible(true);
-            method.invoke(canonicalBookPersistenceService, testBookId.toString(), book);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to invoke persistDimensions", e);
-        }
-        
-        // Verify only height was persisted
-        Map<String, Object> result = jdbcTemplate.queryForMap(
-            "SELECT height, width, thickness, weight_grams FROM book_dimensions WHERE book_id = ?",
-            testBookId
+    void testBookUpsertService_persistDimensionsWithNulls() {
+        BookAggregate aggregate = buildAggregate(
+            "dim-partial",
+            BookAggregate.Dimensions.builder()
+                .height("24.0 cm")
+                .build()
         );
-        
-        assertThat(result.get("height")).isEqualTo(new BigDecimal("24.0"));
-        assertThat(result.get("width")).isNull();
-        assertThat(result.get("thickness")).isNull();
-        assertThat(result.get("weight_grams")).isNull();
+
+        BookUpsertService.UpsertResult result = bookUpsertService.upsert(aggregate);
+
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+            "SELECT height, width, thickness FROM book_dimensions WHERE book_id = ?",
+            result.getBookId()
+        );
+
+        assertThat((BigDecimal) row.get("height")).isEqualByComparingTo("24.0");
+        assertThat(row.get("width")).isNull();
+        assertThat(row.get("thickness")).isNull();
     }
 
     @Test
-    void testCanonicalBookPersistenceService_deletesDimensionsWhenAllNull() {
-        // First insert dimensions
-        jdbcTemplate.update(
-            "INSERT INTO book_dimensions (book_id, height, width, thickness, created_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, NOW(), NOW())",
-            testBookId, 24.0, 16.0, 2.5
+    void testBookUpsertService_deletesDimensionsWhenAllNull() {
+        String externalId = "dim-delete";
+        BookAggregate createAggregate = buildAggregate(
+            externalId,
+            BookAggregate.Dimensions.builder()
+                .height("24.0 cm")
+                .width("16.0 cm")
+                .thickness("2.5 cm")
+                .build()
         );
-        
-        // Create a Book object with all null dimensions
-        Book book = new Book();
-        book.setId(testBookId.toString());
-        book.setHeightCm(null);
-        book.setWidthCm(null);
-        book.setThicknessCm(null);
-        book.setWeightGrams(null);
-        
-        // Persist dimensions (should delete record)
-        try {
-            var method = CanonicalBookPersistenceService.class.getDeclaredMethod(
-                "persistDimensions", String.class, Book.class
-            );
-            method.setAccessible(true);
-            method.invoke(canonicalBookPersistenceService, testBookId.toString(), book);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to invoke persistDimensions", e);
-        }
-        
-        // Verify record was deleted
-        Integer count = jdbcTemplate.queryForObject(
+
+        BookUpsertService.UpsertResult initial = bookUpsertService.upsert(createAggregate);
+
+        Integer countBefore = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM book_dimensions WHERE book_id = ?",
             Integer.class,
-            testBookId
+            initial.getBookId()
         );
-        
-        assertThat(count).isZero();
+        assertThat(countBefore).isEqualTo(1);
+
+        BookAggregate clearAggregate = buildAggregate(
+            externalId,
+            BookAggregate.Dimensions.builder().build()
+        );
+
+        bookUpsertService.upsert(clearAggregate);
+
+        Integer countAfter = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM book_dimensions WHERE book_id = ?",
+            Integer.class,
+            initial.getBookId()
+        );
+        assertThat(countAfter).isZero();
     }
 
     @Test
@@ -479,5 +454,19 @@ class BookDimensionsPersistenceTest {
             "test-book-" + bookId
         );
         return bookId;
+    }
+
+    private BookAggregate buildAggregate(String externalId, BookAggregate.Dimensions dimensions) {
+        return BookAggregate.builder()
+            .title("Dimensions Test " + externalId)
+            .slugBase("dimensions-test-" + externalId)
+            .authors(List.of("Test Author"))
+            .categories(List.of())
+            .identifiers(BookAggregate.ExternalIdentifiers.builder()
+                .source("TEST")
+                .externalId(externalId)
+                .build())
+            .dimensions(dimensions)
+            .build();
     }
 }
