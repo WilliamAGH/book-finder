@@ -82,10 +82,20 @@ function toIntegerOrNull(value) {
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 function generateNanoId(size = 10) {
-  const bytes = crypto.randomBytes(size);
   let id = '';
-  for (let i = 0; i < size; i++) {
-    id += ALPHABET[bytes[i] % ALPHABET.length];
+  const mask = 0xff - (0xff % ALPHABET.length);
+  let bytes = crypto.randomBytes(size);
+  let cursor = 0;
+
+  while (id.length < size) {
+    if (cursor >= bytes.length) {
+      bytes = crypto.randomBytes(size);
+      cursor = 0;
+    }
+    const random = bytes[cursor++] & 0xff;
+    if (random < mask) {
+      id += ALPHABET[random % ALPHABET.length];
+    }
   }
   return id;
 }
@@ -142,7 +152,7 @@ class JsonParser {
     }
 
     // If we found a { or [, return it
-    if (jsonStart >= 0 && jsonStart < 1000) {
+    if (jsonStart >= 0) {
       return { index: jsonStart, name: 'JSON start' };
     }
 
@@ -443,10 +453,13 @@ class JsonParser {
 
     // Try ISBN first
     if (volumeInfo.industryIdentifiers) {
-      for (const id of volumeInfo.industryIdentifiers) {
-        if (id.type === 'ISBN_13') return `isbn13:${id.identifier}`;
-        if (id.type === 'ISBN_10') return `isbn10:${id.identifier}`;
-      }
+      const ids = volumeInfo.industryIdentifiers;
+      const raw13 = ids.find(i => i.type === 'ISBN_13')?.identifier;
+      const raw10 = ids.find(i => i.type === 'ISBN_10')?.identifier;
+      const sanitized13 = sanitizeIsbn(raw13);
+      const sanitized10 = sanitizeIsbn(raw10);
+      if (sanitized13) return `isbn13:${sanitized13}`;
+      if (sanitized10) return `isbn10:${sanitized10}`;
     }
 
     // Fall back to title + first author
@@ -704,7 +717,7 @@ class BookMigrator {
 
     let slug = title.toLowerCase()
       .replace(/&/g, 'and')
-      .replace(/['"''""]/g, '')
+      .replace(/['"]/g, '')
       .replace(/[^a-z0-9\s-]/g, '')
       .replace(/[\s_]+/g, '-')
       .replace(/-+/g, '-')
@@ -957,11 +970,6 @@ class BookMigrator {
       if (!authorName?.trim()) continue;
 
       const normalizedName = this.normalizeAuthorName(authorName);
-      const existingAuthor = await this.client.query(
-        'SELECT id FROM authors WHERE name = $1 LIMIT 1',
-        [authorName]
-      );
-
       // Insert or get author
       const authorResult = await this.client.query(
         `INSERT INTO authors (id, name, normalized_name, created_at, updated_at)
@@ -972,19 +980,7 @@ class BookMigrator {
       );
 
       const authorId = authorResult.rows[0].id;
-
-      if (existingAuthor.rows.length > 0) {
-        this.log(`↻ Reusing existing author ${authorId} (${authorName})`);
-      } else {
-        this.log(`✨ Inserted author ${authorId} (${authorName})`);
-      }
-
-      const existingJoin = await this.client.query(
-        `SELECT id FROM book_authors_join
-         WHERE book_id = $1::uuid AND author_id = $2
-         LIMIT 1`,
-        [bookId, authorId]
-      );
+      this.log(`↻ Upserted author ${authorId} (${authorName})`);
 
       // Link book to author
       await this.client.query(
@@ -993,12 +989,7 @@ class BookMigrator {
          ON CONFLICT (book_id, author_id) DO UPDATE SET position = EXCLUDED.position`,
         [generateNanoId(12), bookId, authorId, i]
       );
-
-      if (existingJoin.rows.length > 0) {
-        this.log(`↻ Reusing existing book_authors_join row for author ${authorId} and book ${bookId}`);
-      } else {
-        this.log(`✨ Linked author ${authorId} to book ${bookId}`);
-      }
+      this.log(`↻ Upserted author→book link (${authorId} → ${bookId})`);
     }
   }
 
@@ -1064,13 +1055,6 @@ class BookMigrator {
         this.log(`✨ Created category collection ${collectionId} (${categoryName})`);
       }
 
-      const existingJoin = await this.client.query(
-        `SELECT id FROM book_collections_join
-         WHERE collection_id = $1 AND book_id = $2::uuid
-         LIMIT 1`,
-        [collectionId, bookId]
-      );
-
       await this.client.query(
         `INSERT INTO book_collections_join (
             id, collection_id, book_id, created_at, updated_at
@@ -1081,12 +1065,7 @@ class BookMigrator {
             updated_at = NOW()`,
         [generateNanoId(12), collectionId, bookId]
       );
-
-      if (existingJoin.rows.length > 0) {
-        this.log(`↻ Reusing category membership for collection ${collectionId} → book ${bookId}`);
-      } else {
-        this.log(`✨ Linked book ${bookId} to category ${collectionId}`);
-      }
+      this.log(`↻ Upserted category membership for collection ${collectionId} → book ${bookId}`);
     }
   }
 
@@ -1148,13 +1127,6 @@ class BookMigrator {
       this.log(`✨ Created NYT qualifier collection ${collectionId} (${displayName})`);
     }
 
-    const existingJoin = await this.client.query(
-      `SELECT id FROM book_collections_join
-       WHERE collection_id = $1 AND book_id = $2::uuid
-       LIMIT 1`,
-      [collectionId, bookId]
-    );
-
     await this.client.query(
       `INSERT INTO book_collections_join (
             id, collection_id, book_id, position, weeks_on_list, created_at, updated_at
@@ -1167,12 +1139,7 @@ class BookMigrator {
             updated_at = NOW()`,
       [generateNanoId(12), collectionId, bookId, rank ?? null, weeksOnList ?? null]
     );
-
-    if (existingJoin.rows.length > 0) {
-      this.log(`↻ Reusing NYT qualifier membership for book ${bookId}`);
-    } else {
-      this.log(`✨ Linked book ${bookId} to NYT qualifier list ${collectionId}`);
-    }
+    this.log(`↻ Upserted NYT qualifier membership for book ${bookId}`);
   }
 }
 
