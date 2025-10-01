@@ -42,7 +42,7 @@ public class OpenLibraryBookDataService {
     private final boolean externalFallbackEnabled;
 
     public OpenLibraryBookDataService(WebClient.Builder webClientBuilder,
-                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl,
+                                   @Value("${openlibrary.data.api.url:https://openlibrary.org}") String openLibraryApiUrl,
                                    @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.webClient = webClientBuilder.baseUrl(openLibraryApiUrl).build();
         this.externalFallbackEnabled = externalFallbackEnabled;
