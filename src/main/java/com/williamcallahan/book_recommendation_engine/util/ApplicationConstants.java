@@ -35,9 +35,10 @@ public final class ApplicationConstants {
     }
 
     public static final class Paging {
-        public static final int DEFAULT_SEARCH_LIMIT = 10;
+        public static final int DEFAULT_SEARCH_LIMIT = 12;
         public static final int MIN_SEARCH_LIMIT = 1;
         public static final int MAX_SEARCH_LIMIT = 100;
+        public static final int SEARCH_PREFETCH_MULTIPLIER = 2;
 
         public static final int DEFAULT_SIMILAR_LIMIT = 5;
         public static final int MAX_SIMILAR_LIMIT = 20;
