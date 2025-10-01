@@ -105,7 +105,7 @@ public class TieredBookSearchService {
      * @deprecated Stream DTOs via repository-backed queries rather than legacy {@link Book} flows.
      */
     @Deprecated(since = "2025-10-01", forRemoval = true)
-    Flux<Book> streamSearch(String query,
+    public Flux<Book> streamSearch(String query,
                              String langCode,
                              int desiredTotalResults,
                              String orderBy,
