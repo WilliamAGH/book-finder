@@ -1,230 +1,354 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
+import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
+import com.williamcallahan.book_recommendation_engine.dto.RecommendationCard;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
-import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
+import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
 import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import reactor.core.publisher.Mono;
 
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest({BookController.class, BookCoverController.class})
-@AutoConfigureMockMvc(addFilters = false)
+@ExtendWith(MockitoExtension.class)
 class BookControllerTest {
 
-    @Autowired
-    private MockMvc mockMvc;
+    @Mock
+    private BookSearchService bookSearchService;
 
+    @Mock
+    private BookQueryRepository bookQueryRepository;
 
-    @MockitoBean
+    @Mock
+    private BookIdentifierResolver bookIdentifierResolver;
+
+    @Mock
     private BookDataOrchestrator bookDataOrchestrator;
 
-    @MockitoBean
-    private RecommendationService recommendationService;
-
-    @MockitoBean
-    private GoogleBooksService googleBooksService;
-
-    @MockitoBean
+    @Mock
     private BookImageOrchestrationService bookImageOrchestrationService;
+
+    private MockMvc mockMvc;
 
     private Book fixtureBook;
 
     @BeforeEach
     void setUp() {
-        fixtureBook = buildBook("11111111-1111-4111-8111-111111111111", "Fixture Title");
-        when(bookDataOrchestrator.fetchCanonicalBookReactive(anyString())).thenReturn(Mono.empty());
+        BookController bookController = new BookController(bookSearchService, bookQueryRepository, bookIdentifierResolver);
+        BookCoverController bookCoverController = new BookCoverController(
+            bookImageOrchestrationService,
+            bookQueryRepository,
+            bookIdentifierResolver,
+            bookDataOrchestrator
+        );
 
-        when(googleBooksService.getBookById(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
-        when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class)))
-            .thenAnswer(invocation -> java.util.concurrent.CompletableFuture.completedFuture(invocation.getArgument(0)));
+        mockMvc = MockMvcBuilders.standaloneSetup(bookController, bookCoverController).build();
+        fixtureBook = buildBook("11111111-1111-4111-8111-111111111111", "fixture-book-of-secrets");
     }
 
     @Test
     @DisplayName("GET /api/books/search returns DTO results")
     void searchBooks_returnsDtos() throws Exception {
-        when(bookDataOrchestrator.searchBooksTiered(eq("Fixture"), eq(null), eq(5), eq("newest")))
-                .thenReturn(Mono.just(List.of(fixtureBook)));
+        UUID bookUuid = UUID.fromString(fixtureBook.getId());
+        List<BookSearchService.SearchResult> searchResults = List.of(
+            new BookSearchService.SearchResult(bookUuid, 0.92, "POSTGRES")
+        );
+        Map<String, Object> tags = Map.of("nytBestseller", Map.of("rank", 1));
+        BookListItem listItem = new BookListItem(
+            fixtureBook.getId(),
+            fixtureBook.getSlug(),
+            fixtureBook.getTitle(),
+            fixtureBook.getDescription(),
+            fixtureBook.getAuthors(),
+            fixtureBook.getCategories(),
+            fixtureBook.getCoverImages().getPreferredUrl(),
+            4.8,
+            123,
+            tags
+        );
+
+        when(bookSearchService.searchBooks(eq("Fixture"), anyInt())).thenReturn(searchResults);
+        when(bookQueryRepository.fetchBookListItems(eq(List.of(bookUuid)))).thenReturn(List.of(listItem));
 
         performAsync(get("/api/books/search")
-                .param("query", "Fixture")
-                .param("maxResults", "5"))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.query", equalTo("Fixture")))
-                .andExpect(jsonPath("$.results", hasSize(1)))
-                .andExpect(jsonPath("$.results[0].id", equalTo(fixtureBook.getId())))
-                .andExpect(jsonPath("$.results[0].slug", equalTo(fixtureBook.getSlug())))
-                .andExpect(jsonPath("$.results[0].cover.preferredUrl", containsString("preferred")))
-                .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")))
-                .andExpect(jsonPath("$.results[0].collections", hasSize(1)))
-                .andExpect(jsonPath("$.results[0].collections[0].name", equalTo("NYT Hardcover Fiction")));
+            .param("query", "Fixture")
+            .param("maxResults", "5"))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.query", equalTo("Fixture")))
+            .andExpect(jsonPath("$.results", hasSize(1)))
+            .andExpect(jsonPath("$.results[0].id", equalTo(fixtureBook.getId())))
+            .andExpect(jsonPath("$.results[0].slug", equalTo(fixtureBook.getSlug())))
+            .andExpect(jsonPath("$.results[0].cover.preferredUrl", containsString("preferred")))
+            .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")))
+            .andExpect(jsonPath("$.results[0].tags[0].attributes.rank", equalTo(1)))
+            .andExpect(jsonPath("$.results[0].matchType", equalTo("POSTGRES")));
     }
 
     @Test
     @DisplayName("GET /api/books/{id} returns mapped DTO")
     void getBookByIdentifier_returnsDto() throws Exception {
-        when(bookDataOrchestrator.fetchCanonicalBookReactive(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
+        BookDetail detail = buildDetailFromBook(fixtureBook);
+        when(bookQueryRepository.fetchBookDetailBySlug(fixtureBook.getSlug()))
+            .thenReturn(Optional.of(detail));
 
-        performAsync(get("/api/books/" + fixtureBook.getId()))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
-                .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())))
-                .andExpect(jsonPath("$.authors[0].name", equalTo("Fixture Author")))
-                .andExpect(jsonPath("$.cover.s3ImagePath", equalTo(fixtureBook.getS3ImagePath())))
-                .andExpect(jsonPath("$.collections[0].type", equalTo("BESTSELLER_LIST")));
-    }
-
-    @Test
-    @DisplayName("GET /api/books/{slug} falls back to slug lookup")
-    void getBookBySlug_fallsBackToSlugLookup() throws Exception {
-        when(bookDataOrchestrator.fetchCanonicalBookReactive("fixture-book-of-secrets")).thenReturn(Mono.just(fixtureBook));
-
-        performAsync(get("/api/books/fixture-book-of-secrets"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
-                .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())))
-                .andExpect(jsonPath("$.collections", hasSize(1)));
-    }
-
-    @Test
-    @DisplayName("GET /api/books/{id} returns 404 when not found")
-    void getBook_notFound() throws Exception {
-        when(bookDataOrchestrator.fetchCanonicalBookReactive("missing")).thenReturn(Mono.empty());
-
-        performAsync(get("/api/books/missing"))
-                .andExpect(status().isNotFound());
-    }
-
-    @Test
-    @DisplayName("GET /api/books/{id}/similar returns mapped DTOs")
-    void getSimilarBooks_returnsDtos() throws Exception {
-        Book similar = buildBook("22222222-2222-4222-8222-222222222222", "Sibling Title");
-        when(bookDataOrchestrator.fetchCanonicalBookReactive(fixtureBook.getId())).thenReturn(Mono.just(fixtureBook));
-        when(recommendationService.getSimilarBooks(eq(fixtureBook.getId()), anyInt()))
-                .thenReturn(Mono.just(List.of(similar)));
-
-        performAsync(get("/api/books/" + fixtureBook.getId() + "/similar").param("limit", "3"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(1)))
-                .andExpect(jsonPath("$[0].id", equalTo(similar.getId())));
-    }
-
-    @Test
-    @DisplayName("GET /api/covers/{id} hydrates via orchestrator before Google fallback")
-    void getBookCover_usesOrchestratorFirst() throws Exception {
-        Book hydrated = buildBook("orchestrator-id", "Hydrated Title");
-        when(bookDataOrchestrator.getBookByIdTiered("orchestrator-id")).thenReturn(Mono.just(hydrated));
-        when(bookImageOrchestrationService.getBestCoverUrlAsync(eq(hydrated), eq(CoverImageSource.ANY)))
-            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(hydrated));
-
-        performAsync(get("/api/covers/orchestrator-id"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.bookId", equalTo("orchestrator-id")))
-                .andExpect(jsonPath("$.coverUrl", equalTo(hydrated.getS3ImagePath())));
-
-        verify(googleBooksService, never()).getBookById("orchestrator-id");
-    }
-
-    @Test
-    @DisplayName("GET /api/covers/{id} falls back to Google when orchestrator returns empty")
-    void getBookCover_fallsBackToGoogle() throws Exception {
-        Book fallback = buildBook("fallback-id", "Fallback Title");
-        when(bookDataOrchestrator.getBookByIdTiered("fallback-id")).thenReturn(Mono.empty());
-        when(googleBooksService.getBookById("fallback-id"))
-            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(fallback));
-        when(bookImageOrchestrationService.getBestCoverUrlAsync(eq(fallback), eq(CoverImageSource.ANY)))
-            .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(fallback));
-
-        performAsync(get("/api/covers/fallback-id"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.bookId", equalTo("fallback-id")))
-                .andExpect(jsonPath("$.coverUrl", equalTo(fallback.getS3ImagePath())));
-
-        verify(googleBooksService).getBookById("fallback-id");
-    }
-
-    @Test
-    @DisplayName("GET /api/books/authors/search returns fallback IDs when missing from Postgres")
-    void searchAuthors_returnsFallbackIds() throws Exception {
-        List<BookSearchService.AuthorResult> authorResults = List.of(
-            new BookSearchService.AuthorResult("db-1", "Known Author", 5, 0.92),
-            new BookSearchService.AuthorResult(null, "Mystery Author", 1, 0.35)
-        );
-
-        when(bookDataOrchestrator.searchAuthors(eq("Mystery"), anyInt())).thenReturn(Mono.just(authorResults));
-
-        performAsync(get("/api/books/authors/search")
-                .param("query", "Mystery"))
+        performAsync(get("/api/books/" + fixtureBook.getSlug()))
             .andExpect(status().isOk())
             .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-            .andExpect(jsonPath("$.results", hasSize(2)))
-            .andExpect(jsonPath("$.results[0].id", equalTo("db-1")))
-            .andExpect(jsonPath("$.results[1].id", containsString("external-author-")))
-            .andExpect(jsonPath("$.results[1].name", equalTo("Mystery Author")));
+            .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
+            .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())))
+            .andExpect(jsonPath("$.authors[0].name", equalTo("Fixture Author")))
+            .andExpect(jsonPath("$.cover.s3ImagePath", equalTo(fixtureBook.getS3ImagePath())))
+            .andExpect(jsonPath("$.tags[0].key", equalTo("nytBestseller")));
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{identifier} falls back to canonical UUID when slug missing")
+    void getBookByIdentifier_fallsBackToCanonicalId() throws Exception {
+        when(bookQueryRepository.fetchBookDetailBySlug(fixtureBook.getSlug()))
+            .thenReturn(Optional.empty());
+        when(bookIdentifierResolver.resolveCanonicalId(fixtureBook.getSlug()))
+            .thenReturn(Optional.of(fixtureBook.getId()));
+
+        BookDetail detail = buildDetailFromBook(fixtureBook);
+        when(bookQueryRepository.fetchBookDetail(UUID.fromString(fixtureBook.getId())))
+            .thenReturn(Optional.of(detail));
+
+        performAsync(get("/api/books/" + fixtureBook.getSlug()))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.id", equalTo(fixtureBook.getId())))
+            .andExpect(jsonPath("$.slug", equalTo(fixtureBook.getSlug())));
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{identifier} returns 404 when not found")
+    void getBook_notFound() throws Exception {
+        when(bookQueryRepository.fetchBookDetailBySlug("missing")).thenReturn(Optional.empty());
+        when(bookIdentifierResolver.resolveCanonicalId("missing")).thenReturn(Optional.empty());
+
+        performAsync(get("/api/books/missing"))
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{id}/similar returns cached DTOs")
+    void getBookSimilar_returnsDtos() throws Exception {
+        UUID bookUuid = UUID.fromString(fixtureBook.getId());
+        when(bookIdentifierResolver.resolveToUuid(fixtureBook.getSlug()))
+            .thenReturn(Optional.of(bookUuid));
+
+        BookCard card = new BookCard(
+            fixtureBook.getId(),
+            fixtureBook.getSlug(),
+            fixtureBook.getTitle(),
+            fixtureBook.getAuthors(),
+            fixtureBook.getCoverImages().getPreferredUrl(),
+            4.7,
+            321,
+            Map.of("reason", Map.of("type", "AUTHOR"))
+        );
+        List<RecommendationCard> cards = List.of(new RecommendationCard(card, 0.9, "AUTHOR"));
+        when(bookQueryRepository.fetchRecommendationCards(bookUuid, 3)).thenReturn(cards);
+
+        performAsync(get("/api/books/" + fixtureBook.getSlug() + "/similar")
+            .param("limit", "3"))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].id", equalTo(fixtureBook.getId())));
+    }
+
+    @Test
+    @DisplayName("GET /api/books/{id}/similar returns 404 when canonical lookup fails")
+    void getBookSimilar_returnsEmptyWhenMissing() throws Exception {
+        when(bookIdentifierResolver.resolveToUuid("unknown"))
+            .thenReturn(Optional.empty());
+
+        performAsync(get("/api/books/unknown/similar"))
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /api/covers/{id} uses orchestrator fallback when repository misses")
+    void getBookCover_fallsBackToOrchestrator() throws Exception {
+        stubRepositoryMiss("orchestrator-id");
+        Book fallback = buildBook(UUID.randomUUID().toString(), "fallback-book");
+        when(bookDataOrchestrator.fetchCanonicalBookReactive("orchestrator-id"))
+            .thenReturn(Mono.just(fallback));
+        stubCoverPipeline();
+
+        String expectedCoverUrl = fallback.getS3ImagePath();
+        String expectedPreferred = fallback.getCoverImages().getPreferredUrl();
+
+        performAsync(get("/api/covers/orchestrator-id"))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.preferredUrl", equalTo(expectedPreferred)))
+            .andExpect(jsonPath("$.coverUrl", equalTo(expectedCoverUrl)))
+            .andExpect(jsonPath("$.requestedSourcePreference", equalTo("ANY")));
+    }
+
+    @Test
+    @DisplayName("GET /api/covers/{id} resolves via repository detail first")
+    void getBookCover_usesRepositoryFirst() throws Exception {
+        BookDetail detail = buildDetailFromBook(fixtureBook);
+        when(bookQueryRepository.fetchBookDetailBySlug(fixtureBook.getSlug()))
+            .thenReturn(Optional.of(detail));
+        when(bookDataOrchestrator.fetchCanonicalBookReactive(fixtureBook.getSlug()))
+            .thenReturn(Mono.empty());
+        stubCoverPipeline();
+
+        performAsync(get("/api/covers/" + fixtureBook.getSlug()))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.coverUrl", containsString(fixtureBook.getId())));
+    }
+
+    @Test
+    @DisplayName("GET /api/books/authors/search returns author results")
+    void searchAuthors_returnsResults() throws Exception {
+        List<BookSearchService.AuthorResult> results = List.of(
+            new BookSearchService.AuthorResult("author-1", "Fixture Author", 12, 0.98)
+        );
+        when(bookSearchService.searchAuthors(eq("Fixture"), anyInt())).thenReturn(results);
+
+        performAsync(get("/api/books/authors/search")
+            .param("query", "Fixture")
+            .param("limit", "5"))
+            .andExpect(status().isOk())
+            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+            .andExpect(jsonPath("$.query", equalTo("Fixture")))
+            .andExpect(jsonPath("$.results", hasSize(1)))
+            .andExpect(jsonPath("$.results[0].id", containsString("author-1")));
     }
 
     private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {
-        MvcResult result = mockMvc.perform(builder).andReturn();
+        MvcResult result = mockMvc.perform(builder)
+            .andExpect(request().asyncStarted())
+            .andReturn();
         return mockMvc.perform(asyncDispatch(result));
     }
 
-    private Book buildBook(String id, String title) {
+    private Book buildBook(String id, String slug) {
         Book book = new Book();
         book.setId(id);
-        book.setTitle(title);
-        book.setSlug("fixture-title");
+        book.setTitle("Fixture Title");
+        book.setSlug(slug);
         book.setDescription("Fixture Description");
         book.setAuthors(List.of("Fixture Author"));
         book.setCategories(List.of("NYT Fiction"));
+        book.setLanguage("en");
+        book.setPageCount(320);
+        book.setPublisher("Fixture Publisher");
         book.setS3ImagePath("s3://covers/" + id + ".jpg");
         book.setExternalImageUrl("https://example.test/cover/" + id + ".jpg");
-        book.setCoverImageWidth(640);
-        book.setCoverImageHeight(960);
-        book.setIsCoverHighResolution(true);
+        book.setCoverImageWidth(600);
+        book.setCoverImageHeight(900);
+        book.setIsCoverHighResolution(Boolean.TRUE);
+        book.setCoverImages(new CoverImages(
+            "https://cdn.test/preferred/" + id + ".jpg",
+            "https://cdn.test/fallback/" + id + ".jpg",
+            CoverImageSource.GOOGLE_BOOKS));
         book.setQualifiers(Map.of("nytBestseller", Map.of("rank", 1)));
         book.setCachedRecommendationIds(List.of("rec-1", "rec-2"));
-
-        CoverImages coverImages = new CoverImages("https://cdn.test/preferred/" + id + ".jpg",
-                "https://cdn.test/fallback/" + id + ".jpg",
-                CoverImageSource.GOOGLE_BOOKS);
-        book.setCoverImages(coverImages);
-        Book.CollectionAssignment assignment = new Book.CollectionAssignment("nyt-hardcover-fiction", "NYT Hardcover Fiction", "BESTSELLER_LIST", 1, "NYT");
-        book.setCollections(List.of(assignment));
+        book.setPublishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z")));
+        book.setDataSource("POSTGRES");
         return book;
+    }
+
+    private BookDetail buildDetailFromBook(Book book) {
+        return new BookDetail(
+            book.getId(),
+            book.getSlug(),
+            book.getTitle(),
+            book.getDescription(),
+            book.getPublisher(),
+            LocalDate.of(2024, 1, 1),
+            book.getLanguage(),
+            book.getPageCount(),
+            book.getAuthors(),
+            book.getCategories(),
+            book.getS3ImagePath(),
+            book.getExternalImageUrl(),
+            book.getCoverImageWidth(),
+            book.getCoverImageHeight(),
+            book.getIsCoverHighResolution(),
+            book.getDataSource(),
+            4.6,
+            87,
+            "1234567890",
+            "1234567890123",
+            "https://preview",
+            "https://info",
+            Map.of("nytBestseller", Map.of("rank", 1)),
+            List.of()
+        );
+    }
+
+    private void stubRepositoryMiss(String identifier) {
+        when(bookQueryRepository.fetchBookDetailBySlug(identifier)).thenReturn(Optional.empty());
+        when(bookIdentifierResolver.resolveCanonicalId(identifier)).thenReturn(Optional.empty());
+        when(bookIdentifierResolver.resolveToUuid(identifier)).thenReturn(Optional.empty());
+    }
+
+    private void stubCoverPipeline() {
+        when(bookImageOrchestrationService.getBestCoverUrlAsync(any(Book.class), any(CoverImageSource.class)))
+            .thenAnswer(invocation -> {
+                Book book = invocation.getArgument(0);
+                CoverImageSource source = invocation.getArgument(1);
+                CoverImages images = book.getCoverImages();
+                if (images == null) {
+                    images = new CoverImages(
+                        "https://cdn.example/preferred/" + book.getId() + ".jpg",
+                        book.getExternalImageUrl(),
+                        source
+                    );
+                    book.setCoverImages(images);
+                }
+                if (book.getS3ImagePath() == null) {
+                    book.setS3ImagePath(images.getPreferredUrl());
+                }
+                return CompletableFuture.completedFuture(book);
+            });
     }
 }

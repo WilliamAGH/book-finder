@@ -75,7 +75,7 @@ public class BookCoverManagementServiceSmokeTest {
         CoverImages mockCoverImages = new CoverImages(
             "/book-covers/test-image.jpg",
             ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH,
-            CoverImageSource.LOCAL_CACHE
+            CoverImageSource.NONE
         );
         
         // Clean the cache directory before each test for consistent results

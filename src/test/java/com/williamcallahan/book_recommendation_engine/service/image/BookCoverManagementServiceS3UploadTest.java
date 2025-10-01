@@ -1,7 +1,7 @@
 /**
  * Test suite for the S3 upload functionality in the BookCoverManagementService
- * 
- * This test class focuses on validating:
+ *
+ * This test focuses on validating:
  * - Successful S3 image uploads from local cache
  * - Error handling during S3 upload failures
  * - Fallback mechanisms to local cache when S3 is unavailable
@@ -26,7 +26,7 @@ import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSour
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
-import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.cover.CoverIdentifierResolver;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +34,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import reactor.core.publisher.Mono;
 
 import java.nio.file.Path;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -73,13 +74,28 @@ public class BookCoverManagementServiceS3UploadTest {
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         EnvironmentService environmentService = mock(EnvironmentService.class);
         DuplicateBookService duplicateBookService = mock(DuplicateBookService.class);
+        CoverPersistenceService coverPersistenceService = mock(CoverPersistenceService.class);
 
         BookCoverManagementService bookCoverManagementService = new BookCoverManagementService(
-            cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService, duplicateBookService
+            cacheManager,
+            sourceFetchingService,
+            s3Service,
+            diskService,
+            eventPublisher,
+            environmentService,
+            duplicateBookService,
+            coverPersistenceService
         );
         
-Book testBook = BookTestData.aBook().id("test-book-id").title("Test Book").authors(java.util.Collections.singletonList("Test Author")).isbn13("9781234567890").coverImageUrl("https://example.com/test-book-cover.jpg").build();
-        String identifierKey = ImageCacheUtils.getIdentifierKey(testBook);
+UUID bookUuid = UUID.fromString("11111111-1111-4111-8111-111111111111");
+Book testBook = BookTestData.aBook()
+    .id(bookUuid.toString())
+    .title("Test Book")
+    .authors(java.util.Collections.singletonList("Test Author"))
+    .isbn13("9781234567890")
+    .coverImageUrl("https://example.com/test-book-cover.jpg")
+    .build();
+        String identifierKey = CoverIdentifierResolver.resolve(testBook);
 
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
@@ -132,7 +148,16 @@ ImageDetails s3UploadedImageDetails = ImageTestData.s3Cache(
 
             verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(s3UploadedImageDetails));
 
-verify(eventPublisher, timeout(1000)).publishEvent(argThat(EventMatchers.bookCoverUpdated(identifierKey, s3UploadedImageDetails.getUrlOrPath(), CoverImageSource.S3_CACHE)));
+            verify(eventPublisher, timeout(1000)).publishEvent(argThat(EventMatchers.bookCoverUpdated(identifierKey, s3UploadedImageDetails.getUrlOrPath(), CoverImageSource.GOOGLE_BOOKS)));
+
+            verify(coverPersistenceService, timeout(1000)).updateAfterS3Upload(
+                eq(bookUuid),
+                eq(s3UploadedImageDetails.getSourceSystemId()),
+                eq(s3UploadedImageDetails.getUrlOrPath()),
+                eq(s3UploadedImageDetails.getWidth()),
+                eq(s3UploadedImageDetails.getHeight()),
+                eq(CoverImageSource.GOOGLE_BOOKS)
+            );
         } finally {
 TestFiles.deleteRecursive(tempDir);
         }
@@ -163,12 +188,21 @@ TestFiles.deleteRecursive(tempDir);
         EnvironmentService environmentService = mock(EnvironmentService.class);
         DuplicateBookService duplicateBookService = mock(DuplicateBookService.class);
 
+        CoverPersistenceService coverPersistenceService = mock(CoverPersistenceService.class);
+
         BookCoverManagementService bookCoverManagementService = new BookCoverManagementService(
-            cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService, duplicateBookService
+            cacheManager,
+            sourceFetchingService,
+            s3Service,
+            diskService,
+            eventPublisher,
+            environmentService,
+            duplicateBookService,
+            coverPersistenceService
         );
         
 Book testBook = BookTestData.aBook().id("test-book-id").build();
-        String identifierKey = ImageCacheUtils.getIdentifierKey(testBook);
+        String identifierKey = CoverIdentifierResolver.resolve(testBook);
 
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
@@ -249,12 +283,21 @@ TestFiles.deleteRecursive(tempDir);
         EnvironmentService environmentService = mock(EnvironmentService.class);
         DuplicateBookService duplicateBookService = mock(DuplicateBookService.class);
 
+        CoverPersistenceService coverPersistenceService = mock(CoverPersistenceService.class);
+
         BookCoverManagementService bookCoverManagementService = new BookCoverManagementService(
-            cacheManager, sourceFetchingService, s3Service, diskService, eventPublisher, environmentService, duplicateBookService
+            cacheManager,
+            sourceFetchingService,
+            s3Service,
+            diskService,
+            eventPublisher,
+            environmentService,
+            duplicateBookService,
+            coverPersistenceService
         );
         
 Book testBook = BookTestData.aBook().id("test-book-id").build();
-        String identifierKey = ImageCacheUtils.getIdentifierKey(testBook);
+        String identifierKey = CoverIdentifierResolver.resolve(testBook);
         
         when(environmentService.isBookCoverDebugMode()).thenReturn(true);
         when(diskService.getLocalPlaceholderPath()).thenReturn(LOCAL_PLACEHOLDER_PATH);
@@ -268,7 +311,7 @@ Book testBook = BookTestData.aBook().id("test-book-id").build();
 ImageDetails placeholderDetails = ImageTestData.placeholder(LOCAL_PLACEHOLDER_PATH);
         
         // This mock is crucial: BookCoverManagementService calls this when getBestCoverImageUrlAsync yields no good image
-        when(diskService.createPlaceholderImageDetails(
+        when(diskService.placeholderImageDetails(
                 eq(testBook.getId()), eq("background-fetch-failed")))
             .thenReturn(placeholderDetails);
         
@@ -276,9 +319,9 @@ ImageDetails placeholderDetails = ImageTestData.placeholder(LOCAL_PLACEHOLDER_PA
         bookCoverManagementService.processCoverInBackground(testBook, "http://some.url/that-will-fail.jpg"); // Provisional hint
         
         // ASSERT
-        // Verify that createPlaceholderImageDetails was called because fetching failed
+        // Verify that placeholderImageDetails was called because fetching failed
         // Use Mockito timeout to wait for async operations
-        verify(diskService, timeout(1000)).createPlaceholderImageDetails(eq(testBook.getId()), eq("background-fetch-failed"));
+        verify(diskService, timeout(1000)).placeholderImageDetails(eq(testBook.getId()), eq("background-fetch-failed"));
         
         // Verify cache is updated with placeholder details
         verify(cacheManager, timeout(1000)).putFinalImageDetails(eq(identifierKey), eq(placeholderDetails));

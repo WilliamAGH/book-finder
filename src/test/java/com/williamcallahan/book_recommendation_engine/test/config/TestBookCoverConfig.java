@@ -15,7 +15,6 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 // CachedBookRepository removed with Redis; no longer needed
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
-import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.service.PostgresBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
@@ -51,6 +50,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 
 /**
  * Test configuration for book cover management tests
@@ -99,14 +99,19 @@ public class TestBookCoverConfig {
         // Configure special test book ID
         Mockito.when(mockS3BookCoverService.fetchCover(Mockito.argThat(book -> 
                 "testbook123".equals(book.getId()) || "Hn41AgAAQBAJ".equals(book.getId()))))
-               .thenReturn(CompletableFuture.completedFuture(Optional.of(
-                   new ImageDetails("https://test-cdn.example.com/images/book-covers/testbook123-lg-google-books.jpg", 
-                                   "S3_CACHE", 
-                                   "images/book-covers/testbook123-lg-google-books.jpg", 
-                                   CoverImageSource.S3_CACHE, 
-                                   ImageResolutionPreference.ORIGINAL,
-                                   300, 450)
-               )));
+               .thenAnswer(invocation -> {
+                   ImageDetails details = new ImageDetails(
+                       "https://test-cdn.example.com/images/book-covers/testbook123-lg-google-books.jpg", 
+                       "GOOGLE_BOOKS", 
+                       "images/book-covers/testbook123-lg-google-books.jpg", 
+                       CoverImageSource.GOOGLE_BOOKS,  // Actual data source
+                       ImageResolutionPreference.ORIGINAL,
+                       300, 450
+                   );
+                   details.setStorageLocation(ImageDetails.STORAGE_S3);  // Stored in S3
+                   details.setStorageKey("images/book-covers/testbook123-lg-google-books.jpg");
+                   return CompletableFuture.completedFuture(Optional.of(details));
+               });
                
         // Mock uploadProcessedCoverToS3Async method
         Mockito.when(mockS3BookCoverService.uploadProcessedCoverToS3Async(
@@ -118,13 +123,19 @@ public class TestBookCoverConfig {
                 Mockito.anyString(), 
                 Mockito.anyString(), 
                 Mockito.any(ImageProvenanceData.class)))
-               .thenReturn(Mono.just(new ImageDetails(
-                   "https://test-cdn.example.com/images/book-covers/mock-upload.jpg",
-                   "S3_UPLOAD",
-                   "images/book-covers/mock-upload.jpg",
-                   CoverImageSource.S3_CACHE,
-                   ImageResolutionPreference.ORIGINAL,
-                   300, 450)));
+               .thenAnswer(invocation -> {
+                   ImageDetails details = new ImageDetails(
+                       "https://test-cdn.example.com/images/book-covers/mock-upload.jpg",
+                       "GOOGLE_BOOKS",  // Use actual data source
+                       "images/book-covers/mock-upload.jpg",
+                       CoverImageSource.GOOGLE_BOOKS,  // Not S3_CACHE
+                       ImageResolutionPreference.ORIGINAL,
+                       300, 450
+                   );
+                   details.setStorageLocation(ImageDetails.STORAGE_S3);  // Uploaded to S3
+                   details.setStorageKey("images/book-covers/mock-upload.jpg");
+                   return Mono.just(details);
+               });
         
         // Mock isS3Enabled method
         Mockito.when(mockS3BookCoverService.isS3Enabled()).thenReturn(true);
@@ -144,104 +155,156 @@ public class TestBookCoverConfig {
     @Bean
     @Primary
     public LocalDiskCoverCacheService testLocalDiskCoverCacheService() {
-        LocalDiskCoverCacheService mockDiskCache = Mockito.mock(LocalDiskCoverCacheService.class);
+        BiFunction<String, String, ImageDetails> placeholderFactory = (bookIdForLog, reasonSuffix) -> {
+            String cleanSuffix = reasonSuffix != null ? reasonSuffix.replaceAll("[^a-zA-Z0-9-]", "_") : "unknown";
+            String placeholderPath = ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH;
+            ImageDetails details = new ImageDetails(
+                placeholderPath,
+                "SYSTEM_PLACEHOLDER",
+                "placeholder-" + cleanSuffix + "-" + bookIdForLog,
+                CoverImageSource.NONE,
+                ImageResolutionPreference.UNKNOWN
+            );
+            details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+            details.setStorageKey(placeholderPath);
+            return details;
+        };
 
-        // Mock paths and directory names
+        LocalDiskCoverCacheService mockDiskCache = Mockito.mock(
+            LocalDiskCoverCacheService.class,
+            invocation -> {
+                String methodName = invocation.getMethod().getName();
+                switch (methodName) {
+                    case "cacheRemoteImageAsync": {
+                        String imageUrl = invocation.getArgument(0, String.class);
+                        String bookIdForLog = invocation.getArgument(1, String.class);
+                        ImageProvenanceData provenanceData = invocation.getArgument(2, ImageProvenanceData.class);
+                        String sourceNameString = invocation.getArgument(3, String.class);
+
+                        if (provenanceData != null) {
+                            ImageSourceName sourceName = ImageSourceName.valueOf(sourceNameString.toUpperCase().replace('-', '_'));
+                            ImageProvenanceData.AttemptedSourceInfo attemptInfo =
+                                new ImageProvenanceData.AttemptedSourceInfo(sourceName, imageUrl, ImageAttemptStatus.SUCCESS);
+                            if (provenanceData.getAttemptedImageSources() == null) {
+                                provenanceData.setAttemptedImageSources(new java.util.ArrayList<>());
+                            }
+                            provenanceData.getAttemptedImageSources().add(attemptInfo);
+                        }
+
+                        if (imageUrl.contains("testbook123") || imageUrl.contains("Hn41AgAAQBAJ")) {
+                            ImageDetails details = new ImageDetails(
+                                "/book-covers/testbook-" + sourceNameString + ".jpg",
+                                sourceNameString,
+                                "testbook-" + sourceNameString + ".jpg",
+                                CoverImageSource.GOOGLE_BOOKS,
+                                ImageResolutionPreference.ORIGINAL,
+                                300,
+                                450
+                            );
+                            details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+                            details.setStorageKey("testbook-" + sourceNameString + ".jpg");
+                            return CompletableFuture.completedFuture(details);
+                        }
+
+                        if (imageUrl.contains("large-image")) {
+                            ImageDetails details = new ImageDetails(
+                                "/book-covers/large-" + bookIdForLog + ".jpg",
+                                sourceNameString,
+                                "large-" + bookIdForLog + ".jpg",
+                                CoverImageSource.GOOGLE_BOOKS,
+                                ImageResolutionPreference.ORIGINAL,
+                                800,
+                                1200
+                            );
+                            details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+                            details.setStorageKey("large-" + bookIdForLog + ".jpg");
+                            return CompletableFuture.completedFuture(details);
+                        }
+
+                        if (imageUrl.contains("small-image")) {
+                            ImageDetails details = new ImageDetails(
+                                "/book-covers/small-" + bookIdForLog + ".jpg",
+                                sourceNameString,
+                                "small-" + bookIdForLog + ".jpg",
+                                CoverImageSource.GOOGLE_BOOKS,
+                                ImageResolutionPreference.ORIGINAL,
+                                120,
+                                180
+                            );
+                            details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+                            details.setStorageKey("small-" + bookIdForLog + ".jpg");
+                            return CompletableFuture.completedFuture(details);
+                        }
+
+                        if (imageUrl.contains("books.google.com/books/content")) {
+                            ImageDetails details = new ImageDetails(
+                                imageUrl,
+                                sourceNameString,
+                                "google-content-" + bookIdForLog + ".jpg",
+                                CoverImageSource.GOOGLE_BOOKS,
+                                ImageResolutionPreference.ORIGINAL,
+                                600,
+                                900
+                            );
+                            details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+                            details.setStorageKey("google-content-" + bookIdForLog + ".jpg");
+                            return CompletableFuture.completedFuture(details);
+                        }
+
+                        if (imageUrl.contains("s3.amazonaws.com")) {
+                            ImageDetails details = new ImageDetails(
+                                "https://s3.amazonaws.com/mock/testbook-s3.jpg",
+                                sourceNameString,
+                                "s3-testbook.jpg",
+                                CoverImageSource.MOCK,
+                                ImageResolutionPreference.HIGH_ONLY,
+                                600,
+                                900
+                            );
+                            details.setStorageLocation(ImageDetails.STORAGE_S3);
+                            details.setStorageKey("images/book-covers/mock-upload.jpg");
+                            return CompletableFuture.completedFuture(details);
+                        }
+
+                        CoverImageSource source = CoverImageSource.GOOGLE_BOOKS;
+                        if (imageUrl.contains("openlibrary.org")) {
+                            source = CoverImageSource.OPEN_LIBRARY;
+                        } else if (imageUrl.contains("longitood.com")) {
+                            source = CoverImageSource.LONGITOOD;
+                        }
+
+                        ImageDetails details = new ImageDetails(
+                            "/book-covers/mock-" + bookIdForLog + ".jpg",
+                            sourceNameString,
+                            "mock-" + bookIdForLog + ".jpg",
+                            source,
+                            ImageResolutionPreference.ORIGINAL,
+                            300,
+                            450
+                        );
+                        details.setStorageLocation(ImageDetails.STORAGE_LOCAL);
+                        details.setStorageKey("mock-" + bookIdForLog + ".jpg");
+                        return CompletableFuture.completedFuture(details);
+                    }
+                    case "placeholderImageDetails": {
+                        String bookIdForLog = invocation.getArgument(0, String.class);
+                        String reasonSuffix = invocation.getArgument(1, String.class);
+                        return placeholderFactory.apply(bookIdForLog, reasonSuffix);
+                    }
+                    case "buildPlaceholderImageDetails": {
+                        String bookIdForLog = invocation.getArgument(0, String.class);
+                        String reasonSuffix = invocation.getArgument(1, String.class);
+                        return placeholderFactory.apply(bookIdForLog, reasonSuffix);
+                    }
+                    default:
+                        return Mockito.RETURNS_DEFAULTS.answer(invocation);
+                }
+            }
+        );
+
         Mockito.when(mockDiskCache.getLocalPlaceholderPath()).thenReturn(ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH);
         Mockito.when(mockDiskCache.getCacheDirName()).thenReturn("book-covers");
         Mockito.when(mockDiskCache.getCacheDirString()).thenReturn("/tmp/book-covers");
-
-        // Mock createPlaceholderImageDetails
-        Mockito.when(mockDiskCache.createPlaceholderImageDetails(Mockito.anyString(), Mockito.anyString()))
-            .thenAnswer(invocation -> {
-                String bookIdForLog = invocation.getArgument(0);
-                String reasonSuffix = invocation.getArgument(1);
-                return new ImageDetails(
-                    ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH,
-                    "SYSTEM_PLACEHOLDER",
-                    "placeholder-" + reasonSuffix + "-" + bookIdForLog,
-                    CoverImageSource.LOCAL_CACHE,
-                    ImageResolutionPreference.UNKNOWN
-                );
-            });
-
-        // Mock downloadAndStoreImageLocallyAsync
-        Mockito.when(mockDiskCache.downloadAndStoreImageLocallyAsync(
-                Mockito.anyString(), Mockito.anyString(), 
-                Mockito.any(ImageProvenanceData.class), Mockito.anyString()))
-            .thenAnswer(invocation -> {
-                String imageUrl = invocation.getArgument(0);
-                String bookIdForLog = invocation.getArgument(1);
-                ImageProvenanceData provenanceData = invocation.getArgument(2);
-                String sourceNameString = invocation.getArgument(3);
-                
-                // Add attempt to provenance data if provided
-                if (provenanceData != null) {
-                    ImageProvenanceData.AttemptedSourceInfo attemptInfo = 
-                        new ImageProvenanceData.AttemptedSourceInfo(
-                            ImageSourceName.valueOf(
-                                sourceNameString.toUpperCase().replace('-', '_')),
-                            imageUrl, 
-                            ImageAttemptStatus.SUCCESS
-                        );
-                    if (provenanceData.getAttemptedImageSources() == null) {
-                        provenanceData.setAttemptedImageSources(new java.util.ArrayList<>());
-                    }
-                    provenanceData.getAttemptedImageSources().add(attemptInfo);
-                }
-                
-                // For test books, return a valid cached image
-                if (imageUrl.contains("testbook123") || imageUrl.contains("Hn41AgAAQBAJ")) {
-                    return CompletableFuture.completedFuture(new ImageDetails(
-                        "/book-covers/testbook-" + sourceNameString + ".jpg",
-                        sourceNameString,
-                        "testbook-" + sourceNameString + ".jpg",
-                        CoverImageSource.LOCAL_CACHE,
-                        ImageResolutionPreference.ORIGINAL,
-                        300, 450
-                    ));
-                }
-                
-                // For special test URLs, return specific dimensions
-                if (imageUrl.contains("large-image")) {
-                    return CompletableFuture.completedFuture(new ImageDetails(
-                        "/book-covers/large-" + bookIdForLog + ".jpg",
-                        sourceNameString,
-                        "large-" + bookIdForLog + ".jpg",
-                        CoverImageSource.LOCAL_CACHE,
-                        ImageResolutionPreference.ORIGINAL,
-                        800, 1200
-                    ));
-                } else if (imageUrl.contains("small-image")) {
-                    return CompletableFuture.completedFuture(new ImageDetails(
-                        "/book-covers/small-" + bookIdForLog + ".jpg",
-                        sourceNameString,
-                        "small-" + bookIdForLog + ".jpg",
-                        CoverImageSource.LOCAL_CACHE,
-                        ImageResolutionPreference.ORIGINAL,
-                        120, 180
-                    ));
-                }
-                
-                // For URLs with known sources, use those sources in the response
-                CoverImageSource source = CoverImageSource.LOCAL_CACHE;
-                if (imageUrl.contains("googleapis.com") || imageUrl.contains("google.com")) {
-                    source = CoverImageSource.GOOGLE_BOOKS;
-                } else if (imageUrl.contains("openlibrary.org")) {
-                    source = CoverImageSource.OPEN_LIBRARY;
-                } else if (imageUrl.contains("longitood.com")) {
-                    source = CoverImageSource.LONGITOOD;
-                }
-                
-                return CompletableFuture.completedFuture(new ImageDetails(
-                    "/book-covers/mock-" + bookIdForLog + ".jpg",
-                    sourceNameString,
-                    "mock-" + bookIdForLog + ".jpg",
-                    source,
-                    ImageResolutionPreference.ORIGINAL,
-                    300, 450
-                ));
-            });
 
         logger.info("Mock LocalDiskCoverCacheService configured for testing");
         return mockDiskCache;
@@ -388,10 +451,12 @@ public class TestBookCoverConfig {
                     "/book-covers/mock-cover-" + bookId + ".jpg",
                     "TEST_SOURCE",
                     "mock-cover-" + bookId + ".jpg",
-                    CoverImageSource.LOCAL_CACHE,
+                    CoverImageSource.GOOGLE_BOOKS,  // Use actual data source, not cache
                     ImageResolutionPreference.ORIGINAL,
                     300, 450
                 );
+                result.setStorageLocation(ImageDetails.STORAGE_LOCAL);  // Cached locally
+                result.setStorageKey("mock-cover-" + bookId + ".jpg");
                 
                 return CompletableFuture.completedFuture(result);
             });
@@ -518,104 +583,13 @@ public class TestBookCoverConfig {
     @Bean
     @Primary
     public GoogleBooksService testGoogleBooksService() {
-        GoogleBooksService mockService = Mockito.mock(GoogleBooksService.class);
-        
-        // Configure behavior for ISBN searches
-        Mockito.when(mockService.searchBooksByISBN(Mockito.anyString()))
-            .thenReturn(reactor.core.publisher.Mono.just(java.util.Collections.emptyList()));
-        
-        // Special case for test ISBN
-        Mockito.when(mockService.searchBooksByISBN(Mockito.eq("9781234567890")))
-            .thenAnswer(invocation -> {
-                Book testBook = new Book();
-                testBook.setId("testbook123");
-                testBook.setTitle("Test Book Title");
-                testBook.setAuthors(java.util.Collections.singletonList("Test Author"));
-                testBook.setIsbn13("9781234567890");
-                testBook.setCoverImageUrl("https://books.google.com/books/content?id=testbook123&printsec=frontcover&img=1&zoom=1");
-                testBook.setRawJsonResponse("{\"kind\":\"books#volume\",\"id\":\"testbook123\"}");
-                return reactor.core.publisher.Mono.just(java.util.Collections.singletonList(testBook));
-            });
-        
-        // Configure behavior for getBookById
-        Mockito.when(mockService.getBookById(Mockito.anyString()))
-            .thenReturn(CompletableFuture.completedFuture(null));
-        
-        // Special case for test book ID
-        Mockito.when(mockService.getBookById(Mockito.eq("testbook123")))
-            .thenAnswer(invocation -> {
-                Book testBook = new Book();
-                testBook.setId("testbook123");
-                testBook.setTitle("Test Book Title");
-                testBook.setAuthors(java.util.Collections.singletonList("Test Author"));
-                testBook.setIsbn13("9781234567890");
-                testBook.setCoverImageUrl("https://books.google.com/books/content?id=testbook123&printsec=frontcover&img=1&zoom=1");
-                testBook.setRawJsonResponse("{\"kind\":\"books#volume\",\"id\":\"testbook123\"}");
-                return CompletableFuture.completedFuture(testBook);
-            });
-
-        Mockito.when(mockService.fetchCoverByIsbn(
-                Mockito.anyString(),
-                Mockito.anyString(),
-                Mockito.any(),
-                Mockito.any(LocalDiskCoverCacheService.class),
-                Mockito.any(CoverCacheManager.class)))
-            .thenReturn(CompletableFuture.completedFuture(new ImageDetails(
-                "https://books.googleusercontent.com/mock-isbn.jpg",
-                "GOOGLE",
-                "mock-isbn",
-                CoverImageSource.GOOGLE_BOOKS,
-                ImageResolutionPreference.ORIGINAL,
-                600,
-                900
-            )));
-
-        Mockito.when(mockService.fetchCoverByVolumeId(
-                Mockito.anyString(),
-                Mockito.anyString(),
-                Mockito.any(),
-                Mockito.any(LocalDiskCoverCacheService.class),
-                Mockito.any(CoverCacheManager.class)))
-            .thenReturn(CompletableFuture.completedFuture(new ImageDetails(
-                "https://books.googleusercontent.com/mock-volume.jpg",
-                "GOOGLE",
-                "mock-volume",
-                CoverImageSource.GOOGLE_BOOKS,
-                ImageResolutionPreference.ORIGINAL,
-                600,
-                900
-            )));
-        
+        GoogleBooksService mockService = Mockito.mock(GoogleBooksService.class, Mockito.RETURNS_DEFAULTS);
         logger.info("Mock GoogleBooksService configured for testing");
         return mockService;
     }
     
     // CachedBookRepository removed; no bean required
 
-    /**
-     * Provides a mock BookQueryRepository for testing
-     * - Prevents actual database queries during testing
-     * - Returns empty results by default
-     * 
-     * @return Mock BookQueryRepository for testing
-     */
-    @Bean
-    @Primary
-    public BookQueryRepository testBookQueryRepository() {
-        BookQueryRepository mockRepository = Mockito.mock(BookQueryRepository.class);
-        
-        // Configure default behaviors to return empty results
-        Mockito.when(mockRepository.fetchBookCards(Mockito.anyList()))
-            .thenReturn(java.util.Collections.emptyList());
-        Mockito.when(mockRepository.fetchBookListItems(Mockito.anyList()))
-            .thenReturn(java.util.Collections.emptyList());
-        Mockito.when(mockRepository.fetchBookCardsByProviderListCode(Mockito.anyString(), Mockito.anyInt()))
-            .thenReturn(java.util.Collections.emptyList());
-        
-        logger.info("Mock BookQueryRepository configured for testing");
-        return mockRepository;
-    }
-    
     /**
      * Provides a mock PostgresBookRepository for testing
      * - Prevents actual database queries during testing

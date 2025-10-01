@@ -1,146 +1,89 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 import java.time.Instant;
-import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+import java.util.Date;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class RecentlyViewedServiceTest {
 
-    private GoogleBooksService googleBooksService;
+    private BookSearchService bookSearchService;
     private DuplicateBookService duplicateBookService;
     private BookDataOrchestrator bookDataOrchestrator;
+    private BookQueryRepository bookQueryRepository;
     private RecentBookViewRepository recentBookViewRepository;
     private RecentlyViewedService recentlyViewedService;
 
     @BeforeEach
     void setUp() {
-        googleBooksService = mock(GoogleBooksService.class);
+        bookSearchService = mock(BookSearchService.class);
         duplicateBookService = mock(DuplicateBookService.class);
         bookDataOrchestrator = mock(BookDataOrchestrator.class);
+        bookQueryRepository = mock(BookQueryRepository.class);
         recentBookViewRepository = mock(RecentBookViewRepository.class);
 
         when(recentBookViewRepository.isEnabled()).thenReturn(false);
         when(duplicateBookService.findPrimaryCanonicalBook(any())).thenReturn(Optional.empty());
 
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of()));
-
-        recentlyViewedService = createService(false);
+        recentlyViewedService = createService();
     }
 
-    private RecentlyViewedService createService(boolean googleFallbackEnabled) {
-        return new RecentlyViewedService(googleBooksService, duplicateBookService, bookDataOrchestrator, recentBookViewRepository, googleFallbackEnabled);
+    private RecentlyViewedService createService() {
+        return new RecentlyViewedService(bookSearchService, duplicateBookService, bookDataOrchestrator, bookQueryRepository, recentBookViewRepository);
     }
 
     @Test
-    void fetchDefaultBooks_prefersPostgresResults() {
-Book postgresBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
-                .id("postgres-book").publishedDate(Date.from(Instant.parse("2022-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/postgres-book.jpg").build();
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
-            .thenReturn(Mono.just(List.of(postgresBook)));
-
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "postgres-book");
-
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
-        verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
-    }
-
-    @Test
-    void fetchDefaultBooks_fallsBackToGoogleWhenPostgresEmpty() {
-        when(recentBookViewRepository.isEnabled()).thenReturn(false);
-
-        recentlyViewedService = createService(true);
-
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
-            .thenReturn(Mono.just(List.of()));
-
-Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
-                .id("google-book").publishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/google-book.jpg").build();
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of(googleBook)));
-
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "google-book");
-
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
-        verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
-    }
-
-    @Test
-    void fetchDefaultBooks_googleFallbackOnPostgresError() {
-        when(recentBookViewRepository.isEnabled()).thenReturn(false);
-
-        recentlyViewedService = createService(true);
-
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
-            .thenReturn(Mono.error(new RuntimeException("boom")));
-
-Book googleBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
-                .id("google-book").publishedDate(Date.from(Instant.parse("2018-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/google-book.jpg").build();
-        when(googleBooksService.searchBooksAsyncReactive(anyString(), any(), anyInt(), any()))
-            .thenReturn(Mono.just(List.of(googleBook)));
-
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyListHasSingleId(recentlyViewedService.fetchDefaultBooksAsync(), "google-book");
-
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
-        verify(googleBooksService).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
-    }
-
-    @Test
-    void fetchDefaultBooks_returnsEmptyWhenFallbackDisabled() {
-        when(recentBookViewRepository.isEnabled()).thenReturn(false);
-
-        when(bookDataOrchestrator.searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean()))
-            .thenReturn(Mono.just(List.of()));
-
-com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyEmptyList(recentlyViewedService.fetchDefaultBooksAsync());
-
-        verify(bookDataOrchestrator).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
-        verify(googleBooksService, never()).searchBooksAsyncReactive(anyString(), any(), anyInt(), any());
-    }
-
-    @Test
-    void fetchDefaultBooks_usesRepositoryWhenAvailable() {
+    void getRecentlyViewedBookIds_returnsRepositoryIdsWhenAvailable() {
         Instant now = Instant.parse("2024-01-01T00:00:00Z");
         when(recentBookViewRepository.isEnabled()).thenReturn(true);
-when(recentBookViewRepository.fetchMostRecentViews(anyInt()))
-            .thenReturn(List.of(com.williamcallahan.book_recommendation_engine.testutil.RecentViewStatsTestData.viewStats("uuid-1", now, 3L, 10L, 15L)));
+        when(recentBookViewRepository.fetchMostRecentViews(3))
+            .thenReturn(List.of(
+                new RecentBookViewRepository.ViewStats("uuid-1", now, 5L, 9L, 12L),
+                new RecentBookViewRepository.ViewStats("uuid-2", now.minusSeconds(60), 4L, 7L, 10L)
+            ));
 
-Book dbBook = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
-                .id("uuid-1").publishedDate(Date.from(Instant.parse("2021-01-01T00:00:00Z"))).s3ImagePath("https://cdn.example/uuid-1.jpg").build();
-        dbBook.setSlug("slug-uuid-1");
-        when(bookDataOrchestrator.getBookFromDatabase("uuid-1"))
-            .thenReturn(Optional.of(dbBook));
+        List<String> ids = recentlyViewedService.getRecentlyViewedBookIds(3);
 
-        StepVerifier.create(recentlyViewedService.fetchDefaultBooksAsync())
-            .expectNextMatches(results -> {
-                if (results.size() != 1) {
-                    return false;
-                }
-                Book result = results.get(0);
-                Object lastViewed = result.getQualifiers().get("recent.views.lastViewedAt");
-                Object views7d = result.getQualifiers().get("recent.views.7d");
-                return "uuid-1".equals(result.getId())
-                        && lastViewed instanceof Instant && ((Instant) lastViewed).equals(now)
-                        && views7d instanceof Long && ((Long) views7d) == 10L;
-            })
-            .verifyComplete();
+        assertEquals(List.of("uuid-1", "uuid-2"), ids);
+        verify(recentBookViewRepository).fetchMostRecentViews(3);
+    }
 
-        verify(recentBookViewRepository).fetchMostRecentViews(anyInt());
-        verify(bookDataOrchestrator).getBookFromDatabase("uuid-1");
-        verify(bookDataOrchestrator, never()).searchBooksTiered(anyString(), any(), anyInt(), any(), anyBoolean());
+    @Test
+    void getRecentlyViewedBookIds_fallsBackToCacheWhenRepositoryDisabled() {
+        when(recentBookViewRepository.isEnabled()).thenReturn(false);
+
+        Book cached = com.williamcallahan.book_recommendation_engine.testutil.BookTestData.aBook()
+            .id("uuid-cache")
+            .s3ImagePath("https://cdn.example/uuid-cache.jpg")
+            .build();
+        cached.setSlug("uuid-cache");
+
+        recentlyViewedService.addToRecentlyViewed(cached);
+
+        List<String> ids = recentlyViewedService.getRecentlyViewedBookIds(5);
+
+        assertEquals(List.of("uuid-cache"), ids);
+    }
+
+    @Test
+    void getRecentlyViewedBookIds_handlesRepositoryErrorsGracefully() {
+        when(recentBookViewRepository.isEnabled()).thenReturn(true);
+        when(recentBookViewRepository.fetchMostRecentViews(anyInt())).thenThrow(new RuntimeException("boom"));
+
+        List<String> ids = recentlyViewedService.getRecentlyViewedBookIds(4);
+
+        assertTrue(ids.isEmpty());
+        verify(recentBookViewRepository).fetchMostRecentViews(4);
     }
 
     @Test
