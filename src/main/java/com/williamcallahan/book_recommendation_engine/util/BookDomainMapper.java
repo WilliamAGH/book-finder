@@ -9,6 +9,7 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.Book.EditionInfo;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector;
 
 import java.time.LocalDate;
@@ -70,6 +71,8 @@ public final class BookDomainMapper {
         book.setRatingsCount(card.ratingsCount());
         book.setQualifiers(copyMap(card.tags()));
         setCoverImages(book, card.coverUrl(), card.coverUrl());
+        book.setRetrievedFrom("POSTGRES");
+        book.setInPostgres(true);
         return book;
     }
 
@@ -94,6 +97,8 @@ public final class BookDomainMapper {
         book.setRatingsCount(item.ratingsCount());
         book.setQualifiers(copyMap(item.tags()));
         setCoverImages(book, item.coverUrl(), item.coverUrl());
+        book.setRetrievedFrom("POSTGRES");
+        book.setInPostgres(true);
         return book;
     }
 
@@ -149,6 +154,14 @@ public final class BookDomainMapper {
 
         book.setEditionNumber(aggregate.getEditionNumber());
         book.setEditionGroupKey(aggregate.getEditionGroupKey());
+        book.setInPostgres(false);
+        String source = identifiers != null ? identifiers.getSource() : null;
+        if (ValidationUtils.hasText(source)) {
+            book.setRetrievedFrom(source);
+            book.setDataSource(source);
+        } else {
+            book.setRetrievedFrom("EXTERNAL_API");
+        }
         return book;
     }
 
