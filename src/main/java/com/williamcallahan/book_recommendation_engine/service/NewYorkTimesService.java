@@ -91,7 +91,8 @@ public class NewYorkTimesService {
         if (publishedDate != null) {
             overviewUrl.append("&published_date=").append(publishedDate.format(API_DATE_FORMAT));
         }
-        log.info("Fetching NYT bestseller list overview from API: {}{}", nytApiBaseUrl, overviewUrl);
+        String maskedUrl = "/lists/overview.json?api-key=****" + (publishedDate != null ? "&published_date=" + publishedDate.format(API_DATE_FORMAT) : "");
+        log.info("Fetching NYT bestseller list overview from API: {}{}", nytApiBaseUrl, maskedUrl);
         return webClient.mutate()
                 .baseUrl(nytApiBaseUrl)
                 .build()
