@@ -85,15 +85,22 @@ public final class BookDtoMapper {
             detail.publisher()
         );
 
+        String detailCoverUrl = detail.coverUrl();
+        String thumbnailUrl = detail.thumbnailUrl();
+        String s3ImagePath = resolveS3Candidate(detailCoverUrl);
+        String externalImageUrl = (s3ImagePath == null) ? detailCoverUrl : null;
+        String preferredUrl = ValidationUtils.hasText(thumbnailUrl) ? thumbnailUrl : firstNonBlank(detailCoverUrl);
+        String fallbackUrl = firstNonBlank(detailCoverUrl, thumbnailUrl);
+
         CoverDto cover = new CoverDto(
-            detail.coverUrl(),
-            detail.coverUrl(),
-            null,
-            null,
-            null,
-            detail.coverUrl(),
-            ValidationUtils.hasText(detail.thumbnailUrl()) ? detail.thumbnailUrl() : detail.coverUrl(),
-            null
+            s3ImagePath,
+            externalImageUrl,
+            detail.coverWidth(),
+            detail.coverHeight(),
+            detail.coverHighResolution(),
+            preferredUrl,
+            fallbackUrl,
+            detail.dataSource()
         );
 
         List<AuthorDto> authors = toAuthorDtos(detail.authors());
@@ -129,14 +136,19 @@ public final class BookDtoMapper {
             return null;
         }
 
+        String cardCoverUrl = card.coverUrl();
+        String cardS3ImagePath = resolveS3Candidate(cardCoverUrl);
+        String cardExternalUrl = (cardS3ImagePath == null) ? cardCoverUrl : null;
+        String resolvedCoverUrl = firstNonBlank(cardS3ImagePath, cardExternalUrl);
+
         CoverDto cover = new CoverDto(
-            card.coverUrl(),
-            card.coverUrl(),
+            cardS3ImagePath,
+            cardExternalUrl,
             null,
             null,
             null,
-            card.coverUrl(),
-            card.coverUrl(),
+            resolvedCoverUrl,
+            resolvedCoverUrl,
             null
         );
 
@@ -256,6 +268,32 @@ public final class BookDtoMapper {
                 coverImages != null ? coverImages.getFallbackUrl() : null,
                 coverImages != null && coverImages.getSource() != null ? coverImages.getSource().name() : null
         );
+    }
+
+    private static String resolveS3Candidate(String candidate) {
+        if (!ValidationUtils.hasText(candidate)) {
+            return null;
+        }
+        String value = candidate.trim();
+        if (value.startsWith("s3://")) {
+            return value;
+        }
+        if (!value.contains("://")) {
+            return value;
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (ValidationUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private static List<AuthorDto> mapAuthors(Book book) {

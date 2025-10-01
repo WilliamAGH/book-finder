@@ -14,10 +14,13 @@
  */
 package com.williamcallahan.book_recommendation_engine.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -32,6 +35,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.StaticHeadersWriter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.util.StringUtils;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
@@ -41,7 +45,10 @@ import static org.springframework.security.config.Customizer.withDefaults;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SecurityConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
+
     private final AuthenticationEntryPoint customBasicAuthenticationEntryPoint;
+    private final Environment environment;
 
     @Value("${app.security.headers.content-security-policy.enabled:true}")
     private boolean cspEnabled;
@@ -61,18 +68,10 @@ public class SecurityConfig {
     @Value("${app.book.covers.additional-domains:}")
     private String bookCoversAdditionalDomains;
 
-    // Inject plain text passwords from environment variables
-    // SAFE DEFAULTS: Default passwords for dev mode prevent startup crashes
-    // These should be overridden in production via environment variables
-    // Bug #7 Fix: These defaults ensure the app starts even without credentials configured
-    @Value("${app.security.admin.password:admin123}")
-    private String adminPasswordPlain;
-
-    @Value("${app.security.user.password:user123}")
-    private String userPasswordPlain;
-
-    public SecurityConfig(CustomBasicAuthenticationEntryPoint customBasicAuthenticationEntryPoint) {
+    public SecurityConfig(CustomBasicAuthenticationEntryPoint customBasicAuthenticationEntryPoint,
+                          Environment environment) {
         this.customBasicAuthenticationEntryPoint = customBasicAuthenticationEntryPoint;
+        this.environment = environment;
     }
 
     @Bean
@@ -149,16 +148,59 @@ public class SecurityConfig {
 
     @Bean
     public UserDetailsService userDetailsService(PasswordEncoder passwordEncoder) {
-        UserDetails admin = User.builder()
-            .username("admin")
-            .password(passwordEncoder.encode(adminPasswordPlain)) // Use injected plain text password
-            .roles("ADMIN", "USER")
-            .build();
-        UserDetails regularUser = User.builder()
-            .username("user")
-            .password(passwordEncoder.encode(userPasswordPlain)) // Use injected plain text password
-            .roles("USER")
-            .build();
-        return new InMemoryUserDetailsManager(admin, regularUser);
+        String adminUsername = resolveUsername("app.security.admin.username", "admin");
+        String userUsername = resolveUsername("app.security.user.username", "user");
+        String adminPassword = resolvePassword("app.security.admin.password");
+        String userPassword = resolvePassword("app.security.user.password");
+
+        InMemoryUserDetailsManager userDetailsManager = new InMemoryUserDetailsManager();
+        boolean adminRegistered = false;
+        boolean userRegistered = false;
+
+        if (adminPassword != null) {
+            UserDetails admin = User.builder()
+                .username(adminUsername)
+                .password(passwordEncoder.encode(adminPassword))
+                .roles("ADMIN", "USER")
+                .build();
+            userDetailsManager.createUser(admin);
+            adminRegistered = true;
+        } else {
+            log.error("Admin endpoints disabled: missing app.security.admin.password. Set the secret to re-enable /admin/**.");
+        }
+
+        if (userPassword != null) {
+            UserDetails regularUser = User.builder()
+                .username(userUsername)
+                .password(passwordEncoder.encode(userPassword))
+                .roles("USER")
+                .build();
+            userDetailsManager.createUser(regularUser);
+            userRegistered = true;
+        } else {
+            log.warn("Basic auth user account disabled: missing app.security.user.password. Non-admin authenticated endpoints will reject credentials until configured.");
+        }
+
+        if (!adminRegistered && !userRegistered) {
+            log.error("No basic-auth credentials configured. Protected endpoints will respond with 401 until credentials are provided via environment variables.");
+        }
+
+        return userDetailsManager;
+    }
+
+    private String resolvePassword(String propertyKey) {
+        String value = environment.getProperty(propertyKey);
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private String resolveUsername(String propertyKey, String defaultValue) {
+        String value = environment.getProperty(propertyKey);
+        if (!StringUtils.hasText(value)) {
+            return defaultValue;
+        }
+        return value.trim();
     }
 }
