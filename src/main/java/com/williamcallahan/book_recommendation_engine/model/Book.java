@@ -136,11 +136,17 @@ public class Book {
         this.collections.add(assignment);
     }
 
+    /**
+     * @deprecated Use {@link #getS3ImagePath()} or {@link #getExternalImageUrl()} instead.
+     */
     @Deprecated // Use getS3ImagePath() or getExternalImageUrl()
     public String getCoverImageUrl() {
         return (s3ImagePath != null && !s3ImagePath.isEmpty()) ? s3ImagePath : externalImageUrl;
     }
 
+    /**
+     * @deprecated Use {@link #setS3ImagePath(String)} or {@link #setExternalImageUrl(String)} instead.
+     */
     @Deprecated // Use setS3ImagePath() or setExternalImageUrl()
     public void setCoverImageUrl(String coverImageUrl) {
         // Don't overwrite existing values with null
@@ -160,11 +166,17 @@ public class Book {
         }
     }
 
+    /**
+     * @deprecated Use {@link #getExternalImageUrl()} instead.
+     */
     @Deprecated // Use getExternalImageUrl()
     public String getImageUrl() {
         return externalImageUrl;
     }
 
+    /**
+     * @deprecated Use {@link #setExternalImageUrl(String)} instead.
+     */
     @Deprecated // Use setExternalImageUrl()
     public void setImageUrl(String imageUrl) {
         this.externalImageUrl = imageUrl;
