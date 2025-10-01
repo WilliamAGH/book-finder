@@ -14,26 +14,43 @@ package com.williamcallahan.book_recommendation_engine.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
+import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
+import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.Locale;
 
 
 public class BookJsonParser {
 
     private static final Logger logger = LoggerFactory.getLogger(BookJsonParser.class);
+    
+    // GoogleBooksMapper is THE SSOT for parsing Google Books JSON
+    // BookJsonParser now delegates to it for consistency
+    private static final GoogleBooksMapper googleBooksMapper = new GoogleBooksMapper();
+    private static final Pattern EDITION_WORD_PATTERN = Pattern.compile("(\\d+)(?:st|nd|rd|th)?\\s*(?:edition|ed\\b)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TRAILING_NUMBER_PATTERN = Pattern.compile("(\\d+)(?:\\.\\d+)*$");
+    private static final Pattern QUALIFIER_NORMALIZE_PATTERN = Pattern.compile("[^a-z0-9]+");
 
     /**
-     * Converts Google Books API JSON to Book object
+     * Converts Google Books API JSON to Book object.
+     * <p>
+     * REFACTORED: Now delegates to GoogleBooksMapper (SSOT) for parsing,
+     * then converts BookAggregate → Book via BookAggregateToBookConverter.
+     * <p>
+     * This ensures consistency: both old path (this method) and new path
+     * (BookUpsertService) use GoogleBooksMapper as single source of truth.
      *
      * @param item JsonNode with volume data
      * @return Populated Book object or null if input is null
@@ -43,14 +60,62 @@ public class BookJsonParser {
             logger.warn("Input JsonNode is null. Cannot convert to Book.");
             return null;
         }
-
+        
+        // Check if this looks like Google Books JSON
+        boolean isGoogleBooks = item.has("volumeInfo") || 
+                               (item.has("kind") && item.get("kind").asText("").contains("books#volume"));
+        
+        if (!isGoogleBooks) {
+            // Not Google Books format - fall back to legacy parsing
+            logger.debug("Non-Google Books JSON detected, using legacy parsing");
+            return convertJsonToBookLegacy(item);
+        }
+        
+        try {
+            // NEW PATH: Use GoogleBooksMapper (SSOT) to parse
+            BookAggregate aggregate = googleBooksMapper.map(item);
+            
+            if (aggregate == null) {
+                logger.warn("GoogleBooksMapper returned null for JSON: {}", item.has("id") ? item.get("id").asText() : "UNKNOWN");
+                // Fallback to legacy parsing
+                return convertJsonToBookLegacy(item);
+            }
+            
+            // Convert BookAggregate → Book
+            Book book = BookAggregateToBookConverter.convert(aggregate);
+            
+            if (book != null) {
+                // Preserve raw JSON (not in BookAggregate)
+                book.setRawJsonResponse(item.toString());
+                
+                // Apply legacy-specific logic that's not in BookAggregate yet
+                extractQualifiersFromItem(item, book);
+                normalizeQualifierKeys(book);
+                applyEditionMetadata(item, book);
+            }
+            
+            return book;
+            
+        } catch (Exception e) {
+            logger.warn("Error using GoogleBooksMapper for JSON, falling back to legacy: {}", e.getMessage());
+            return convertJsonToBookLegacy(item);
+        }
+    }
+    
+    /**
+     * Legacy conversion method (fallback only).
+     * Used when GoogleBooksMapper fails or for non-Google Books JSON.
+     */
+    private static Book convertJsonToBookLegacy(JsonNode item) {
         Book book = new Book();
-        book.setRawJsonResponse(item.toString()); // Store raw JSON
+        book.setRawJsonResponse(item.toString());
 
         extractBookBaseInfo(item, book);
         setAdditionalFields(item, book);
         setLinks(item, book);
-        extractQualifiersFromItem(item, book); // Extract qualifiers if present
+        extractQualifiersFromItem(item, book);
+        normalizeQualifierKeys(book);
+        applyEditionMetadata(item, book);
 
         return book;
     }
@@ -74,7 +139,11 @@ public class BookJsonParser {
         JsonNode volumeInfo = item.get("volumeInfo");
 
         book.setId(item.has("id") ? item.get("id").asText() : null);
-        book.setTitle(volumeInfo.has("title") ? volumeInfo.get("title").asText() : null);
+        
+        // Normalize title to proper case
+        String rawTitle = volumeInfo.has("title") ? volumeInfo.get("title").asText() : null;
+        book.setTitle(TextUtils.normalizeBookTitle(rawTitle));
+        
         book.setAuthors(getAuthorsFromVolumeInfo(volumeInfo));
 
         String rawPublisher = volumeInfo.has("publisher") ? volumeInfo.get("publisher").asText() : null;
@@ -85,7 +154,7 @@ public class BookJsonParser {
 
         book.setPublishedDate(parsePublishedDate(volumeInfo));
         book.setDescription(volumeInfo.has("description") ? volumeInfo.get("description").asText() : null);
-        book.setCoverImageUrl(getGoogleCoverImageFromVolumeInfo(volumeInfo));
+        book.setExternalImageUrl(getGoogleCoverImageFromVolumeInfo(volumeInfo));
         book.setLanguage(volumeInfo.has("language") ? volumeInfo.get("language").asText() : null);
 
         if (volumeInfo.has("industryIdentifiers")) {
@@ -108,6 +177,151 @@ public class BookJsonParser {
         }
     }
 
+    private static void normalizeQualifierKeys(Book book) {
+        Map<String, Object> qualifiers = book.getQualifiers();
+        if (qualifiers == null || qualifiers.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> normalized = new HashMap<>();
+        qualifiers.forEach((key, value) -> {
+            if (key == null) return;
+            String trimmed = key.trim().toLowerCase();
+            if (trimmed.isEmpty()) return;
+            String canonical = QUALIFIER_NORMALIZE_PATTERN.matcher(trimmed).replaceAll("_");
+            canonical = canonical.replaceAll("_{2,}", "_");
+            canonical = canonical.replaceAll("^_+|_+$", "");
+            if (!canonical.isEmpty()) {
+                normalized.put(canonical, value);
+            }
+        });
+
+        if (!normalized.isEmpty()) {
+            book.setQualifiers(normalized);
+        }
+    }
+
+    private static void applyEditionMetadata(JsonNode item, Book book) {
+        Integer editionNumber = deriveEditionNumber(item, book);
+        if (editionNumber != null) {
+            book.setEditionNumber(editionNumber);
+        }
+
+        String groupKey = buildEditionGroupKey(book);
+        if (groupKey != null && !groupKey.isBlank()) {
+            book.setEditionGroupKey(groupKey);
+        }
+    }
+
+    private static Integer deriveEditionNumber(JsonNode item, Book book) {
+        List<Integer> candidates = new ArrayList<>();
+
+        JsonNode volumeInfo = item != null ? item.get("volumeInfo") : null;
+        if (volumeInfo != null) {
+            addEditionCandidate(candidates, volumeInfo.get("edition"));
+            addEditionCandidate(candidates, volumeInfo.get("editionInformation"));
+            addEditionCandidate(candidates, volumeInfo.get("editionInfo"));
+            addEditionCandidate(candidates, volumeInfo.get("contentVersion"));
+            if (volumeInfo.has("subtitle")) {
+                addEditionCandidate(candidates, volumeInfo.get("subtitle"));
+            }
+            if (volumeInfo.has("title")) {
+                addEditionCandidate(candidates, volumeInfo.get("title"));
+            }
+        }
+
+        if (item != null) {
+            addEditionCandidate(candidates, item.get("edition"));
+            addEditionCandidate(candidates, item.get("editionNumber"));
+            addEditionCandidate(candidates, item.get("edition_number"));
+        }
+
+        Map<String, Object> qualifiers = book.getQualifiers();
+        if (qualifiers != null) {
+            addEditionCandidate(candidates, qualifiers.get("edition_number"));
+            addEditionCandidate(candidates, qualifiers.get("edition-number"));
+            addEditionCandidate(candidates, qualifiers.get("edition"));
+        }
+
+        addEditionCandidate(candidates, book.getTitle());
+
+        return candidates.isEmpty() ? null : candidates.get(0);
+    }
+
+    private static void addEditionCandidate(List<Integer> candidates, Object value) {
+        Integer parsed = parseEditionCandidate(value);
+        if (parsed != null) {
+            candidates.add(parsed);
+        }
+    }
+
+    private static Integer parseEditionCandidate(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            int candidate = number.intValue();
+            return candidate > 0 ? candidate : null;
+        }
+        if (value instanceof JsonNode node) {
+            if (node.isNumber()) {
+                int candidate = node.intValue();
+                return candidate > 0 ? candidate : null;
+            }
+            if (node.isTextual()) {
+                return parseEditionCandidate(node.textValue());
+            }
+            return null;
+        }
+        if (value instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.isEmpty()) {
+                return null;
+            }
+            try {
+                int direct = Integer.parseInt(trimmed);
+                if (direct > 0) {
+                    return direct;
+                }
+            } catch (NumberFormatException ignored) {
+                Matcher editionMatcher = EDITION_WORD_PATTERN.matcher(trimmed);
+                if (editionMatcher.find()) {
+                    int candidate = Integer.parseInt(editionMatcher.group(1));
+                    return candidate > 0 ? candidate : null;
+                }
+                Matcher trailingMatcher = TRAILING_NUMBER_PATTERN.matcher(trimmed);
+                if (trailingMatcher.find()) {
+                    int candidate = Integer.parseInt(trailingMatcher.group(1));
+                    return candidate > 0 ? candidate : null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String buildEditionGroupKey(Book book) {
+        String titleComponent = normalizeKeyComponent(book.getTitle());
+        if (titleComponent.isEmpty()) {
+            return null;
+        }
+        List<String> authors = book.getAuthors();
+        String authorComponent = (authors != null && !authors.isEmpty()) ? normalizeKeyComponent(authors.get(0)) : "";
+        return authorComponent.isEmpty() ? titleComponent : titleComponent + "__" + authorComponent;
+    }
+
+    private static String normalizeKeyComponent(String value) {
+        if (value == null) {
+            return "";
+        }
+            String normalized = Normalizer.normalize(value, Normalizer.Form.NFKD)
+            .replaceAll("\\p{M}+", "")
+            .toLowerCase(Locale.ROOT)
+            .replaceAll("[^a-z0-9\\s]+", " ")
+            .trim()
+            .replaceAll("\\s+", " ");
+        return normalized;
+    }
+
     /**
      * Extracts authors from volume info
      * 
@@ -128,7 +342,8 @@ public class BookJsonParser {
                     if (authorNode != null && !authorNode.isNull()) {
                         String authorText = authorNode.asText("").trim();
                         if (!authorText.isEmpty()) {
-                            authors.add(authorText);
+                            // Normalize author name to proper case
+                            authors.add(TextUtils.normalizeAuthorName(authorText));
                         }
                     }
                 });
@@ -136,7 +351,8 @@ public class BookJsonParser {
                 // Handle case where authors might be a single string instead of an array
                 String authorText = authorsNode.asText("").trim();
                 if (!authorText.isEmpty()) {
-                    authors.add(authorText);
+                    // Normalize author name to proper case
+                    authors.add(TextUtils.normalizeAuthorName(authorText));
                 }
             } else {
                 logger.warn("Authors field is present but is neither an array nor a string: {}", authorsNode.getNodeType());
@@ -291,26 +507,11 @@ public class BookJsonParser {
     private static Date parsePublishedDate(JsonNode volumeInfo) {
         if (volumeInfo.has("publishedDate")) {
             String dateString = volumeInfo.get("publishedDate").asText();
-            // Try yyyy-MM-dd first
-            SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
-            try {
-                return format.parse(dateString);
-            } catch (ParseException e) {
-                // Try yyyy-MM
-                format = new SimpleDateFormat("yyyy-MM");
-                try {
-                    return format.parse(dateString);
-                } catch (ParseException ex) {
-                    // Try yyyy
-                    format = new SimpleDateFormat("yyyy");
-                    try {
-                        return format.parse(dateString);
-                    } catch (ParseException exc) {
-                        logger.warn("Failed to parse published date: {} with formats yyyy-MM-dd, yyyy-MM, yyyy", dateString);
-                        return null;
-                    }
-                }
+            Date parsed = DateParsingUtils.parseFlexibleDate(dateString);
+            if (parsed == null) {
+                logger.warn("Failed to parse published date '{}' via DateParsingUtils", dateString);
             }
+            return parsed;
         }
         return null;
     }
@@ -382,9 +583,12 @@ public class BookJsonParser {
         if (query == null || query.trim().isEmpty()) {
             return qualifiers;
         }
-        
-        String normalizedQuery = query.toLowerCase().trim();
-        
+
+        String normalizedQuery = SearchQueryUtils.canonicalize(query);
+        if (normalizedQuery == null || normalizedQuery.isEmpty()) {
+            return qualifiers;
+        }
+
         if (normalizedQuery.contains("new york times bestseller") || 
             normalizedQuery.contains("nyt bestseller") ||
             normalizedQuery.contains("ny times bestseller")) {
@@ -426,7 +630,7 @@ public class BookJsonParser {
         if (isbn == null) {
             return false;
         }
-        String sanitizedIsbn = isbn.replace("-", "").replace(" ", "").toUpperCase();
+        String sanitizedIsbn = isbn.replace("-", "").replace(" ", "").toUpperCase(Locale.ROOT);
         if (sanitizedIsbn.length() == 10) {
             // Basic check for ISBN-10 (9 digits + 1 check digit which can be X)
             return sanitizedIsbn.matches("^[0-9]{9}[0-9X]$");

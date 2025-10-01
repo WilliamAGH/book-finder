@@ -19,13 +19,23 @@ package com.williamcallahan.book_recommendation_engine.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
-import com.williamcallahan.book_recommendation_engine.service.ApiRequestMonitor;
-import com.williamcallahan.book_recommendation_engine.service.GoogleApiFetcher;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.service.image.GoogleCoverUrlEvaluator;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
+import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.service.image.ExternalCoverFetchHelper;
+import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
@@ -42,17 +52,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
+import com.williamcallahan.book_recommendation_engine.service.image.CoverCacheManager;
 
 @SuppressWarnings("unused")
 @Service
+@Slf4j
 public class GoogleBooksService {
-
-    private static final Logger logger = LoggerFactory.getLogger(GoogleBooksService.class);
 
     private final ObjectMapper objectMapper;
     private final ApiRequestMonitor apiRequestMonitor;
     private final GoogleApiFetcher googleApiFetcher;
     private final BookDataOrchestrator bookDataOrchestrator; // Added for fetchMultipleBooksByIds
+    private final ExternalCoverFetchHelper externalCoverFetchHelper;
+    private final GoogleCoverUrlEvaluator googleCoverUrlEvaluator;
 
     private static final int ISBN_BATCH_QUERY_SIZE = 5; // Reduced batch size for ISBN OR queries
     
@@ -70,11 +83,15 @@ public class GoogleBooksService {
             ObjectMapper objectMapper,
             ApiRequestMonitor apiRequestMonitor,
             GoogleApiFetcher googleApiFetcher,
-            BookDataOrchestrator bookDataOrchestrator) {
+            @Lazy BookDataOrchestrator bookDataOrchestrator,
+            ExternalCoverFetchHelper externalCoverFetchHelper,
+            GoogleCoverUrlEvaluator googleCoverUrlEvaluator) {
         this.objectMapper = objectMapper;
         this.apiRequestMonitor = apiRequestMonitor;
         this.googleApiFetcher = googleApiFetcher;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.externalCoverFetchHelper = externalCoverFetchHelper;
+        this.googleCoverUrlEvaluator = googleCoverUrlEvaluator;
     }
 
     /**
@@ -96,7 +113,7 @@ public class GoogleBooksService {
         // Resilience4j annotations remain on this public method
         // The actual API call and its own retry/monitoring are within GoogleApiFetcher
         // This method now primarily serves as an entry point with resilience
-        logger.debug("GoogleBooksService.searchBooks called for query: {}, startIndex: {}. Delegating to GoogleApiFetcher.", query, startIndex);
+        log.debug("GoogleBooksService.searchBooks called for query: {}, startIndex: {}. Delegating to GoogleApiFetcher.", query, startIndex);
         // Assuming this service primarily deals with authenticated calls if it's a direct passthrough
         // The plan implies GoogleBooksService might be a thin wrapper for *authenticated* calls
         return googleApiFetcher.searchVolumesAuthenticated(query, startIndex, orderBy, langCode)
@@ -120,62 +137,110 @@ public class GoogleBooksService {
      * @return Mono containing a list of {@link Book} objects retrieved from the API
      */
     public Mono<List<Book>> searchBooksAsyncReactive(String query, String langCode, int desiredTotalResults, String orderBy) {
-        final int maxResultsPerPage = 40;
-        final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
-        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
-        
-        logger.debug("GoogleBooksService.searchBooksAsyncReactive with query: '{}', langCode: {}, maxResults: {}, orderBy: {}",
-            query, langCode, maxTotalResultsToFetch, effectiveOrderBy);
-
-        final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
-
-        return Flux.range(0, (maxTotalResultsToFetch + maxResultsPerPage - 1) / maxResultsPerPage)
-            .map(page -> page * maxResultsPerPage)
-            .concatMap(startIndex ->
-                // Delegate to searchBooks and handle errors per page to avoid bubbling up
-                searchBooks(query, startIndex, effectiveOrderBy, langCode)
-                    .flatMapMany(responseNode -> {
-                        if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray()) {
-                            List<JsonNode> items = new ArrayList<>();
-                            responseNode.get("items").forEach(items::add);
-                            return Flux.fromIterable(items);
-                        }
-                        return Flux.empty();
-                    })
-                    .onErrorResume(e -> {
-                        logger.error("Error fetching page {} for query '{}': {}", startIndex, query, e.getMessage());
-                        apiRequestMonitor.recordFailedRequest(
-                            "volumes/search/reactive/" + query,
-                            e.getMessage()
-                        );
-                        return Flux.empty();
-                    })
-            )
-            .map(jsonNode -> BookJsonParser.convertJsonToBook(jsonNode)) // Use BookJsonParser
-            .filter(Objects::nonNull)
-            .map(book -> {
-                if (!queryQualifiers.isEmpty()) {
-                    queryQualifiers.forEach(book::addQualifier);
-                }
-                return book;
-            })
+        return streamBooksReactive(query, langCode, desiredTotalResults, orderBy)
             .collectList()
             .map(books -> {
-                logger.info("GoogleBooksService.searchBooksAsyncReactive completed for query '{}'. Retrieved {} books total.",
+                log.info("GoogleBooksService.searchBooksAsyncReactive completed for query '{}'. Retrieved {} books total.",
                     query, books.size());
-                if (books.size() > maxTotalResultsToFetch) {
-                    return books.subList(0, maxTotalResultsToFetch);
-                }
                 return books;
             })
             .onErrorResume(e -> {
-                logger.error("Error in searchBooksAsyncReactive for query '{}': {}", query, e.getMessage());
+                LoggingUtils.error(log, e, "Error in searchBooksAsyncReactive for query '{}'", query);
                 apiRequestMonitor.recordFailedRequest(
                     "volumes/search/reactive/" + query,
                     e.getMessage()
                 );
-                // Return an empty list to handle errors gracefully
-                return Mono.just(Collections.emptyList());
+                return Mono.just(Collections.<Book>emptyList());
+            });
+    }
+
+    /**
+     * Streams results from Google Books, emitting authenticated results first and falling back to
+     * unauthenticated calls when the authenticated path is blocked or unavailable. Results are
+     * deduplicated by volume ID and capped to the desired total.
+     */
+    public Flux<Book> streamBooksReactive(String query,
+                                          String langCode,
+                                          int desiredTotalResults,
+                                          String orderBy) {
+        if (!googleApiFetcher.isGoogleFallbackEnabled()) {
+            log.debug("GoogleBooksService.streamBooksReactive skipping because Google fallback disabled for query '{}'", query);
+            return Flux.empty();
+        }
+
+        final int maxTotalResultsToFetch = (desiredTotalResults > 0) ? desiredTotalResults : 200;
+        final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
+        final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
+
+        final boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
+
+        Set<String> seenIds = Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+        Flux<Book> authenticatedFlux = Flux.empty();
+        if (apiKeyAvailable) {
+            authenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
+                .doOnSubscribe(subscription -> ExternalApiLogger.logApiCallAttempt(log,
+                    "GoogleBooks",
+                    "STREAM_AUTH",
+                    query,
+                    true))
+                .map(BookJsonParser::convertJsonToBook)
+                .filter(Objects::nonNull)
+                .map(book -> applyQualifiers(book, queryQualifiers))
+                .onErrorResume(error -> {
+                    LoggingUtils.warn(log, error,
+                        "GoogleBooksService.streamBooksReactive authenticated search failed for query '{}'", query);
+                    apiRequestMonitor.recordFailedRequest("volumes/search/authenticated/" + query, error.getMessage());
+                    ExternalApiLogger.logApiCallFailure(log,
+                        "GoogleBooks",
+                        "STREAM_AUTH",
+                        query,
+                        error.getMessage());
+                    return Flux.empty();
+                });
+        }
+
+        Flux<Book> unauthenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
+            .doOnSubscribe(subscription -> ExternalApiLogger.logApiCallAttempt(log,
+                "GoogleBooks",
+                "STREAM_UNAUTH",
+                query,
+                false))
+            .map(BookJsonParser::convertJsonToBook)
+            .filter(Objects::nonNull)
+            .map(book -> applyQualifiers(book, queryQualifiers))
+            .onErrorResume(error -> {
+                LoggingUtils.warn(log, error,
+                    "GoogleBooksService.streamBooksReactive unauthenticated search failed for query '{}'", query);
+                apiRequestMonitor.recordFailedRequest("volumes/search/unauthenticated/" + query, error.getMessage());
+                ExternalApiLogger.logApiCallFailure(log,
+                    "GoogleBooks",
+                    "STREAM_UNAUTH",
+                    query,
+                    error.getMessage());
+                return Flux.empty();
+            });
+
+        Flux<Book> combinedFlux = apiKeyAvailable
+            ? Flux.concat(authenticatedFlux, unauthenticatedFlux)
+            : unauthenticatedFlux;
+
+        return combinedFlux
+            .filter(book -> book.getId() != null && seenIds.add(book.getId()))
+            .take(maxTotalResultsToFetch)
+            .doOnSubscribe(subscription -> log.debug(
+                "GoogleBooksService.streamBooksReactive starting stream for query '{}' (max {} results, orderBy={})",
+                query, maxTotalResultsToFetch, effectiveOrderBy))
+            .doOnNext(book -> apiRequestMonitor.recordSuccessfulRequest("volumes/search/stream"))
+            .doOnComplete(() -> {
+                log.debug(
+                    "GoogleBooksService.streamBooksReactive completed stream for query '{}' (emitted {} results)",
+                    query, seenIds.size());
+                ExternalApiLogger.logApiCallSuccess(log,
+                    "GoogleBooks",
+                    "STREAM_COMBINED",
+                    query,
+                    seenIds.size());
             });
     }
 
@@ -198,6 +263,27 @@ public class GoogleBooksService {
      */
     public Mono<List<Book>> searchBooksAsyncReactive(String query) {
         return searchBooksAsyncReactive(query, null, 200, "newest");
+    }
+
+    public Mono<List<Book>> fetchAdditionalHomepageBooks(String query, int limit, boolean allowExternalFallback) {
+        Mono<List<Book>> postgres = bookDataOrchestrator.searchBooksTiered(query, null, limit, null)
+            .onErrorResume(e -> {
+                log.warn("Postgres-first homepage filler lookup failed for query '{}': {}", query, e.getMessage());
+                return Mono.just(Collections.<Book>emptyList());
+            });
+
+        if (!allowExternalFallback) {
+            return postgres.defaultIfEmpty(List.of());
+        }
+
+        Mono<List<Book>> fallback = searchBooksAsyncReactive(query, null, limit, null)
+            .onErrorResume(e -> {
+                log.error("Google fallback for homepage filler failed for query '{}': {}", query, e.getMessage());
+                return Mono.just(Collections.<Book>emptyList());
+            });
+
+        return postgres.flatMap(results -> (results != null && !results.isEmpty()) ? Mono.just(results) : fallback)
+            .defaultIfEmpty(List.of());
     }
 
     /**
@@ -263,6 +349,13 @@ public class GoogleBooksService {
         return searchBooksByISBN(isbn, null);
     }
 
+    private Book applyQualifiers(Book book, Map<String, Object> queryQualifiers) {
+        if (book != null && queryQualifiers != null && !queryQualifiers.isEmpty()) {
+            queryQualifiers.forEach(book::addQualifier);
+        }
+        return book;
+    }
+
     /**
      * Fetches the Google Books ID for a given ISBN
      * This method is specifically for the NYT scheduler to minimize data transfer
@@ -273,26 +366,26 @@ public class GoogleBooksService {
      */
     @RateLimiter(name = "googleBooksServiceRateLimiter") // Apply rate limiting
     public Mono<String> fetchGoogleBookIdByIsbn(String isbn) {
-        logger.debug("Fetching Google Book ID for ISBN: {}", isbn);
+        log.debug("Fetching Google Book ID for ISBN: {}", isbn);
         return searchBooks("isbn:" + isbn, 0, "relevance", null)
             .map(responseNode -> {
                 if (responseNode != null && responseNode.has("items") && responseNode.get("items").isArray() && responseNode.get("items").size() > 0) {
                     JsonNode firstItem = responseNode.get("items").get(0);
                     if (firstItem.has("id")) {
                         String googleId = firstItem.get("id").asText();
-                        logger.info("Found Google Book ID: {} for ISBN: {}", googleId, isbn);
+                        log.info("Found Google Book ID: {} for ISBN: {}", googleId, isbn);
                         return googleId;
                     }
                 }
-                logger.warn("No Google Book ID found for ISBN: {}", isbn);
+                log.warn("No Google Book ID found for ISBN: {}", isbn);
                 return null; // Will be filtered by filter(Objects::nonNull) or handled by switchIfEmpty
             })
             .filter(Objects::nonNull) // Ensure we only proceed if an ID was found
             .doOnError(e -> {
-                logger.error("Error fetching Google Book ID for ISBN {}: {}", isbn, e.getMessage(), e);
+                LoggingUtils.error(log, e, "Error fetching Google Book ID for ISBN {}", isbn);
                 apiRequestMonitor.recordFailedRequest("volumes/search/isbn_to_id/" + isbn, e.getMessage());
             })
-            .onErrorResume(e -> Mono.empty()); // On error, return an empty Mono
+            .onErrorResume(e -> Mono.<String>empty());
     }
 
     /**
@@ -308,7 +401,7 @@ public class GoogleBooksService {
     @TimeLimiter(name = "googleBooksService")
     @RateLimiter(name = "googleBooksServiceRateLimiter", fallbackMethod = "getBookByIdRateLimitFallback")
     public CompletionStage<Book> getBookById(String bookId) {
-        logger.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheFacadeService/GoogleBooksCachingStrategy.", bookId);
+        log.warn("GoogleBooksService.getBookById called directly for {}. Consider using orchestrated flow via BookCacheFacadeService/GoogleBooksCachingStrategy.", bookId);
         return googleApiFetcher.fetchVolumeByIdAuthenticated(bookId)
             .map(BookJsonParser::convertJsonToBook)
             .filter(Objects::nonNull)
@@ -318,11 +411,12 @@ public class GoogleBooksService {
             ))
             // Handle errors by recording failure and returning empty
             .onErrorResume(e -> {
+                LoggingUtils.error(log, e, "Error fetching book by ID {}", bookId);
                 apiRequestMonitor.recordFailedRequest(
                     "volumes/get/authenticated/" + bookId,
                     e.getMessage()
                 );
-                return Mono.empty();
+                return Mono.<Book>empty();
             })
             .toFuture();
     }
@@ -379,7 +473,7 @@ public class GoogleBooksService {
      * @return Empty Mono to indicate no results available
      */
     public Mono<JsonNode> searchBooksFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
-        logger.warn("GoogleBooksService.searchBooks circuit breaker opened for query: '{}', startIndex: {}. Error: {}", 
+        log.warn("GoogleBooksService.searchBooks circuit breaker opened for query: '{}', startIndex: {}. Error: {}", 
             query, startIndex, t.getMessage());
         
         String queryType = "general"; // Simplified for fallback, specific type determined by GoogleApiFetcher now
@@ -409,7 +503,7 @@ public class GoogleBooksService {
      * @return Empty Mono to indicate no results available
      */
     public Mono<JsonNode> searchBooksRateLimitFallback(String query, int startIndex, String orderBy, String langCode, Throwable t) {
-        logger.warn("GoogleBooksService.searchBooks rate limit exceeded for query: '{}', startIndex: {}. Error: {}", 
+        log.warn("GoogleBooksService.searchBooks rate limit exceeded for query: '{}', startIndex: {}. Error: {}", 
             query, startIndex, t.getMessage());
         
         apiRequestMonitor.recordMetric("api/rate-limited", "API call rate limited for search: " + query + " (via GoogleBooksService)");
@@ -430,7 +524,7 @@ public class GoogleBooksService {
      * @return CompletedFuture with null value to indicate no book available
      */
     public CompletionStage<Book> getBookByIdFallback(String bookId, Throwable t) {
-        logger.warn("GoogleBooksService.getBookById circuit breaker opened for bookId: {}. Error: {}", 
+        log.warn("GoogleBooksService.getBookById circuit breaker opened for bookId: {}. Error: {}", 
             bookId, t.getMessage());
         
         apiRequestMonitor.recordFailedRequest("volumes/get/" + bookId + "/authenticated", "Circuit breaker opened for bookId: " + bookId + ": " + t.getMessage());
@@ -450,12 +544,112 @@ public class GoogleBooksService {
      * @return CompletedFuture with null value to indicate no book available
      */
     public CompletionStage<Book> getBookByIdRateLimitFallback(String bookId, Throwable t) {
-        logger.warn("GoogleBooksService.getBookById rate limit exceeded for bookId: {}. Error: {}", 
+        log.warn("GoogleBooksService.getBookById rate limit exceeded for bookId: {}. Error: {}", 
             bookId, t.getMessage());
         
         apiRequestMonitor.recordMetric("api/rate-limited", "API call rate limited for book " + bookId + " (via GoogleBooksService)");
         
         return CompletableFuture.completedFuture(null);
+    }
+
+    public CompletableFuture<ImageDetails> fetchCoverByIsbn(
+        String isbn,
+        String bookIdForLog,
+        ImageProvenanceData provenanceData,
+        LocalDiskCoverCacheService localDiskCoverCacheService,
+        CoverCacheManager coverCacheManager) {
+
+        log.debug("Attempting Google Books API by ISBN {} (book log id: {})", isbn, bookIdForLog);
+
+        return externalCoverFetchHelper.fetchAndCache(
+            isbn,
+            coverCacheManager::isKnownBadImageUrl,
+            url -> coverCacheManager.addKnownBadImageUrl(url),
+            () -> searchBooksByISBN(isbn)
+                .toFuture()
+                .thenApply(books -> {
+                    if (books == null || books.isEmpty()) {
+                        return Optional.empty();
+                    }
+                    Book googleBook = books.get(0);
+                    if (googleBook == null) {
+                        return Optional.empty();
+                    }
+                    if (googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
+                        provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
+                    }
+                    String googleUrl = googleBook.getExternalImageUrl();
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
+                        return Optional.empty();
+                    }
+                    String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
+                    return Optional.of(new ImageDetails(
+                        enhanced,
+                        "GOOGLE_BOOKS",
+                        googleBook.getId(),
+                        com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS,
+                        ImageResolutionPreference.ORIGINAL
+                    ));
+                }),
+            "Google ISBN: " + isbn,
+            ImageSourceName.GOOGLE_BOOKS,
+            "GoogleBooksAPI-ISBN",
+            "google-isbn",
+            provenanceData,
+            bookIdForLog,
+            new ExternalCoverFetchHelper.ValidationHooks(
+                url -> ImageCacheUtils.isLikelyGoogleCoverUrl(url),
+                details -> ImageCacheUtils.isLikelyGoogleCoverUrl(details.getUrlOrPath())
+            )
+        );
+    }
+
+    public CompletableFuture<ImageDetails> fetchCoverByVolumeId(
+        String googleVolumeId,
+        String bookIdForLog,
+        ImageProvenanceData provenanceData,
+        LocalDiskCoverCacheService localDiskCoverCacheService,
+        CoverCacheManager coverCacheManager) {
+
+        log.debug("Attempting Google Books API by Volume ID {} (book log id: {})", googleVolumeId, bookIdForLog);
+
+        return externalCoverFetchHelper.fetchAndCache(
+            googleVolumeId,
+            coverCacheManager::isKnownBadImageUrl,
+            url -> coverCacheManager.addKnownBadImageUrl(url),
+            () -> getBookById(googleVolumeId)
+                .toCompletableFuture()
+                .thenApply(googleBook -> {
+                    if (googleBook != null && googleBook.getRawJsonResponse() != null && provenanceData.getGoogleBooksApiResponse() == null) {
+                        provenanceData.setGoogleBooksApiResponse(googleBook.getRawJsonResponse());
+                    }
+                    if (googleBook == null) {
+                        return Optional.empty();
+                    }
+                    String googleUrl = googleBook.getExternalImageUrl();
+                    if (!ValidationUtils.hasText(googleUrl) || googleUrl.contains("image-not-available.png")) {
+                        return Optional.empty();
+                    }
+                    String enhanced = ImageCacheUtils.enhanceGoogleCoverUrl(googleUrl, "zoom=0");
+                    return Optional.of(new ImageDetails(
+                        enhanced,
+                        "GOOGLE_BOOKS",
+                        googleBook.getId(),
+                        com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS,
+                        ImageResolutionPreference.ORIGINAL
+                    ));
+                }),
+            "Google VolumeID: " + googleVolumeId,
+            ImageSourceName.GOOGLE_BOOKS,
+            "GoogleBooksAPI-VolumeID",
+            "google-volume",
+            provenanceData,
+            bookIdForLog,
+            new ExternalCoverFetchHelper.ValidationHooks(
+                url -> ImageCacheUtils.isLikelyGoogleCoverUrl(url),
+                details -> ImageCacheUtils.isLikelyGoogleCoverUrl(details.getUrlOrPath())
+            )
+        );
     }
 
     /**
@@ -483,29 +677,32 @@ public class GoogleBooksService {
                     String batchQuery = batch.stream()
                                             .map(isbn -> "isbn:" + isbn.trim())
                                             .collect(Collectors.joining(" OR "));
-                    logger.info("Fetching Google Book IDs for ISBN batch query: {}", batchQuery);
+                    log.info("Fetching Google Book IDs for ISBN batch query: {}", batchQuery);
                     // Use searchBooksAsyncReactive, which handles pagination within the API call for that query
                     // We expect few results per ISBN, so desiredTotalResults can be batch.size() * small_multiplier
                     return searchBooksAsyncReactive(batchQuery, langCode, batch.size() * 2, "relevance")
                         .onErrorResume(e -> {
-                            logger.error("Error fetching batch of ISBNs (query: {}): {}", batchQuery, e.getMessage());
-                            return Mono.just(Collections.emptyList()); // Continue with other batches
+                            LoggingUtils.error(log, e, "Error fetching batch of ISBNs (query: {})", batchQuery);
+                            return Mono.just(Collections.<Book>emptyList());
                         });
                 })
                 .delayElement(java.time.Duration.ofMillis(isbnBatchDelayMs)) // Add delay between batch executions
             )
             .flatMap(Flux::fromIterable) // Flatten List<Book> from each batch into a single Flux<Book>
-            .filter(book -> book != null && book.getId() != null && (book.getIsbn10() != null || book.getIsbn13() != null))
+            .filter(book -> {
+                if (book == null) {
+                    return false;
+                }
+                String preferredIsbn = BookValidator.getPreferredIsbn(book);
+                return ValidationUtils.hasText(book.getId()) && ValidationUtils.hasText(preferredIsbn);
+            })
             .collect(Collectors.toMap(
-                (Book book) -> { // Key Mapper: Extract ISBN (prefer ISBN13)
-                    String isbn13 = book.getIsbn13();
-                    return (isbn13 != null && !isbn13.isEmpty()) ? isbn13 : book.getIsbn10();
-                },
-                Book::getId, // Value Mapper: Google Book ID
+                BookValidator::getPreferredIsbn,
+                Book::getId,
                 mergeFunction // Merge Function: In case of duplicate ISBNs, take the first ID
             ))
-            .doOnSuccess(idMap -> logger.info("Successfully fetched {} Google Book IDs for {} initial ISBNs.", idMap.size(), isbns.size()))
-            .onErrorReturn(Collections.emptyMap());
+            .doOnSuccess(idMap -> log.info("Successfully fetched {} Google Book IDs for {} initial ISBNs.", idMap.size(), isbns.size()))
+            .onErrorReturn(Collections.<String, String>emptyMap());
     }
 
     /**
@@ -519,12 +716,12 @@ public class GoogleBooksService {
         if (bookIds == null || bookIds.isEmpty()) {
             return Flux.empty();
         }
-        logger.info("Fetching full details for {} book IDs using BookDataOrchestrator.", bookIds.size());
+        log.info("Fetching full details for {} book IDs using BookDataOrchestrator.", bookIds.size());
         return Flux.fromIterable(bookIds)
             .publishOn(reactor.core.scheduler.Schedulers.parallel()) // Allow parallel execution of orchestrator calls
             .flatMap(bookId -> bookDataOrchestrator.getBookByIdTiered(bookId)
-                                .doOnError(e -> logger.warn("Error fetching book ID {} via orchestrator in batch: {}", bookId, e.getMessage()))
-                                .onErrorResume(e -> Mono.empty()), // Continue if one book fails
+                                .doOnError(e -> LoggingUtils.warn(log, e, "Error fetching book ID {} via orchestrator in batch", bookId))
+                                .onErrorResume(e -> Mono.<Book>empty()),
                         Math.min(bookIds.size(), 10) // Concurrency level, adjust as needed
             )
             .filter(Objects::nonNull);

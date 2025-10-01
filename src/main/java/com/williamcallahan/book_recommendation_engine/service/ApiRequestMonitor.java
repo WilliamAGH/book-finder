@@ -239,25 +239,25 @@ public class ApiRequestMonitor {
      */
     public String generateReport() {
         StringBuilder report = new StringBuilder();
-        report.append("API Request Monitor Report\n");
-        report.append("==========================\n");
-        report.append("Generated at: ").append(TIME_FORMATTER.format(LocalDateTime.now())).append("\n\n");
+        report.append(String.format("API Request Monitor Report%n"));
+        report.append(String.format("==========================%n"));
+        report.append(String.format("Generated at: %s%n%n", TIME_FORMATTER.format(LocalDateTime.now())));
         
-        report.append("Current Counts:\n");
-        report.append(String.format("  Hourly: %d requests (%d successful, %d failed)\n", 
+        report.append(String.format("Current Counts:%n"));
+        report.append(String.format("  Hourly: %d requests (%d successful, %d failed)%n", 
                 hourlyRequests.get(), hourlySuccessful.get(), hourlyFailed.get()));
-        report.append(String.format("  Daily: %d requests (%d successful, %d failed)\n", 
+        report.append(String.format("  Daily: %d requests (%d successful, %d failed)%n", 
                 dailyRequests.get(), dailySuccessful.get(), dailyFailed.get()));
-        report.append(String.format("  Total: %d requests (%d successful, %d failed)\n\n", 
+        report.append(String.format("  Total: %d requests (%d successful, %d failed)%n%n", 
                 totalRequests.get(), totalSuccessful.get(), totalFailed.get()));
         
-        report.append("Endpoint Counts:\n");
+        report.append(String.format("Endpoint Counts:%n"));
         endpointCounts.forEach((endpoint, count) -> 
-            report.append(String.format("  %s: %d requests\n", endpoint, count.get())));
+            report.append(String.format("  %s: %d requests%n", endpoint, count.get())));
         
-        report.append("\nLast Reset Times:\n");
-        report.append("  Hourly: ").append(TIME_FORMATTER.format(lastHourlyReset)).append("\n");
-        report.append("  Daily: ").append(TIME_FORMATTER.format(lastDailyReset)).append("\n");
+        report.append(String.format("%nLast Reset Times:%n"));
+        report.append(String.format("  Hourly: %s%n", TIME_FORMATTER.format(lastHourlyReset)));
+        report.append(String.format("  Daily: %s%n", TIME_FORMATTER.format(lastDailyReset)));
         
         return report.toString();
     }

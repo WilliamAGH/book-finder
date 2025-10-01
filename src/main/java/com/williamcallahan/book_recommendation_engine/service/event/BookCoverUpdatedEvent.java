@@ -12,7 +12,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.service.event;
 
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 
 /**
  * Event class representing a book cover image update

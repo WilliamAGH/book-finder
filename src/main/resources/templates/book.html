@@ -169,10 +169,10 @@
                         <!-- Book Cover Section -->
                         <div class="col-md-4 col-lg-3 book-cover-section">
                             <div class="position-relative book-cover-container book-cover-wrapper">
-                                <img th:src="@{/images/placeholder-book-cover.svg}"
-                                     th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : null)}, 
-                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                                     th:attr="data-book-id=${book.id},
+                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : book.externalImageUrl)},
+                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'},
                                               data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                      class="img-fluid rounded-start book-cover"
                                      title="Book cover" th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
@@ -184,13 +184,49 @@
                                     <span th:text="${book.averageRating}">4.5</span>
                                 </div>
 
-                                <!-- Development Mode Image Source Indicator -->
-                                <div th:if="${isDevelopmentMode and book.coverImages != null and book.coverImages.source != null}"
-                                     class="position-absolute bottom-0 start-0 m-2 dev-source-indicator"
-                                     th:classappend="'dev-source-' + ${book.coverImages.source.name()}"
-                                     th:title="${'Source: ' + book.coverImages.source.displayName + (book.coverImages.preferredUrl != null ? ' | URL: ' + #strings.abbreviate(book.coverImages.preferredUrl, 70) : '')}"
-                                     style="z-index: 10; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;">
-                                    <i class="fas fa-check" style="font-size: 0.8em;"></i>
+                                <!-- Development Mode Data Source Panel -->
+                                <div th:if="${isDevelopmentMode}"
+                                     class="position-absolute bottom-0 start-0 m-2 p-2 bg-dark bg-opacity-75 text-white rounded"
+                                     style="z-index: 10; font-size: 0.75rem; line-height: 1.4; max-width: 260px;"
+                                     th:with="
+                                        renderedUrl=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.s3ImagePath != null ? book.s3ImagePath : (book.externalImageUrl != null ? book.externalImageUrl : null))},
+                                        imageRenderedLabel=${renderedUrl == null ? 'None' : ((book.s3ImagePath != null && renderedUrl == book.s3ImagePath) || (#strings.containsIgnoreCase(renderedUrl, 'amazonaws.com') || #strings.containsIgnoreCase(renderedUrl, 'digitaloceanspaces.com')) ? 'S3' : (#strings.contains(renderedUrl, '://') ? #strings.substringBefore(#strings.substringAfter(renderedUrl, '://'), '/') : #strings.substringBefore(renderedUrl, '/')))},
+                                        dimLabel=${book.coverImageWidth != null && book.coverImageHeight != null ? (book.coverImageWidth + ' x ' + book.coverImageHeight + ' px') : 'Unknown'},
+                                        largeAvailable=${(book.coverImageWidth != null && book.coverImageWidth >= 800) || (book.isCoverHighResolution != null && book.isCoverHighResolution) || (book.coverImages != null && book.coverImages.fallbackUrl != null && book.coverImages.preferredUrl != null && book.coverImages.fallbackUrl != book.coverImages.preferredUrl)}
+                                     ">
+                                    <div class="fw-bold mb-1 text-warning">📊 Data Source</div>
+                                    <div>
+                                        <strong>Rendered From:</strong> 
+                                        <span th:text="${book.retrievedFrom != null ? book.retrievedFrom : 'Unknown'}" 
+                                              th:classappend="${book.retrievedFrom == 'POSTGRES' ? 'text-success' : (book.retrievedFrom != null ? 'text-warning' : 'text-danger')}">POSTGRES</span>
+                                    </div>
+                                    <div>
+                                        <strong>Data Source:</strong> 
+                                        <span th:text="${book.dataSource != null ? book.dataSource : 'Unknown'}" 
+                                              class="text-info">Google Books</span>
+                                    </div>
+                                    <div>
+                                        <strong>In Postgres:</strong> 
+                                        <span th:text="${book.inPostgres != null and book.inPostgres ? 'Yes' : 'No'}" 
+                                              th:classappend="${book.inPostgres != null and book.inPostgres ? 'text-success' : 'text-danger'}">Yes</span>
+                                    </div>
+                                    <div class="mt-1 pt-1 border-top border-secondary">
+                                        <strong>Image Rendered:</strong>
+                                        <span th:text="${imageRenderedLabel}" class="text-light">S3</span>
+                                    </div>
+                                    <div>
+                                        <strong>Image Dimensions:</strong>
+                                        <span th:text="${dimLabel}" class="text-light">Unknown</span>
+                                    </div>
+                                    <div>
+                                        <strong>Larger Image(s) Available:</strong>
+                                        <span th:text="${largeAvailable ? 'Yes' : 'No'}" th:classappend="${largeAvailable ? 'text-success' : 'text-danger'}">No</span>
+                                    </div>
+                                    <div th:if="${book.coverImages != null and book.coverImages.source != null}" class="mt-1 pt-1 border-top border-secondary">
+                                        <strong>Cover:</strong> 
+                                        <span th:text="${book.coverImages.source.displayName != null ? book.coverImages.source.displayName : book.coverImages.source.name()}" 
+                                              class="text-light">Source</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -203,8 +239,8 @@
                                 <!-- Authors -->
                                 <h5 class="card-subtitle mb-4 text-muted">
                                     By 
-                                    <span th:if="${book.authors == null || book.authors.empty}">Unknown Author</span>
-                                    <span th:if="${book.authors != null && !book.authors.empty}">
+<span th:if="${book.authors == null or #lists.isEmpty(book.authors)}">Unknown Author</span>
+                                    <span th:if="${book.authors != null and not #lists.isEmpty(book.authors)}">
                                         <span th:each="author, authorStat : ${book.authors}">
                                             <a th:href="@{/search(query=${author})}" class="text-decoration-none" th:text="${author}">Author Name</a><span th:if="${!authorStat.last}">, </span>
                                         </span>
@@ -239,7 +275,7 @@
                                 </div>
                                 
                                 <!-- Categories -->
-                                <div class="book-categories mb-4" th:if="${book.categories != null && !book.categories.empty}">
+<div class="book-categories mb-4" th:if="${book.categories != null and not #lists.isEmpty(book.categories)}">
                                     <h5 class="mb-3">Categories</h5>
                                     <div class="d-flex flex-wrap gap-2">
                                         <a th:each="category : ${book.categories}" 
@@ -423,16 +459,16 @@
                                         <div class="mt-4 pt-3 border-top" th:if="${affiliateLinks != null and !affiliateLinks.isEmpty()}">
                                             <h5 class="mb-3">Purchase Options</h5>
                                             <div class="d-flex flex-wrap gap-2">
-                                                <a th:if="${affiliateLinks.barnesAndNoble}" th:href="${affiliateLinks.barnesAndNoble}" target="_blank" rel="noopener sponsored" class="btn btn-barnesandnoble btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['barnesAndNoble']}" th:href="${affiliateLinks['barnesAndNoble']}" target="_blank" rel="noopener sponsored" class="btn btn-barnesandnoble btn-affiliate mb-2">
                                                     <i class="fas fa-store me-2"></i> Barnes & Noble
                                                 </a>
-                                                <a th:if="${affiliateLinks.bookshop}" th:href="${affiliateLinks.bookshop}" target="_blank" rel="noopener sponsored" class="btn btn-bookshop btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['bookshop']}" th:href="${affiliateLinks['bookshop']}" target="_blank" rel="noopener sponsored" class="btn btn-bookshop btn-affiliate mb-2">
                                                     <i class="fas fa-shopping-bag me-2"></i> Bookshop.org
                                                 </a>
-                                                <a th:if="${affiliateLinks.audible}" th:href="${affiliateLinks.audible}" target="_blank" rel="noopener sponsored" class="btn btn-audible btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['audible']}" th:href="${affiliateLinks['audible']}" target="_blank" rel="noopener sponsored" class="btn btn-audible btn-affiliate mb-2">
                                                     <i class="fas fa-headphones-alt me-2"></i> Listen on Audible
                                                 </a>
-                                                <a th:if="${affiliateLinks.amazon}" th:href="${affiliateLinks.amazon}" target="_blank" rel="noopener sponsored" class="btn btn-warning btn-affiliate mb-2">
+                                                <a th:if="${affiliateLinks['amazon']}" th:href="${affiliateLinks['amazon']}" target="_blank" rel="noopener sponsored" class="btn btn-warning btn-affiliate mb-2">
                                                     <i class="fas fa-shopping-cart me-2"></i> View on Amazon.com
                                                 </a>
                                             </div>
@@ -493,10 +529,10 @@
                         <div class="card h-100">
                             <div class="position-relative book-cover-container">
                                 <a th:href="@{'/book/' + ${rec.id}}" class="d-block h-100">
-                                    <img th:src="@{/images/placeholder-book-cover.svg}"
-                                         th:attr="data-book-id=${rec.id}, 
-                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.coverImageUrl != null ? rec.coverImageUrl : null)}, 
-                                                  data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
+                                    <img th:src="${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.s3ImagePath != null ? rec.s3ImagePath : (rec.externalImageUrl != null ? rec.externalImageUrl : '/images/placeholder-book-cover.svg'))}"
+                                         th:attr="data-book-id=${rec.id},
+                                                  data-preferred-url=${rec.coverImages != null && rec.coverImages.preferredUrl != null ? rec.coverImages.preferredUrl : (rec.s3ImagePath != null ? rec.s3ImagePath : rec.externalImageUrl)},
+                                                  data-fallback-url=${rec.coverImages != null && rec.coverImages.fallbackUrl != null ? rec.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'},
                                                   data-ultimate-fallback='/images/placeholder-book-cover.svg'"
                                          class="card-img-top book-cover"
                                          title="Book cover" loading="lazy"
@@ -564,6 +600,10 @@ document.addEventListener('DOMContentLoaded', function() {
             devIndicator.setAttribute('title', newTitle);
           }
         }
+      });
+      // Subscribe to persistence upserts for this book
+      stompClient.subscribe('/topic/book/' + id + '/upsert', function(message) {
+        try { var payload = JSON.parse(message.body); console.log('[WS][upsert]', payload); } catch(e) {}
       });
     });
   });

@@ -15,9 +15,11 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.service.event.BookCoverUpdatedEvent;
-import com.williamcallahan.book_recommendation_engine.service.event.SearchResultsUpdatedEvent;
 import com.williamcallahan.book_recommendation_engine.service.event.SearchProgressEvent;
+import com.williamcallahan.book_recommendation_engine.service.event.SearchResultsUpdatedEvent;
+import com.williamcallahan.book_recommendation_engine.service.event.BookUpsertEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
@@ -78,8 +80,8 @@ public class CoverUpdateNotifierService {
             payload.put("sourceName", event.getSource().name()); // e.g., GOOGLE_BOOKS
             payload.put("sourceDisplayName", event.getSource().getDisplayName()); // e.g., "Google Books"
         } else {
-            payload.put("sourceName", com.williamcallahan.book_recommendation_engine.types.CoverImageSource.UNDEFINED.name());
-            payload.put("sourceDisplayName", com.williamcallahan.book_recommendation_engine.types.CoverImageSource.UNDEFINED.getDisplayName());
+            payload.put("sourceName", CoverImageSource.UNDEFINED.name());
+            payload.put("sourceDisplayName", CoverImageSource.UNDEFINED.getDisplayName());
         }
 
         logger.info("Sending cover update to {}: URL = {}, Source = {}", destination, event.getNewCoverUrl(), event.getSource() != null ? event.getSource().name() : "UNDEFINED");
@@ -118,7 +120,8 @@ public class CoverUpdateNotifierService {
                 bookData.put("id", book.getId());
                 bookData.put("title", book.getTitle());
                 bookData.put("authors", book.getAuthors());
-                bookData.put("coverImageUrl", book.getCoverImageUrl());
+                bookData.put("s3ImagePath", book.getS3ImagePath());
+                bookData.put("externalImageUrl", book.getExternalImageUrl());
                 bookData.put("publishedDate", book.getPublishedDate());
                 bookData.put("description", book.getDescription());
                 bookData.put("pageCount", book.getPageCount());
@@ -167,6 +170,26 @@ public class CoverUpdateNotifierService {
         payload.put("source", event.getSource());
 
         logger.debug("Sending search progress to {}: {} - {}", destination, event.getStatus(), event.getMessage());
+        this.messagingTemplate.convertAndSend(destination, payload);
+    }
+
+    /**
+     * Broadcast book upsert notifications to book-specific topics
+     */
+    @EventListener
+    public void handleBookUpsert(BookUpsertEvent event) {
+        if (event == null || event.getBookId() == null) {
+            logger.warn("Received BookUpsertEvent with null content");
+            return;
+        }
+        String destination = "/topic/book/" + event.getBookId() + "/upsert";
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("bookId", event.getBookId());
+        payload.put("slug", event.getSlug());
+        payload.put("title", event.getTitle());
+        payload.put("isNew", event.isNew());
+        payload.put("context", event.getContext());
+        logger.info("Sending book upsert to {}: {} (new={})", destination, event.getTitle(), event.isNew());
         this.messagingTemplate.convertAndSend(destination, payload);
     }
 }

@@ -13,10 +13,15 @@
 package com.williamcallahan.book_recommendation_engine.service.image;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.types.LongitoodService;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils.BookValidator;
+// LongitoodService is in the same package; explicit import not required
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,14 +44,20 @@ public class LongitoodServiceImpl implements LongitoodService {
     private static final String LONGITOOD_SOURCE_NAME = "Longitood";
 
     private final WebClient webClient;
+    private final CoverCacheManager coverCacheManager;
+    private final ExternalCoverFetchHelper externalCoverFetchHelper;
 
     /**
      * Constructs a new LongitoodServiceImpl with the specified WebClient
      *
      * @param webClient The WebClient for making HTTP requests to the Longitood API
      */
-    public LongitoodServiceImpl(WebClient webClient) {
+    public LongitoodServiceImpl(WebClient webClient,
+                                ExternalCoverFetchHelper externalCoverFetchHelper,
+                                CoverCacheManager coverCacheManager) {
         this.webClient = webClient;
+        this.externalCoverFetchHelper = externalCoverFetchHelper;
+        this.coverCacheManager = coverCacheManager;
     }
 
     /**
@@ -60,8 +71,8 @@ public class LongitoodServiceImpl implements LongitoodService {
     @TimeLimiter(name = "longitoodService")
     @RateLimiter(name = "longitoodServiceRateLimiter", fallbackMethod = "fetchCoverRateLimitFallback")
     public CompletableFuture<Optional<ImageDetails>> fetchCover(Book book) {
-        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
-        if (isbn == null || isbn.trim().isEmpty()) {
+        String isbn = BookValidator.getPreferredIsbn(book);
+        if (!ValidationUtils.hasText(isbn)) {
             logger.warn("No ISBN found for book ID: {}, cannot fetch cover from Longitood", book.getId());
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -108,6 +119,38 @@ public class LongitoodServiceImpl implements LongitoodService {
             .toFuture(); // Convert to CompletableFuture
     }
 
+    public CompletableFuture<ImageDetails> fetchAndCacheCover(Book book, String bookIdForLog, ImageProvenanceData provenanceData) {
+        String isbn = ImageCacheUtils.getIdentifierKey(book);
+        if (!ValidationUtils.hasText(isbn)) {
+            logger.warn("Longitood requires ISBN, not found for Book ID for log: {}", bookIdForLog);
+            return externalCoverFetchHelper.fetchAndCache(
+                null,
+                null,
+                null,
+                () -> CompletableFuture.completedFuture(Optional.empty()),
+                "Longitood ISBN: missing",
+                ImageSourceName.LONGITOOD,
+                "Longitood",
+                "longitood-no-isbn",
+                provenanceData,
+                bookIdForLog
+            );
+        }
+
+        return externalCoverFetchHelper.fetchAndCache(
+            isbn,
+            coverCacheManager::isKnownBadLongitoodIsbn,
+            coverCacheManager::addKnownBadLongitoodIsbn,
+            () -> fetchCover(book),
+            "Longitood ISBN: " + isbn,
+            ImageSourceName.LONGITOOD,
+            "Longitood",
+            "longitood",
+            provenanceData,
+            bookIdForLog
+        );
+    }
+
     /**
      * Fallback method for fetchCover when circuit breaker is triggered
      * - Handles when the Longitood service is degraded or unavailable
@@ -118,7 +161,7 @@ public class LongitoodServiceImpl implements LongitoodService {
      * @return Empty Optional wrapped in CompletableFuture
      */
     public CompletableFuture<Optional<ImageDetails>> fetchCoverFallback(Book book, Throwable t) {
-        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
+        String isbn = BookValidator.getPreferredIsbn(book);
         logger.warn("LongitoodService.fetchCover circuit breaker opened for book ID: {}, ISBN: {}. Error: {}", 
             book.getId(), isbn, t.getMessage());
         return CompletableFuture.completedFuture(Optional.empty()); // Return empty Optional in CompletableFuture
@@ -135,7 +178,7 @@ public class LongitoodServiceImpl implements LongitoodService {
      * @return Empty Optional wrapped in CompletableFuture
      */
     public CompletableFuture<Optional<ImageDetails>> fetchCoverRateLimitFallback(Book book, Throwable t) {
-        String isbn = book.getIsbn13() != null ? book.getIsbn13() : book.getIsbn10();
+        String isbn = BookValidator.getPreferredIsbn(book);
         logger.warn("LongitoodService.fetchCover rate limit exceeded for book ID: {}, ISBN: {}. Error: {}", 
             book.getId(), isbn, t.getMessage());
         return CompletableFuture.completedFuture(Optional.empty());

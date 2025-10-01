@@ -14,9 +14,8 @@
 package com.williamcallahan.book_recommendation_engine.service.similarity;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import com.williamcallahan.book_recommendation_engine.repository.CachedBookRepository;
 import com.williamcallahan.book_recommendation_engine.service.GoogleBooksService;
-import com.williamcallahan.book_recommendation_engine.service.cache.BookReactiveCacheService;
+import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,20 +30,19 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class BookSimilarityServiceTest {
 
-    @Mock
-    private CachedBookRepository cachedBookRepository;
+    private static final String TEST_EMBEDDING_SERVICE_URL = "http://localhost:8095/api/embedding";
 
     @Mock
     private GoogleBooksService googleBooksService;
 
     @Mock
-    private BookReactiveCacheService bookReactiveCacheService;
+    private BookDataOrchestrator bookDataOrchestrator;
 
     @Mock
     private WebClient.Builder webClientBuilder;
@@ -70,9 +68,8 @@ class BookSimilarityServiceTest {
         
         // Test with embedding service disabled by default
         bookSimilarityService = new BookSimilarityService(
-            cachedBookRepository,
             googleBooksService,
-            bookReactiveCacheService,
+            bookDataOrchestrator,
             null, // embeddingServiceUrl
             webClientBuilder,
             false // embeddingServiceEnabled
@@ -141,10 +138,9 @@ class BookSimilarityServiceTest {
 
         // Create service with embedding enabled
         bookSimilarityService = new BookSimilarityService(
-            cachedBookRepository,
             googleBooksService,
-            bookReactiveCacheService,
-            "http://localhost:8080/api/embedding",
+            bookDataOrchestrator,
+            TEST_EMBEDDING_SERVICE_URL,
             webClientBuilder,
             true // embeddingServiceEnabled
         );
@@ -171,10 +167,9 @@ class BookSimilarityServiceTest {
 
         // Create service with embedding enabled
         bookSimilarityService = new BookSimilarityService(
-            cachedBookRepository,
             googleBooksService,
-            bookReactiveCacheService,
-            "http://localhost:8080/api/embedding",
+            bookDataOrchestrator,
+            TEST_EMBEDDING_SERVICE_URL,
             webClientBuilder,
             true // embeddingServiceEnabled
         );
@@ -194,6 +189,66 @@ class BookSimilarityServiceTest {
                 assertThat(embedding).isEqualTo(expected);
             })
             .verifyComplete();
+    }
+
+    @Test
+    void getSimilarBooks_returnsCachedRecommendationsBeforeGoogle() {
+        Book source = createTestBook();
+        source.setId("source-id");
+        source.setCachedRecommendationIds(List.of("rec-1", "rec-2", "rec-3"));
+
+        Book rec1 = new Book();
+        rec1.setId("rec-1");
+        rec1.setTitle("Recommendation 1");
+
+        Book rec2 = new Book();
+        rec2.setId("rec-2");
+        rec2.setTitle("Recommendation 2");
+
+        when(bookDataOrchestrator.getBookByIdTiered(eq("source-id"))).thenReturn(Mono.just(source));
+        when(bookDataOrchestrator.getBookByIdTiered(eq("rec-1"))).thenReturn(Mono.just(rec1));
+        when(bookDataOrchestrator.getBookByIdTiered(eq("rec-2"))).thenReturn(Mono.just(rec2));
+
+        List<Book> result = bookSimilarityService.getSimilarBooks("source-id", 2);
+
+        assertThat(result)
+            .extracting(Book::getId)
+            .containsExactly("rec-1", "rec-2");
+
+        verify(googleBooksService, never()).getSimilarBooks(any(Book.class));
+    }
+
+    @Test
+    void getSimilarBooks_withoutCachedRecommendationsFallsBackToGoogle() {
+        Book source = createTestBook();
+        source.setId("source-id");
+        source.setCachedRecommendationIds(List.of());
+
+        Book googleRec = new Book();
+        googleRec.setId("google-1");
+        googleRec.setTitle("Google Rec");
+
+        when(bookDataOrchestrator.getBookByIdTiered(eq("source-id"))).thenReturn(Mono.just(source));
+        when(googleBooksService.getSimilarBooks(same(source))).thenReturn(Mono.just(List.of(googleRec)));
+
+        List<Book> result = bookSimilarityService.getSimilarBooks("source-id", 3);
+
+        assertThat(result)
+            .extracting(Book::getId)
+            .containsExactly("google-1");
+
+        verify(googleBooksService).getSimilarBooks(same(source));
+    }
+
+    @Test
+    void getSimilarBooksReactive_returnsEmptyWhenBookMissing() {
+        when(bookDataOrchestrator.getBookByIdTiered(eq("missing"))).thenReturn(Mono.empty());
+
+com.williamcallahan.book_recommendation_engine.testutil.ReactorAssertions.verifyEmptyList(
+                bookSimilarityService.getSimilarBooksReactive("missing", 3)
+        );
+
+        verifyNoInteractions(googleBooksService);
     }
 
     @Test

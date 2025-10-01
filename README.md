@@ -9,8 +9,8 @@ Spring Boot application for book lookup and recommendations using OpenAI and Goo
 **Prerequisites:** Java 21, Maven 3.6+
 
 1. **Configure:** Copy `.env.example` to `.env` and update values
-2. **Run:** `mvn spring-boot:run -P dev` 
-3. **Access:** http://localhost:8081 (or configured `SERVER_PORT`)
+2. **Run:** `mvn spring-boot:run -P dev`
+3. **Access:** [http://localhost:8095](http://localhost:8095) (or configured `SERVER_PORT`)
 
 ## Development Shortcuts
 
@@ -21,8 +21,6 @@ Spring Boot application for book lookup and recommendations using OpenAI and Goo
 | `mvn test` | Run tests only |
 | `mvn spring-boot:run -Dspring.profiles.active=nodb` | Run without database |
 | `mvn spring-boot:run -Dspring.profiles.active=prod` | Run in production mode |
-| `mvn spring-boot:run -Dspring-boot.run.profiles=jsontoredis -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=false -Dspring.devtools.enabled=false -Dspring.devtools.add-properties=false"` | Run S3-to-Redis JSON migration (disable DevTools & property defaults) |
-| `java -Dspring.profiles.active=jsontoredis -Dspring.devtools.restart.enabled=false -Dspring.devtools.enabled=false -Dspring.devtools.add-properties=false -jar target/book_recommendation_engine-0.0.1-SNAPSHOT.jar` | Run packaged JAR migration (disable DevTools & property defaults) |
 | `mvn dependency:tree` | Display dependencies |
 | `mvn clean package` | Build JAR |
 
@@ -60,70 +58,114 @@ Key variables in `.env`:
 **JVM Warnings:** `export MAVEN_OPTS="-XX:+EnableDynamicAgentLoading -Xshare:off"`
 
 **Port Conflicts:**
+
 ```bash
 # macOS/Linux
-kill -9 $(lsof -ti :8081)
+kill -9 $(lsof -ti :8095)
 ```
 
 ```bash
 # Windows
-FOR /F "tokens=5" %i IN ('netstat -ano ^| findstr :8081') DO taskkill /F /PID %i
+FOR /F "tokens=5" %i IN ('netstat -ano ^| findstr :8095') DO taskkill /F /PID %i
 ```
 
 ## Additional Features
 
-<details>
-<summary><b>UML Diagram</b></summary>
-See <a href="src/main/resources/uml/README.md">UML README</a>.
-</details>
+### UML Diagram
 
-<details>
-<summary><b>Manual Sitemap Generation</b></summary>
+See [UML README](src/main/resources/uml/README.md).
+
+### Manual Sitemap Generation
 
 ```bash
-curl -X POST http://localhost:8081/admin/trigger-sitemap-update
+curl -X POST http://localhost:8095/admin/trigger-sitemap-update
 ```
-</details>
 
-<details>
-<summary><b>Debugging Overrides</b></summary>
+### S3 → Postgres Backfill (Manual CLI)
+
+The app includes CLI flags to backfill S3 JSON into Postgres. Run with your DB and S3 configured (via `.env` or env vars).
+
+- Backfill individual book JSONs (S3 prefix defaults to `books/v1/`):
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.arguments="--migrate.s3.books --migrate.prefix=books/v1/ --migrate.max=0 --migrate.skip=0"
+```
+
+- Backfill list JSONs (e.g., NYT lists under `lists/nyt/`):
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.arguments="--migrate.s3.lists --migrate.lists.provider=NYT --migrate.lists.prefix=lists/nyt/ --migrate.lists.max=0 --migrate.lists.skip=0"
+```
+
+Notes:
+
+- `--migrate.max` (`--migrate.lists.max`) ≤ 0 means no limit. Use a positive number to cap items processed.
+- `--migrate.skip` (`--migrate.lists.skip`) skips the first N JSON files (useful for batching).
+- Enrichment is idempotent: matching records are updated; non-existing ones are created.
+
+#### JDBC URL format (important)
+
+If you use a Postgres URI like `postgres://user:pass@host:port/db?sslmode=prefer`, convert it to JDBC format:
+
+```properties
+spring.datasource.url=jdbc:postgresql://host:port/db?sslmode=prefer
+spring.datasource.username=user
+spring.datasource.password=pass
+```
+
+Or pass via env vars or `.env`:
+
+```bash
+export SPRING_DATASOURCE_URL="jdbc:postgresql://<host>:<port>/<db>?sslmode=prefer"
+export SPRING_DATASOURCE_USERNAME="<user>"
+export SPRING_DATASOURCE_PASSWORD="<pass>"
+```
+
+Then run, for example, to process 1 book JSON from S3:
+
+```bash
+mvn spring-boot:run -P dev -Dspring-boot.run.arguments="--migrate.s3.books --migrate.prefix=books/v1/ --migrate.max=1 --migrate.skip=0"
+```
+
+### Debugging Overrides
 
 To bypass caches for book lookups:
+
 ```properties
 googlebooks.api.override.bypass-caches=true
 ```
 
 To bypass rate limiter:
+
 ```properties
 resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.limitForPeriod=2147483647
 resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.limitRefreshPeriod=1ms
 resilience4j.ratelimiter.instances.googleBooksServiceRateLimiter.timeoutDuration=0ms
 ```
-</details>
 
-<details>
-<summary><b>Code Analysis Tools</b></summary>
+### Code Analysis Tools
 
 - **PMD:** `mvn pmd:pmd && open target/site/pmd.html`
 - **SpotBugs:** `mvn spotbugs:spotbugs && open target/site/spotbugs/index.html`
 - **Dependency Analysis:** `mvn dependency:analyze`
-</details>
 
-<details>
-<summary><b>Admin API Authentication</b></summary>
+## Admin API Authentication
 
 Admin endpoints require HTTP Basic Authentication:
+
 - Username: `admin`
 - Password: Set via `APP_ADMIN_PASSWORD` environment variable (as defined in `.env.example`)
 
 Example:
+
 ```bash
 dotenv run sh -c 'curl -u admin:$APP_ADMIN_PASSWORD -X POST "http://localhost:${SERVER_PORT}/admin/s3-cleanup/move-flagged?limit=100"'
 ```
-This uses a `dotenv` wrapper to load `$APP_ADMIN_PASSWORD` and `$SERVER_PORT` from `.env`. For `dotenv-cli`, use `dotenv curl ...`. Alternatively, export variables: `export APP_ADMIN_PASSWORD='your_password'`.
-</details>
 
-#### References
+This uses a `dotenv` wrapper to load `$APP_ADMIN_PASSWORD` and `$SERVER_PORT` from `.env`. For `dotenv-cli`, use `dotenv curl ...`. Alternatively, export variables: `export APP_ADMIN_PASSWORD='your_password'`.
+
+## References
+
 - [Java Docs](https://docs.oracle.com/en/java/index.html)
 - [Spring Boot Docs](https://docs.spring.io/spring-boot/docs/current/reference/html/)
 - [PMD Maven Plugin](https://maven.apache.org/plugins/maven-pmd-plugin/)
@@ -132,7 +174,7 @@ This uses a `dotenv` wrapper to load `$APP_ADMIN_PASSWORD` and `$SERVER_PORT` fr
 
 ## License
 
-MIT License 
+MIT License
 
 ## Contributing
 

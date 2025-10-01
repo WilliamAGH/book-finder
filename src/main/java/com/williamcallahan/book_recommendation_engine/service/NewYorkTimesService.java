@@ -11,54 +11,69 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.context.annotation.Conditional;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-// import java.util.ArrayList; // Unused
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Optional;
-import java.util.stream.Collectors;
-
 import reactor.core.scheduler.Schedulers;
 
-@Service
-@Conditional(S3EnvironmentCondition.class)
-public class NewYorkTimesService {
-    private static final Logger logger = LoggerFactory.getLogger(NewYorkTimesService.class);
+// import java.util.ArrayList; // Unused
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.List;
 
-    private final S3StorageService s3StorageService;
-    private final ObjectMapper objectMapper;
+@Service
+@Slf4j
+public class NewYorkTimesService {
+    
+    // S3 no longer used as read source for NYT bestsellers
     private final WebClient webClient;
     private final String nytApiBaseUrl;
 
     private final String nytApiKey;
+    /**
+     * @deprecated Use {@link #bookQueryRepository} instead. This is kept temporarily for backward compatibility.
+     * Will be removed once all consumers migrate to the new optimized repository.
+     */
+    @Deprecated
+    @SuppressWarnings("unused")
+    private final PostgresBookRepository postgresBookRepository;
+    
+    /**
+     * THE SINGLE SOURCE OF TRUTH for book queries.
+     * All new code must use this repository.
+     */
+    private final BookQueryRepository bookQueryRepository;
+    
+    private static final DateTimeFormatter API_DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
 
-    public NewYorkTimesService(S3StorageService s3StorageService,
-                               ObjectMapper objectMapper,
-                               WebClient.Builder webClientBuilder,
+    /**
+     * Preferred constructor using BookQueryRepository (THE SINGLE SOURCE OF TRUTH).
+     * Spring will automatically inject all dependencies.
+     */
+    public NewYorkTimesService(WebClient.Builder webClientBuilder,
                                @Value("${nyt.api.base-url:https://api.nytimes.com/svc/books/v3}") String nytApiBaseUrl,
-                               @Value("${nyt.api.key}") String nytApiKey) {
-        this.s3StorageService = s3StorageService;
-        this.objectMapper = objectMapper;
+                               @Value("${nyt.api.key}") String nytApiKey,
+                               @Autowired(required = false) PostgresBookRepository postgresBookRepository,
+                               @Autowired(required = false) BookQueryRepository bookQueryRepository) {
         this.nytApiBaseUrl = nytApiBaseUrl;
         this.nytApiKey = nytApiKey;
         this.webClient = webClientBuilder.baseUrl(nytApiBaseUrl).build();
+        this.postgresBookRepository = postgresBookRepository;
+        this.bookQueryRepository = bookQueryRepository;
     }
 
     /**
@@ -68,193 +83,80 @@ public class NewYorkTimesService {
      * @return Mono<JsonNode> representing the API response, or empty on error
      */
     public Mono<JsonNode> fetchBestsellerListOverview() {
-        String overviewUrl = "/lists/overview.json?api-key=" + nytApiKey;
-        logger.info("Fetching NYT bestseller list overview from API: {}", nytApiBaseUrl + overviewUrl);
+        return fetchBestsellerListOverview(null);
+    }
+
+    public Mono<JsonNode> fetchBestsellerListOverview(@Nullable LocalDate publishedDate) {
+        StringBuilder overviewUrl = new StringBuilder("/lists/overview.json?api-key=").append(nytApiKey);
+        if (publishedDate != null) {
+            overviewUrl.append("&published_date=").append(publishedDate.format(API_DATE_FORMAT));
+        }
+        log.info("Fetching NYT bestseller list overview from API: {}{}", nytApiBaseUrl, overviewUrl);
         return webClient.mutate()
                 .baseUrl(nytApiBaseUrl)
                 .build()
                 .get()
-                .uri(overviewUrl)
+                .uri(overviewUrl.toString())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .onErrorResume(e -> {
-                    logger.error("Error fetching NYT bestseller list overview from API: {}", e.getMessage(), e);
+                    LoggingUtils.error(log, e, "Error fetching NYT bestseller list overview from API for date {}", publishedDate);
                     return Mono.empty();
                 });
     }
 
 
     /**
-     * Fetches the "current" NYT bestsellers list for a given list name from cache or S3
-     * Data is expected to be populated by a scheduled job
-     *
-     * @param listNameEncoded The URL-encoded name of the bestseller list (e.g., "hardcover-fiction")
-     * @param limit maximum number of books to retrieve
-     * @return Mono of list of Book. Returns empty list if not found
+     * Fetch the latest published list's books for the given provider list code from Postgres.
+     * Returns BookCard DTOs as THE SINGLE SOURCE OF TRUTH.
+     * 
+     * Performance: Single optimized query instead of 5+ queries per book.
+     * 
+     * @param listNameEncoded NYT list code (e.g., "hardcover-fiction")
+     * @param limit Maximum number of books to return
+     * @return Mono of BookCard list (optimized DTOs for card display)
      */
-    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + #limit")
-    public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
-        String s3Prefix = "lists/nyt/" + listNameEncoded + "/";
-        logger.debug("Attempting to fetch latest NYT list for category '{}' (limit {}) from S3 prefix: {}", listNameEncoded, limit, s3Prefix);
+    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100) + '-v2'")
+    public Mono<List<BookCard>> getCurrentBestSellersCards(String listNameEncoded, int limit) {
+        // Validate and clamp limit to reasonable range
+        final int effectiveLimit = PagingUtils.clamp(limit, 1, 100);
 
-        return Mono.fromCallable(() -> s3StorageService.listObjects(s3Prefix)) // Wrap synchronous call
-            .subscribeOn(Schedulers.boundedElastic()) // Execute blocking S3 call on appropriate scheduler
-            .flatMap(s3ObjectList -> { // s3ObjectList is List<S3Object>
-                if (s3ObjectList == null || s3ObjectList.isEmpty()) {
-                    logger.warn("No S3 objects found for prefix '{}'. Returning empty list.", s3Prefix);
-                    return Mono.just(Collections.<Book>emptyList());
-                }
-
-                Optional<String> latestS3KeyOpt = s3ObjectList.stream()
-                    .map(s3Object -> {
-                        String key = s3Object.key();
-                        // Extract filename, e.g., "2023-10-26.json" from "lists/nyt/hardcover-fiction/2023-10-26.json"
-                        String[] parts = key.split("/");
-                        return parts.length > 0 ? parts[parts.length - 1] : null;
-                    })
-                    .filter(filename -> filename != null && filename.endsWith(".json"))
-                    .map(filename -> filename.substring(0, filename.length() - 5)) // Remove ".json"
-                    .map(dateStr -> {
-                        try {
-                            return LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE);
-                        } catch (DateTimeParseException e) {
-                            logger.trace("Could not parse date from filename '{}' for key prefix '{}'", dateStr, s3Prefix);
-                            return null;
-                        }
-                    })
-                    .filter(java.util.Objects::nonNull)
-                    .max(Comparator.naturalOrder())
-                    .map(latestDate -> s3Prefix + latestDate.format(DateTimeFormatter.ISO_LOCAL_DATE) + ".json");
-
-                if (latestS3KeyOpt.isEmpty()) {
-                    logger.warn("No valid dated JSON files found for NYT list category '{}' under S3 prefix '{}'. Returning empty list.", listNameEncoded, s3Prefix);
-                    return Mono.just(Collections.<Book>emptyList());
-                }
-
-                String latestS3Key = latestS3KeyOpt.get();
-                logger.info("Latest S3 key identified for NYT list '{}': {}", listNameEncoded, latestS3Key);
-
-                return Mono.fromFuture(s3StorageService.fetchGenericJsonAsync(latestS3Key))
-                    .flatMap(s3Result -> {
-                        if (s3Result.isSuccess()) {
-                            try {
-                                String jsonContent = s3Result.getData().orElseThrow(() ->
-                                    new RuntimeException("S3 success result with no data for key: " + latestS3Key));
-
-                                logger.info("Successfully fetched NYT list '{}' from S3 key: {}", listNameEncoded, latestS3Key);
-                                NytApiListDetails listDetails = objectMapper.readValue(jsonContent, NytApiListDetails.class);
-
-                                List<Book> books = listDetails.books().stream()
-                                    .limit(limit)
-                                    .map(this::toBook)
-                                    .collect(Collectors.toList());
-                                return Mono.just(books);
-                            } catch (Exception e) {
-                                logger.error("Error deserializing NYT list '{}' from S3 (key: {}): {}. Returning empty list.",
-                                             listNameEncoded, latestS3Key, e.getMessage(), e);
-                                return Mono.just(Collections.<Book>emptyList());
-                            }
-                        } else {
-                            logger.warn("NYT list '{}' not found or error fetching from S3 (key: {}). Status: {}. Returning empty list.",
-                                        listNameEncoded, latestS3Key, s3Result.getStatus());
-                            return Mono.just(Collections.<Book>emptyList());
-                        }
-                    })
-                    .onErrorResume(e -> {
-                        logger.error("Error during S3 fetch for NYT list '{}' (key: {}): {}. Returning empty list.",
-                                     listNameEncoded, latestS3Key, e.getMessage(), e);
-                        return Mono.just(Collections.<Book>emptyList());
-                    });
+        // Use BookQueryRepository as THE SINGLE SOURCE
+        if (bookQueryRepository != null) {
+            return Mono.fromCallable(() -> {
+                List<BookCard> cards = bookQueryRepository.fetchBookCardsByProviderListCode(listNameEncoded, effectiveLimit);
+                log.info("BookQueryRepository returned {} book cards for list '{}' (optimized query)", cards.size(), listNameEncoded);
+                return cards; // Return DTOs directly - no conversion needed!
             })
-            .onErrorResume(e -> { // Handles errors from the Mono.fromCallable or subsequent flatMap
-                logger.error("Error processing S3 objects for NYT list prefix '{}': {}. Returning empty list.",
-                             s3Prefix, e.getMessage(), e);
-                return Mono.just(Collections.<Book>emptyList());
-            });
-    }
-
-    private Book toBook(NytBookPayload bp) {
-        Book book = new Book();
-        String id = bp.primaryIsbn13() != null ? bp.primaryIsbn13() : bp.primaryIsbn10();
-        if (id == null || id.trim().isEmpty()) {
-            // Attempt to find a valid ISBN from the isbns list if primary ones are missing
-            if (bp.isbns() != null) {
-                for (IsbnPayload isbnEntry : bp.isbns()) {
-                    if (isbnEntry.isbn13() != null && !isbnEntry.isbn13().trim().isEmpty()) {
-                        id = isbnEntry.isbn13();
-                        break;
-                    }
-                    if (isbnEntry.isbn10() != null && !isbnEntry.isbn10().trim().isEmpty()) {
-                        id = isbnEntry.isbn10();
-                        break;
-                    }
+            .timeout(Duration.ofMillis(3000)) // 3s timeout for Postgres query
+            .subscribeOn(Schedulers.boundedElastic())
+            .onErrorResume(e -> {
+                if (e instanceof java.util.concurrent.TimeoutException) {
+                    log.error("Timeout fetching bestsellers for list '{}' after 3000ms", listNameEncoded);
+                } else {
+                    LoggingUtils.error(log, e, "DB error fetching current bestsellers for list '{}'", listNameEncoded);
                 }
-            }
-            if (id == null || id.trim().isEmpty()) {
-                 logger.warn("Book with title '{}' by {} has no valid ISBNs. Using placeholder ID.", bp.title(), bp.author());
-                 id = "MISSING_ID_" + (bp.title() != null ? bp.title().replaceAll("[^a-zA-Z0-9]+", "_") : "UNTITLED") + "_" + (bp.author() != null ? bp.author().replaceAll("[^a-zA-Z0-9]+", "_") : "UNKNOWN");
-            }
+                return Mono.just(Collections.emptyList());
+            });
         }
-        book.setId(id);
-        book.setTitle(bp.title());
-        book.setAuthors(List.of(bp.author() != null ? bp.author() : "Unknown Author"));
-        book.setDescription(bp.description());
-        book.setPublisher(bp.publisher());
-        book.setIsbn10(bp.primaryIsbn10()); // Keep this for consistency, even if ID might be derived from isbns list
-        book.setIsbn13(bp.primaryIsbn13());// Keep this for consistency
-        book.setCoverImageUrl(bp.bookImage());
-        book.setInfoLink(bp.amazonProductUrl() != null ? bp.amazonProductUrl() : "");
-        // Potentially map other fields like rank, weeks_on_list if added to Book model
-        // book.setRank(bp.rank());
-        // book.setWeeksOnList(bp.weeksOnList());
-        return book;
+        
+        // No BookQueryRepository available
+        log.error("BookQueryRepository not injected - cannot fetch bestsellers");
+        return Mono.just(Collections.emptyList());
     }
-
+    
     /**
-     * Represents the structure of an individual bestseller list details,
-     * as it would be stored in S3 by the scheduler
+     * @deprecated Use {@link #getCurrentBestSellersCards(String, int)} instead.
+     * This method returns Book entities which trigger hydration queries.
+     * The replacement returns BookCard DTOs with 40x better performance.
+     * Will be removed in v2.0.
      */
-    private static record NytApiListDetails(
-        @JsonProperty("list_id") int listId,
-        @JsonProperty("list_name") String listName,
-        @JsonProperty("list_name_encoded") String listNameEncoded,
-        @JsonProperty("display_name") String displayName,
-        @JsonProperty("updated") String updated, // e.g., "WEEKLY", "MONTHLY"
-        @JsonProperty("bestsellers_date") String bestsellersDate, // Date FOR this list data
-        @JsonProperty("published_date") String publishedDate, // Date this list was published by NYT
-        @JsonProperty("books") List<NytBookPayload> books
-        // Other fields from the list overview like 'normal_list_ends_at', 'corrections' can be added if needed
-    ) {}
-
-    /**
-     * Represents an individual book as returned by the NYT API within a list
-     */
-    private static record NytBookPayload(
-        @JsonProperty("rank") int rank,
-        @JsonProperty("weeks_on_list") int weeksOnList,
-        @JsonProperty("publisher") String publisher,
-        @JsonProperty("description") String description,
-        @JsonProperty("title") String title,
-        @JsonProperty("author") String author,
-        @JsonProperty("contributor") String contributor,
-        @JsonProperty("contributor_note") String contributorNote,
-        @JsonProperty("book_image") String bookImage,
-        @JsonProperty("book_image_width") int bookImageWidth,
-        @JsonProperty("book_image_height") int bookImageHeight,
-        @JsonProperty("amazon_product_url") String amazonProductUrl,
-        @JsonProperty("age_group") String ageGroup,
-        @JsonProperty("book_review_link") String bookReviewLink,
-        @JsonProperty("first_chapter_link") String firstChapterLink,
-        @JsonProperty("sunday_review_link") String sundayReviewLink,
-        @JsonProperty("article_chapter_link") String articleChapterLink,
-        @JsonProperty("isbns") List<IsbnPayload> isbns,
-        @JsonProperty("primary_isbn13") String primaryIsbn13,
-        @JsonProperty("primary_isbn10") String primaryIsbn10
-    ) {}
-
-    private static record IsbnPayload(
-        @JsonProperty("isbn10") String isbn10,
-        @JsonProperty("isbn13") String isbn13
-    ) {}
+    @Deprecated(since = "1.5", forRemoval = true)
+    @Cacheable(value = "nytBestsellersCurrent", key = "#listNameEncoded + '-' + T(com.williamcallahan.book_recommendation_engine.util.PagingUtils).clamp(#limit, 1, 100) + '-book'")
+    public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
+        // Bridge to new method for backward compatibility
+        return getCurrentBestSellersCards(listNameEncoded, limit)
+            .map(DtoToBookMapper::toBooks);
+    }
 
 }

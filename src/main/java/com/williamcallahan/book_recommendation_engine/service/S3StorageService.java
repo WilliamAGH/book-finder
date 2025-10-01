@@ -10,6 +10,7 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
@@ -28,17 +29,17 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
+import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
+import com.williamcallahan.book_recommendation_engine.util.CompressionUtils;
+import com.williamcallahan.book_recommendation_engine.util.S3Paths;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Object;
@@ -49,7 +50,6 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 @Conditional(S3EnvironmentCondition.class)
 public class S3StorageService {
     private static final Logger logger = LoggerFactory.getLogger(S3StorageService.class);
-    private static final String GOOGLE_BOOKS_API_CACHE_DIRECTORY = "books/v1/";
 
 
     private final S3Client s3Client;
@@ -77,6 +77,17 @@ public class S3StorageService {
         this.bucketName = bucketName;
         this.publicCdnUrl = publicCdnUrl;
         this.serverUrl = serverUrl;
+    }
+
+    @PostConstruct
+    void validateConfiguration() {
+        if (s3Client == null) {
+            logger.warn("S3StorageService initialized without an S3 client. All S3 operations will be disabled.");
+            return;
+        }
+        if (bucketName == null || bucketName.isBlank()) {
+            throw new IllegalStateException("S3 bucket name must be configured when S3StorageService is active.");
+        }
     }
 
     /**
@@ -140,38 +151,18 @@ public class S3StorageService {
      * @param jsonContent The JSON string to upload.
      * @return A CompletableFuture<Void> that completes when the upload is finished or fails.
      */
-    public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. JSON book payloads are no longer
+ * written to S3. This API will be removed in version 1.0. S3 image uploads are unaffected.
+ */
+@Deprecated
+public CompletableFuture<Void> uploadJsonAsync(String volumeId, String jsonContent) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot upload JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
             return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
         }
-        return Mono.<Void>fromRunnable(() -> {
-            String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
-            try {
-                byte[] compressedJson;
-                try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                     GZIPOutputStream gzipOutputStream = new GZIPOutputStream(bos)) {
-                    gzipOutputStream.write(jsonContent.getBytes(StandardCharsets.UTF_8));
-                    gzipOutputStream.finish();
-                    compressedJson = bos.toByteArray();
-                }
-
-                PutObjectRequest putObjectRequest = PutObjectRequest.builder()
-                        .bucket(bucketName)
-                        .key(keyName)
-                        .contentType("application/json")
-                        .contentEncoding("gzip")
-                        .build();
-
-                s3Client.putObject(putObjectRequest, RequestBody.fromBytes(compressedJson));
-                logger.info("Successfully uploaded JSON for volumeId {} to S3 key {}", volumeId, keyName);
-            } catch (Exception e) {
-                logger.error("Error uploading JSON for volumeId {} to S3: {}", volumeId, e.getMessage(), e);
-                throw new RuntimeException("Failed to upload JSON to S3 for volumeId " + volumeId, e);
-            }
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .toFuture();
+        String keyName = S3Paths.GOOGLE_BOOK_CACHE_PREFIX + volumeId + ".json";
+        return uploadGenericJsonAsync(keyName, jsonContent, true);
     }
     
     /**
@@ -180,52 +171,18 @@ public class S3StorageService {
      * @param volumeId The Google Books volume ID, used to construct the S3 key.
      * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found
      */
-    public CompletableFuture<S3FetchResult<String>> fetchJsonAsync(String volumeId) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. JSON book payloads are no longer
+ * fetched from S3 at runtime. This API will be removed in version 1.0. S3 image reads are unaffected.
+ */
+@Deprecated
+public CompletableFuture<S3FetchResult<String>> fetchJsonAsync(String volumeId) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot fetch JSON for volumeId: {}. S3 may be disabled or misconfigured.", volumeId);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
         }
-        String keyName = GOOGLE_BOOKS_API_CACHE_DIRECTORY + volumeId + ".json";
-        
-        return Mono.<S3FetchResult<String>>fromCallable(() -> {
-            try {
-                GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                        .bucket(bucketName)
-                        .key(keyName)
-                        .build();
-
-                ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
-                String jsonString;
-                String contentEncoding = objectBytes.response().contentEncoding();
-                if (contentEncoding != null && contentEncoding.equalsIgnoreCase("gzip")) {
-                    try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(objectBytes.asByteArray()));
-                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                        byte[] buffer = new byte[1024];
-                        int len;
-                        while ((len = gis.read(buffer)) > 0) {
-                            baos.write(buffer, 0, len);
-                        }
-                        jsonString = baos.toString(StandardCharsets.UTF_8.name());
-                    } catch (IOException e) { 
-                        logger.error("IOException during GZIP decompression for key {}: {}", keyName, e.getMessage(), e);
-                        return S3FetchResult.serviceError("Failed to decompress GZIP content for key " + keyName);
-                    }
-                } else {
-                    jsonString = objectBytes.asUtf8String();
-                }
-                logger.info("Successfully fetched JSON from S3 key {}", keyName);
-                return S3FetchResult.success(jsonString);
-            } catch (NoSuchKeyException e) {
-                logger.debug("JSON not found in S3 for key {}: {}", keyName, e.getMessage());
-                return S3FetchResult.notFound();
-            } catch (Exception e) {
-                logger.error("Error fetching JSON from S3 for key {}: {}", keyName, e.getMessage(), e);
-                return S3FetchResult.serviceError(e.getMessage());
-            }
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .onErrorReturn(S3FetchResult.serviceError("Failed to execute S3 fetch operation for key " + keyName))
-        .toFuture();
+        String keyName = S3Paths.GOOGLE_BOOK_CACHE_PREFIX + volumeId + ".json";
+        return fetchGenericJsonAsync(keyName);
     }
 
     /**
@@ -236,7 +193,12 @@ public class S3StorageService {
      * @param gzipCompress true to GZIP compress the content before uploading, false otherwise
      * @return A CompletableFuture<Void> that completes when the upload is finished or fails
      */
-    public CompletableFuture<Void> uploadGenericJsonAsync(String keyName, String jsonContent, boolean gzipCompress) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Generic JSON storage in S3 will be removed
+ * in version 1.0. This does not impact S3 image storage APIs.
+ */
+@Deprecated
+public CompletableFuture<Void> uploadGenericJsonAsync(String keyName, String jsonContent, boolean gzipCompress) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot upload generic JSON to key: {}. S3 may be disabled or misconfigured.", keyName);
             return CompletableFuture.failedFuture(new IllegalStateException("S3Client is not available."));
@@ -288,7 +250,12 @@ public class S3StorageService {
      * @param keyName The full S3 key (path/filename) from which to fetch the JSON.
      * @return A CompletableFuture<S3FetchResult<String>> containing the result status and optionally the JSON string if found.
      */
-    public CompletableFuture<S3FetchResult<String>> fetchGenericJsonAsync(String keyName) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Generic JSON fetches from S3 will be removed
+ * in version 1.0. This does not impact S3 image storage APIs.
+ */
+@Deprecated
+public CompletableFuture<S3FetchResult<String>> fetchGenericJsonAsync(String keyName) {
         if (s3Client == null) {
             logger.warn("S3Client is null. Cannot fetch generic JSON from key: {}. S3 may be disabled or misconfigured.", keyName);
             return CompletableFuture.completedFuture(S3FetchResult.disabled());
@@ -303,30 +270,31 @@ public class S3StorageService {
 
                 ResponseBytes<GetObjectResponse> objectBytes = s3Client.getObjectAsBytes(getObjectRequest);
                 String jsonString;
-                
+
                 String contentEncoding = objectBytes.response().contentEncoding();
+                byte[] payload = objectBytes.asByteArray();
                 if (contentEncoding != null && contentEncoding.equalsIgnoreCase("gzip")) {
                     logger.debug("Attempting GZIP decompression for S3 key {}", keyName);
-                    try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(objectBytes.asByteArray()));
-                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                        byte[] buffer = new byte[1024];
-                        int len;
-                        while ((len = gis.read(buffer)) > 0) {
-                            baos.write(buffer, 0, len);
-                        }
-                        jsonString = baos.toString(StandardCharsets.UTF_8.name());
-                    } catch (IOException e) { 
+                    try {
+                        jsonString = CompressionUtils.decodeUtf8ExpectingGzip(payload);
+                    } catch (IOException e) {
                         logger.error("IOException during GZIP decompression for generic key {}: {}", keyName, e.getMessage(), e);
                         return S3FetchResult.serviceError("Failed to decompress GZIP content for generic key " + keyName);
                     }
                 } else {
-                    logger.debug("Content for S3 key {} is not GZIP encoded or encoding not specified, reading as plain string.", keyName);
-                    jsonString = objectBytes.asUtf8String();
+                    logger.debug("Content for S3 key {} is not GZIP encoded or encoding not specified, attempting direct UTF-8 decode.", keyName);
+                    jsonString = CompressionUtils.decodeUtf8WithOptionalGzip(payload);
+                    if (jsonString == null) {
+                        return S3FetchResult.serviceError("Failed to decode content for key " + keyName);
+                    }
                 }
                 logger.info("Successfully fetched generic JSON from S3 key {}", keyName);
                 return S3FetchResult.success(jsonString);
             } catch (NoSuchKeyException e) {
-                logger.debug("Generic JSON not found in S3 for key {}: {}", keyName, e.getMessage());
+                // TRACE level: 404s are expected for new books not yet cached in S3
+                if (logger.isTraceEnabled()) {
+                    logger.trace("Generic JSON not found in S3 for key {}: {}", keyName, e.getMessage());
+                }
                 return S3FetchResult.notFound();
             } catch (Exception e) { 
                 logger.error("Error fetching generic JSON from S3 for key {}: {}", keyName, e.getMessage(), e);

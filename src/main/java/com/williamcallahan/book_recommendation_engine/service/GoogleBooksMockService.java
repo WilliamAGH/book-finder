@@ -26,6 +26,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -66,7 +67,7 @@ public class GoogleBooksMockService {
      * @return The normalized query (lowercase, trimmed), or null if the input is null.
      */
     public static String normalizeQuery(String query) {
-        return query == null ? null : query.toLowerCase().trim();
+        return SearchQueryUtils.canonicalize(query);
     }
     
     private final Map<String, JsonNode> mockBookResponses = new ConcurrentHashMap<>();
@@ -272,8 +273,11 @@ public class GoogleBooksMockService {
             searchNode.set("items", objectMapper.valueToTree(books));
             
             // Save to filesystem
-            Path searchFile = Paths.get(mockResponseDirectory, "searches", 
-                    normalizedQuery.replaceAll("[^a-zA-Z0-9-_]", "_") + ".json");
+            Path searchFile = Paths.get(
+                    mockResponseDirectory,
+                    "searches",
+                    SearchQueryUtils.cacheKey(searchQuery)
+            );
             
             // Ensure directory exists
             Files.createDirectories(searchFile.getParent());

@@ -16,6 +16,7 @@ import java.time.Duration;
 @Component("s3HealthIndicator")
 public class S3HealthIndicator implements ReactiveHealthIndicator {
 
+    // S3Client is thread-safe and immutable per AWS SDK v2; storing reference is safe
     private final S3Client s3Client;
     private final String bucketName;
     private final boolean s3Enabled;
@@ -25,7 +26,7 @@ public class S3HealthIndicator implements ReactiveHealthIndicator {
             @Autowired(required = false) S3Client s3Client,
             @Value("${s3.bucket-name:}") String bucketName,
             @Value("${s3.enabled:false}") boolean s3Enabled) {
-        this.s3Client = s3Client;
+        this.s3Client = s3Client; // reference only; not exposing mutable rep
         this.bucketName = bucketName;
         this.s3Enabled = s3Enabled;
     }

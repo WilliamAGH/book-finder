@@ -1,0 +1,115 @@
+{
+  "kind": "books#volume",
+  "id": "zyTCAlFPjgYC",
+  "etag": "5yh3urbt0CM",
+  "selfLink": "https://www.googleapis.com/books/v1/volumes/zyTCAlFPjgYC",
+  "volumeInfo": {
+    "title": "The Google Story (2018 Updated Edition)",
+    "subtitle": "Inside the Hottest Business, Media, and Technology Success of Our Time",
+    "authors": [
+      "David A. Vise",
+      "Mark Malseed"
+    ],
+    "publisher": "Random House Publishing Group",
+    "publishedDate": "2005-11-15",
+    "description": "\u003cb\u003e \u003cb\u003eThe definitive, bestselling account of the company that changed the way we work and live, updated for the twentieth anniversary of Google’s founding with analysis of its most recent bold moves to redefine the world—and its even more ambitious plans for the future.\u003c/b\u003e\u003cbr\u003e\u003c/b\u003e\u003cbr\u003eMoscow-born Sergey Brin and Midwest-born Larry Page dropped out of graduate school at Stanford University to, as they said, “change the world” through a powerful search engine that would organize every bit of information on the Web for free. \u003ci\u003eThe Google Story\u003c/i\u003e takes you deep inside the company’s wild ride from an idea that struggled for funding in 1998 to a firm that today rakes in billions in profits. Based on scrupulous research and extraordinary access to Google, this fast-moving narrative reveals how an unorthodox management style and a culture of innovation enabled a search-engine giant to shake up Madison Avenue, clash with governments that accuse it of being a monopoly, deploy self-driving cars to forever change how we travel, and launch high-flying Internet balloons. Unafraid of controversy, Google is surging ahead with artificial intelligence that could cure diseases but also displace millions of people from their jobs, testing the founders’ guiding mantra: DON’T BE EVIL.\u003cbr\u003e\u003cb\u003e\u003cbr\u003ePraise for \u003ci\u003eThe Google Story\u003cbr\u003e\u003c/i\u003e\u003c/b\u003e\u003ci\u003e\u003cbr\u003e\u003c/i\u003e“[The authors] do a fine job of recounting Google’s rapid rise and explaining its search business.”\u003cb\u003e—\u003ci\u003eThe New York Times\u003cbr\u003e\u003c/i\u003e\u003c/b\u003e\u003cbr\u003e“An intriguing insider view of the Google culture.”\u003cb\u003e—\u003ci\u003eHarvard Business Review\u003cbr\u003e\u003c/i\u003e\u003c/b\u003e\u003cbr\u003e“An interesting read on a powerhouse company . . . If you haven’t read anything about one of today’s most influential companies, you should. If you don’t read \u003ci\u003eThe Google Story,\u003c/i\u003e you’re missing a few extra treats.”\u003cb\u003e—\u003ci\u003eUSA Today\u003cbr\u003e\u003c/i\u003e\u003c/b\u003e\u003cbr\u003e“Fascinating . . . meticulous . . . never bogs down.”\u003cb\u003e—\u003ci\u003eHouston Chronicle\u003c/i\u003e\u003c/b\u003e",
+    "industryIdentifiers": [
+      {
+        "type": "ISBN_10",
+        "identifier": "0440335701"
+      },
+      {
+        "type": "ISBN_13",
+        "identifier": "9780440335702"
+      }
+    ],
+    "readingModes": {
+      "text": true,
+      "image": false
+    },
+    "pageCount": 384,
+    "printedPageCount": 394,
+    "dimensions": {
+      "height": "24.00 cm"
+    },
+    "printType": "BOOK",
+    "categories": [
+      "Business & Economics / Entrepreneurship",
+      "Computers / Information Technology",
+      "History / Modern / 20th Century / General"
+    ],
+    "averageRating": 4,
+    "ratingsCount": 4,
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": true,
+    "contentVersion": "2.5.3.0.preview.2",
+    "panelizationSummary": {
+      "containsEpubBubbles": false,
+      "containsImageBubbles": false
+    },
+    "imageLinks": {
+      "smallThumbnail": "http://books.google.com/books/content?id=zyTCAlFPjgYC&printsec=frontcover&img=1&zoom=5&edge=curl&imgtk=AFLRE73vz_36lX5nINvzeOFFBKZZOCc0_MwsfrdssaLA7dbt3XdedZvQH7hfydvdBZd62jRntTRAURRF9gRAfxgtcciwUxvXOAqZzQtRHnUufvIQHiXaEQs1uPuSCmoVLvJf0kRlrwCC&source=gbs_api",
+      "thumbnail": "http://books.google.com/books/content?id=zyTCAlFPjgYC&printsec=frontcover&img=1&zoom=1&edge=curl&imgtk=AFLRE71y_dsl-NcUkkAh-iNZ8ox-Ycs1Dg1smvDbhEO1qjNU29XsMpXjxzclBqTDhBwh21ndY3Z-IAnEGYwIZDWSwUt7yJJyJSFhirpZ4T-CMDmRwCVURqUgN_ONnamANHjJKXbGF0Tw&source=gbs_api",
+      "small": "http://books.google.com/books/content?id=zyTCAlFPjgYC&printsec=frontcover&img=1&zoom=2&edge=curl&imgtk=AFLRE7263_khTuDrzmWT_3-GwDbGWttW8pW0sSZAmdqId2gpZIrLGwOf1mJT1-vFQ27lTRSJlM-U6mjyNCmMom5MjBZ2q-Wwl0_2YCz0h5vY6345OEmGwnjfnG01LClbYhuTUTvq1mpd&source=gbs_api",
+      "medium": "http://books.google.com/books/content?id=zyTCAlFPjgYC&printsec=frontcover&img=1&zoom=3&edge=curl&imgtk=AFLRE72EKZfhgW4LHvvNPhtAoUYn5ZjX78mPiB-t82ia3PTOiPJSTJEWwUGRl58sIGd6lmaXivZZJaHFm9IrF3XjUzTboCzl2MxUb1LK__dE5GdOBU16G2qOBlZM-3gfjzKWCHFmNFJR&source=gbs_api",
+      "large": "http://books.google.com/books/content?id=zyTCAlFPjgYC&printsec=frontcover&img=1&zoom=4&edge=curl&imgtk=AFLRE719L3tSVm_HTrbBnSjwA5W1HO_kUeRIXfht0CYzipH1XHEGfTxeKGCZ3me1oSJTlvmioz0wtUAmYXWAWD_zRkKWt0FOW06dSzyz-Yc0eWA2qbI1xgykRz1-J-U_Wrg22CRl2Hqu&source=gbs_api"
+    },
+    "language": "en",
+    "previewLink": "http://books.google.com/books?id=zyTCAlFPjgYC&hl=&source=gbs_api",
+    "infoLink": "https://play.google.com/store/books/details?id=zyTCAlFPjgYC&source=gbs_api",
+    "canonicalVolumeLink": "https://play.google.com/store/books/details?id=zyTCAlFPjgYC"
+  },
+  "layerInfo": {
+    "layers": [
+      {
+        "layerId": "geo",
+        "volumeAnnotationsVersion": "10"
+      }
+    ]
+  },
+  "saleInfo": {
+    "country": "US",
+    "saleability": "FOR_SALE",
+    "isEbook": true,
+    "listPrice": {
+      "amount": 12.99,
+      "currencyCode": "USD"
+    },
+    "retailPrice": {
+      "amount": 12.99,
+      "currencyCode": "USD"
+    },
+    "buyLink": "https://play.google.com/store/books/details?id=zyTCAlFPjgYC&rdid=book-zyTCAlFPjgYC&rdot=1&source=gbs_api",
+    "offers": [
+      {
+        "finskyOfferType": 1,
+        "listPrice": {
+          "amountInMicros": 12990000,
+          "currencyCode": "USD"
+        },
+        "retailPrice": {
+          "amountInMicros": 12990000,
+          "currencyCode": "USD"
+        },
+        "giftable": true
+      }
+    ]
+  },
+  "accessInfo": {
+    "country": "US",
+    "viewability": "PARTIAL",
+    "embeddable": true,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+      "isAvailable": true,
+      "acsTokenLink": "http://books.google.com/books/download/The_Google_Story_2018_Updated_Edition-sample-epub.acsm?id=zyTCAlFPjgYC&format=epub&output=acs4_fulfillment_token&dl_type=sample&source=gbs_api"
+    },
+    "pdf": {
+      "isAvailable": false
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=zyTCAlFPjgYC&hl=&source=gbs_api",
+    "accessViewStatus": "SAMPLE",
+    "quoteSharingAllowed": false
+  }
+}

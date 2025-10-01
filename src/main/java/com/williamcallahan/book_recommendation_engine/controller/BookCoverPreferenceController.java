@@ -4,7 +4,8 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.RequestParam;
 
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.util.EnumParsingUtils;
 
 /**
  * Controller advice for managing book cover image source preferences
@@ -31,16 +32,7 @@ public class BookCoverPreferenceController {
     public CoverImageSource addCoverSourcePreference(
             @RequestParam(required = false, defaultValue = "ANY") String coverSource) {
         
-        // Parse the source parameter
-        CoverImageSource preferredSource;
-        try {
-            preferredSource = CoverImageSource.valueOf(coverSource.toUpperCase());
-        } catch (IllegalArgumentException e) {
-            preferredSource = CoverImageSource.ANY;
-        }
-        
-        // Return the preferred source to be added to the model
-        return preferredSource;
+        return EnumParsingUtils.parseOrDefault(coverSource, CoverImageSource.class, CoverImageSource.ANY);
     }
     
     /**

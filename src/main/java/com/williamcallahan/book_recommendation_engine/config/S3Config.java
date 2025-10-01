@@ -14,6 +14,7 @@ package com.williamcallahan.book_recommendation_engine.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -67,7 +68,7 @@ public class S3Config {
                             AwsBasicCredentials.create(accessKeyId, secretAccessKey)))
                     .build();
         } catch (Exception e) {
-            logger.error("Failed to create S3Client bean due to configuration error: {}", e.getMessage(), e);
+            LoggingUtils.error(logger, e, "Failed to create S3Client bean due to configuration error");
             return null; // Prevent application startup with a broken S3 client
         }
     }

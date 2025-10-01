@@ -1,8 +1,39 @@
+# =============================================================================
+# PRODUCTION-SAFE DEFAULTS
+# =============================================================================
+# This configuration contains secure defaults suitable for production.
+# Dev/test profiles override these settings for development convenience.
+# If no profile is set, these production-safe defaults apply (default: prod).
+# =============================================================================
+
 spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:}
+    username: ${SPRING_DATASOURCE_USERNAME:}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 2000
+      validation-timeout: 1000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
   main:
     allow-bean-definition-overriding: true
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate # PRODUCTION-SAFE: Only validate schema, never auto-create/update
+    show-sql: false # PRODUCTION-SAFE: No SQL logging (security/performance)
+  
+  sql:
+    init:
+      mode: never # PRODUCTION-SAFE: Schema initialization disabled to prevent data loss
+  
   profiles:
-    default: prod # Default to prod if no other profile is active
+    default: prod # PRODUCTION-SAFE: Default to prod if no profile is explicitly set
   
   # Cache configuration - can be disabled with SPRING_CACHE_TYPE=none
   cache:
@@ -11,21 +42,6 @@ spring:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Default spec for all caches
   
-  # Redis configuration - optional, only used if cache type is redis
-  data:
-    redis:
-      url: ${REDIS_SERVER:}
-      host: ${SPRING_REDIS_HOST:localhost}
-      port: ${SPRING_REDIS_PORT:6379}
-      # Skip Redis if not available
-      connect-timeout: 2000
-      lettuce:
-        shutdown-timeout: 0
-        pool:
-          max-active: 8 # Default for GenericObjectPoolConfig, consider tuning for production
-          max-idle: 8   # Default
-          min-idle: 0   # Default
-          max-wait: -1ms # Block indefinitely if pool exhausted, consider a specific timeout
 
   web:
     resources:
@@ -45,6 +61,14 @@ spring:
     max-in-memory-size: 10MB # Configure global max buffer size for WebClient
 
 app:
+  features:
+    external-fallback:
+      enabled: ${APP_FEATURE_EXTERNAL_FALLBACK_ENABLED:true}
+    google-fallback:
+      enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:true}
+    persist-search-results: ${APP_FEATURE_PERSIST_SEARCH_RESULTS:true} # Persist external API search results to Postgres for click availability
+    async-backfill:
+      enabled: ${APP_FEATURE_ASYNC_BACKFILL_ENABLED:false} # Disabled: requires backfill_tasks table and database-as-queue is questionable architecture
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}
@@ -85,7 +109,7 @@ s3:
       
 # Server configuration (common, can be overridden by application.properties or profiles)
 server:
-  port: ${SERVER_PORT:8080} # Default from YML, application.properties will override if SERVER_PORT is set
+  port: ${SERVER_PORT:8095} # Default from YML, application.properties will override if SERVER_PORT is set
   compression:
     enabled: true
   
@@ -108,94 +132,153 @@ openlibrary:
     api:
       url: ${OPENLIBRARY_API_URL:https://openlibrary.org}
 
-# Sitemap S3 configuration
+# Sitemap configuration
 sitemap:
-  s3:
-    accumulated-ids-key: sitemap/accumulated-book-ids.json
+  base-url: ${SITEMAP_BASE_URL:https://findmybook.net}
+  html-page-size: 100
+  xml-page-size: 5000
 
-# Common Logging (can be overridden by profiles)
+# Affiliate link configuration
+affiliate:
+  amazon:
+    associate-tag: ${AMAZON_ASSOCIATE_TAG:williamagh-20}
+  barnesandnoble:
+    publisher-id: ${BARNES_NOBLE_PUBLISHER_ID:}
+    website-id: ${BARNES_NOBLE_WEBSITE_ID:}
+  bookshop:
+    affiliate-id: ${BOOKSHOP_AFFILIATE_ID:113888}
+
+# =============================================================================
+# RESILIENCE4J CONFIGURATION (for backfill rate limiting and bulkheading)
+# =============================================================================
+# Note: BackfillCoordinator uses these settings to prevent API overload.
+# Rate limiter and bulkhead work together with circuit breaker in GoogleApiFetcher.
+resilience4j:
+  ratelimiter:
+    instances:
+      googleBooksServiceRateLimiter:
+        limitForPeriod: 10          # 10 requests per period
+        limitRefreshPeriod: 1s      # Period duration
+        timeoutDuration: 0ms        # Don't wait if limit exceeded (fail fast)
+  bulkhead:
+    instances:
+      googleBooksServiceBulkhead:
+        maxConcurrentCalls: 5       # Max concurrent API calls
+        maxWaitDuration: 100ms      # Max wait for permit
+  retry:
+    instances:
+      googleBooksServiceRetry:
+        maxAttempts: 3              # Retry up to 3 times
+        waitDuration: 1s            # Wait 1s between retries
+        retryExceptions:
+          - org.springframework.web.client.HttpServerErrorException
+          - java.io.IOException
+
+# Common Logging - Production-safe defaults (minimal verbosity)
 logging:
   level:
-    root: INFO # Default root level
+    root: INFO # PRODUCTION-SAFE: Standard INFO level
     "[com.williamcallahan.book_recommendation_engine]": INFO
     "[org.springframework.cache]": WARN
     "[org.hibernate]": WARN
+    "[org.springframework.web]": WARN # PRODUCTION-SAFE: Minimal web logging
+    "[ro.isdc.wro]": ERROR
+    "[ro.isdc.wro.extensions.processor.css.CssVariablesProcessor]": ERROR
 
+# =============================================================================
+# DEVELOPMENT PROFILE - Permissive settings for local development
+# =============================================================================
 ---
 spring:
   config:
     activate:
       on-profile: dev
+
   devtools:
     restart:
       enabled: true
     livereload:
       enabled: true
+  
+  jpa:
+    show-sql: true # DEV OVERRIDE: Show SQL for debugging
+    hibernate:
+      ddl-auto: validate # Still validate only, never auto-create
+  
   # Dev-specific cache configuration
   cache:
     caffeine:
       spec: "maximumSize=1000,expireAfterWrite=240m,recordStats" # Dev cache settings
+
 logging:
   level:
-    '[org.springframework.boot.devtools]': WARN  # suppress DevTools internal logs
-    "[org.springframework.web]": INFO # Changed from DEBUG
+    '[org.springframework.boot.devtools]': WARN
+    "[org.springframework.web]": INFO # DEV OVERRIDE: More verbose web logging
+    "[com.williamcallahan.book_recommendation_engine]": DEBUG # DEV OVERRIDE: Debug app logging
+    "[ro.isdc.wro]": ERROR
+    "[ro.isdc.wro.extensions.processor.css.CssVariablesProcessor]": ERROR
+
 app:
   environment:
-    mode: development # Custom property for dev mode
+    mode: development
+  features:
+    external-fallback:
+      enabled: true # DEV: Enable fallbacks for testing tiered search
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD:devAdminPass}
     user:
       password: ${APP_USER_PASSWORD:devUserPass}
 
+# =============================================================================
+# PRODUCTION PROFILE - Minimal overrides (base config is already prod-safe)
+# =============================================================================
 ---
 spring:
   config:
     activate:
       on-profile: prod
+  
   # Production-specific cache configuration with optimized settings
   cache:
     cache-names: books,bookSearchResults,nytBestsellersCurrent
     caffeine:
-      spec: "maximumSize=2000,expireAfterWrite=12h,recordStats" # Optimized for production
+      spec: "maximumSize=2000,expireAfterWrite=12h,recordStats" # Optimized for production load
+
 logging:
   level:
-    "[com.williamcallahan.book_recommendation_engine]": INFO # Standard INFO level for prod
+    "[com.williamcallahan.book_recommendation_engine]": INFO
+
 app:
   environment:
-    mode: production # Custom property for prod mode
+    mode: production
 
+# =============================================================================
+# TEST PROFILE - Simplified settings for automated testing
+# =============================================================================
 ---
 spring:
   config:
     activate:
       on-profile: test
+  
+  jpa:
+    show-sql: false # TEST: Keep SQL logging off for cleaner test output
+  
   cache:
-    type: simple
+    type: simple # TEST: Use simple in-memory cache for testing
+
 logging:
   level:
     root: WARN
     "[com.williamcallahan.book_recommendation_engine]": INFO
     "[org.springframework]": WARN
+
 s3:
   cdn-url: https://book-finder.sfo3.digitaloceanspaces.com
+
 app:
   cache:
     enabled: true
-
----
-spring:
-  config:
-    activate:
-      on-profile: jsontoredis
-  main:
-    web-application-type: none
-  data:
-    redis:
-      timeout: 20000
-  devtools:
-    restart:
-      enabled: false
-logging:
-  level:
-    '[com.williamcallahan.book_recommendation_engine.jsontoredis]': INFO
+  environment:
+    mode: test

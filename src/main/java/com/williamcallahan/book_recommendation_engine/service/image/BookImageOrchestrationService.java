@@ -24,9 +24,9 @@ import org.springframework.stereotype.Service;
 
 import java.util.concurrent.CompletableFuture;
 
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.types.CoverImages;
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
 
 @Service
 public class BookImageOrchestrationService {
@@ -117,7 +117,7 @@ public class BookImageOrchestrationService {
             Book placeholderBook = new Book();
             placeholderBook.setId("null-book");
             placeholderBook.setTitle("Unknown Book");
-            placeholderBook.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
+            placeholderBook.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
             placeholderBook.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, DEFAULT_PLACEHOLDER_IMAGE));
             placeholderBook.setCoverImageWidth(0);
             placeholderBook.setCoverImageHeight(0);
@@ -128,7 +128,7 @@ public class BookImageOrchestrationService {
         if (book.getId() == null) {
             logger.warn("Book ID is null for book object title: '{}'. Setting defaults and using placeholder for cover images.", book.getTitle());
             // Modify the existing book object
-            book.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
+            book.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
             book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, DEFAULT_PLACEHOLDER_IMAGE));
             book.setCoverImageWidth(0);
             book.setCoverImageHeight(0);
@@ -137,10 +137,7 @@ public class BookImageOrchestrationService {
         }
 
         // Capture the original cover URL from the book to use as a fallback
-        String originalSourceUrl = book.getCoverImageUrl(); // Assumes this is populated by GoogleBooksService
-        if (originalSourceUrl == null || originalSourceUrl.isEmpty()) {
-            originalSourceUrl = book.getImageUrl(); // Check imageUrl as another possible field for original
-        }
+        String originalSourceUrl = book.getExternalImageUrl();
         if (originalSourceUrl == null || originalSourceUrl.isEmpty() || originalSourceUrl.equals(DEFAULT_PLACEHOLDER_IMAGE)) {
             originalSourceUrl = DEFAULT_PLACEHOLDER_IMAGE; 
         }
@@ -161,10 +158,10 @@ public class BookImageOrchestrationService {
                 if (coverImagesResult == null) {
                     logger.warn("coverImagesResult was null for book ID {}. Using default placeholder.", book.getId());
                     book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, CoverImageSource.LOCAL_CACHE));
-                    book.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
+                    book.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
                 } else {
                     book.setCoverImages(new CoverImages(initialPreferredUrl, finalFallbackUrl, sourceFromResult));
-                    book.setCoverImageUrl(initialPreferredUrl);
+                    book.setS3ImagePath(initialPreferredUrl);
                 }
 
                 // Set resolution details to null for background processing
@@ -173,13 +170,13 @@ public class BookImageOrchestrationService {
                 book.setIsCoverHighResolution(null);
 
                 logger.debug("Book ID {}: CoverImages set - Preferred URL: '{}', Fallback URL: '{}'. Background processing initiated by cache service.",
-                             book.getId(), book.getCoverImageUrl(), finalFallbackUrl);
+                             book.getId(), book.getS3ImagePath(), finalFallbackUrl);
                 
                 return book;
             })
             .exceptionally(ex -> {
                 logger.error("Error processing cover images for book ID {}: {}. Using placeholders.", book.getId(), ex.getMessage(), ex);
-                book.setCoverImageUrl(DEFAULT_PLACEHOLDER_IMAGE);
+                book.setS3ImagePath(DEFAULT_PLACEHOLDER_IMAGE);
                 book.setCoverImages(new CoverImages(DEFAULT_PLACEHOLDER_IMAGE, finalFallbackUrl, CoverImageSource.LOCAL_CACHE));
                 book.setCoverImageWidth(null);
                 book.setCoverImageHeight(null);

@@ -1,0 +1,57 @@
+<!-- 
+  BookCard DTO Fragment
+  Works with both BookCard and Book entities during migration
+  BookCard properties: id, slug, title, authors (List<String>), coverUrl (String), averageRating, ratingsCount, tags (Map)
+-->
+<div xmlns:th="http://www.thymeleaf.org" th:fragment="bookCard(book, showStats)" class="col-sm-6 col-md-4 col-lg-3" th:if="${book != null}" th:with="bookSlug=${book != null && book.slug != null ? book.slug : (book != null ? book.id : 'unknown')}">
+    <div class="card h-100">
+        <div class="position-relative book-cover-container">
+            <a th:href="@{'/book/' + ${bookSlug}}" class="d-block h-100">
+                <!-- BookCard DTO has coverUrl; Book entity has s3ImagePath/externalImageUrl -->
+                <!-- coverUrl takes priority as it's present in both BookCard (directly) and DtoToBookMapper output -->
+                <img th:src="${book.coverUrl != null ? book.coverUrl : '/images/placeholder-book-cover.svg'}"
+                     class="card-img-top book-cover"
+                     loading="lazy"
+                     alt="Book cover"
+                     title="Book cover"
+                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
+                     th:attr="data-book-id=${book.id},
+                              data-preferred-url=${book.coverUrl ?: '/images/placeholder-book-cover.svg'},
+                              data-fallback-url='/images/placeholder-book-cover.svg',
+                              data-ultimate-fallback='/images/placeholder-book-cover.svg'">
+            </a>
+            <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
+                <i class="fas fa-star me-1"></i>
+                <span th:text="${book.averageRating}">4.5</span>
+            </div>
+        </div>
+        <div class="card-body">
+            <h5 class="card-title text-truncate">
+                <a th:href="@{'/book/' + ${bookSlug}}" th:text="${book.title}" class="text-decoration-none text-dark">Book Title</a>
+            </h5>
+            <!-- BookCard DTO: authors is List<String> directly | Book entity: also List<String> now -->
+            <p class="card-text small text-muted text-truncate" 
+               th:text="${book.authors != null && !#lists.isEmpty(book.authors) ? book.authors[0] : 'Unknown Author'}">Author Name</p>
+            <!-- BookCard DTO: tags is Map<String, Object> | For stats display only -->
+            <div class="d-flex flex-wrap gap-2 small text-muted mt-2" th:if="${showStats && book.tags != null}"
+                 th:unless="${book.tags['recent.views.24h'] == null && book.tags['recent.views.7d'] == null && book.tags['recent.views.30d'] == null}">
+                <span class="badge bg-light text-dark"
+                      th:if="${book.tags['recent.views.24h'] != null && book.tags['recent.views.24h'] > 0}"
+                      th:text="${#numbers.formatInteger(book.tags['recent.views.24h'], 0)} + ' in 24h'">0 in 24h</span>
+                <span class="badge bg-light text-dark"
+                      th:if="${book.tags['recent.views.7d'] != null && book.tags['recent.views.7d'] > 0}"
+                      th:text="${#numbers.formatInteger(book.tags['recent.views.7d'], 0)} + ' in 7d'">0 in 7d</span>
+                <span class="badge bg-light text-dark"
+                      th:if="${book.tags['recent.views.30d'] != null && book.tags['recent.views.30d'] > 0}"
+                      th:text="${#numbers.formatInteger(book.tags['recent.views.30d'], 0)} + ' in 30d'">0 in 30d</span>
+            </div>
+            <p class="small text-muted mb-0" 
+               th:if="${showStats && book.tags != null && book.tags['recent.views.lastViewedAt'] != null}"
+               th:text="${'Last viewed ' + #temporals.format(book.tags['recent.views.lastViewedAt'], 'MMM d, h:mm a')}"></p>
+        </div>
+        <div class="card-footer bg-white border-top-0">
+            <a th:href="@{'/book/' + ${bookSlug}}" class="btn btn-sm btn-outline-primary d-block">View Details</a>
+        </div>
+    </div>
+</div>

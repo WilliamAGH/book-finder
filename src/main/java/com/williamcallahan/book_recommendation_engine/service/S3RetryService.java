@@ -9,12 +9,10 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
-import com.williamcallahan.book_recommendation_engine.types.S3FetchResult;
+import com.williamcallahan.book_recommendation_engine.service.s3.S3FetchResult;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.BookJsonWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -63,7 +61,12 @@ public class S3RetryService {
      * @param volumeId The Google Books volume ID to fetch
      * @return A CompletableFuture that completes with the S3 fetch result
      */
-    public CompletableFuture<S3FetchResult<String>> fetchJsonWithRetry(String volumeId) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Runtime S3 JSON fetch retries will be removed
+ * in version 1.0. Cover image S3 operations remain supported.
+ */
+@Deprecated
+public CompletableFuture<S3FetchResult<String>> fetchJsonWithRetry(String volumeId) {
         return fetchJsonWithRetryInternal(volumeId, 0, initialBackoffMs);
     }
 
@@ -126,7 +129,12 @@ public class S3RetryService {
      * @param jsonContent The JSON content to upload
      * @return A CompletableFuture that completes when the upload is done
      */
-    public CompletableFuture<Void> uploadJsonWithRetry(String volumeId, String jsonContent) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Runtime S3 JSON upload retries will be
+ * removed in version 1.0. Cover image S3 operations remain supported.
+ */
+@Deprecated
+public CompletableFuture<Void> uploadJsonWithRetry(String volumeId, String jsonContent) {
         return uploadJsonWithRetryInternal(volumeId, jsonContent, 0, initialBackoffMs);
     }
 
@@ -175,7 +183,12 @@ public class S3RetryService {
      * @param book The book with updated qualifiers to persist
      * @return A CompletableFuture that completes when the update is done
      */
-    public CompletableFuture<Void> updateBookJsonWithRetry(Book book) {
+/**
+ * @deprecated Replaced by Postgres-first persistence. Runtime S3 JSON updates will be removed
+ * in version 1.0. Cover image S3 operations remain supported.
+ */
+@Deprecated
+public CompletableFuture<Void> updateBookJsonWithRetry(Book book) {
         if (book == null || book.getId() == null) {
             return CompletableFuture.failedFuture(
                 new IllegalArgumentException("Cannot update S3 book data: Book or Book ID is null"));
@@ -191,58 +204,9 @@ public class S3RetryService {
                     
                     // If we successfully fetched existing data
                     if (fetchResult.isSuccess() && fetchResult.getData().isPresent()) {
-                        String existingJson = fetchResult.getData().get();
-                        ObjectMapper objectMapper = new ObjectMapper();
-                        
-                        // Parse existing JSON to JsonNode
-                        JsonNode existingNode = objectMapper.readTree(existingJson);
-                        
-                        // Convert current book to JsonNode
-                        JsonNode bookNode = objectMapper.valueToTree(book);
-                        
-                        // Create a merged node - this will be a deep merge
-                        ObjectNode mergedNode;
-                        if (existingNode instanceof ObjectNode) {
-                            mergedNode = (ObjectNode) existingNode;
-                            
-                            // If the existing node has qualifiers, we need to merge them
-                            if (bookNode.has("qualifiers")) {
-                                // If existing node already has qualifiers, merge them
-                                if (mergedNode.has("qualifiers")) {
-                                    JsonNode existingQualifiers = mergedNode.get("qualifiers");
-                                    JsonNode newQualifiers = bookNode.get("qualifiers");
-                                    
-                                    // Deep merge the qualifier nodes
-                                    if (existingQualifiers instanceof ObjectNode && newQualifiers instanceof ObjectNode) {
-                                        ObjectNode mergedQualifiers = (ObjectNode) existingQualifiers;
-                                        
-                                        // Copy all fields from new qualifiers to existing qualifiers
-                                        newQualifiers.fields().forEachRemaining(entry -> {
-                                            mergedQualifiers.set(entry.getKey(), entry.getValue());
-                                        });
-                                        
-                                        // Update the merged node with merged qualifiers
-                                        mergedNode.set("qualifiers", mergedQualifiers);
-                                    } else {
-                                        // If not both are ObjectNodes, prefer the new one
-                                        mergedNode.set("qualifiers", newQualifiers);
-                                    }
-                                } else {
-                                    // No existing qualifiers, just add the new ones
-                                    mergedNode.set("qualifiers", bookNode.get("qualifiers"));
-                                }
-                            }
-                        } else {
-                            // If existing node is not an ObjectNode, use the new book node as is
-                            mergedNode = (ObjectNode) bookNode;
-                        }
-                        
-                        // Convert merged node back to JSON string
-                        updatedJson = objectMapper.writeValueAsString(mergedNode);
+                        updatedJson = BookJsonWriter.mergeBookJson(fetchResult.getData().get(), book);
                     } else {
-                        // If we couldn't fetch existing data, just use the current book data
-                        ObjectMapper objectMapper = new ObjectMapper();
-                        updatedJson = objectMapper.writeValueAsString(book);
+                        updatedJson = BookJsonWriter.toJsonString(book);
                     }
                     
                     // Upload the updated JSON

@@ -14,35 +14,42 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
+import com.williamcallahan.book_recommendation_engine.util.DateParsingUtils;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
-import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.PrematureCloseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Date;
-import java.text.SimpleDateFormat;
-import java.text.ParseException;
 import java.util.Objects; // Added import
+import java.time.Duration;
 
 @Service
+@Slf4j
 public class OpenLibraryBookDataService {
 
-    private static final Logger logger = LoggerFactory.getLogger(OpenLibraryBookDataService.class);
-    private final WebClient webClient;
+    private static final Logger log = LoggerFactory.getLogger(OpenLibraryBookDataService.class);
+
+        private final WebClient webClient;
+    private final boolean externalFallbackEnabled;
 
     public OpenLibraryBookDataService(WebClient.Builder webClientBuilder,
-                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl) {
+                                   @Value("${OPENLIBRARY_API_URL:https://openlibrary.org}") String openLibraryApiUrl,
+                                   @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
         this.webClient = webClientBuilder.baseUrl(openLibraryApiUrl).build();
+        this.externalFallbackEnabled = externalFallbackEnabled;
     }
 
     /**
@@ -53,13 +60,16 @@ public class OpenLibraryBookDataService {
      */
     @RateLimiter(name = "openLibraryDataService")
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "fetchBookFallback")
-    @TimeLimiter(name = "openLibraryDataService")
     public Mono<Book> fetchBookByIsbn(String isbn) {
         if (isbn == null || isbn.trim().isEmpty()) {
-            logger.warn("ISBN is null or empty. Cannot fetch book from OpenLibrary.");
+            log.warn("ISBN is null or empty. Cannot fetch book from OpenLibrary.");
             return Mono.empty();
         }
-        logger.info("Attempting to fetch book data from OpenLibrary for ISBN: {}", isbn);
+        if (!externalFallbackEnabled) {
+            log.debug("External fallback disabled; skipping OpenLibrary fetch for ISBN {}.", isbn);
+            return Mono.empty();
+        }
+        log.info("Attempting to fetch book data from OpenLibrary for ISBN: {}", isbn);
 
         String bibkey = "ISBN:" + isbn;
 
@@ -72,18 +82,23 @@ public class OpenLibraryBookDataService {
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(5))
+                .onErrorResume(PrematureCloseException.class, e -> {
+                    log.debug("OpenLibrary connection closed early for ISBN {}: {}", isbn, e.toString());
+                    return Mono.empty();
+                })
                 .flatMap(responseNode -> {
                     JsonNode bookDataNode = responseNode.path(bibkey);
                     if (bookDataNode.isMissingNode() || bookDataNode.isEmpty()) {
-                        logger.warn("No data found in OpenLibrary response for bibkey: {}", bibkey);
+                        log.warn("No data found in OpenLibrary response for bibkey: {}", bibkey);
                         return Mono.empty();
                     }
                     Book book = parseOpenLibraryBook(bookDataNode, isbn);
                     return book != null ? Mono.just(book) : Mono.empty();
                 })
-                .doOnError(e -> logger.error("Error fetching book by ISBN {} from OpenLibrary: {}", isbn, e.getMessage()))
+                .doOnError(e -> LoggingUtils.error(log, e, "Error fetching book by ISBN {} from OpenLibrary", isbn))
                 .onErrorResume(e -> { // Ensure fallback behavior on error before circuit breaker
-                    logger.warn("Error during OpenLibrary fetch for ISBN {}, returning empty. Error: {}", isbn, e.getMessage());
+                    LoggingUtils.warn(log, e, "Error during OpenLibrary fetch for ISBN {}, returning empty", isbn);
                     return Mono.empty();
                 });
     }
@@ -98,16 +113,21 @@ public class OpenLibraryBookDataService {
     @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
     public Flux<Book> searchBooksByTitle(String title) {
         if (title == null || title.trim().isEmpty()) {
-            logger.warn("Title is null or empty. Cannot search books on OpenLibrary.");
+            log.warn("Title is null or empty. Cannot search books on OpenLibrary.");
+            return Flux.empty();
+        }
+        if (!externalFallbackEnabled) {
+            log.debug("External fallback disabled; skipping OpenLibrary search for title: {}", title);
             return Flux.empty();
         }
         // Example endpoint: /search.json?q={title} or /search.json?title={title}&author={author}
-        logger.info("Attempting to search books from OpenLibrary for title: {}", title);
+        log.info("Attempting to search books from OpenLibrary for title: {}", title);
+        ExternalApiLogger.logApiCallAttempt(log, "OpenLibrary", "SEARCH_TITLE", title, false);
         // Placeholder:
         // return webClient.get().uri("/search.json?q=" + title)
         // .retrieve()
         // .bodyToFlux(Book.class) // This will need proper mapping and extraction from search results
-        // .doOnError(e -> logger.error("Error searching books by title '{}' from OpenLibrary: {}", title, e.getMessage()));
+        // .doOnError(e -> log.error("Error searching books by title '{}' from OpenLibrary: {}", title, e.getMessage()));
         // return Flux.empty(); // Placeholder
         return webClient.get()
                 .uri(uriBuilder -> uriBuilder
@@ -118,36 +138,99 @@ public class OpenLibraryBookDataService {
                         .build())
                 .retrieve()
                 .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(5))
+                .onErrorResume(PrematureCloseException.class, e -> {
+                    log.debug("OpenLibrary search connection closed early for title '{}': {}", title, e.toString());
+                    return Mono.empty();
+                })
                 .flatMapMany(responseNode -> {
                     if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
+                        ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_TITLE", title, 0);
                         return Flux.empty();
                     }
+                    int count = responseNode.get("docs").size();
+                    ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_TITLE", title, count);
                     return Flux.fromIterable(responseNode.get("docs"))
                                .map(this::parseOpenLibrarySearchDoc)
                                .filter(Objects::nonNull);
                 })
-                .doOnError(e -> logger.error("Error searching books by title '{}' from OpenLibrary: {}", title, e.getMessage()))
+                .doOnError(e -> LoggingUtils.error(log, e, "Error searching books by title '{}' from OpenLibrary", title))
                 .onErrorResume(e -> {
-                     logger.warn("Error during OpenLibrary search for title '{}', returning empty Flux. Error: {}", title, e.getMessage());
+                     LoggingUtils.warn(log, e, "Error during OpenLibrary search for title '{}', returning empty Flux", title);
+                     ExternalApiLogger.logApiCallFailure(log, "OpenLibrary", "SEARCH_TITLE", title, e.getMessage());
                      return Flux.empty();
                 });
+    }
+
+    @RateLimiter(name = "openLibraryDataService")
+    @CircuitBreaker(name = "openLibraryDataService", fallbackMethod = "searchBooksFallback")
+    public Flux<Book> searchBooksByAuthor(String author) {
+        if (author == null || author.trim().isEmpty()) {
+            log.warn("Author is null or empty. Cannot search books on OpenLibrary.");
+            return Flux.empty();
+        }
+        if (!externalFallbackEnabled) {
+            log.debug("External fallback disabled; skipping OpenLibrary author search for: {}", author);
+            return Flux.empty();
+        }
+
+        log.info("Attempting to search OpenLibrary for author: {}", author);
+        ExternalApiLogger.logApiCallAttempt(log, "OpenLibrary", "SEARCH_AUTHOR", author, false);
+
+        return webClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/search.json")
+                        .queryParam("author", author)
+                        .queryParam("limit", 20)
+                        .build())
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(5))
+                .onErrorResume(PrematureCloseException.class, e -> {
+                    log.debug("OpenLibrary author search connection closed early for '{}': {}", author, e.toString());
+                    return Mono.empty();
+                })
+                .flatMapMany(responseNode -> {
+                    if (!responseNode.has("docs") || !responseNode.get("docs").isArray()) {
+                        ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_AUTHOR", author, 0);
+                        return Flux.empty();
+                    }
+                    int count = responseNode.get("docs").size();
+                    ExternalApiLogger.logApiCallSuccess(log, "OpenLibrary", "SEARCH_AUTHOR", author, count);
+                    return Flux.fromIterable(responseNode.get("docs"))
+                            .map(this::parseOpenLibrarySearchDoc)
+                            .filter(Objects::nonNull);
+                })
+                .doOnError(e -> LoggingUtils.error(log, e, "Error searching books by author '{}' from OpenLibrary", author))
+                .onErrorResume(e -> {
+                    LoggingUtils.warn(log, e, "Error during OpenLibrary search for author '{}', returning empty Flux", author);
+                    ExternalApiLogger.logApiCallFailure(log, "OpenLibrary", "SEARCH_AUTHOR", author, e.getMessage());
+                    return Flux.empty();
+                });
+    }
+
+    /**
+     * Unified entry point that selects title or author search heuristics.
+     */
+    public Flux<Book> searchBooks(String query, boolean treatAsAuthor) {
+        return treatAsAuthor ? searchBooksByAuthor(query) : searchBooksByTitle(query);
     }
 
     // --- Fallback Methods ---
 
     public Mono<Book> fetchBookFallback(String isbn, Throwable t) {
-        logger.warn("OpenLibraryBookDataService.fetchBookByIsbn fallback triggered for ISBN: {}. Error: {}", isbn, t.getMessage());
+        LoggingUtils.warn(log, t, "OpenLibraryBookDataService.fetchBookByIsbn fallback triggered for ISBN: {}", isbn);
         return Mono.empty();
     }
 
     public Flux<Book> searchBooksFallback(String title, Throwable t) {
-        logger.warn("OpenLibraryBookDataService.searchBooksByTitle fallback triggered for title: '{}'. Error: {}", title, t.getMessage());
+        LoggingUtils.warn(log, t, "OpenLibraryBookDataService.searchBooksByTitle fallback triggered for title: '{}'", title);
         return Flux.empty();
     }
 
     private Book parseOpenLibraryBook(JsonNode bookDataNode, String originalIsbn) {
         if (bookDataNode == null || bookDataNode.isMissingNode() || !bookDataNode.isObject()) {
-            logger.warn("Book data node is null, missing, or not an object for ISBN: {}", originalIsbn);
+            log.warn("Book data node is null, missing, or not an object for ISBN: {}", originalIsbn);
             return null;
         }
 
@@ -159,12 +242,16 @@ public class OpenLibraryBookDataService {
         }
         book.setId(olid);
 
-        book.setTitle(bookDataNode.path("title").asText(null));
+        // Normalize title to proper case
+        String rawTitle = bookDataNode.path("title").asText(null);
+        book.setTitle(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(rawTitle));
 
         List<String> authors = new ArrayList<>();
         if (bookDataNode.has("authors")) {
             for (JsonNode authorNode : bookDataNode.path("authors")) {
-                authors.add(authorNode.path("name").asText(null));
+                String rawAuthor = authorNode.path("name").asText(null);
+                // Normalize author name to proper case
+                authors.add(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeAuthorName(rawAuthor));
             }
         }
         book.setAuthors(authors.isEmpty() ? null : authors);
@@ -177,32 +264,9 @@ public class OpenLibraryBookDataService {
 
         String publishedDateStr = bookDataNode.path("publish_date").asText(null);
         if (publishedDateStr != null && !publishedDateStr.trim().isEmpty()) {
-            Date parsedDate = null;
-            List<SimpleDateFormat> dateFormats = Arrays.asList(
-                    new SimpleDateFormat("MMMM d, yyyy"), // "January 1, 2020"
-                    new SimpleDateFormat("dd MMMM yyyy"),  // "15 January 2020"
-                    new SimpleDateFormat("yyyy-MM-dd"),    // "2020-01-15"
-                    new SimpleDateFormat("MM/dd/yyyy"),    // "01/15/2020"
-                    new SimpleDateFormat("yyyy/MM/dd"),    // "2020/01/15"
-                    new SimpleDateFormat("MMMM yyyy"),     // "January 2020"
-                    new SimpleDateFormat("yyyy-MM"),       // "2020-01"
-                    new SimpleDateFormat("yyyy")           // "2020"
-            );
-
-            for (SimpleDateFormat sdf : dateFormats) {
-                try {
-                    sdf.setLenient(false); // Be strict about matching the format
-                    parsedDate = sdf.parse(publishedDateStr);
-                    if (parsedDate != null) {
-                        break; // Successfully parsed
-                    }
-                } catch (ParseException e) {
-                    // Try next format
-                }
-            }
-
+            Date parsedDate = DateParsingUtils.parseFlexibleDate(publishedDateStr);
             if (parsedDate == null) {
-                logger.warn("Could not parse OpenLibrary publish_date '{}' for ISBN {} with any of the attempted formats.", publishedDateStr, originalIsbn);
+                log.warn("Could not parse OpenLibrary publish_date '{}' for ISBN {} via DateParsingUtils.", publishedDateStr, originalIsbn);
             }
             book.setPublishedDate(parsedDate);
         }
@@ -255,8 +319,12 @@ public class OpenLibraryBookDataService {
             thumbnailUrl = coverNode.path("medium").asText(null); // Typically used as primary cover
             smallThumbnailUrl = coverNode.path("small").asText(null);
         }
-        book.setCoverImageUrl(thumbnailUrl);
-        book.setImageUrl(smallThumbnailUrl); // Or some other logic for alternative image
+        book.setExternalImageUrl(thumbnailUrl); // original external source
+        // s3ImagePath remains null here; S3 upload may occur later in orchestration
+        // Keep small thumbnail as fallback external URL if main is null
+        if (book.getExternalImageUrl() == null) {
+            book.setExternalImageUrl(smallThumbnailUrl);
+        }
 
         book.setInfoLink(bookDataNode.path("url").asText(null));
         book.setRawJsonResponse(bookDataNode.toString());
@@ -295,12 +363,16 @@ public class OpenLibraryBookDataService {
             book.setId(key.substring(key.lastIndexOf('/') + 1)); // Use OLID as ID
         }
 
-        book.setTitle(docNode.path("title").asText(null));
+        // Normalize title to proper case
+        String rawTitle = docNode.path("title").asText(null);
+        book.setTitle(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeBookTitle(rawTitle));
 
         List<String> authors = new ArrayList<>();
         if (docNode.has("author_name") && docNode.get("author_name").isArray()) {
             for (JsonNode authorNameNode : docNode.get("author_name")) {
-                authors.add(authorNameNode.asText(null));
+                String rawAuthor = authorNameNode.asText(null);
+                // Normalize author name to proper case
+                authors.add(com.williamcallahan.book_recommendation_engine.util.TextUtils.normalizeAuthorName(rawAuthor));
             }
         }
         book.setAuthors(authors.isEmpty() ? null : authors);

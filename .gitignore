@@ -47,7 +47,6 @@ build/
 .claude
 
 ### VS Code ###
-.vscode/
 
 ### Environment Variables ###
 .env
@@ -55,3 +54,8 @@ build/
 .env.development
 .env.test
 .env.production
+
+### Temporary Files and Logs ###
+tmp/
+migration-logs/
+.DS_Store

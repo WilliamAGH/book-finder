@@ -35,9 +35,6 @@ import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
-import java.util.Arrays;
-import java.util.stream.Collectors;
-
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
@@ -112,34 +109,19 @@ public class SecurityConfig {
             headers.referrerPolicy(referrer -> referrer.policy(policy));
 
             if (cspEnabled) { // Check if CSP is enabled first
-                StringBuilder imgSrcDirective = new StringBuilder("'self' data: ");
-                StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline'");
-                StringBuilder connectSrcDirective = new StringBuilder("'self'");
+                // Allow HTTP and HTTPS images from any source - book covers come from many external sources
+                // (Google Books, Open Library, Goodreads, Amazon, etc.)
+                // Note: HTTP allowed because some providers (e.g., Google Books API) return HTTP URLs
+                StringBuilder imgSrcDirective = new StringBuilder("'self' data: blob: https: http: ");
+                StringBuilder scriptSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline' blob:");
+                StringBuilder connectSrcDirective = new StringBuilder("'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com");
 
                 if (clickyEnabled) {
-                    // Add Clicky Analytics domains for img-src, script-src, and connect-src
-                    imgSrcDirective.append("https://static.getclicky.com https://in.getclicky.com https://clicky.com ");
-                    scriptSrcDirective.append(" https://static.getclicky.com https://clicky.com");
-                    connectSrcDirective.append(" https://static.getclicky.com https://in.getclicky.com https://clicky.com");
-                }
-
-                // Add Google Books domain for cover images
-                imgSrcDirective.append("https://books.google.com ");
-
-                // Add book covers CDN domain
-                if (bookCoversCdnDomain != null && !bookCoversCdnDomain.isEmpty()) {
-                    imgSrcDirective.append(bookCoversCdnDomain).append(" ");
-                }
-
-                // Add additional domains if specified
-                if (bookCoversAdditionalDomains != null && !bookCoversAdditionalDomains.isEmpty()) {
-                    String formattedDomains = Arrays.stream(bookCoversAdditionalDomains.split(","))
-                        .map(String::trim)
-                        .filter(s -> !s.isEmpty())
-                        .collect(Collectors.joining(" "));
-                    if (!formattedDomains.isEmpty()) {
-                        imgSrcDirective.append(formattedDomains);
-                    }
+                    // Add Clicky Analytics domains for script-src, connect-src, and img-src
+                    // Include both HTTP and HTTPS as Clicky may use either depending on page protocol
+                    scriptSrcDirective.append(" https://static.getclicky.com http://static.getclicky.com https://in.getclicky.com http://in.getclicky.com https://clicky.com http://clicky.com");
+                    connectSrcDirective.append(" https://static.getclicky.com http://static.getclicky.com https://in.getclicky.com http://in.getclicky.com https://clicky.com http://clicky.com");
+                    imgSrcDirective.append(" https://in.getclicky.com http://in.getclicky.com");
                 }
 
                 // Add Content Security Policy header with dynamic directives

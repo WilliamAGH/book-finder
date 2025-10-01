@@ -52,51 +52,22 @@
     <section class="current-bestsellers-section py-4">
         <div class="container">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2>Current Bestsellers</h2>
+                <h2>NYT Bestsellers</h2>
                 <a th:href="@{/search(query='new york times', year=${T(java.time.Year).now().getValue()})}" class="btn btn-view-all btn-outlined btn-outline-primary">View All</a>
             </div>
             
             <div class="row g-4">
                 <!-- Check if currentBestsellers list exists and is not empty -->
-                <div th:if="${currentBestsellers == null || currentBestsellers.empty}" class="col-12 text-center py-5">
+                <div th:if="${currentBestsellers == null or #lists.isEmpty(currentBestsellers)}" class="col-12 text-center py-5">
                     <div class="alert alert-info" role="alert">
                         <i class="fas fa-info-circle me-2"></i> No current bestsellers to display. Check back soon!
                     </div>
                 </div>
                 
                 <!-- Loop through current bestsellers -->
-                <div th:each="book : ${currentBestsellers}" class="col-sm-6 col-md-4 col-lg-3">
-                    <div class="card h-100">
-                        <div class="position-relative book-cover-container">
-                            <a th:href="@{'/book/' + ${book.id}}" class="d-block h-100">
-                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}"
-                                     class="card-img-top book-cover"
-                                     loading="lazy"
-                                     alt="Book cover" 
-                                     title="Book cover"
-                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
-                                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
-                                     th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : null)},
-                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
-                                              data-ultimate-fallback='/images/placeholder-book-cover.svg'">
-                            </a>
-                            <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
-                                <i class="fas fa-star me-1"></i>
-                                <span th:text="${book.averageRating}">4.5</span>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <h5 class="card-title text-truncate">
-                                <a th:href="@{'/book/' + ${book.id}}" th:text="${book.title}" class="text-decoration-none text-dark">Book Title</a>
-                            </h5>
-                            <p class="card-text small text-muted text-truncate" th:text="${book.authors != null && !book.authors.empty} ? ${book.authors[0]} : 'Unknown Author'">Author Name</p>
-                        </div>
-                        <div class="card-footer bg-white border-top-0">
-                            <a th:href="@{'/book/' + ${book.id}}" class="btn btn-sm btn-outline-primary d-block">View Details</a>
-                        </div>
-                    </div>
-                </div>
+                <th:block th:each="book : ${currentBestsellers}">
+                    <div th:replace="~{fragments/cards :: bookCard(book=${book}, showStats=${false})}"></div>
+                </th:block>
             </div>
         </div>
     </section>
@@ -111,45 +82,16 @@
             
             <div class="row g-4">
                 <!-- Check if recentBooks list exists and is not empty -->
-                <div th:if="${recentBooks == null || recentBooks.empty}" class="col-12 text-center py-5">
+                <div th:if="${recentBooks == null or #lists.isEmpty(recentBooks)}" class="col-12 text-center py-5">
                     <div class="alert alert-info" role="alert">
                         <i class="fas fa-info-circle me-2"></i> No recent books to display. Start exploring to see recommendations!
                     </div>
                 </div>
                 
                 <!-- Loop through recent books -->
-                <div th:each="book : ${recentBooks}" class="col-sm-6 col-md-4 col-lg-3">
-                    <div class="card h-100">
-                        <div class="position-relative book-cover-container">
-                            <a th:href="@{'/book/' + ${book.id}}" class="d-block h-100">
-                                <img th:src="${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : '/images/placeholder-book-cover.svg')}"
-                                     class="card-img-top book-cover"
-                                     loading="lazy"
-                                     alt="Book cover" 
-                                     title="Book cover"
-                                     th:alt="${book.title != null ? book.title + ' cover' : 'Book cover'}"
-                                     th:title="${book.title != null ? book.title + ' cover' : 'Book cover'}"
-                                     th:attr="data-book-id=${book.id}, 
-                                              data-preferred-url=${book.coverImages != null && book.coverImages.preferredUrl != null ? book.coverImages.preferredUrl : (book.coverImageUrl != null ? book.coverImageUrl : null)},
-                                              data-fallback-url=${book.coverImages != null && book.coverImages.fallbackUrl != null ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg'}, 
-                                              data-ultimate-fallback='/images/placeholder-book-cover.svg'">
-                            </a>
-                            <div th:if="${book.averageRating != null}" class="position-absolute top-0 end-0 m-2 badge bg-warning text-dark">
-                                <i class="fas fa-star me-1"></i>
-                                <span th:text="${book.averageRating}">4.5</span>
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <h5 class="card-title text-truncate">
-                                <a th:href="@{'/book/' + ${book.id}}" th:text="${book.title}" class="text-decoration-none text-dark">Book Title</a>
-                            </h5>
-                            <p class="card-text small text-muted text-truncate" th:text="${book.authors != null && !book.authors.empty} ? ${book.authors[0]} : 'Unknown Author'">Author Name</p>
-                        </div>
-                        <div class="card-footer bg-white border-top-0">
-                            <a th:href="@{'/book/' + ${book.id}}" class="btn btn-sm btn-outline-primary d-block">View Details</a>
-                        </div>
-                    </div>
-                </div>
+                <th:block th:each="book : ${recentBooks}">
+                    <div th:replace="~{fragments/cards :: bookCard(book=${book}, showStats=${true})}"></div>
+                </th:block>
             </div>
         </div>
     </section>

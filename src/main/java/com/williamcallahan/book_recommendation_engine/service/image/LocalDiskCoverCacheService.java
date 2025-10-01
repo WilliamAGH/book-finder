@@ -13,13 +13,15 @@
  */
 package com.williamcallahan.book_recommendation_engine.service.image;
 
-import com.williamcallahan.book_recommendation_engine.types.CoverImageSource;
-import com.williamcallahan.book_recommendation_engine.types.ImageAttemptStatus;
-import com.williamcallahan.book_recommendation_engine.types.ImageDetails;
-import com.williamcallahan.book_recommendation_engine.types.ImageProvenanceData;
-import com.williamcallahan.book_recommendation_engine.types.ImageResolutionPreference;
-import com.williamcallahan.book_recommendation_engine.types.ImageSourceName;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageAttemptStatus;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageProvenanceData;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageResolutionPreference;
+import com.williamcallahan.book_recommendation_engine.model.image.ImageSourceName;
 import com.williamcallahan.book_recommendation_engine.util.ImageCacheUtils;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -43,12 +45,20 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+
 @Service
 public class LocalDiskCoverCacheService {
 
     private static final Logger logger = LoggerFactory.getLogger(LocalDiskCoverCacheService.class);
     private static final String LOCAL_PLACEHOLDER_PATH = "/images/placeholder-book-cover.svg";
-    private static final String GOOGLE_PLACEHOLDER_CLASSPATH_PATH = "/images/image-not-available.png";
+    // Try Spring Boot resource locations in order (classpath), then legacy path
+    private static final String[] GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES = new String[] {
+            "/static/images/image-not-available.png",
+            "/public/images/image-not-available.png",
+            "/resources/images/image-not-available.png",
+            "/META-INF/resources/images/image-not-available.png",
+            "/images/image-not-available.png"
+    };
 
     @Value("${app.cover-cache.enabled:true}")
     private boolean cacheEnabled;
@@ -110,36 +120,43 @@ public class LocalDiskCoverCacheService {
                 logger.info("Using existing book cover cache directory: {}", cacheDir);
             }
 
-            // Load Google placeholder image for hash comparison
-            try (InputStream placeholderStream = getClass().getResourceAsStream(GOOGLE_PLACEHOLDER_CLASSPATH_PATH)) {
-                if (placeholderStream != null) {
+            // Load Google placeholder image for hash comparison (try common Spring Boot resource locations)
+            boolean loadedPlaceholderHash = false;
+            for (String candidate : GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES) {
+                try (InputStream placeholderStream = getClass().getResourceAsStream(candidate)) {
+                    if (placeholderStream == null) {
+                        continue;
+                    }
                     byte[] placeholderBytes = placeholderStream.readAllBytes();
                     if (placeholderBytes.length > 0) {
                         googlePlaceholderHash = ImageCacheUtils.computeImageHash(placeholderBytes);
-                        logger.info("Loaded Google Books placeholder image hash from classpath: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
+                        logger.info("Loaded Google Books placeholder image hash from classpath: {}", candidate);
+                        loadedPlaceholderHash = true;
+                        break;
                     } else {
-                        logger.warn("Google Books placeholder image from classpath {} was empty, hash-based detection disabled", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
+                        logger.warn("Google Books placeholder image from classpath {} was empty; trying next candidate", candidate);
                     }
-                } else {
-                    logger.warn("Google Books placeholder image not found in classpath at {}, hash-based detection disabled", GOOGLE_PLACEHOLDER_CLASSPATH_PATH);
+                } catch (IOException e) {
+                    logger.warn("IOException while loading Google Books placeholder from {}: {}", candidate, e.getMessage());
+                } catch (NoSuchAlgorithmException e) {
+                    LoggingUtils.error(logger, e, "Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.");
+                } catch (Exception e) {
+                    logger.warn("Unexpected error loading Google Books placeholder from {}: {}", candidate, e.getMessage());
                 }
-            } catch (NoSuchAlgorithmException e) {
-                logger.error("Failed to compute Google Books placeholder hash (SHA-256 not available). Hash-based detection disabled.", e);
-            } catch (IOException e) { // Catch IO exceptions from stream operations
-                logger.warn("IOException while loading Google Books placeholder image from classpath {}: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH, e.getMessage(), e);
-            } catch (Exception e) { // Catch any other unexpected exceptions
-                logger.warn("Unexpected error loading Google Books placeholder image for hash comparison from classpath {}: {}", GOOGLE_PLACEHOLDER_CLASSPATH_PATH, e.getMessage(), e);
+            }
+            if (!loadedPlaceholderHash) {
+                logger.info("Google Books placeholder image not found in classpath (searched {} candidates). Hash-based detection disabled.", GOOGLE_PLACEHOLDER_CLASSPATH_CANDIDATES.length);
             }
 
             // Schedule cleanup task
-            long initialDelayDays = Math.max(0, Math.min(1, maxCacheAgeDays)); // Run quickly on startup, but not less than 0
-            long periodDays = Math.max(1, maxCacheAgeDays); // Ensure period is at least 1 day
+            long initialDelayDays = PagingUtils.clamp(maxCacheAgeDays, 0, 1); // Run quickly on startup, but not less than 0
+            long periodDays = PagingUtils.atLeast(maxCacheAgeDays, 1); // Ensure period is at least 1 day
 
             scheduler.scheduleAtFixedRate(this::safeCleanupOldCachedCovers, initialDelayDays, periodDays, TimeUnit.DAYS);
             logger.info("Scheduled cleanup of old cached covers (older than {} days) to run with initial delay of {} day(s) and then every {} days", maxCacheAgeDays, initialDelayDays, periodDays);
 
         } catch (IOException e) { // For Files.createDirectories
-            logger.error("Failed to create or access book cover cache directory: {}. Disabling local disk caching.", cacheDirString, e);
+            LoggingUtils.error(logger, e, "Failed to create or access book cover cache directory: {}. Disabling local disk caching.", cacheDirString);
             cacheEnabled = false;
         }
         // The NoSuchAlgorithmException from computeImageHash inside the try-with-resources is handled locally.
@@ -176,7 +193,7 @@ public class LocalDiskCoverCacheService {
             destinationPath = cacheDir.resolve(ImageCacheUtils.generateFilenameFromUrl(imageUrl));
             logger.debug("Generated destination path: {}. Context: {}", destinationPath, logContext);
         } catch (NoSuchAlgorithmException e) {
-            logger.error("CRITICAL: SHA-256 algorithm not found for generating filename. Context: {}", logContext, e);
+            LoggingUtils.error(logger, e, "CRITICAL: SHA-256 algorithm not found for generating filename. Context: {}", logContext);
             return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "hash-algo-filename"));
         }
 
@@ -249,7 +266,7 @@ public class LocalDiskCoverCacheService {
                             logger.debug("Downloaded image is not the Google placeholder. Context: {}", finalLogContext);
                         }
                     } catch (NoSuchAlgorithmException e) {
-                        logger.error("NoSuchAlgorithmException (SHA-256) during hash computation for placeholder check. Context: {}", finalLogContext, e);
+                        LoggingUtils.error(logger, e, "NoSuchAlgorithmException (SHA-256) during hash computation for placeholder check. Context: {}", finalLogContext);
                         if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_PROCESSING);
                         return CompletableFuture.completedFuture(createPlaceholderImageDetails(bookIdForLog, "hash-algo-placeholder-check"));
                     }
@@ -286,11 +303,11 @@ public class LocalDiskCoverCacheService {
                                         CoverImageSource.LOCAL_CACHE, ImageResolutionPreference.ORIGINAL,
                                         processedImage.width(), processedImage.height());
                             } catch (IOException e) { // Handles IOException from Files.write
-                                logger.error("IOException during saving processed image. Context: {}", finalLogContext, e);
+                                LoggingUtils.error(logger, e, "IOException during saving processed image. Context: {}", finalLogContext);
                                 if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_IO);
                                 return createPlaceholderImageDetails(bookIdForLog, "io-exception-saving");
                             } catch (Exception e) { // Catch any other unexpected error from this inner block
-                                logger.error("Unexpected exception during post-processing or saving. Context: {}", finalLogContext, e);
+                                LoggingUtils.error(logger, e, "Unexpected exception during post-processing or saving. Context: {}", finalLogContext);
                                 if (finalAttemptInfo != null) finalAttemptInfo.setStatus(ImageAttemptStatus.FAILURE_GENERIC);
                                 return createPlaceholderImageDetails(bookIdForLog, "generic-post-processing-ex");
                             }
@@ -361,7 +378,7 @@ public class LocalDiskCoverCacheService {
         try {
             cleanupOldCachedCovers();
         } catch (Throwable t) {
-            logger.error("Uncaught exception in LocalDiskCoverCacheService cleanup task. Scheduler thread might have died if not for this catch.", t);
+            LoggingUtils.error(logger, t, "Uncaught exception in LocalDiskCoverCacheService cleanup task. Scheduler thread might have died if not for this catch.");
         }
     }
 
@@ -401,7 +418,7 @@ public class LocalDiskCoverCacheService {
                     });
             logger.info("Completed cleanup of old cached book covers. Deleted {} files", deleteCount[0]);
         } catch (IOException e) {
-            logger.error("Error during cleanup of cached book covers in {}", cacheDir, e);
+            LoggingUtils.error(logger, e, "Error during cleanup of cached book covers in {}", cacheDir);
         }
     }
 

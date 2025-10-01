@@ -67,6 +67,14 @@
     {
       "name": "healthcheck",
       "description": "Health check configuration properties"
+    },
+    {
+      "name": "sitemap",
+      "description": "Sitemap configuration properties"
+    },
+    {
+      "name": "app.features",
+      "description": "Application feature flags"
     }
   ],
   "properties": [
@@ -497,6 +505,42 @@
       "type": "java.lang.Integer",
       "description": "Number of days to consider for recently viewed books",
       "defaultValue": 7
+    },
+    {
+      "name": "sitemap.base-url",
+      "type": "java.lang.String",
+      "description": "Base URL used for sitemap links",
+      "defaultValue": "https://findmybook.net"
+    },
+    {
+      "name": "sitemap.html-page-size",
+      "type": "java.lang.Integer",
+      "description": "Number of entries per HTML page",
+      "defaultValue": 100
+    },
+    {
+      "name": "sitemap.xml-page-size",
+      "type": "java.lang.Integer",
+      "description": "Max URLs per XML sitemap file",
+      "defaultValue": 5000
+    },
+    {
+      "name": "app.features.external-fallback.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable external API fallbacks (Google, OpenLibrary, Longitood, S3 enrichment)",
+      "defaultValue": false
+    },
+    {
+      "name": "app.features.google-fallback.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable Google Books fallback for covers/data",
+      "defaultValue": false
+    },
+    {
+      "name": "app.features.persist-search-results",
+      "type": "java.lang.Boolean",
+      "description": "Persist external API search results to Postgres asynchronously so they're available when users click on them",
+      "defaultValue": true
     }
   ],
   "hints": []

@@ -507,6 +507,14 @@
         }
         
         function performSearch(query, startIndex, sortBy, coverSource, resolution, year) {
+            // Ensure WebSocket client is ready
+            try {
+                if (!window._searchStompClient) {
+                    var socket = new SockJS('/ws');
+                    window._searchStompClient = Stomp.over(socket);
+                    window._searchStompClient.connect({}, function(){ console.log('[WS] Search client connected'); });
+                }
+            } catch (e) { console.warn('Search WS init failed:', e); }
             if (!query) return;
             
             // Show loading indicator and completely hide results container
@@ -555,6 +563,16 @@
                 }
             }
             
+            // Subscribe to search WS topics for this query
+            try {
+                const queryHash = (query || '').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '_');
+                if (window._searchStompClient && window._searchWsQuery !== queryHash) {
+                    window._searchWsQuery = queryHash;
+                    window._searchStompClient.subscribe(`/topic/search/${queryHash}/progress`, function(msg){ try{ console.log('[WS][progress]', JSON.parse(msg.body)); } catch(e){} });
+                    window._searchStompClient.subscribe(`/topic/search/${queryHash}/results`, function(msg){ try{ console.log('[WS][results]', JSON.parse(msg.body)); } catch(e){} });
+                }
+            } catch (e) { console.warn('Search WS subscribe failed:', e); }
+            
             fetch(apiUrl)
                 .then(response => {
                     if (!response.ok) {
@@ -583,7 +601,7 @@
                     }
                     
                     console.log("Search results data:", data);
-                    console.log("Total available results:", data.totalAvailableResults);
+                    console.log("Total available results:", data.totalResults);
                     console.log("Current max results:", currentMaxResults);
                     
                     if (sortBy && sortBy !== 'relevance') {
@@ -594,24 +612,23 @@
                     
                     /**
                      * Setup pagination based on available response data
-                     * @since the API doesn't provide totalAvailableResults
                      */
                     console.log("Available data for pagination:", data);
-                    
+
                     // Detect if more pages likely exist
-                    const hasMoreResults = data.count >= currentMaxResults || data.resultsInPage >= currentMaxResults;
+                    const hasMoreResults = data.results.length >= currentMaxResults;
                     console.log("Has more results:", hasMoreResults, "Current page:", currentPage);
-                    
+
                     /**
                      * Show pagination if:
                      * 1. Not on first page, OR
                      * 2. Full page of results (suggesting more exist)
                      */
-                    if (data.count > 0 && (currentPage > 0 || hasMoreResults)) {
+                    if (data.totalResults > 0 && (currentPage > 0 || hasMoreResults)) {
                         // Calculate minimum estimated total for pagination buttons
                         const estimatedTotal = Math.max(
                             (currentPage + 1) * currentMaxResults + (hasMoreResults ? currentMaxResults : 0),
-                            data.count
+                            data.totalResults
                         );
                         console.log("Setting up pagination with estimated total:", estimatedTotal);
                         setupPagination(currentPage, estimatedTotal, currentMaxResults);
@@ -675,13 +692,18 @@
             const card = template.content.cloneNode(true);
             
             const yearParam = publishedYear ? `&year=${publishedYear}` : '';
-            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
+            const identifierForUrl = book.slug ? book.slug : book.id;
+            const bookUrl = `/book/${identifierForUrl}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForCard = card.querySelector('.book-cover');
-            const preferredUrl = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
-            const fallbackUrl = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const preferredUrl = (book.cover && book.cover.preferredUrl)
+                ? book.cover.preferredUrl
+                : (book.cover?.s3ImagePath || book.cover?.externalImageUrl || null);
+            const fallbackUrl = (book.cover && book.cover.fallbackUrl)
+                ? book.cover.fallbackUrl
+                : '/images/placeholder-book-cover.svg';
 
-            imgElementForCard.src = '/images/placeholder-book-cover.svg'; // Initial src
+            imgElementForCard.src = preferredUrl || fallbackUrl;
             imgElementForCard.alt = book.title ? `${book.title} cover` : 'Book cover';
             imgElementForCard.setAttribute('data-book-id', book.id);
             imgElementForCard.setAttribute('data-preferred-url', preferredUrl || '');
@@ -716,9 +738,9 @@
                 }
 
                 // Add dev source indicator if in development mode
-                if (isDevelopmentMode && book.coverImages && book.coverImages.source && book.coverImages.source.name) {
+                if (isDevelopmentMode && book.cover && book.cover.source) {
                     const devIndicator = document.createElement('div');
-                    devIndicator.className = 'position-absolute bottom-0 start-0 m-2 dev-source-indicator dev-source-' + book.coverImages.source.name;
+                    devIndicator.className = 'position-absolute bottom-0 start-0 m-2 dev-source-indicator dev-source-' + book.cover.source;
                     devIndicator.style.zIndex = '10';
                     devIndicator.style.width = '20px';
                     devIndicator.style.height = '20px';
@@ -726,9 +748,9 @@
                     devIndicator.style.alignItems = 'center';
                     devIndicator.style.justifyContent = 'center';
                     
-                    let titleText = 'Source: ' + (book.coverImages.source.displayName || 'Unknown');
-                    if (book.coverImages.preferredUrl) {
-                        let preferredUrlAbbreviated = book.coverImages.preferredUrl.length > 70 ? book.coverImages.preferredUrl.substring(0, 70) + '...' : book.coverImages.preferredUrl;
+                    let titleText = 'Source: ' + (book.cover.source || 'Unknown');
+                    if (book.cover.preferredUrl) {
+                        let preferredUrlAbbreviated = book.cover.preferredUrl.length > 70 ? book.cover.preferredUrl.substring(0, 70) + '...' : book.cover.preferredUrl;
                         titleText += ' | URL: ' + preferredUrlAbbreviated;
                     }
                     devIndicator.setAttribute('title', titleText);
@@ -753,7 +775,10 @@
             }
             
             const authorText = book.authors && book.authors.length > 0 
-                ? book.authors.join(', ') 
+                ? book.authors
+                    .map(a => (typeof a === 'string') ? a : (a && a.name ? a.name : null))
+                    .filter(Boolean)
+                    .join(', ')
                 : 'Unknown Author';
             const authorElement = card.querySelector('.book-author');
             if (authorElement) {
@@ -782,13 +807,18 @@
             const listItem = template.content.cloneNode(true);
             
             const yearParam = publishedYear ? `&year=${publishedYear}` : '';
-            const bookUrl = `/book/${book.id}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
+            const identifierForUrl = book.slug ? book.slug : book.id;
+            const bookUrl = `/book/${identifierForUrl}?query=${encodeURIComponent(query)}&page=${currentPage + 1}&sort=${currentSort}&view=${currentView}${yearParam}`;
             
             const imgElementForListItem = listItem.querySelector('.book-cover');
-            const preferredUrlListItem = book.coverImages && book.coverImages.preferredUrl ? book.coverImages.preferredUrl : (book.coverImageUrl || null);
-            const fallbackUrlListItem = book.coverImages && book.coverImages.fallbackUrl ? book.coverImages.fallbackUrl : '/images/placeholder-book-cover.svg';
+            const preferredUrlListItem = (book.cover && book.cover.preferredUrl)
+                ? book.cover.preferredUrl
+                : (book.cover?.s3ImagePath || book.cover?.externalImageUrl || null);
+            const fallbackUrlListItem = (book.cover && book.cover.fallbackUrl)
+                ? book.cover.fallbackUrl
+                : '/images/placeholder-book-cover.svg';
 
-            imgElementForListItem.src = '/images/placeholder-book-cover.svg'; // Initial src
+            imgElementForListItem.src = preferredUrlListItem || fallbackUrlListItem;
             imgElementForListItem.alt = book.title ? `${book.title} cover` : 'Book cover';
             imgElementForListItem.setAttribute('data-book-id', book.id);
             imgElementForListItem.setAttribute('data-preferred-url', preferredUrlListItem || '');
@@ -823,9 +853,9 @@
                 }
 
                 // Add dev source indicator if in development mode (for list view)
-                if (isDevelopmentMode && book.coverImages && book.coverImages.source && book.coverImages.source.name) {
+                if (isDevelopmentMode && book.cover && book.cover.source) {
                     const devIndicator = document.createElement('div');
-                    devIndicator.className = 'position-absolute bottom-0 start-0 m-1 dev-source-indicator dev-source-' + book.coverImages.source.name; // m-1 for smaller margin in list
+                    devIndicator.className = 'position-absolute bottom-0 start-0 m-1 dev-source-indicator dev-source-' + book.cover.source; // m-1 for smaller margin in list
                     devIndicator.style.zIndex = '10';
                     devIndicator.style.width = '18px'; // Slightly smaller for list view
                     devIndicator.style.height = '18px';
@@ -833,9 +863,9 @@
                     devIndicator.style.alignItems = 'center';
                     devIndicator.style.justifyContent = 'center';
 
-                    let titleText = 'Source: ' + (book.coverImages.source.displayName || 'Unknown');
-                    if (book.coverImages.preferredUrl) {
-                         let preferredUrlAbbreviated = book.coverImages.preferredUrl.length > 70 ? book.coverImages.preferredUrl.substring(0, 70) + '...' : book.coverImages.preferredUrl;
+                    let titleText = 'Source: ' + (book.cover.source || 'Unknown');
+                    if (book.cover.preferredUrl) {
+                         let preferredUrlAbbreviated = book.cover.preferredUrl.length > 70 ? book.cover.preferredUrl.substring(0, 70) + '...' : book.cover.preferredUrl;
                         titleText += ' | URL: ' + preferredUrlAbbreviated;
                     }
                     devIndicator.setAttribute('title', titleText);
@@ -859,7 +889,10 @@
             }
             
             const authorText = book.authors && book.authors.length > 0 
-                ? book.authors.join(', ') 
+                ? book.authors
+                    .map(a => (typeof a === 'string') ? a : (a && a.name ? a.name : null))
+                    .filter(Boolean)
+                    .join(', ')
                 : 'Unknown Author';
             const authorElement = listItem.querySelector('.book-author');
             if (authorElement) {
@@ -1227,6 +1260,46 @@
         margin-top: 5px;
     }
 </style>
+
+<!-- Clicky virtual pageview logging for filter-driven URL changes on search page -->
+<script>
+    (function() {
+        function logVirtualPageview(url) {
+            try {
+                if (window.clicky && typeof window.clicky.log === 'function') {
+                    window.clicky.log(url, document.title);
+                }
+            } catch (e) { /* no-op */ }
+        }
+
+        var originalPushState = history.pushState;
+        history.pushState = function(state, title, url) {
+            var result = originalPushState.apply(this, arguments);
+            if (url) {
+                var u = (typeof url === 'string') ? url : url.toString();
+                logVirtualPageview(u);
+            }
+            return result;
+        };
+
+        var originalReplaceState = history.replaceState;
+        history.replaceState = function(state, title, url) {
+            var result = originalReplaceState.apply(this, arguments);
+            if (url) {
+                var u = (typeof url === 'string') ? url : url.toString();
+                logVirtualPageview(u);
+            }
+            return result;
+        };
+
+        window.addEventListener('popstate', function() {
+            try {
+                var current = window.location.pathname + window.location.search + window.location.hash;
+                logVirtualPageview(current);
+            } catch (e) { /* no-op */ }
+        });
+    })();
+</script>
 
 </body>
 </html>

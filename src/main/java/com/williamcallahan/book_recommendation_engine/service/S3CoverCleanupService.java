@@ -15,9 +15,11 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.williamcallahan.book_recommendation_engine.config.S3EnvironmentCondition;
 import com.williamcallahan.book_recommendation_engine.service.image.ImageProcessingService;
-import com.williamcallahan.book_recommendation_engine.types.DryRunSummary;
+import com.williamcallahan.book_recommendation_engine.service.s3.DryRunSummary;
+import com.williamcallahan.book_recommendation_engine.service.s3.MoveActionSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.model.S3Object;
@@ -112,12 +114,12 @@ public class S3CoverCleanupService {
                     }
 
                 } catch (Exception e) {
-                    logger.error("Error processing S3 object: {}. Error: {}", key, e.getMessage(), e);
+                    LoggingUtils.error(logger, e, "Error processing S3 object: {}", key);
                 }
             }
 
         } catch (Exception e) {
-            logger.error("Failed to list or process objects from S3 bucket: {}. Error: {}", bucketName, e.getMessage(), e);
+            LoggingUtils.error(logger, e, "Failed to list or process objects from S3 bucket: {}", bucketName);
         }
 
         logger.info("S3 Cover Cleanup DRY RUN Finished.");
@@ -133,18 +135,18 @@ public class S3CoverCleanupService {
      * @param quarantinePrefix The S3 prefix to move flagged images to.
      * @return MoveActionSummary containing counts and lists of processed, moved, and failed items.
      */
-    public com.williamcallahan.book_recommendation_engine.types.MoveActionSummary performMoveAction(String s3Prefix, int batchLimit, String quarantinePrefix) {
+    public MoveActionSummary performMoveAction(String s3Prefix, int batchLimit, String quarantinePrefix) {
         logger.info("Starting S3 Cover Cleanup MOVE ACTION for prefix '{}', batch limit {}, target quarantine prefix '{}'...",
                 s3Prefix, batchLimit, quarantinePrefix);
 
         String bucketName = s3StorageService.getBucketName();
         if (bucketName == null || bucketName.isEmpty()) {
             logger.error("S3 bucket name is not configured. Aborting move action.");
-            return new com.williamcallahan.book_recommendation_engine.types.MoveActionSummary(0, 0, 0, 0, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            return new MoveActionSummary(0, 0, 0, 0, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
         if (quarantinePrefix == null || quarantinePrefix.isEmpty() || quarantinePrefix.equals(s3Prefix)) {
             logger.error("Quarantine prefix is invalid (null, empty, or same as source prefix: '{}'). Aborting move action.", quarantinePrefix);
-            return new com.williamcallahan.book_recommendation_engine.types.MoveActionSummary(0, 0, 0, 0, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            return new MoveActionSummary(0, 0, 0, 0, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
         
         // Ensure quarantinePrefix ends with a slash if it's not empty
@@ -233,21 +235,21 @@ public class S3CoverCleanupService {
                     }
 
                 } catch (Exception e) {
-                    logger.error("Error processing S3 object {} for move action: {}", sourceKey, e.getMessage(), e);
+                    LoggingUtils.error(logger, e, "Error processing S3 object {} for move action", sourceKey);
                     failedToMove.incrementAndGet(); // Count as failed if processing itself fails
                     failedMoveFileKeys.add(sourceKey);
                 }
             }
 
         } catch (Exception e) {
-            logger.error("Failed to list or process objects from S3 bucket {} for move action: {}", bucketName, e.getMessage(), e);
+            LoggingUtils.error(logger, e, "Failed to list or process objects from S3 bucket {} for move action", bucketName);
         }
 
         logger.info("S3 Cover Cleanup MOVE ACTION Finished.");
         logger.info("Summary: Total Scanned: {}, Total Flagged: {}, Successfully Moved: {}, Failed to Move: {}",
                 totalScanned.get(), totalFlagged.get(), successfullyMoved.get(), failedToMove.get());
         
-        return new com.williamcallahan.book_recommendation_engine.types.MoveActionSummary(
+        return new MoveActionSummary(
                 totalScanned.get(), totalFlagged.get(), successfullyMoved.get(), failedToMove.get(),
                 flaggedKeysList, movedFileKeys, failedMoveFileKeys);
     }

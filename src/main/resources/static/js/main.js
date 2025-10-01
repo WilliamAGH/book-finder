@@ -16,7 +16,7 @@ function applyConsistentDimensions(imgElement, naturalWidth, naturalHeight) {
     imgElement.setAttribute('data-natural-height', naturalHeight);
     
     // Calculate aspect ratio
-    const aspectRatio = naturalWidth / naturalHeight;
+    const _aspectRatio = naturalWidth / naturalHeight;
     
     // The image will now rely on its container and its own CSS rules
     // (e.g., object-fit: contain and max-width/max-height: 100%)
@@ -158,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const originalSrc = img.getAttribute('data-original-src');
             if (originalSrc && originalSrc !== img.src) {
                 console.log('Retrying cover: ' + (img.alt || 'Unknown book'));
-                img.src = originalSrc;
+                img.src = ensureHttpsForGoogleBooks(originalSrc);
             }
         });
         return 'Attempted to reload ' + covers.length + ' book covers';
@@ -242,17 +242,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         tempImg.onload = function() {
                             // Apply normalized dimensions through the shared function
                             applyConsistentDimensions(img, tempImg.naturalWidth, tempImg.naturalHeight);
-                            
+
                             // Set the source last, after all dimension adjustments are applied
-                            img.src = payload.newCoverUrl;
+                            img.src = ensureHttpsForGoogleBooks(payload.newCoverUrl);
                             console.log('WebSocket updated cover for book ' + id + ' with normalized dimensions (' + tempImg.naturalWidth + 'x' + tempImg.naturalHeight + ')');
                         };
                         tempImg.onerror = function() {
                             console.warn('Failed to preload WebSocket updated cover for book ' + id);
                             // Still update the src on error, but without dimension normalization
-                            img.src = payload.newCoverUrl;
+                            img.src = ensureHttpsForGoogleBooks(payload.newCoverUrl);
                         };
-                        tempImg.src = payload.newCoverUrl;
+                        tempImg.src = ensureHttpsForGoogleBooks(payload.newCoverUrl);
                     }
                 });
             });
@@ -319,6 +319,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             colorSchemeQuery.addEventListener('change', handleSystemColorSchemeChange);
         } catch (error) {
+            console.warn('MediaQueryList.addEventListener unsupported, falling back:', error);
             // Fallback for older browsers
             try {
                 // Safari 13.1 and older support
@@ -453,6 +454,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// Placeholder image constants
+const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
+// Inline fallback for cases where server isn't available - embedded SVG as data URI
+const INLINE_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjMwMCIgZmlsbD0iI2Y4ZjlmYSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIGZpbGw9IiM2Yzc1N2QiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5ObyBDb3ZlcjwvdGV4dD48L3N2Zz4=';
+
 /**
  * Initialize book cover images with loading and placeholder functionality
  * Includes advanced error handling, retry mechanism, and preload validation
@@ -460,13 +466,12 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeBookCovers() {
     const covers = document.querySelectorAll('img.book-cover');
     if (covers.length === 0) {
-        console.log("No book covers found to initialize.");
+        console.debug("No book covers found to initialize.");
         return;
     }
     console.log('Initializing ' + covers.length + ' book covers.');
 
-    const LOCAL_PLACEHOLDER = '/images/placeholder-book-cover.svg';
-    const MAX_RETRIES = 1;
+    // const _MAX_RETRIES = 1; // reserved for future use
     
     covers.forEach((cover, index) => {
         if (cover.getAttribute('data-cover-initialized') === 'true') {
@@ -488,6 +493,7 @@ function initializeBookCovers() {
         cover.setAttribute('data-preferred-url-internal', preferredUrl || '');
         cover.setAttribute('data-fallback-url-internal', fallbackUrl || '');
         cover.setAttribute('data-ultimate-fallback-internal', ultimateFallback);
+        cover.setAttribute('data-inline-fallback-internal', INLINE_PLACEHOLDER);
 
         // Add loading indicators and placeholder div
         const parent = cover.parentNode;
@@ -512,16 +518,17 @@ function initializeBookCovers() {
 
         if (preferredUrl && preferredUrl !== "null" && preferredUrl.trim() !== "") {
             console.log('[Cover ' + index + '] Attempting preferred URL: ' + preferredUrl);
-            cover.src = preferredUrl;
+            cover.src = ensureHttpsForGoogleBooks(preferredUrl);
         } else if (fallbackUrl && fallbackUrl !== "null" && fallbackUrl.trim() !== "") {
             console.log('[Cover ' + index + '] No preferred URL, attempting fallback URL: ' + fallbackUrl);
-            cover.src = fallbackUrl;
+            cover.src = ensureHttpsForGoogleBooks(fallbackUrl);
         } else {
             console.log('[Cover ' + index + '] No preferred or fallback URL, using ultimate fallback: ' + ultimateFallback);
-            cover.src = ultimateFallback;
+            cover.src = ensureHttpsForGoogleBooks(ultimateFallback);
             // If it's already the placeholder, the load event might not fire consistently if src doesn't change
             // Manually trigger if it's already the placeholder and not loading
-            if (cover.complete && ultimateFallback.includes(LOCAL_PLACEHOLDER)) {
+            const isPlaceholder = ultimateFallback.includes(LOCAL_PLACEHOLDER) || ultimateFallback.includes('data:image/svg');
+            if (cover.complete && isPlaceholder) {
                  setTimeout(() => handleImageSuccess.call(cover), 0);
             }
         }
@@ -544,7 +551,8 @@ function handleImageSuccess() {
     cover.classList.add('loaded');
     cover.style.opacity = '1';
 
-    if (cover.naturalWidth < 20 && cover.naturalHeight < 20 && !cover.src.includes(LOCAL_PLACEHOLDER)) {
+    const isPlaceholder = cover.src.includes(LOCAL_PLACEHOLDER) || cover.src.includes('data:image/svg');
+    if (cover.naturalWidth < 20 && cover.naturalHeight < 20 && !isPlaceholder) {
         console.warn('[Cover Warning] Loaded image is tiny (' + cover.naturalWidth + 'x' + cover.naturalHeight + '), treating as failure for: ' + cover.src);
         handleImageFailure.call(cover); // Treat as error
     } else {
@@ -555,6 +563,21 @@ function handleImageSuccess() {
         // Successfully loaded a real image or the intended local placeholder
         cover.onerror = null; // Prevent future errors on this now successfully loaded image (e.g. if removed from DOM then re-added by mistake)
     }
+}
+
+/**
+ * Converts HTTP Google Books URLs to HTTPS to comply with CSP
+ * @param {string} url - The image URL to fix
+ * @returns {string} - The fixed HTTPS URL
+ */
+function ensureHttpsForGoogleBooks(url) {
+    if (!url) return url;
+    // Convert HTTP Google Books URLs to HTTPS for CSP compliance
+    if (url.startsWith('http://books.google.com/') || url.startsWith('http://books.googleapis.com/')) {
+        console.log('[CSP Fix] Converting HTTP to HTTPS for Google Books URL:', url);
+        return url.replace('http://', 'https://');
+    }
+    return url;
 }
 
 function handleImageFailure() {
@@ -569,37 +592,56 @@ function handleImageFailure() {
 
     let nextSrc = null;
 
+    // Helper to compare URLs ignoring query params (cache-busting, etc.)
+    function urlsMatch(url1, url2) {
+        if (!url1 || !url2 || url1 === "" || url2 === "") return false;
+        try {
+            const parsed1 = new URL(url1, window.location.href);
+            const parsed2 = new URL(url2, window.location.href);
+            return parsed1.origin === parsed2.origin && parsed1.pathname === parsed2.pathname;
+        } catch (error) {
+            console.debug('[Cover Fallback] URL parsing failed, using string comparison.', error);
+            return url1.split('?')[0] === url2.split('?')[0];
+        }
+    }
+
     // Check if currentSrc matches preferred (even if currentSrc has cache-busting params)
-    if (currentSrc.startsWith(preferred) && preferred !== "") { 
-        if (fallback && fallback !== "" && fallback !== currentSrc) {
+    if (urlsMatch(currentSrc, preferred)) { 
+        if (fallback && fallback !== "" && !urlsMatch(currentSrc, fallback)) {
             console.log('[Cover Retry] Preferred failed, trying fallback: ' + fallback);
             nextSrc = fallback;
-        } else if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
+        } else if (ultimate && ultimate !== "" && !urlsMatch(currentSrc, ultimate)) {
             console.log('[Cover Retry] Preferred failed, no fallback or fallback is same, trying ultimate: ' + ultimate);
             nextSrc = ultimate;
         }
     } 
     // Check if currentSrc matches fallback
-    else if (currentSrc.startsWith(fallback) && fallback !== "") {
-        if (ultimate && ultimate !== "" && ultimate !== currentSrc) {
+    else if (urlsMatch(currentSrc, fallback)) {
+        if (ultimate && ultimate !== "" && !urlsMatch(currentSrc, ultimate)) {
             console.log('[Cover Retry] Fallback failed, trying ultimate: ' + ultimate);
             nextSrc = ultimate;
         }
     }
     // If it was some other URL (or already the ultimate fallback and it somehow errored)
-    else if (ultimate && ultimate !== "" && currentSrc !== ultimate) {
+    else if (ultimate && ultimate !== "" && !urlsMatch(currentSrc, ultimate)) {
         console.log('[Cover Retry] Current URL is not recognized or ultimate fallback itself failed previously, ensuring ultimate: ' + ultimate);
         nextSrc = ultimate;
     }
 
 
     if (nextSrc) {
-        cover.src = nextSrc;
+        cover.src = ensureHttpsForGoogleBooks(nextSrc);
         if (nextSrc === ultimate) {
             // If we're falling back to the ultimate (local) placeholder,
-            // it should ideally not error. If it does, stop trying.
+            // it should ideally not error. If it does, use inline fallback.
             cover.onerror = function() {
                 console.error('[Cover Final Failure] Ultimate fallback itself failed: ' + this.src);
+                const inlineFallback = this.getAttribute('data-inline-fallback-internal');
+                if (inlineFallback && this.src !== inlineFallback) {
+                    console.log('[Cover Inline Fallback] Using embedded placeholder');
+                    this.src = inlineFallback;
+                    this.onerror = null; // Stop retrying after inline fallback
+                }
                 const container = this.closest('.book-cover-container, .book-cover-wrapper');
                 const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
                 if (placeholderDiv) placeholderDiv.style.display = 'none';
@@ -610,12 +652,27 @@ function handleImageFailure() {
         }
     } else {
         console.error('[Cover Final Failure] All fallbacks exhausted for initial src: ' + cover.getAttribute('data-preferred-url-internal'));
+        const inlineFallback = cover.getAttribute('data-inline-fallback-internal');
         const container = cover.closest('.book-cover-container, .book-cover-wrapper');
         const placeholderDiv = container?.querySelector('.cover-placeholder-overlay');
         if (placeholderDiv) placeholderDiv.style.display = 'none';
         cover.style.opacity = '1';
-        cover.src = ultimate;
-        cover.onerror = null;
+        
+        // Try ultimate fallback first, then inline if that fails
+        if (ultimate && !cover.src.includes(inlineFallback)) {
+            cover.src = ensureHttpsForGoogleBooks(ultimate);
+            cover.onerror = function() {
+                console.log('[Cover Inline Fallback] Server placeholder failed, using embedded');
+                const inline = this.getAttribute('data-inline-fallback-internal');
+                if (inline) {
+                    this.src = inline;
+                    this.onerror = null;
+                }
+            };
+        } else {
+            cover.src = inlineFallback;
+            cover.onerror = null;
+        }
         cover.classList.remove('loading');
         cover.classList.add('failed');
     }
@@ -624,12 +681,12 @@ function handleImageFailure() {
 /**
  * Reset search form
  */
-function resetSearchForm() {
-    document.getElementById('searchForm')?.reset();
-}
+// function resetSearchForm() {
+//     document.getElementById('searchForm')?.reset();
+// }
 
 // Format book data for consistent display
-const BookFormatter = {
+const _BookFormatter = {
     /**
      * Format authors list into a readable string
      * @param {Array} authors - Array of author names
@@ -674,19 +731,53 @@ const BookFormatter = {
      */
     formatPublishedDate: function(dateString) {
         if (!dateString) return 'Unknown';
-        
-        try {
-            const date = new Date(dateString);
-            return date.toLocaleDateString(undefined, { 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-            });
-        } catch (e) {
+        const timestamp = Date.parse(dateString);
+        if (Number.isNaN(timestamp)) {
             return dateString;
         }
+        const date = new Date(timestamp);
+        return date.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
     }
 };
 
 // Make initializeBookCovers globally accessible if search.js needs to call it
 window.initializeBookCovers = initializeBookCovers;
+
+/**
+ * Affiliate link click tracking
+ * Tracks outbound clicks on affiliate links for analytics purposes
+ */
+(function() {
+    // Set up delegated event listener for affiliate link clicks
+    document.addEventListener('click', function(e) {
+        const link = e.target.closest('a.clicky_log_outbound');
+        if (!link) return;
+
+        // Log the click for analytics
+        const href = link.href;
+        const bookId = link.getAttribute('data-book-id') || 'unknown';
+        const affiliate = link.getAttribute('data-affiliate') || 'unknown';
+
+        // Send analytics event (customize based on your analytics provider)
+        if (typeof gtag !== 'undefined') {
+            // Google Analytics
+            gtag('event', 'click', {
+                'event_category': 'affiliate',
+                'event_label': affiliate,
+                'value': bookId,
+                'transport_type': 'beacon'
+            });
+        }
+
+        // Console log for debugging
+        console.log('Affiliate link clicked:', {
+            affiliate: affiliate,
+            bookId: bookId,
+            url: href
+        });
+    }, { capture: true });
+})();
