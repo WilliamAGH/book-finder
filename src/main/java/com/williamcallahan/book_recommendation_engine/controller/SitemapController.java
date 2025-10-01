@@ -205,7 +205,7 @@ public class SitemapController {
     }
 
     private String normalizeView(String view) {
-        if (ValidationUtils.isNullOrBlank(view)) {
+        if (!ValidationUtils.hasText(view)) {
             return "authors";
         }
         String candidate = view.trim().toLowerCase(Locale.ROOT);

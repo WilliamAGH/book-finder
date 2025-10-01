@@ -1,19 +1,24 @@
 package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.dto.BookCard;
+import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
+import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
+import com.williamcallahan.book_recommendation_engine.dto.RecommendationCard;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService;
-import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
+import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
+import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
 import com.williamcallahan.book_recommendation_engine.service.DuplicateBookService;
 import com.williamcallahan.book_recommendation_engine.service.EnvironmentService;
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
-import com.williamcallahan.book_recommendation_engine.service.RecommendationService;
-import com.williamcallahan.book_recommendation_engine.service.image.BookCoverManagementService;
 import com.williamcallahan.book_recommendation_engine.service.image.LocalDiskCoverCacheService;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
+import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
+import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.SeoUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,33 +35,35 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.Objects;
+import java.util.LinkedHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.Consumer;
-import java.util.function.Predicate;
-import java.util.Objects;
 
 @Controller
 @Slf4j
 public class HomeController {
 
-    private final BookDataOrchestrator bookDataOrchestrator;
     private final RecentlyViewedService recentlyViewedService;
-    private final RecommendationService recommendationService;
-    private final BookCoverManagementService bookCoverManagementService;
     private final EnvironmentService environmentService;
     private final DuplicateBookService duplicateBookService;
     private final LocalDiskCoverCacheService localDiskCoverCacheService;
     private final NewYorkTimesService newYorkTimesService;
     private final AffiliateLinkService affiliateLinkService;
     private final BookQueryRepository bookQueryRepository;
+    private final BookSearchService bookSearchService;
+    private final BookIdentifierResolver bookIdentifierResolver;
     private final boolean isYearFilteringEnabled;
 
     private static final int MAX_RECENT_BOOKS = 8;
@@ -77,29 +84,24 @@ public class HomeController {
     // Affiliate IDs from properties
     /**
      * Constructs the HomeController with required services
-     * 
-     * @param bookDataOrchestrator Service for orchestrating book data retrieval
+     *
      * @param recentlyViewedService Service for tracking user book view history
-     * @param recommendationService Service for generating book recommendations
-     * @param bookCoverManagementService Service for retrieving and caching book cover images
      * @param environmentService Service providing environment configuration information
      * @param duplicateBookService Service for handling duplicate book editions
+     * @param bookSearchService Service for search projections
+     * @param bookIdentifierResolver Resolver for canonical identifiers
      */
-    public HomeController(BookDataOrchestrator bookDataOrchestrator,
-                          RecentlyViewedService recentlyViewedService,
-                          RecommendationService recommendationService,
-                          BookCoverManagementService bookCoverManagementService,
+    public HomeController(RecentlyViewedService recentlyViewedService,
                           EnvironmentService environmentService,
                           DuplicateBookService duplicateBookService,
                           LocalDiskCoverCacheService localDiskCoverCacheService,
                           @Value("${app.feature.year-filtering.enabled:false}") boolean isYearFilteringEnabled,
                           NewYorkTimesService newYorkTimesService,
                           AffiliateLinkService affiliateLinkService,
-                          BookQueryRepository bookQueryRepository) {
-        this.bookDataOrchestrator = bookDataOrchestrator;
+                          BookQueryRepository bookQueryRepository,
+                          BookSearchService bookSearchService,
+                          BookIdentifierResolver bookIdentifierResolver) {
         this.recentlyViewedService = recentlyViewedService;
-        this.recommendationService = recommendationService;
-        this.bookCoverManagementService = bookCoverManagementService;
         this.environmentService = environmentService;
         this.duplicateBookService = duplicateBookService;
         this.localDiskCoverCacheService = localDiskCoverCacheService;
@@ -107,6 +109,8 @@ public class HomeController {
         this.newYorkTimesService = newYorkTimesService;
         this.affiliateLinkService = affiliateLinkService;
         this.bookQueryRepository = bookQueryRepository;
+        this.bookSearchService = bookSearchService;
+        this.bookIdentifierResolver = bookIdentifierResolver;
     }
 
     private void applyBaseAttributes(Model model, String activeTab) {
@@ -165,7 +169,7 @@ public class HomeController {
                     log.warn("Bestsellers failed: {}", e.getMessage());
                 }
                 // Return partial results if available instead of empty
-                return Mono.just(List.of());
+                return Mono.just(List.<BookCard>of());
             })
             .doOnNext(list -> {
                 model.addAttribute("currentBestsellers", list);
@@ -183,7 +187,7 @@ public class HomeController {
                     log.warn("Recent books failed: {}", e.getMessage());
                 }
                 // Return partial results if available instead of empty
-                return Mono.just(List.of());
+                return Mono.just(List.<BookCard>of());
             })
             .doOnNext(list -> {
                 model.addAttribute("recentBooks", list);
@@ -211,7 +215,7 @@ public class HomeController {
             .map(cards -> cards.stream().limit(MAX_BESTSELLERS).collect(Collectors.toList()))
             .onErrorResume(e -> {
                 log.error("Error fetching current bestsellers: {}", e.getMessage());
-                return Mono.just(List.of());
+                return Mono.just(List.<BookCard>of());
             });
     }
 
@@ -254,13 +258,43 @@ public class HomeController {
         .subscribeOn(Schedulers.boundedElastic())
         .onErrorResume(e -> {
             log.error("Error loading recent books: {}", e.getMessage());
-            return Mono.just(List.of());
+            return Mono.just(List.<BookCard>of());
         });
     }
 
     private Mono<List<Book>> loadSimilarBooks(String bookId) {
-        return recommendationService.getSimilarBooks(bookId, ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2)
-            .timeout(Duration.ofMillis(1500)) // Hard timeout: recommendations cannot block page render
+        final int limit = ApplicationConstants.Paging.DEFAULT_TIERED_LIMIT / 2;
+        return Mono.fromCallable(() -> bookIdentifierResolver.resolveToUuid(bookId))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(optionalUuid -> {
+                if (optionalUuid.isEmpty()) {
+                    return Mono.just(List.<Book>of());
+                }
+                UUID uuid = optionalUuid.get();
+                return Mono.defer(() -> {
+                        List<RecommendationCard> cards = bookQueryRepository.fetchRecommendationCards(uuid, limit);
+                        if (cards == null || cards.isEmpty()) {
+                            return Mono.just(List.<Book>of());
+                        }
+                        List<Book> mapped = new ArrayList<>(cards.size());
+                        for (RecommendationCard card : cards) {
+                            if (card == null || card.card() == null) {
+                                continue;
+                            }
+                            Book book = BookDomainMapper.fromCard(card.card());
+                            if (book != null) {
+                                ensureCoverDefaults(book);
+                                mapped.add(book);
+                            }
+                            if (mapped.size() >= 6) {
+                                break;
+                            }
+                        }
+                        return Mono.just(mapped);
+                    })
+                    .subscribeOn(Schedulers.boundedElastic());
+            })
+            .timeout(Duration.ofMillis(1500))
             .onErrorResume(e -> {
                 if (e instanceof java.util.concurrent.TimeoutException) {
                     log.warn("Similar books timed out after 1500ms for book {}", bookId);
@@ -268,81 +302,101 @@ public class HomeController {
                     log.warn("Similar books failed for book {}: {}", bookId, e.getMessage());
                 }
                 return Mono.just(List.<Book>of());
+            });
+    }
+
+    private List<Book> searchBooksForView(String query, int totalRequested) {
+        List<BookSearchService.SearchResult> results = bookSearchService.searchBooks(query, totalRequested);
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> bookIds = results.stream()
+            .map(BookSearchService.SearchResult::bookId)
+            .filter(Objects::nonNull)
+            .toList();
+
+        if (bookIds.isEmpty()) {
+            return List.of();
+        }
+
+        List<BookListItem> items = bookQueryRepository.fetchBookListItems(bookIds);
+        Map<String, BookListItem> itemsById = items.stream()
+            .filter(Objects::nonNull)
+            .collect(Collectors.toMap(BookListItem::id, Function.identity(), (first, second) -> first, LinkedHashMap::new));
+
+        List<Book> books = new ArrayList<>(results.size());
+        for (BookSearchService.SearchResult result : results) {
+            UUID bookId = result.bookId();
+            if (bookId == null) {
+                continue;
+            }
+            BookListItem item = itemsById.get(bookId.toString());
+            if (item == null) {
+                continue;
+            }
+            Book book = BookDomainMapper.fromListItem(item);
+            ensureCoverDefaults(book);
+            books.add(book);
+        }
+
+        return books;
+    }
+
+    private void ensureCoverDefaults(Book book) {
+        if (book == null) {
+            return;
+        }
+        String placeholder = ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH;
+        if (!ValidationUtils.hasText(book.getS3ImagePath())) {
+            book.setS3ImagePath(placeholder);
+        }
+        if (!ValidationUtils.hasText(book.getExternalImageUrl())) {
+            book.setExternalImageUrl(book.getS3ImagePath());
+        }
+        if (book.getCoverImages() == null) {
+            book.setCoverImages(new CoverImages(book.getS3ImagePath(), book.getS3ImagePath(), null));
+        }
+    }
+
+    private Mono<Book> locateBook(String identifier) {
+        if (!ValidationUtils.hasText(identifier)) {
+            return Mono.empty();
+        }
+        String trimmed = identifier.trim();
+        return Mono.fromCallable(() -> findBook(trimmed))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(book -> book == null ? Mono.empty() : Mono.just(book));
+    }
+
+    private Book findBook(String identifier) {
+        Optional<BookDetail> bySlug = bookQueryRepository.fetchBookDetailBySlug(identifier);
+        if (bySlug.isPresent()) {
+            Book book = BookDomainMapper.fromDetail(bySlug.get());
+            ensureCoverDefaults(book);
+            return book;
+        }
+
+        Optional<UUID> maybeUuid = bookIdentifierResolver.resolveToUuid(identifier);
+        if (maybeUuid.isEmpty()) {
+            return null;
+        }
+        UUID uuid = maybeUuid.get();
+
+        Optional<BookDetail> detail = bookQueryRepository.fetchBookDetail(uuid);
+        if (detail.isPresent()) {
+            Book book = BookDomainMapper.fromDetail(detail.get());
+            ensureCoverDefaults(book);
+            return book;
+        }
+
+        return bookQueryRepository.fetchBookCard(uuid)
+            .map(BookDomainMapper::fromCard)
+            .map(book -> {
+                ensureCoverDefaults(book);
+                return book;
             })
-            .flatMap(books -> {
-                if (books == null || books.isEmpty()) {
-                    return Mono.just(List.<Book>of());
-                }
-                
-                // Extract book UUIDs for database query
-                List<UUID> bookUuids = books.stream()
-                    .map(Book::getId)
-                    .filter(Objects::nonNull)
-                    .map(id -> {
-                        try {
-                            return UUID.fromString(id);
-                        } catch (IllegalArgumentException e) {
-                            log.warn("Invalid UUID for similar book: {}", id);
-                            return null;
-                        }
-                    })
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toList());
-                
-                if (bookUuids.isEmpty()) {
-                    log.warn("No valid UUIDs found for similar books of {}", bookId);
-                    return Mono.just(List.<Book>of());
-                }
-                
-                // Fetch book cards with proper cover URLs from database
-                return Mono.fromCallable(() -> bookQueryRepository.fetchBookCards(bookUuids))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .map(bookCards -> {
-                        // Create a map of ID to cover URL for fast lookup
-                        Map<String, String> coverUrlMap = bookCards.stream()
-                            .filter(card -> card.coverUrl() != null)
-                            .collect(Collectors.toMap(BookCard::id, BookCard::coverUrl, (a, b) -> a));
-                        
-                        // Populate cover URLs on the Book objects
-                        books.forEach(book -> {
-                            if (book.getId() != null) {
-                                String coverUrl = coverUrlMap.get(book.getId());
-                                if (coverUrl != null && !coverUrl.isEmpty()) {
-                                    // Set cover URL and create CoverImages object
-                                    book.setS3ImagePath(coverUrl);
-                                    if (book.getCoverImages() == null) {
-                                        book.setCoverImages(new com.williamcallahan.book_recommendation_engine.model.image.CoverImages());
-                                    }
-                                    book.getCoverImages().setPreferredUrl(coverUrl);
-                                    book.getCoverImages().setFallbackUrl(coverUrl);
-                                    // Determine source from URL
-                                    if (coverUrl.contains("digitaloceanspaces.com") || coverUrl.contains("s3.amazonaws.com")) {
-                                        book.getCoverImages().setSource(com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.S3_CACHE);
-                                    } else if (coverUrl.contains("books.google.com")) {
-                                        book.getCoverImages().setSource(com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.GOOGLE_BOOKS);
-                                    } else if (coverUrl.contains("openlibrary.org")) {
-                                        book.getCoverImages().setSource(com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource.OPEN_LIBRARY);
-                                    }
-                                    log.debug("Set cover URL for similar book {}: {}", book.getId(), coverUrl);
-                                }
-                            }
-                        });
-                        
-                        // Return limited and filtered list
-                        return books.stream()
-                            .filter(Objects::nonNull)
-                            .limit(6)
-                            .collect(Collectors.toList());
-                    })
-                    .doOnNext(finalList -> {
-                        try { if (bookDataOrchestrator != null) bookDataOrchestrator.persistBooksAsync(finalList, "DETAIL_SIMILAR"); } catch (Exception ignored) {}
-                    })
-                    .onErrorResume(e -> {
-                        log.warn("Error fetching cover URLs for similar books of ID {}: {}", bookId, e.getMessage());
-                        return Mono.just(books.stream().limit(6).collect(Collectors.toList()));
-                    });
-            })
-            .defaultIfEmpty(List.of());
+            .orElse(null);
     }
 
     private void applyBookMetadata(Book book, Model model) {
@@ -373,6 +427,12 @@ public class HomeController {
         }
     }
 
+    /**
+     * @deprecated Compute OG images from {@link com.williamcallahan.book_recommendation_engine.model.image.CoverImages}
+     * using {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector} rather than
+     * {@link ValidationUtils.BookValidator} helpers.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private String resolveOgImage(Book book) {
         String coverUrl = book.getS3ImagePath();
         if (ValidationUtils.BookValidator.hasActualCover(coverUrl, localDiskCoverCacheService.getLocalPlaceholderPath())) {
@@ -440,18 +500,28 @@ public class HomeController {
 
         // Server-render initial results if query provided
         if (ValidationUtils.hasText(query)) {
-            int maxResults = 12; // Default page size
-            
-            return bookDataOrchestrator.searchBooksTiered(query, null, maxResults, sort, false)
-                .timeout(Duration.ofSeconds(8))
-                .flatMap(books -> bookCoverManagementService.prepareBooksForDisplay(books))
-                .map(books -> {
-                    model.addAttribute("initialResults", books);
-                    model.addAttribute("hasInitialResults", !books.isEmpty());
-                    model.addAttribute("totalResults", books.size());
+            final int pageSize = 12; // Default page size
+            final int safePage = Math.max(page, 0);
+            final int safeStart = Math.multiplyExact(safePage, pageSize);
+            final PagingUtils.Window window = PagingUtils.window(
+                safeStart,
+                pageSize,
+                pageSize,
+                pageSize,
+                pageSize,
+                safeStart + pageSize
+            );
+
+            return Mono.fromCallable(() -> searchBooksForView(query, window.totalRequested()))
+                .subscribeOn(Schedulers.boundedElastic())
+                .map(results -> {
+                    List<Book> windowed = PagingUtils.slice(results, window.startIndex(), window.limit());
+                    model.addAttribute("initialResults", windowed);
+                    model.addAttribute("hasInitialResults", !windowed.isEmpty());
+                    model.addAttribute("totalResults", results != null ? results.size() : 0);
                     model.addAttribute("initialResultsError", null);
-                    log.info("Server-rendered {} search results for query '{}'", books.size(), query);
-                    return books;
+                    log.info("Server-rendered {} search results for query '{}'", windowed.size(), query);
+                    return "search";
                 })
                 .onErrorResume(e -> {
                     String reason;
@@ -466,9 +536,8 @@ public class HomeController {
                     model.addAttribute("hasInitialResults", false);
                     model.addAttribute("totalResults", 0);
                     model.addAttribute("initialResultsError", reason);
-                    return Mono.just(List.of());
-                })
-                .thenReturn("search");
+                    return Mono.just("search");
+                });
         }
 
         // No query - show search page with no results
@@ -518,13 +587,8 @@ public class HomeController {
             ApplicationConstants.Urls.OG_LOGO
         );
 
-        Mono<Book> canonicalBookMono = bookDataOrchestrator.fetchCanonicalBookReactive(id).cache();
-        // Fallback to tiered fetch (DB→S3→APIs) when canonical not found, with a reasonable timeout
-        Mono<Book> effectiveBookMono = canonicalBookMono.switchIfEmpty(
-            bookDataOrchestrator.getBookByIdTiered(id)
-                .timeout(Duration.ofSeconds(2))
-                .onErrorResume(e -> Mono.empty())
-        ).cache();
+        Mono<Book> canonicalBookMono = locateBook(id).cache();
+        Mono<Book> effectiveBookMono = canonicalBookMono;
 
         Mono<String> redirectIfNonCanonical = effectiveBookMono
             .flatMap(book -> {
@@ -552,9 +616,7 @@ public class HomeController {
             });
 
         // Only display books that exist in our database
-        Mono<Book> resolvedBookMono = effectiveBookMono
-            .flatMap(bookCoverManagementService::prepareBookForDisplay)
-            .cache();
+        Mono<Book> resolvedBookMono = effectiveBookMono.cache();
 
         // Load similar books in parallel with increased timeout to allow Postgres queries to complete
         Mono<List<Book>> similarBooksMono = resolvedBookMono
@@ -566,9 +628,9 @@ public class HomeController {
                     } else {
                         log.warn("Similar books failed for {}: {}", id, e.getMessage());
                     }
-                    return Mono.just(List.of());
+                    return Mono.just(List.<Book>of());
                 }))
-            .defaultIfEmpty(List.of())
+            .defaultIfEmpty(List.<Book>of())
             .doOnNext(list -> model.addAttribute("similarBooks", list))
             .cache();
 
@@ -621,16 +683,9 @@ public class HomeController {
             log.warn("Invalid ISBN format: {}", rawIsbn);
             return Mono.just(redirectTo(String.format("/?error=%s&originalIsbn=%s", errorCode, rawIsbn)));
         }
-        Mono<Book> lookupMono = Mono.defer(() -> {
-            Mono<Book> m = bookDataOrchestrator.fetchCanonicalBookReactive(sanitized);
-            return m != null ? m : Mono.empty();
-        });
+        Mono<Book> lookupMono = locateBook(sanitized);
 
         return lookupMono
-            .switchIfEmpty(Mono.defer(() -> {
-                Mono<Book> m = bookDataOrchestrator.getBookByIdTiered(sanitized);
-                return m != null ? m : Mono.empty();
-            }))
             .map(book -> book == null ? null : (ValidationUtils.hasText(book.getSlug()) ? book.getSlug() : book.getId()))
             .filter(ValidationUtils::hasText)
             .map(target -> redirectTo("/book/" + target))

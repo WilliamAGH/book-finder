@@ -45,6 +45,9 @@ public record BookCard(
     /**
      * Tags/qualifiers for rendering badges like "NYT Bestseller", "Award Winner", etc.
      * Key is tag type (e.g., "nyt_bestseller"), value is metadata object
+     * 
+     * Bug #9 Fix: Single canonical representation - NO duplication with extras field.
+     * This is the ONLY place qualifiers are stored in DTOs.
      */
     Map<String, Object> tags
 ) {

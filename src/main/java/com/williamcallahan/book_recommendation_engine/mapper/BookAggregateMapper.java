@@ -24,7 +24,13 @@ import java.util.Map;
  * - JsonNode sourceJson → extract external IDs and provider metadata
  * <p>
  * Thread-safe, stateless utility class.
+ *
+ * @deprecated Parse provider payloads through
+ * {@link com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper}
+ * and convert straight into Postgres persistence via
+ * {@link com.williamcallahan.book_recommendation_engine.service.BookUpsertService}.
  */
+@Deprecated(since = "2025-10-01", forRemoval = true)
 @Slf4j
 public final class BookAggregateMapper {
     

@@ -33,6 +33,10 @@ import java.util.Map;
  * @param categories List of category/genre names
  * @param coverUrl Large cover image URL for detail page
  * @param thumbnailUrl Thumbnail cover URL for smaller displays
+ * @param coverWidth Cover image width in pixels when known
+ * @param coverHeight Cover image height in pixels when known
+ * @param coverHighResolution Whether the cover image is considered high resolution
+ * @param dataSource Primary external data source identifier (Google Books, NYT, etc.)
  * @param averageRating Average rating (0.0-5.0)
  * @param ratingsCount Total number of ratings
  * @param isbn10 ISBN-10 identifier
@@ -65,10 +69,22 @@ public record BookDetail(
     
     @JsonProperty("cover_url")
     String coverUrl,
-    
+
     @JsonProperty("thumbnail_url")
     String thumbnailUrl,
-    
+
+    @JsonProperty("cover_width")
+    Integer coverWidth,
+
+    @JsonProperty("cover_height")
+    Integer coverHeight,
+
+    @JsonProperty("cover_high_resolution")
+    Boolean coverHighResolution,
+
+    @JsonProperty("data_source")
+    String dataSource,
+
     @JsonProperty("average_rating")
     Double averageRating,
     
@@ -98,7 +114,7 @@ public record BookDetail(
      * Compact constructor ensuring defensive copies for immutability
      */
     public BookDetail {
-        authors = authors == null ? List.of() : List.copyOf(authors);
+            authors = authors == null ? List.of() : List.copyOf(authors);
         categories = categories == null ? List.of() : List.copyOf(categories);
         tags = tags == null ? Map.of() : Map.copyOf(tags);
         editions = editions == null ? List.of() : List.copyOf(editions);
@@ -110,7 +126,8 @@ public record BookDetail(
     public BookDetail withEditions(List<EditionSummary> newEditions) {
         return new BookDetail(
             id, slug, title, description, publisher, publishedDate, language, pageCount,
-            authors, categories, coverUrl, thumbnailUrl, averageRating, ratingsCount,
+            authors, categories, coverUrl, thumbnailUrl, coverWidth, coverHeight,
+            coverHighResolution, dataSource, averageRating, ratingsCount,
             isbn10, isbn13, previewLink, infoLink, tags, newEditions
         );
     }
