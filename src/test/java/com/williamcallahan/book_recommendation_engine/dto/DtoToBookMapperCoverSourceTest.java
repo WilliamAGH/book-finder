@@ -1,6 +1,5 @@
 package com.williamcallahan.book_recommendation_engine.dto;
 
-import com.williamcallahan.book_recommendation_engine.dto.EditionSummary;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
 import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;

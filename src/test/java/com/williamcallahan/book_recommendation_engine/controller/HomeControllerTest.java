@@ -12,7 +12,6 @@ import com.williamcallahan.book_recommendation_engine.repository.BookQueryReposi
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
 import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
-import com.williamcallahan.book_recommendation_engine.service.BookViewService;
 import com.williamcallahan.book_recommendation_engine.service.RecentlyViewedService;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 // Use fully-qualified names for image services to avoid import resolution issues in test slice
@@ -40,7 +39,6 @@ import static org.mockito.ArgumentMatchers.any; // For mocking any objects
 import static org.mockito.ArgumentMatchers.eq; // For mocking specific values
 import reactor.core.publisher.Mono; // For mocking reactive service
 import com.williamcallahan.book_recommendation_engine.service.NewYorkTimesService;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 @WebFluxTest(value = HomeController.class,
@@ -84,7 +82,6 @@ class HomeControllerTest {
         @Bean com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService affiliateLinkService() { return Mockito.mock(com.williamcallahan.book_recommendation_engine.service.AffiliateLinkService.class); }
         @Bean NewYorkTimesService newYorkTimesService() { return Mockito.mock(NewYorkTimesService.class); }
         @Bean BookQueryRepository bookQueryRepository() { return Mockito.mock(BookQueryRepository.class); }
-        @Bean BookViewService bookViewService() { return Mockito.mock(BookViewService.class); }
         @Bean BookSearchService bookSearchService() { return Mockito.mock(BookSearchService.class); }
         @Bean BookIdentifierResolver bookIdentifierResolver() { return Mockito.mock(BookIdentifierResolver.class); }
     }
