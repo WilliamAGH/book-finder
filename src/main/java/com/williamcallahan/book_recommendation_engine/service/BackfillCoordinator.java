@@ -188,8 +188,6 @@ public class BackfillCoordinator {
             
         } catch (Exception e) {
             log.error("Backfill error: {} {}", task.source(), task.sourceId(), e);
-            // Use the same fallback path as Resilience4j annotations to satisfy linter and unify behavior
-            processTaskFallback(task, e);
             handleFailure(task, e.getMessage());
         }
     }
