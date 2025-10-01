@@ -5,7 +5,13 @@ import java.util.regex.Pattern;
 /**
  * Utility for identifying the source of URLs based on their patterns.
  * Centralizes URL pattern matching logic used across the application.
+ * 
+ * @deprecated This entire class is deprecated in favor of {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector}.
+ * UrlSourceDetector provides more comprehensive URL analysis with better integration into the cover persistence system.
+ * All methods in this class have individual deprecation notices with migration examples.
+ * Will be removed in version 1.0.0.
  */
+@Deprecated(since = "0.9.0", forRemoval = true)
 public final class UrlPatternMatcher {
 
     // Pattern constants for different sources
@@ -31,7 +37,13 @@ public final class UrlPatternMatcher {
 
     /**
      * Enum representing different URL sources.
+     * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource} instead.
+     * This enum duplicates CoverImageSource and should not be used.
+     * CoverImageSource is the canonical enum for tracking image sources.
+     * Will be removed in version 1.0.0.
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public enum UrlSource {
         GOOGLE_BOOKS,
         OPEN_LIBRARY,
@@ -42,10 +54,31 @@ public final class UrlPatternMatcher {
 
     /**
      * Identifies the source of a URL based on its pattern.
+     * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#detect(String)} instead.
+     * This class duplicates URL source detection logic. UrlSourceDetector is the canonical implementation
+     * that returns CoverImageSource enum and is integrated with the cover persistence system.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * UrlPatternMatcher.UrlSource source = UrlPatternMatcher.identifySource(url);
+     * if (source == UrlPatternMatcher.UrlSource.GOOGLE_BOOKS) {
+     *     // handle Google Books
+     * }
+     * 
+     * // New:
+     * CoverImageSource source = UrlSourceDetector.detect(url);
+     * if (source == CoverImageSource.GOOGLE_BOOKS) {
+     *     // handle Google Books
+     * }
+     * }</pre>
      *
      * @param url the URL to analyze
      * @return the identified source
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static UrlSource identifySource(String url) {
         if (url == null || url.trim().isEmpty()) {
             return UrlSource.UNKNOWN;
@@ -69,10 +102,29 @@ public final class UrlPatternMatcher {
 
     /**
      * Checks if a URL is from Google Books.
+     * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#detect(String)} instead.
+     * Check if the result equals CoverImageSource.GOOGLE_BOOKS. This provides consistent source detection
+     * across the application.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * if (UrlPatternMatcher.isGoogleBooksUrl(url)) {
+     *     // handle Google Books URL
+     * }
+     * 
+     * // New:
+     * if (UrlSourceDetector.detect(url) == CoverImageSource.GOOGLE_BOOKS) {
+     *     // handle Google Books URL
+     * }
+     * }</pre>
      *
      * @param url the URL to check
      * @return true if the URL is from Google Books
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static boolean isGoogleBooksUrl(String url) {
         if (url == null || url.trim().isEmpty()) {
             return false;
@@ -82,10 +134,29 @@ public final class UrlPatternMatcher {
 
     /**
      * Checks if a URL is from Open Library.
+     * 
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#detect(String)} instead.
+     * Check if the result equals CoverImageSource.OPEN_LIBRARY. This provides consistent source detection
+     * across the application.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * if (UrlPatternMatcher.isOpenLibraryUrl(url)) {
+     *     // handle Open Library URL
+     * }
+     * 
+     * // New:
+     * if (UrlSourceDetector.detect(url) == CoverImageSource.OPEN_LIBRARY) {
+     *     // handle Open Library URL
+     * }
+     * }</pre>
      *
      * @param url the URL to check
      * @return true if the URL is from Open Library
      */
+    @Deprecated(since = "0.9.0", forRemoval = true)
     public static boolean isOpenLibraryUrl(String url) {
         if (url == null || url.trim().isEmpty()) {
             return false;
@@ -99,6 +170,11 @@ public final class UrlPatternMatcher {
      * @param url the URL to check
      * @return true if the URL is from Amazon
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#detectSource(String)}
+     *             and compare to non-cover sources as needed.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static boolean isAmazonUrl(String url) {
         if (url == null || url.trim().isEmpty()) {
             return false;
@@ -112,6 +188,11 @@ public final class UrlPatternMatcher {
      * @param url the URL to check
      * @return true if the URL is from Goodreads
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#detectSource(String)}
+     *             and compare to non-cover sources as needed.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static boolean isGoodreadsUrl(String url) {
         if (url == null || url.trim().isEmpty()) {
             return false;
@@ -125,6 +206,11 @@ public final class UrlPatternMatcher {
      * @param url the URL to check
      * @return true if the URL is from a known book cover source
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#isExternalUrl(String)}
+     *             or source-specific detection methods.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static boolean isKnownBookCoverSource(String url) {
         UrlSource source = identifySource(url);
         return source != UrlSource.UNKNOWN;
@@ -136,6 +222,10 @@ public final class UrlPatternMatcher {
      * @param url the Google Books URL
      * @return the book ID or null if not found
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Inline parsing should be moved to provider-specific mappers when needed.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static String extractGoogleBooksId(String url) {
         if (url == null || !isGoogleBooksUrl(url)) {
             return null;
@@ -157,6 +247,10 @@ public final class UrlPatternMatcher {
      * @param url the Open Library URL
      * @return the Open Library ID or null if not found
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Inline parsing should be moved to provider-specific mappers when needed.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static String extractOpenLibraryId(String url) {
         if (url == null || !isOpenLibraryUrl(url)) {
             return null;
@@ -178,6 +272,11 @@ public final class UrlPatternMatcher {
      * @param url the URL to check
      * @return true if the URL appears to be a placeholder
      */
+    /**
+     * @deprecated Deprecated 2025-10-01. Use centralized placeholder handling via ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH
+     *             and validation utilities.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static boolean isPlaceholderUrl(String url) {
         if (url == null || url.trim().isEmpty()) {
             return true;

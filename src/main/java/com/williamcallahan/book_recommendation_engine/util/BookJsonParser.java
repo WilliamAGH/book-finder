@@ -22,7 +22,6 @@ import org.slf4j.LoggerFactory;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -32,6 +31,12 @@ import java.util.regex.Pattern;
 import java.util.Locale;
 
 
+/**
+ * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper}
+ * to emit {@link com.williamcallahan.book_recommendation_engine.dto.BookAggregate} instances
+ * and persist them via {@link com.williamcallahan.book_recommendation_engine.service.BookUpsertService}.
+ */
+@Deprecated(since = "2025-10-01", forRemoval = true)
 public class BookJsonParser {
 
     private static final Logger logger = LoggerFactory.getLogger(BookJsonParser.class);
@@ -123,20 +128,55 @@ public class BookJsonParser {
     /**
      * Extracts book core data from JSON
      * 
+     * Bug #13 Fix: Null-safe extraction with graceful degradation
+     * 
+     * @deprecated Class is deprecated. Use GoogleBooksMapper.map() instead which returns BookAggregate.
+     *             This method embeds knowledge of Google Books volumeInfo structure.
+     * 
      * @param item Volume JSON node
      * @param book Book to populate
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private static void extractBookBaseInfo(JsonNode item, Book book) {
+        // Bug #13: Gracefully handle missing volumeInfo
         if (!item.has("volumeInfo")) {
-            logger.debug("JsonNode item for book ID {} lacks 'volumeInfo'. Base info might be incomplete.", item.has("id") ? item.get("id").asText() : "UNKNOWN");
+            String bookId = item.has("id") ? item.get("id").asText() : "UNKNOWN";
+            logger.warn("JsonNode item for book ID {} lacks 'volumeInfo'. Attempting partial fill.", bookId);
+            
             // Still set ID if available at the top level
+            if (item.has("id")) {
+                book.setId(item.get("id").asText());
+            }
+            
+            // Try to extract title from alternative locations
+            if (item.has("title")) {
+                book.setTitle(TextUtils.normalizeBookTitle(item.get("title").asText()));
+                logger.info("Book ID {} partial fill: found title at top level", bookId);
+            }
+            
+            // Try to extract authors from alternative locations
+            if (item.has("authors") && item.get("authors").isArray()) {
+                List<String> authors = new ArrayList<>();
+                item.get("authors").forEach(node -> authors.add(node.asText()));
+                if (!authors.isEmpty()) {
+                    book.setAuthors(authors);
+                    logger.info("Book ID {} partial fill: found {} author(s) at top level", bookId, authors.size());
+                }
+            }
+            
+            return; // Return with partial data instead of failing
+        }
+
+        JsonNode volumeInfo = item.get("volumeInfo");
+        
+        // Bug #13: Additional null safety for volumeInfo itself
+        if (volumeInfo == null || volumeInfo.isNull()) {
+            logger.warn("volumeInfo is null for book ID {}", item.has("id") ? item.get("id").asText() : "UNKNOWN");
             if (item.has("id")) {
                 book.setId(item.get("id").asText());
             }
             return;
         }
-
-        JsonNode volumeInfo = item.get("volumeInfo");
 
         book.setId(item.has("id") ? item.get("id").asText() : null);
         
@@ -325,9 +365,13 @@ public class BookJsonParser {
     /**
      * Extracts authors from volume info
      * 
+     * @deprecated Class is deprecated. Use GoogleBooksMapper.extractAuthors() instead.
+     *             This method embeds knowledge of Google Books volumeInfo.authors structure.
+     * 
      * @param volumeInfo Volume info JSON node
      * @return List of author names (never null)
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private static List<String> getAuthorsFromVolumeInfo(JsonNode volumeInfo) {
         List<String> authors = new ArrayList<>();
         if (volumeInfo == null) {
@@ -367,9 +411,13 @@ public class BookJsonParser {
     /**
      * Extracts best cover image URL from JSON
      * 
+     * @deprecated Class is deprecated. Use GoogleBooksMapper.extractImageLinks() instead.
+     *             This method embeds knowledge of Google Books volumeInfo.imageLinks structure.
+     * 
      * @param volumeInfo Volume info JSON node
      * @return Best quality cover URL or null
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private static String getGoogleCoverImageFromVolumeInfo(JsonNode volumeInfo) {
         if (volumeInfo.has("imageLinks")) {
             JsonNode imageLinks = volumeInfo.get("imageLinks");
@@ -465,9 +513,13 @@ public class BookJsonParser {
     /**
      * Sets commercial fields (price, currency)
      * 
+     * @deprecated Class is deprecated. Use GoogleBooksMapper.mapSaleInfo() and mapAccessInfo() instead.
+     *             This method embeds knowledge of Google Books saleInfo and accessInfo structure.
+     * 
      * @param item Volume JSON node
      * @param book Book to populate
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private static void setAdditionalFields(JsonNode item, Book book) {
         if (item.has("saleInfo")) {
             JsonNode saleInfo = item.get("saleInfo");
@@ -501,9 +553,13 @@ public class BookJsonParser {
     /**
      * Parses published date with format fallbacks
      * 
+     * @deprecated Class is deprecated. Use GoogleBooksMapper with DateParsingUtils instead.
+     *             This method embeds knowledge of Google Books volumeInfo.publishedDate field.
+     * 
      * @param volumeInfo Volume info JSON node
      * @return Date object or null if parsing fails
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private static Date parsePublishedDate(JsonNode volumeInfo) {
         if (volumeInfo.has("publishedDate")) {
             String dateString = volumeInfo.get("publishedDate").asText();
@@ -579,53 +635,31 @@ public class BookJsonParser {
      * @return Map of extracted qualifiers
      */
     public static Map<String, Object> extractQualifiersFromSearchQuery(String query) {
-        Map<String, Object> qualifiers = new HashMap<>();
-        if (query == null || query.trim().isEmpty()) {
-            return qualifiers;
-        }
-
-        String normalizedQuery = SearchQueryUtils.canonicalize(query);
-        if (normalizedQuery == null || normalizedQuery.isEmpty()) {
-            return qualifiers;
-        }
-
-        if (normalizedQuery.contains("new york times bestseller") || 
-            normalizedQuery.contains("nyt bestseller") ||
-            normalizedQuery.contains("ny times bestseller")) {
-            qualifiers.put("nytBestseller", true);
-        }
-        
-        if (normalizedQuery.contains("award winner") || 
-            normalizedQuery.contains("prize winner") ||
-            normalizedQuery.contains("pulitzer") ||
-            normalizedQuery.contains("nobel")) {
-            qualifiers.put("awardWinner", true);
-            if (normalizedQuery.contains("pulitzer")) qualifiers.put("pulitzerPrize", true);
-            if (normalizedQuery.contains("nobel")) qualifiers.put("nobelPrize", true);
-        }
-        
-        if (normalizedQuery.contains("best books") || 
-            normalizedQuery.contains("top books") ||
-            normalizedQuery.contains("must read")) {
-            qualifiers.put("recommendedList", true);
-        }
-        
-        // Add the raw query terms as a qualifier
-        qualifiers.put("queryTerms", new ArrayList<>(Arrays.asList(normalizedQuery.split("\\s+"))));
-        // Add the original full query as a qualifier
-        qualifiers.put("searchQuery", query.trim());
-
-
-        return qualifiers;
+        Map<String, Object> extracted = SearchQueryQualifierExtractor.extract(query);
+        return extracted.isEmpty() ? new HashMap<>() : new HashMap<>(extracted);
     }
 
     /**
      * Validates if the given string is a plausible ISBN-10 or ISBN-13
      * This is a basic structural check, not a checksum validation
+     * 
+     * @deprecated Use {@link IsbnUtils#isValidIsbn13(String)} or {@link IsbnUtils#isValidIsbn10(String)} instead.
+     * This method duplicates ISBN validation logic. IsbnUtils provides the canonical implementation.
+     * Will be removed in version 1.0.0.
+     * 
+     * <p><b>Migration Example:</b></p>
+     * <pre>{@code
+     * // Old:
+     * if (BookJsonParser.isValidIsbn(isbn)) { ... }
+     * 
+     * // New:
+     * if (IsbnUtils.isValidIsbn13(isbn) || IsbnUtils.isValidIsbn10(isbn)) { ... }
+     * }</pre>
      *
      * @param isbn The string to validate
      * @return true if it structurally resembles an ISBN, false otherwise
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public static boolean isValidIsbn(String isbn) {
         if (isbn == null) {
             return false;

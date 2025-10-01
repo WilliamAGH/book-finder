@@ -8,7 +8,19 @@ public final class ApplicationConstants {
     }
 
     public static final class Cover {
-        public static final String PLACEHOLDER_IMAGE_PATH = "/images/placeholder-book-cover.svg";
+        public static final String PLACEHOLDER_IMAGE_PATH;
+        static {
+            String cdn = System.getenv("S3_PUBLIC_CDN_URL");
+            if (cdn == null || cdn.isBlank()) {
+                cdn = System.getenv("S3_CDN_URL");
+            }
+            if (cdn != null && !cdn.isBlank()) {
+                String base = cdn.endsWith("/") ? cdn.substring(0, cdn.length() - 1) : cdn;
+                PLACEHOLDER_IMAGE_PATH = base + "/images/placeholder-book-cover.svg";
+            } else {
+                PLACEHOLDER_IMAGE_PATH = "/images/placeholder-book-cover.svg";
+            }
+        }
 
         private Cover() {
         }

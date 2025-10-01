@@ -17,7 +17,12 @@ import java.util.Map;
  * Shared helpers for serialising {@link Book} objects back to JSON and merging with
  * existing stored payloads. Complements {@link BookJsonParser} so ingest/export paths
  * share a single conversion layer.
+ *
+ * @deprecated Persist raw payloads via
+ * {@link com.williamcallahan.book_recommendation_engine.service.CanonicalBookPersistenceService}
+ * and surface API state through DTO projections rather than re-hydrating legacy Book JSON.
  */
+@Deprecated(since = "2025-10-01", forRemoval = true)
 public final class BookJsonWriter {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
