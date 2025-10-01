@@ -156,6 +156,10 @@ public class BookSupplementalPersistenceService {
 
     private String serializeQualifierMetadata(Object value) {
         try {
+            // Map.of doesn't allow null values, handle null explicitly
+            if (value == null) {
+                return "{\"value\":null}";
+            }
             return objectMapper.writeValueAsString(Map.of("value", value));
         } catch (Exception e) {
             return "{\"value\":null}";
