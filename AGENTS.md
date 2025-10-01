@@ -8,6 +8,8 @@ We do not use Flyway or Liquibase or any migration tools like them. We do manual
 
 Automatic migrations on boot in the code are NEVER ALLOWED UNDER ANY CIRCUMSTANCES.
 
+The usage of @SuppressWarnings is never an allowed solution. EVER.
+
 ## 1. Purpose & Scope
 
 - Provide a single, current reference for anyone (human or AI) working in this repository.

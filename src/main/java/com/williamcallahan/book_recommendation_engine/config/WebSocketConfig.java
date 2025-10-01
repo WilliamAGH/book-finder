@@ -1,6 +1,5 @@
 package com.williamcallahan.book_recommendation_engine.config;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
@@ -36,7 +35,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
      * Inject TaskScheduler with @Lazy to avoid circular dependency.
      * TaskScheduler is used for WebSocket heartbeat keepalive.
      */
-    @Autowired
     public WebSocketConfig(@Lazy TaskScheduler messageBrokerTaskScheduler) {
         this.messageBrokerTaskScheduler = messageBrokerTaskScheduler;
     }

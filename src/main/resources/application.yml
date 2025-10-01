@@ -68,7 +68,7 @@ app:
       enabled: ${APP_FEATURE_GOOGLE_FALLBACK_ENABLED:true}
     persist-search-results: ${APP_FEATURE_PERSIST_SEARCH_RESULTS:true} # Persist external API search results to Postgres for click availability
     async-backfill:
-      enabled: ${APP_FEATURE_ASYNC_BACKFILL_ENABLED:false} # Disabled: requires backfill_tasks table and database-as-queue is questionable architecture
+      enabled: ${APP_FEATURE_ASYNC_BACKFILL_ENABLED:false} # Disabled by default. Uses BackfillQueueService (in-memory queue) instead of database table
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}
@@ -99,10 +99,10 @@ app:
 
 # S3 configuration
 s3:
-  enabled: ${S3_ENABLED:false}
+  enabled: ${S3_ENABLED:true}
   access-key-id: ${S3_ACCESS_KEY_ID:}
   secret-access-key: ${S3_SECRET_ACCESS_KEY:}
-  server-url: ${S3_SERVER_URL:}
+  server-url: ${S3_SERVER_URL:https://sfo3.digitaloceanspaces.com}
   region: ${AWS_REGION:us-west-2}
   bucket-name: ${S3_BUCKET:}
   cdn-url: ${S3_CDN_URL:}

@@ -1,79 +1,125 @@
 {
   "groups": [
     {
+      "name": "app",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
+      "description": "Application configuration properties"
+    },
+    {
+      "name": "google",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
+      "description": "Google service configuration properties"
+    },
+    {
+      "name": "nyt",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
+      "description": "New York Times API configuration properties"
+    },
+    {
+      "name": "openlibrary",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
+      "description": "Open Library configuration properties"
+    },
+    {
+      "name": "affiliate",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
+      "description": "Affiliate link provider configuration properties"
+    },
+    {
       "name": "google.books.api",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
       "description": "Google Books API configuration properties"
     },
     {
       "name": "s3",
+      "type": "java.lang.Object",
+      "sourceType": "com.williamcallahan.book_recommendation_engine",
       "description": "S3 compatible storage configuration properties"
     },
     {
       "name": "app.cover-cache",
+      "type": "java.lang.Object",
       "description": "Book cover caching configuration properties"
     },
     {
       "name": "app.cache",
+      "type": "java.lang.Object",
       "description": "Application caching configuration properties"
     },
     {
       "name": "app.embedding",
+      "type": "java.lang.Object",
       "description": "Embedding service configuration properties"
     },
     {
       "name": "app.environment",
+      "type": "java.lang.Object",
       "description": "Environment-specific configuration properties"
     },
     {
       "name": "app.nyt",
+      "type": "java.lang.Object",
       "description": "New York Times API configuration properties"
     },
     {
-      "name": "affiliate",
-      "description": "Affiliate link configuration properties"
-    },
-    {
       "name": "openlibrary.data.api",
+      "type": "java.lang.Object",
       "description": "OpenLibrary API configuration properties"
     },
     {
       "name": "app.security",
+      "type": "java.lang.Object",
       "description": "Application security configuration properties"
     },
     {
       "name": "app.feature",
+      "type": "java.lang.Object",
       "description": "Feature flag configuration properties"
     },
     {
       "name": "nyt.api",
+      "type": "java.lang.Object",
       "description": "New York Times API credentials"
     },
     {
       "name": "app.s3.cleanup",
+      "type": "java.lang.Object",
       "description": "S3 cleanup utility configuration properties"
     },
     {
       "name": "jsontoredis.s3",
+      "type": "java.lang.Object",
       "description": "JSON to Redis S3 configuration properties"
     },
     {
       "name": "sitemap.s3",
+      "type": "java.lang.Object",
       "description": "Sitemap S3 configuration properties"
     },
     {
       "name": "book.cover",
+      "type": "java.lang.Object",
       "description": "Book cover processing configuration properties"
     },
     {
       "name": "healthcheck",
+      "type": "java.lang.Object",
       "description": "Health check configuration properties"
     },
     {
       "name": "sitemap",
+      "type": "java.lang.Object",
       "description": "Sitemap configuration properties"
     },
     {
       "name": "app.features",
+      "type": "java.lang.Object",
       "description": "Application feature flags"
     }
   ],
@@ -528,6 +574,12 @@
       "name": "app.features.external-fallback.enabled",
       "type": "java.lang.Boolean",
       "description": "Enable external API fallbacks (Google, OpenLibrary, Longitood, S3 enrichment)",
+      "defaultValue": false
+    },
+    {
+      "name": "app.features.async-backfill.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Enable the asynchronous backfill worker for book data enrichment",
       "defaultValue": false
     },
     {

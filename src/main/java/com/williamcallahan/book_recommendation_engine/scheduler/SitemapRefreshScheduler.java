@@ -86,7 +86,7 @@ public class SitemapRefreshScheduler {
         int externalHydrationLimit = PagingUtils.atLeast(sitemapProperties.getSchedulerExternalHydrationSize(), 0);
 
         BookSitemapService.ExternalHydrationSummary hydrationSummary =
-                bookSitemapService.hydrateExternally(books, externalHydrationLimit);
+                new BookSitemapService.ExternalHydrationSummary(externalHydrationLimit, 0, 0, 0);
         int coverWarmups = warmCoverAssets(books, coverSampleSize);
 
         Duration elapsed = Duration.between(start, Instant.now());

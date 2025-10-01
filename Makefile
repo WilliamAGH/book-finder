@@ -3,6 +3,7 @@ SHELL := /bin/sh
 # Configurable variables
 PORT ?= 8095
 MVN ?= mvn
+WRO4J_SKIP ?= true
 
 # Migration args (override via: make migrate-books MIGRATE_MAX=100 MIGRATE_SKIP=0 MIGRATE_PREFIX=books/v1/ MIGRATE_DEBUG=true)
 MIGRATE_MAX ?= 0
@@ -29,11 +30,11 @@ run: kill-port
 
 # Build the application JAR
 build:
-	$(MVN) clean package
+	$(MVN) -Dwro4j.skip=$(WRO4J_SKIP) clean package
 
 # Run tests
 test:
-	$(MVN) test
+	$(MVN) -Dwro4j.skip=$(WRO4J_SKIP) test
 
 
 # Fast S3 -> Postgres books migration (standalone Node.js script - v2 refactored)
@@ -139,4 +140,3 @@ cluster-books:
 		echo "❌ Error: .env file not found"; \
 		exit 1; \
 	fi
-
