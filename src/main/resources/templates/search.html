@@ -229,6 +229,28 @@
         let currentCoverSource = 'ANY';
         let currentResolution = 'HIGH_FIRST'; // Default to HIGH_FIRST
         let publishedYear = initialYear; // Published year filter from server or URL params
+
+        const searchCache = new Map();
+        const prefetchInFlight = new Set();
+        let lastSearchSignature = null;
+
+        const buildSearchSignature = (queryValue, sortBy, coverSource, resolutionPref, yearFilter) => {
+            return [
+                queryValue || '',
+                sortBy || '',
+                coverSource || '',
+                resolutionPref || '',
+                yearFilter || ''
+            ].join('|');
+        };
+
+        const buildCacheKey = (queryValue, startIndex, sortBy, coverSource, resolutionPref, yearFilter, pageSize) => {
+            return [
+                buildSearchSignature(queryValue, sortBy, coverSource, resolutionPref, yearFilter),
+                startIndex,
+                pageSize
+            ].join('#');
+        };
         
         // Initialize search if query exists
         if (query) {
@@ -506,6 +528,75 @@
             });
         }
         
+        const prefetchNextPage = (queryValue, nextStartIndex, sortBy, coverSource, resolution, year, pageSize) => {
+            if (nextStartIndex == null) return;
+            const cacheKey = buildCacheKey(queryValue, nextStartIndex, sortBy, coverSource, resolution, year, pageSize);
+            if (searchCache.has(cacheKey) || prefetchInFlight.has(cacheKey)) {
+                return;
+            }
+
+            let url = `/api/books/search?query=${encodeURIComponent(queryValue)}&startIndex=${nextStartIndex}&maxResults=${pageSize}`;
+            if (sortBy && sortBy !== 'relevance') url += `&orderBy=${sortBy}`;
+            if (resolution && resolution !== 'ANY') url += `&resolution=${resolution}`;
+            if (coverSource && coverSource !== 'ANY') url += `&coverSource=${coverSource}`;
+            if (year) url += `&publishedYear=${year}`;
+
+            prefetchInFlight.add(cacheKey);
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Prefetch request failed');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    searchCache.set(cacheKey, data);
+                    console.log(`[prefetch] cached startIndex=${nextStartIndex}`, data);
+                })
+                .catch(err => console.warn('Prefetch error', err))
+                .finally(() => prefetchInFlight.delete(cacheKey));
+        };
+
+        const applySearchResponse = (data, context) => {
+            loadingIndicator.classList.add('d-none');
+            resultsContainer.style.display = 'block';
+            window.lastSearchResults = data;
+
+            if (context.year) {
+                const resultsText = document.querySelector('.search-header .text-muted');
+                if (resultsText) {
+                    resultsText.innerHTML = `Results for: <span class="fw-bold">${context.query}</span> <span class="badge bg-info ms-2">Published in ${context.year} <i class="fas fa-calendar-alt ms-1"></i></span>`;
+                }
+                const yearInputField = document.getElementById('yearInput');
+                if (yearInputField) {
+                    yearInputField.value = context.year;
+                }
+            }
+
+            if (context.sortBy && context.sortBy !== 'relevance') {
+                sortResults(data.results, context.sortBy);
+            }
+
+            displayResults(data, currentView);
+
+            const paginationMeta = {
+                currentPage,
+                itemsPerPage: context.pageSize,
+                hasMore: data.hasMore,
+                totalResults: data.totalResults
+            };
+            setupPagination(paginationMeta);
+            if (paginationContainer.innerHTML.trim() !== '' && paginationNav) {
+                paginationNav.classList.remove('d-none');
+            } else if (paginationNav) {
+                paginationNav.classList.add('d-none');
+            }
+
+            if (data.hasMore) {
+                prefetchNextPage(context.query, data.nextStartIndex, context.sortBy, context.coverSource, context.resolution, context.year, context.pageSize);
+            }
+        };
+
         function performSearch(query, startIndex, sortBy, coverSource, resolution, year) {
             // Ensure WebSocket client is ready
             try {
@@ -517,17 +608,41 @@
             } catch (e) { console.warn('Search WS init failed:', e); }
             if (!query) return;
             
+            const searchSignature = buildSearchSignature(query, sortBy, coverSource, resolution, year);
+            if (startIndex === 0 && searchSignature !== lastSearchSignature) {
+                searchCache.clear();
+                prefetchInFlight.clear();
+                lastSearchSignature = searchSignature;
+            }
+
             // Show loading indicator and completely hide results container
             resultsContainer.innerHTML = '';
             resultsContainer.style.display = 'none'; // Hide completely during loading
             loadingIndicator.classList.remove('d-none');
-            
+
             // Reset pagination container at the start of each search
             if (paginationNav) paginationNav.classList.add('d-none'); // Hide nav by default
             paginationContainer.innerHTML = '';
             // paginationContainer.style.display = 'flex'; // Controlled by paginationNav's d-none
             // paginationContainer.style.border = 'none'; // Styling can be done in CSS
-            
+
+            const cacheKey = buildCacheKey(query, startIndex, sortBy, coverSource, resolution, year, currentMaxResults);
+            currentPage = Math.floor(startIndex / currentMaxResults);
+
+            if (searchCache.has(cacheKey)) {
+                console.log('[cache] hit for', cacheKey);
+                const cached = searchCache.get(cacheKey);
+                applySearchResponse(cached, {
+                    query,
+                    sortBy,
+                    coverSource,
+                    resolution,
+                    year,
+                    pageSize: currentMaxResults
+                });
+                return;
+            }
+
             // Build the URL
             let apiUrl = `/api/books/search?query=${encodeURIComponent(query)}&startIndex=${startIndex}&maxResults=${currentMaxResults}`;
             
@@ -581,66 +696,15 @@
                     return response.json();
                 })
                 .then(data => {
-                    loadingIndicator.classList.add('d-none');
-                    resultsContainer.style.display = 'block'; // Show results container again
-                    window.lastSearchResults = data;
-                    
-                    // Display detected year if applicable
-                    if (year) {
-                        const resultsText = document.querySelector('.search-header .text-muted');
-                        if (resultsText) {
-                            // Show that we're filtering by year
-                            resultsText.innerHTML = `Results for: <span class="fw-bold">${query}</span> <span class="badge bg-info ms-2">Published in ${year} <i class="fas fa-calendar-alt ms-1"></i></span>`;
-                            
-                            // Also set the year input field
-                            const yearInput = document.getElementById('yearInput');
-                            if (yearInput) {
-                                yearInput.value = year;
-                            }
-                        }
-                    }
-                    
-                    console.log("Search results data:", data);
-                    console.log("Total available results:", data.totalResults);
-                    console.log("Current max results:", currentMaxResults);
-                    
-                    if (sortBy && sortBy !== 'relevance') {
-                        sortResults(data.results, sortBy);
-                    }
-                    
-                    displayResults(data, currentView);
-                    
-                    /**
-                     * Setup pagination based on available response data
-                     */
-                    console.log("Available data for pagination:", data);
-
-                    // Detect if more pages likely exist
-                    const hasMoreResults = data.results.length >= currentMaxResults;
-                    console.log("Has more results:", hasMoreResults, "Current page:", currentPage);
-
-                    /**
-                     * Show pagination if:
-                     * 1. Not on first page, OR
-                     * 2. Full page of results (suggesting more exist)
-                     */
-                    if (data.totalResults > 0 && (currentPage > 0 || hasMoreResults)) {
-                        // Calculate minimum estimated total for pagination buttons
-                        const estimatedTotal = Math.max(
-                            (currentPage + 1) * currentMaxResults + (hasMoreResults ? currentMaxResults : 0),
-                            data.totalResults
-                        );
-                        console.log("Setting up pagination with estimated total:", estimatedTotal);
-                        setupPagination(currentPage, estimatedTotal, currentMaxResults);
-                        if (paginationContainer.innerHTML.trim() !== '' && paginationNav) {
-                            paginationNav.classList.remove('d-none'); // Show nav if pagination was populated
-                        }
-                        console.log("Pagination container HTML after setup:", paginationContainer.innerHTML);
-                    } else {
-                        console.log("Not setting up pagination. No data suggesting more pages.");
-                        paginationContainer.innerHTML = '';
-                        if (paginationNav) paginationNav.classList.add('d-none'); // Ensure nav is hidden
-                    }
+                    searchCache.set(cacheKey, data);
+                    applySearchResponse(data, {
+                        query,
+                        sortBy,
+                        coverSource,
+                        resolution,
+                        year,
+                        pageSize: currentMaxResults
+                    });
                 })
                 .catch(error => {
                     console.error('Error fetching search results:', error);
@@ -975,20 +1039,27 @@
             }
         }
         
-        function setupPagination(currentPage, totalItems, itemsPerPage) {
-            console.log("setupPagination called with:", currentPage, totalItems, itemsPerPage);
-            paginationContainer.innerHTML = ''; // Clear existing pagination
-            
-            if (!totalItems || totalItems <= itemsPerPage) {
-                console.log("No pagination needed - total items <= items per page", totalItems, itemsPerPage);
-                if (paginationNav) paginationNav.classList.add('d-none'); // Ensure nav is hidden
-                return; // No pagination needed if total items fit on one page or no items
+        function setupPagination({ currentPage, itemsPerPage, hasMore, totalResults }) {
+            paginationContainer.innerHTML = '';
+
+            if (!itemsPerPage || itemsPerPage <= 0) {
+                if (paginationNav) paginationNav.classList.add('d-none');
+                return;
             }
 
-            const totalPages = Math.ceil(totalItems / itemsPerPage);
-            if (paginationNav) paginationNav.classList.remove('d-none'); // Show nav as we are adding items
-            console.log("Calculated total pages:", totalPages);
-            
+            const baseTotalPages = totalResults ? Math.ceil(totalResults / itemsPerPage) : 0;
+            let totalPages = Math.max(baseTotalPages, currentPage + 1);
+            if (hasMore) {
+                totalPages = Math.max(totalPages, currentPage + 2);
+            }
+
+            if (!totalPages || totalPages <= 1) {
+                if (paginationNav) paginationNav.classList.add('d-none');
+                return;
+            }
+
+            if (paginationNav) paginationNav.classList.remove('d-none');
+
             const ul = document.createElement('ul');
             ul.className = 'pagination';
 
@@ -1010,7 +1081,6 @@
             ul.appendChild(prevLi);
 
             // Page numbers (simplified: show current and a few around it)
-            // For a more robust pagination, you'd implement logic for "..." and first/last page links
             let startPage = Math.max(0, currentPage - 2);
             let endPage = Math.min(totalPages - 1, currentPage + 2);
 
@@ -1032,7 +1102,7 @@
 
             // Next button
             const nextLi = document.createElement('li');
-            nextLi.className = `page-item ${currentPage === totalPages - 1 ? 'disabled' : ''}`;
+            nextLi.className = `page-item ${currentPage >= totalPages - 1 ? 'disabled' : ''}`;
             const nextLink = document.createElement('a');
             nextLink.className = 'page-link';
             nextLink.setAttribute('aria-label', 'Next');
@@ -1048,25 +1118,6 @@
             ul.appendChild(nextLi);
 
             paginationContainer.appendChild(ul);
-            console.log("Pagination added to DOM:", paginationContainer.innerHTML.length > 0);
-            
-            // Force repaint of the container with inline styles to ensure visibility - now applies to paginationNav
-            if (paginationNav) {
-                paginationNav.style.display = 'none'; // Hide then show to trigger repaint
-                setTimeout(() => {
-                    if (paginationContainer.innerHTML.trim() !== '') { // Only show if it has content
-                        paginationNav.style.display = 'flex';
-                        // paginationNav.style.border = '2px solid var(--primary-color)'; // Optional: for debugging visibility
-                        // paginationNav.style.padding = '10px';
-                        // paginationNav.style.margin = '20px 0';
-                        // paginationNav.style.position = 'relative';
-                        // paginationNav.style.zIndex = '100';
-                        console.log("Forced repaint of paginationNav container with enhanced visibility");
-                    } else {
-                         paginationNav.classList.add('d-none'); // Keep hidden if no content
-                    }
-                }, 10);
-            }
         }
         
         /**
