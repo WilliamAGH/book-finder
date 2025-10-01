@@ -1,15 +1,17 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
+import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
+import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
-import com.williamcallahan.book_recommendation_engine.util.BookJsonParser;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
 import com.williamcallahan.book_recommendation_engine.util.ExternalApiLogger;
 import com.williamcallahan.book_recommendation_engine.util.PagingUtils;
 import com.williamcallahan.book_recommendation_engine.util.ReactiveErrorUtils;
 import com.williamcallahan.book_recommendation_engine.util.SlugGenerator;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
+import com.williamcallahan.book_recommendation_engine.util.SearchQueryQualifierExtractor;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -24,10 +26,8 @@ import java.util.stream.Collectors;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -38,7 +38,6 @@ import com.williamcallahan.book_recommendation_engine.service.event.SearchResult
 import com.williamcallahan.book_recommendation_engine.service.event.SearchProgressEvent;
 import com.williamcallahan.book_recommendation_engine.util.SearchQueryUtils;
 import java.time.temporal.ChronoUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Extracted tiered search orchestration from {@link BookDataOrchestrator}. Handles DB-first search
@@ -65,39 +64,47 @@ public class TieredBookSearchService {
     private final BookQueryRepository bookQueryRepository;
     private final boolean externalFallbackEnabled;
     private final @Nullable ApplicationEventPublisher eventPublisher;
-    @Autowired
+    private final GoogleBooksMapper googleBooksMapper;
     public TieredBookSearchService(BookSearchService bookSearchService,
                             GoogleApiFetcher googleApiFetcher,
                             OpenLibraryBookDataService openLibraryBookDataService,
+                            GoogleBooksMapper googleBooksMapper,
                             @Nullable BookQueryRepository bookQueryRepository,
                             @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
                             @Nullable ApplicationEventPublisher eventPublisher) {
         this.bookSearchService = bookSearchService;
         this.googleApiFetcher = googleApiFetcher;
         this.openLibraryBookDataService = openLibraryBookDataService;
+        this.googleBooksMapper = googleBooksMapper;
         this.bookQueryRepository = bookQueryRepository;
         this.externalFallbackEnabled = externalFallbackEnabled;
         this.eventPublisher = eventPublisher;
     }
 
-    // Backward-compatible constructor for tests and older injection paths
-    TieredBookSearchService(BookSearchService bookSearchService,
-                            GoogleApiFetcher googleApiFetcher,
-                            OpenLibraryBookDataService openLibraryBookDataService,
-                            @Nullable BookQueryRepository bookQueryRepository,
-                            boolean externalFallbackEnabled) {
-        this(bookSearchService, googleApiFetcher, openLibraryBookDataService, bookQueryRepository, externalFallbackEnabled, null);
-    }
-
+    /**
+     * @deprecated Redirect callers to repository-backed DTO searches instead of
+     * legacy {@link Book} projections. Prefer {@link BookQueryRepository#fetchBookCards(List)} or
+     * {@link BookQueryRepository#searchCards(String, String, int, String)} depending on context.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy) {
         return searchBooks(query, langCode, desiredTotalResults, orderBy, false);
     }
-    
+
+    /**
+     * @deprecated Prefer repository-backed DTO projections (e.g. {@link com.williamcallahan.book_recommendation_engine.dto.BookCard})
+     * combined with explicit fallbacks instead of legacy tiered {@link Book} entities.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     Mono<List<Book>> searchBooks(String query, String langCode, int desiredTotalResults, String orderBy, boolean bypassExternalApis) {
         return streamSearch(query, langCode, desiredTotalResults, orderBy, bypassExternalApis)
             .collectList();
     }
 
+    /**
+     * @deprecated Stream DTOs via repository-backed queries rather than legacy {@link Book} flows.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     Flux<Book> streamSearch(String query,
                              String langCode,
                              int desiredTotalResults,
@@ -113,7 +120,7 @@ public class TieredBookSearchService {
             .onErrorResume(postgresError -> {
                 String message = postgresError != null && postgresError.getMessage() != null
                     ? postgresError.getMessage()
-                    : postgresError.toString();
+                    : String.valueOf(postgresError);
                 LOGGER.warn("TieredBookSearch: Postgres search failed for query '{}': {}", query, message, postgresError);
                 if (!externalFallbackEnabled || bypassExternalApis) {
                     LOGGER.error("TieredBookSearch: No external fallback allowed for '{}' after Postgres failure; streaming empty results.", query);
@@ -162,7 +169,7 @@ public class TieredBookSearchService {
                 Flux<Book> externalFlux = performExternalSearchStream(query, langCode, externalTarget, orderBy, baseline.isEmpty())
                     .onErrorResume(error -> {
                         externalErrored.set(true);
-                        String message = error != null && error.getMessage() != null ? error.getMessage() : error.toString();
+                        String message = error != null && error.getMessage() != null ? error.getMessage() : String.valueOf(error);
                         LOGGER.warn("TieredBookSearch: External fallback failed for '{}': {}", query, message);
                         safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.ERROR, message, queryHash));
                         return Flux.empty();
@@ -191,6 +198,8 @@ public class TieredBookSearchService {
                         safePublish(new SearchProgressEvent(query, SearchProgressEvent.SearchStatus.COMPLETE, message, queryHash));
                     });
 
+                // CRITICAL: Use Flux.concat to ensure Postgres results are emitted FIRST,
+                // then external results fill gaps. This guarantees Postgres-first ordering.
                 return Flux.concat(postgresFlux, instrumentedExternal)
                     .take(desiredTotalResults);
             })
@@ -207,7 +216,7 @@ public class TieredBookSearchService {
             return Flux.empty();
         }
 
-        final Map<String, Object> queryQualifiers = BookJsonParser.extractQualifiersFromSearchQuery(query);
+        final Map<String, Object> queryQualifiers = SearchQueryQualifierExtractor.extract(query);
         boolean googleFallbackEnabled = googleApiFetcher.isGoogleFallbackEnabled();
         boolean shouldTryAuthorSearch = postgresWasEmpty && looksLikeAuthorName(query);
 
@@ -266,49 +275,74 @@ public class TieredBookSearchService {
         final String effectiveOrderBy = (orderBy != null && !orderBy.trim().isEmpty()) ? orderBy : "newest";
         final boolean apiKeyAvailable = googleApiFetcher.isApiKeyAvailable();
 
-        Flux<JsonNode> authenticatedFlux = Flux.empty();
+        Flux<JsonNode> jsonFlux;
+        
         if (apiKeyAvailable) {
-            authenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
+            // SEQUENTIAL fallback: try authenticated FIRST, only fall back to unauth on failure
+            jsonFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, true)
                 .doOnSubscribe(sub -> ExternalApiLogger.logApiCallAttempt(
                     LOGGER,
                     "GoogleBooks",
                     "STREAM_AUTH",
                     query,
                     true))
-                .onErrorResume(err -> {
+                .onErrorResume(authErr -> {
+                    String message = authErr != null ? authErr.getMessage() : "unknown error";
+                    LOGGER.warn("TieredBookSearch: Authenticated Google Books failed for '{}': {}. Falling back to unauthenticated.", 
+                        query, message);
                     ExternalApiLogger.logApiCallFailure(
                         LOGGER,
                         "GoogleBooks",
                         "STREAM_AUTH",
                         query,
-                        err.getMessage());
-                    return Flux.empty();
+                        message);
+                    
+                    // Fall back to unauthenticated on ANY auth error (401, 403, 429, 5xx)
+                    return googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
+                        .doOnSubscribe(sub -> {
+                            LOGGER.info("TieredBookSearch: Attempting unauthenticated Google Books for '{}' after auth failure", query);
+                            ExternalApiLogger.logApiCallAttempt(
+                                LOGGER,
+                                "GoogleBooks",
+                                "STREAM_UNAUTH_FALLBACK",
+                                query,
+                                false);
+                        })
+                        .onErrorResume(unauthErr -> {
+                            String unauthMessage = unauthErr != null ? unauthErr.getMessage() : "unknown error";
+                            LOGGER.warn("TieredBookSearch: Unauthenticated fallback also failed for '{}': {}", query, unauthMessage);
+                            ExternalApiLogger.logApiCallFailure(
+                                LOGGER,
+                                "GoogleBooks",
+                                "STREAM_UNAUTH_FALLBACK",
+                                query,
+                                unauthMessage);
+                            return Flux.empty();
+                        });
                 });
-        }
-
-        Flux<JsonNode> unauthenticatedFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
-            .doOnSubscribe(sub -> ExternalApiLogger.logApiCallAttempt(
-                LOGGER,
-                "GoogleBooks",
-                "STREAM_UNAUTH",
-                query,
-                false))
-            .onErrorResume(err -> {
-                ExternalApiLogger.logApiCallFailure(
+        } else {
+            // No API key, go straight to unauthenticated
+            jsonFlux = googleApiFetcher.streamSearchItems(query, maxTotalResultsToFetch, effectiveOrderBy, langCode, false)
+                .doOnSubscribe(sub -> ExternalApiLogger.logApiCallAttempt(
                     LOGGER,
                     "GoogleBooks",
                     "STREAM_UNAUTH",
                     query,
-                    err.getMessage());
-                return Flux.empty();
-            });
+                    false))
+                .onErrorResume(err -> {
+                    String message = err != null ? err.getMessage() : "unknown error";
+                    ExternalApiLogger.logApiCallFailure(
+                        LOGGER,
+                        "GoogleBooks",
+                        "STREAM_UNAUTH",
+                        query,
+                        message);
+                    return Flux.empty();
+                });
+        }
 
-        Flux<JsonNode> combined = apiKeyAvailable
-            ? Flux.concat(authenticatedFlux, unauthenticatedFlux)
-            : unauthenticatedFlux;
-
-        return combined
-            .map(BookJsonParser::convertJsonToBook)
+        return jsonFlux
+            .map(this::convertJsonToBook)
             .filter(Objects::nonNull)
             .map(book -> {
                 if (!queryQualifiers.isEmpty()) {
@@ -316,6 +350,24 @@ public class TieredBookSearchService {
                 }
                 return book;
             });
+    }
+
+    private Book convertJsonToBook(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+
+        try {
+            BookAggregate aggregate = googleBooksMapper.map(node);
+            Book book = BookDomainMapper.fromAggregate(aggregate);
+            if (book != null) {
+                book.setRawJsonResponse(node.toString());
+            }
+            return book;
+        } catch (Exception ex) {
+            LOGGER.debug("Failed to map Google Books JSON node: {}", ex.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -364,10 +416,18 @@ public class TieredBookSearchService {
         return capitalizedWords >= (words.length / 2.0);
     }
 
+    /**
+     * @deprecated Call {@link BookSearchService#searchAuthors(String, Integer)} directly and surface DTOs.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query, int desiredTotalResults) {
         return searchAuthors(query, desiredTotalResults, false);
     }
 
+    /**
+     * @deprecated See {@link #searchAuthors(String, int)}.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     Mono<List<BookSearchService.AuthorResult>> searchAuthors(String query,
                                                             int desiredTotalResults,
                                                             boolean bypassExternalApis) {
@@ -383,7 +443,10 @@ public class TieredBookSearchService {
 
         return postgresMono
             .onErrorResume(postgresError -> {
-                LOGGER.warn("TieredBookSearch: Postgres author search failed for '{}': {}", query, postgresError.getMessage());
+                String message = postgresError != null && postgresError.getMessage() != null
+                    ? postgresError.getMessage()
+                    : String.valueOf(postgresError);
+                LOGGER.warn("TieredBookSearch: Postgres author search failed for '{}': {}", query, message, postgresError);
                 if (!externalFallbackEnabled || bypassExternalApis) {
                     LOGGER.error("TieredBookSearch: Author fallback disabled or bypassed after Postgres error for '{}'. Returning empty set.", query);
                     return Mono.just(List.<BookSearchService.AuthorResult>of());
@@ -539,7 +602,7 @@ public class TieredBookSearchService {
     }
 
     private String normalizeAuthorName(String name) {
-        if (ValidationUtils.isNullOrBlank(name)) {
+        if (!ValidationUtils.hasText(name)) {
             return "";
         }
         String normalized = name.trim().toLowerCase(Locale.ROOT);
@@ -550,10 +613,10 @@ public class TieredBookSearchService {
 
     private String generateFallbackAuthorId(String displayName, String normalized) {
         String slug = SlugGenerator.slugify(displayName);
-        String suffix = !ValidationUtils.isNullOrBlank(slug)
+        String suffix = ValidationUtils.hasText(slug)
             ? slug
             : normalized.replace(' ', '-');
-        if (ValidationUtils.isNullOrBlank(suffix)) {
+        if (!ValidationUtils.hasText(suffix)) {
             suffix = UUID.randomUUID().toString();
         }
         return EXTERNAL_AUTHOR_ID_PREFIX + suffix;
@@ -564,7 +627,7 @@ public class TieredBookSearchService {
         if (!normalized.isEmpty()) {
             return normalized;
         }
-        if (!ValidationUtils.isNullOrBlank(authorId)) {
+        if (ValidationUtils.hasText(authorId)) {
             return authorId.trim();
         }
         return "";
@@ -644,7 +707,10 @@ public class TieredBookSearchService {
                     .subscribeOn(Schedulers.boundedElastic())
                     .map(cards -> {
                         // Convert BookCard DTOs to Book entities (temporary bridge)
-                        List<Book> books = DtoToBookMapper.toBooks(cards);
+                        List<Book> books = cards.stream()
+                            .map(BookDomainMapper::fromCard)
+                            .filter(Objects::nonNull)
+                            .collect(Collectors.toList());
                         
                         // Create map for fast lookup
                         Map<String, Book> bookMap = books.stream()
@@ -683,7 +749,8 @@ public class TieredBookSearchService {
                 eventPublisher.publishEvent(event);
             }
         } catch (Exception ex) {
-            LOGGER.debug("TieredBookSearch: Failed to publish event {}: {}", event.getClass().getSimpleName(), ex.getMessage());
+            String eventName = event != null ? event.getClass().getSimpleName() : "unknown";
+            LOGGER.debug("TieredBookSearch: Failed to publish event {}: {}", eventName, ex.getMessage());
         }
     }
 }

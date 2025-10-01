@@ -12,9 +12,9 @@ import java.util.concurrent.PriorityBlockingQueue;
 /**
  * In-memory queue for backfill tasks.
  * <p>
- * Replaces the horrifically stupid {@code backfill_tasks} database table with
- * proper Java concurrency primitives. This is ephemeral data that lives for seconds,
- * not something that needs database persistence.
+ * DEPRECATION NOTE (2025-10-01): the legacy {@code backfill_tasks} database table is deprecated and must not be used.
+ * This service exists explicitly to replace that design with proper Java concurrency primitives. Backfill items are ephemeral
+ * (seconds), not data to persist in a database.
  * <p>
  * Features:
  * - Thread-safe enqueue/dequeue via {@link BlockingQueue}

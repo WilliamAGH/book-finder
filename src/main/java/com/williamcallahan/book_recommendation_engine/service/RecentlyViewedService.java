@@ -15,12 +15,15 @@
  */
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 import com.williamcallahan.book_recommendation_engine.model.Book;
+import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
-import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
+import com.williamcallahan.book_recommendation_engine.util.UrlPatternMatcher;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import reactor.core.publisher.Mono;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.scheduler.Schedulers;
@@ -30,7 +33,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
 
@@ -48,11 +53,11 @@ import java.util.stream.Collectors;
 @Slf4j
 public class RecentlyViewedService {
 
-    private final GoogleBooksService googleBooksService;
+    private final BookSearchService bookSearchService;
     private final BookDataOrchestrator bookDataOrchestrator;
+    private final BookQueryRepository bookQueryRepository;
     private final DuplicateBookService duplicateBookService;
     private final RecentBookViewRepository recentBookViewRepository;
-    private final boolean externalFallbackEnabled;
 
     // In-memory storage for recently viewed books (lock-free for better concurrency)
     private final ConcurrentLinkedDeque<Book> recentlyViewedBooks = new ConcurrentLinkedDeque<>();
@@ -67,16 +72,16 @@ public class RecentlyViewedService {
      * 
      * @implNote Initializes the in-memory linked list for storing recently viewed books
      */
-    public RecentlyViewedService(GoogleBooksService googleBooksService,
+    public RecentlyViewedService(@Nullable BookSearchService bookSearchService,
                                  DuplicateBookService duplicateBookService,
                                  BookDataOrchestrator bookDataOrchestrator,
-                                 RecentBookViewRepository recentBookViewRepository,
-                                 @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled) {
-        this.googleBooksService = googleBooksService;
+                                 @Nullable BookQueryRepository bookQueryRepository,
+                                 RecentBookViewRepository recentBookViewRepository) {
+        this.bookSearchService = bookSearchService;
         this.duplicateBookService = duplicateBookService;
         this.bookDataOrchestrator = bookDataOrchestrator;
+        this.bookQueryRepository = bookQueryRepository;
         this.recentBookViewRepository = recentBookViewRepository;
-        this.externalFallbackEnabled = externalFallbackEnabled;
     }
 
     /**
@@ -113,7 +118,7 @@ public class RecentlyViewedService {
             log.info("RECENT_VIEWS_DEBUG: No canonical book found for book ID '{}', Title '{}'. Using original ID as canonical.", originalBookId, book.getTitle());
         }
         
-        if (ValidationUtils.isNullOrBlank(canonicalId)) {
+        if (!ValidationUtils.hasText(canonicalId)) {
             log.warn("RECENT_VIEWS_DEBUG: Null or empty canonical ID determined for book title '{}' (original ID '{}'). Skipping add.", book.getTitle(), originalBookId);
             return;
         }
@@ -124,7 +129,7 @@ public class RecentlyViewedService {
         // If the canonical ID is different from the book's current ID,
         // create a new Book object (or clone) for storage in the list with the canonical ID
         // This avoids modifying the original 'book' object which might be used elsewhere
-        if (!java.util.Objects.equals(originalBookId, finalCanonicalId)) {
+        if (!Objects.equals(originalBookId, finalCanonicalId)) {
             log.info("RECENT_VIEWS_DEBUG: Book ID mismatch. Original: '{}', Canonical: '{}'. Creating new Book instance for recent views.", originalBookId, finalCanonicalId);
             bookToAdd = new Book();
             // Copy essential properties for display in recent views
@@ -136,7 +141,7 @@ public class RecentlyViewedService {
             // Add other fields if they are displayed in the "Recent Views" section
         }
 
-        if (ValidationUtils.isNullOrBlank(bookToAdd.getSlug())) {
+        if (!ValidationUtils.hasText(bookToAdd.getSlug())) {
             bookToAdd.setSlug(finalCanonicalId);
         }
 
@@ -145,8 +150,8 @@ public class RecentlyViewedService {
 
         // Lock-free operations using ConcurrentLinkedDeque
         // Remove existing entry for this book
-        recentlyViewedBooks.removeIf(b -> 
-            b != null && java.util.Objects.equals(b.getId(), finalCanonicalId)
+        recentlyViewedBooks.removeIf(b ->
+            b != null && Objects.equals(b.getId(), finalCanonicalId)
         );
 
         // Add to front
@@ -179,6 +184,11 @@ public class RecentlyViewedService {
      * Limits results to the maximum number of books in history
      * Provides error handling with fallback to empty list
      */
+    /**
+     * @deprecated Surface default recommendations via DTO projections (e.g. {@code BookCard}) using
+     * {@link BookQueryRepository} and avoid hydrating legacy {@link Book} lists.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> fetchDefaultBooksAsync() {
         log.debug("Fetching default books reactively (Postgres-first).");
 
@@ -189,37 +199,7 @@ public class RecentlyViewedService {
                     return Mono.just(prepared);
                 }
 
-                if (bookDataOrchestrator == null) {
-                    return Mono.just(Collections.emptyList());
-                }
-
-                return bookDataOrchestrator.searchBooksTiered(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null, false)
-                    .defaultIfEmpty(Collections.emptyList())
-                    .map(this::prepareDefaultBooks)
-                    .doOnSuccess(list -> {
-                        if (!list.isEmpty()) {
-                            log.debug("Returning {} default books from Postgres tier.", list.size());
-                        }
-                    })
-                    .onErrorResume(ex -> {
-                        LoggingUtils.warn(log, ex, "Postgres lookup for recently viewed defaults failed");
-                        return Mono.just(Collections.emptyList());
-                    })
-                    .flatMap(postgresPrepared -> {
-                        if (!postgresPrepared.isEmpty() || !externalFallbackEnabled) {
-                            return Mono.just(postgresPrepared);
-                        }
-
-                        log.debug("Postgres tier returned empty defaults; falling back to Google Books.");
-                        return googleBooksService.searchBooksAsyncReactive(DEFAULT_FALLBACK_QUERY, null, MAX_RECENT_BOOKS, null)
-                            .defaultIfEmpty(Collections.emptyList())
-                            .map(this::prepareDefaultBooks)
-                            .doOnSuccess(list -> log.debug("Returning {} default books from Google fallback tier.", list.size()))
-                            .onErrorResume(e -> {
-                                LoggingUtils.error(log, e, "Error fetching default books from Google fallback");
-                                return Mono.just(Collections.emptyList());
-                            });
-                    });
+                return fetchDefaultBooksFromSearch();
             });
     }
     
@@ -234,6 +214,10 @@ public class RecentlyViewedService {
      * Returns a defensive copy of the list to prevent external modifications
      * Properly handles thread interruption with status restoration
      */
+    /**
+     * @deprecated Use {@link #getRecentlyViewedBookIds(int)} with DTO retrieval to present recently viewed items.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public Mono<List<Book>> getRecentlyViewedBooksReactive() {
         return Mono.defer(() -> {
             // Lock-free read
@@ -325,11 +309,14 @@ public class RecentlyViewedService {
      * Detects placeholder images by checking for specific filename patterns
      * Used to filter out books with missing or placeholder covers in recommendations
      */
+    /**
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector#isExternalUrl(String)}
+     * and {@link com.williamcallahan.book_recommendation_engine.util.cover.CoverImagesFactory} based checks instead of
+     * {@link ValidationUtils.BookValidator} helpers.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private boolean isValidCoverImage(String imageUrl) {
-        return ValidationUtils.BookValidator.hasActualCover(
-            imageUrl,
-            ApplicationConstants.Cover.PLACEHOLDER_IMAGE_PATH
-        );
+        return ValidationUtils.hasText(imageUrl) && !UrlPatternMatcher.isPlaceholderUrl(imageUrl);
     }
 
     private List<Book> prepareDefaultBooks(List<Book> books) {
@@ -342,6 +329,33 @@ public class RecentlyViewedService {
             .sorted(this::compareByLastViewedThenPublished)
             .limit(MAX_RECENT_BOOKS)
             .collect(Collectors.toList());
+    }
+
+    private List<Book> booksFromCards(List<BookCard> cards) {
+        if (cards == null || cards.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Book> books = new ArrayList<>(cards.size());
+        for (BookCard card : cards) {
+            if (card == null) {
+                continue;
+            }
+            Book book = new Book();
+            book.setId(card.id());
+            book.setSlug(ValidationUtils.hasText(card.slug()) ? card.slug() : card.id());
+            book.setTitle(card.title());
+            book.setAuthors(card.authors());
+            book.setExternalImageUrl(card.coverUrl());
+            book.setS3ImagePath(card.coverUrl());
+            book.setAverageRating(card.averageRating());
+            book.setRatingsCount(card.ratingsCount());
+            if (card.tags() != null && !card.tags().isEmpty()) {
+                book.setQualifiers(new java.util.HashMap<>(card.tags()));
+            }
+            books.add(book);
+        }
+        return books;
     }
 
     private Mono<List<Book>> loadFromRepositoryMono() {
@@ -357,7 +371,7 @@ public class RecentlyViewedService {
 
                 List<Book> hydrated = new ArrayList<>();
                 for (RecentBookViewRepository.ViewStats stat : stats) {
-                    if (stat == null || ValidationUtils.isNullOrBlank(stat.bookId())) {
+                    if (stat == null || !ValidationUtils.hasText(stat.bookId())) {
                         continue;
                     }
 
@@ -366,7 +380,7 @@ public class RecentlyViewedService {
                             : Optional.empty();
 
                     bookOptional.ifPresent(book -> {
-                        if (ValidationUtils.isNullOrBlank(book.getSlug())) {
+                        if (!ValidationUtils.hasText(book.getSlug())) {
                             book.setSlug(book.getId());
                         }
                         applyViewStats(book, stat);
@@ -380,6 +394,44 @@ public class RecentlyViewedService {
             .onErrorResume(ex -> {
                 log.warn("Failed to load recent books from repository: {}", ex.getMessage());
                 return Mono.just(Collections.emptyList());
+            });
+    }
+
+    private Mono<List<Book>> fetchDefaultBooksFromSearch() {
+        if (bookSearchService == null || bookQueryRepository == null) {
+            return Mono.just(Collections.emptyList());
+        }
+
+        return Mono.fromCallable(() -> bookSearchService.searchBooks(DEFAULT_FALLBACK_QUERY, MAX_RECENT_BOOKS))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(results -> {
+                if (results == null || results.isEmpty()) {
+                    return Mono.just(Collections.<Book>emptyList());
+                }
+
+                List<UUID> ids = results.stream()
+                    .map(BookSearchService.SearchResult::bookId)
+                    .filter(Objects::nonNull)
+                    .limit(MAX_RECENT_BOOKS)
+                    .collect(Collectors.toList());
+
+                if (ids.isEmpty()) {
+                    return Mono.just(Collections.<Book>emptyList());
+                }
+
+                return Mono.fromCallable(() -> bookQueryRepository.fetchBookCards(ids))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .map(this::booksFromCards)
+                    .map(this::prepareDefaultBooks);
+            })
+            .doOnSuccess(list -> {
+                if (!list.isEmpty()) {
+                    log.debug("Returning {} default books from Postgres search tier.", list.size());
+                }
+            })
+            .onErrorResume(ex -> {
+                LoggingUtils.warn(log, ex, "Search-based fallback for recently viewed defaults failed");
+                return Mono.just(Collections.<Book>emptyList());
             });
     }
 

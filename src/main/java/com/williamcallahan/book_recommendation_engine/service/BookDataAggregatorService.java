@@ -17,8 +17,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.williamcallahan.book_recommendation_engine.dto.BookAggregate;
-import com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -36,7 +34,6 @@ public class BookDataAggregatorService {
 
     private static final Logger logger = LoggerFactory.getLogger(BookDataAggregatorService.class);
     private final ObjectMapper objectMapper;
-    private final GoogleBooksMapper googleBooksMapper;
 
     /**
      * Constructs the BookDataAggregatorService with required dependencies
@@ -45,7 +42,6 @@ public class BookDataAggregatorService {
      */
     public BookDataAggregatorService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-        this.googleBooksMapper = new GoogleBooksMapper();
     }
 
     /**
@@ -56,7 +52,12 @@ public class BookDataAggregatorService {
      * @param dataSources Varargs of JsonNode, each representing book data from a different source.
      *                    It's recommended to pass sources in order of preference (e.g., Google, OpenLibrary, Longitood).
      * @return An ObjectNode containing the merged book data.
+     *
+     * @deprecated Use {@link com.williamcallahan.book_recommendation_engine.mapper.GoogleBooksMapper} and
+     * {@link com.williamcallahan.book_recommendation_engine.service.BookUpsertService} to normalise provider
+     * payloads directly into Postgres before projecting DTOs.
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public ObjectNode aggregateBookDataSources(String primaryId, String sourceIdentifierField, JsonNode... dataSources) {
         ObjectNode aggregatedJson = objectMapper.createObjectNode();
         List<JsonNode> validSources = Arrays.stream(dataSources)
@@ -246,7 +247,11 @@ public class BookDataAggregatorService {
     /**
      * Check if source is Google Books format.
      * Used to delegate parsing to GoogleBooksMapper (SSOT).
+     * 
+     * @deprecated Use GoogleBooksMapper.map() and check for null instead, or create GoogleBooksMapper.isGoogleBooksJson().
+     *             This method embeds knowledge of Google Books JSON structure (volumeInfo, kind fields).
      */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     private boolean isGoogleBooksSource(JsonNode sourceNode) {
         return sourceNode.has("volumeInfo") || 
                (sourceNode.has("kind") && sourceNode.get("kind").asText("").contains("books#volume"));

@@ -25,6 +25,8 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import org.springframework.lang.Nullable;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -37,12 +39,19 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * @deprecated Use {@link BookDataOrchestrator},
+ * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository},
+ * and {@link GoogleApiFetcher} directly for Postgres-first orchestration.
+ */
+@Deprecated(since = "2025-10-01", forRemoval = true)
 @Service
 @Slf4j
 public class BookApiProxy {
         
     private final GoogleBooksService googleBooksService;
-    private final BookDataOrchestrator bookDataOrchestrator;
+    private final BookViewService bookViewService;
+    private final @Nullable BookDataOrchestrator bookDataOrchestrator;
     private final ObjectMapper objectMapper;
     private static final int SEARCH_RESULT_LIMIT = 40;
 
@@ -71,7 +80,8 @@ public class BookApiProxy {
                        @Value("${app.local-cache.directory:.dev-cache}") String localCacheDirectory,
                        @Value("${app.api-client.log-calls:true}") boolean logApiCalls,
                        @Value("${app.features.external-fallback.enabled:${app.features.google-fallback.enabled:true}}") boolean externalFallbackEnabled,
-                       BookDataOrchestrator bookDataOrchestrator) {
+                       BookViewService bookViewService,
+                       @Nullable BookDataOrchestrator bookDataOrchestrator) {
         this.googleBooksService = googleBooksService;
         this.objectMapper = objectMapper;
         this.mockService = mockService;
@@ -79,6 +89,7 @@ public class BookApiProxy {
         this.localCacheDirectory = localCacheDirectory;
         this.logApiCalls = logApiCalls;
         this.externalFallbackEnabled = externalFallbackEnabled;
+        this.bookViewService = bookViewService;
         this.bookDataOrchestrator = bookDataOrchestrator;
         
         // Create local cache directory if needed
@@ -155,25 +166,25 @@ public class BookApiProxy {
         
         java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        if (bookDataOrchestrator != null) {
-            bookDataOrchestrator.getBookByIdTiered(bookId)
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.getBookByIdTiered(" + bookId + ")"))
+        if (bookViewService != null) {
+            bookViewService.fetchBook(bookId)
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.fetchBook(" + bookId + ")"))
                 .subscribe(book -> {
                     if (book != null && resolved.compareAndSet(false, true)) {
-                        log.debug("BookApiProxy: Retrieved {} via orchestrator tier.", bookId);
+                        log.debug("BookApiProxy: Retrieved {} via Postgres tier.", bookId);
                         if (localCacheEnabled) {
                             saveBookToLocalCache(bookId, book);
                         }
                         future.complete(book);
                     }
                 }, ex -> {
-                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator lookup error for {}", bookId);
+                    LoggingUtils.warn(log, ex, "BookApiProxy: Repository lookup error for {}", bookId);
                     if (resolved.compareAndSet(false, true)) {
                         future.complete(null);
                     }
                 }, () -> {
                     if (resolved.compareAndSet(false, true)) {
-                        future.complete(null);
+                        resolveViaExternalFallback(bookId, future);
                     }
                 });
             return;
@@ -193,8 +204,19 @@ public class BookApiProxy {
             return;
         }
 
-        googleBooksService.getBookById(bookId)
-            .thenAccept(book -> {
+        final BookDataOrchestrator orchestrator = bookDataOrchestrator;
+
+        if (orchestrator == null) {
+            log.debug("BookDataOrchestrator unavailable; cannot resolve fallback for '{}'", bookId);
+            future.complete(null);
+            return;
+        }
+
+        orchestrator.fetchCanonicalBookReactive(bookId)
+            .subscribe(book -> {
+                if (future.isDone()) {
+                    return;
+                }
                 if (book != null && localCacheEnabled) {
                     saveBookToLocalCache(bookId, book);
                 }
@@ -209,11 +231,13 @@ public class BookApiProxy {
                 }
 
                 future.complete(book);
-            })
-            .exceptionally(ex -> {
-                LoggingUtils.error(log, ex, "Error retrieving book {}", bookId);
-                future.completeExceptionally(ex);
-                return null;
+            }, ex -> {
+                LoggingUtils.warn(log, ex, "BookDataOrchestrator fallback failed for {}", bookId);
+                future.complete(null);
+            }, () -> {
+                if (!future.isDone()) {
+                    future.complete(null);
+                }
             });
     }
     
@@ -287,9 +311,9 @@ public class BookApiProxy {
         }
         java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        if (bookDataOrchestrator != null) {
-            bookDataOrchestrator.searchBooksTiered(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
-                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.searchBooksTiered(" + normalizedQuery + "," + langCode + ")"))
+        if (bookViewService != null) {
+            bookViewService.searchBooks(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
+                .onErrorResume(ReactiveErrorUtils.logAndReturnEmpty("BookApiProxy.searchBooks(" + normalizedQuery + "," + langCode + ")"))
                 .subscribe(results -> {
                     List<Book> sanitized = sanitizeSearchResults(results);
                     if (!sanitized.isEmpty() && resolved.compareAndSet(false, true)) {
@@ -299,13 +323,13 @@ public class BookApiProxy {
                         future.complete(sanitized);
                     }
                 }, ex -> {
-                    LoggingUtils.warn(log, ex, "BookApiProxy: Orchestrator search error for '{}' (lang {})", normalizedQuery, langCode);
+                    LoggingUtils.warn(log, ex, "BookApiProxy: Repository search error for '{}' (lang {})", normalizedQuery, langCode);
                     if (resolved.compareAndSet(false, true)) {
-                        future.complete(List.of());
+                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
                     }
                 }, () -> {
                     if (resolved.compareAndSet(false, true)) {
-                        future.complete(List.of());
+                        continueSearchWithGoogle(normalizedQuery, originalQuery, langCode, future);
                     }
                 });
             return;
@@ -328,22 +352,37 @@ public class BookApiProxy {
             return;
         }
 
-        if (logApiCalls) {
-            log.info("Making REAL API call to Google Books for search: '{}'", normalizedQuery);
+        Mono<List<Book>> fallbackMono;
+        final BookDataOrchestrator orchestrator = this.bookDataOrchestrator;
+
+        if (orchestrator != null) {
+            if (logApiCalls) {
+                log.info("Invoking tiered search fallback for query '{}' (lang={})", normalizedQuery, langCode);
+            }
+            fallbackMono = orchestrator
+                .searchBooksTiered(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
+                .defaultIfEmpty(List.of());
+        } else {
+            if (logApiCalls) {
+                log.info("Tiered orchestrator unavailable; falling back to legacy Google search for '{}'", normalizedQuery);
+            }
+            fallbackMono = googleBooksService
+                .searchBooksAsyncReactive(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
+                .defaultIfEmpty(List.of());
         }
 
-        googleBooksService.searchBooksAsyncReactive(normalizedQuery, langCode, SEARCH_RESULT_LIMIT, null)
-            .defaultIfEmpty(List.of())
+        fallbackMono
             .map(this::sanitizeSearchResults)
+            .onErrorResume(error -> {
+                LoggingUtils.error(log, error, "Error searching externally for '{}'", normalizedQuery);
+                return Mono.just(List.of());
+            })
             .subscribe(results -> {
                 if (!results.isEmpty() && localCacheEnabled) {
                     saveSearchToLocalCache(originalQuery, langCode, results);
                 }
                 future.complete(results);
-            }, error -> {
-                LoggingUtils.error(log, error, "Error searching for '{}'", normalizedQuery);
-                future.completeExceptionally(error);
-            });
+            }, future::completeExceptionally);
     }
 
     /**

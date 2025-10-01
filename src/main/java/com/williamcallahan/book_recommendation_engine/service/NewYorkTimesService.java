@@ -13,7 +13,7 @@ package com.williamcallahan.book_recommendation_engine.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.williamcallahan.book_recommendation_engine.dto.BookCard;
-import com.williamcallahan.book_recommendation_engine.dto.DtoToBookMapper;
+import com.williamcallahan.book_recommendation_engine.util.BookDomainMapper;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository;
 import com.williamcallahan.book_recommendation_engine.util.LoggingUtils;
@@ -156,7 +156,7 @@ public class NewYorkTimesService {
     public Mono<List<Book>> getCurrentBestSellers(String listNameEncoded, int limit) {
         // Bridge to new method for backward compatibility
         return getCurrentBestSellersCards(listNameEncoded, limit)
-            .map(DtoToBookMapper::toBooks);
+            .map(BookDomainMapper::fromCards);
     }
 
 }

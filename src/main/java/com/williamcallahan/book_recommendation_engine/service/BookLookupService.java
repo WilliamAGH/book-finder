@@ -1,5 +1,7 @@
 package com.williamcallahan.book_recommendation_engine.service;
 
+import com.williamcallahan.book_recommendation_engine.model.ExternalIdentifierType;
+import com.williamcallahan.book_recommendation_engine.util.IdentifierClassifier;
 import com.williamcallahan.book_recommendation_engine.util.IsbnUtils;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
@@ -56,7 +58,7 @@ public class BookLookupService {
      * @return Optional containing the book ID if found
      */
     public Optional<String> findBookIdByIsbn13(String isbn13) {
-        if (ValidationUtils.isNullOrBlank(isbn13)) {
+        if (!ValidationUtils.hasText(isbn13)) {
             return Optional.empty();
         }
 
@@ -88,7 +90,7 @@ public class BookLookupService {
      * @return Optional containing the book ID if found
      */
     public Optional<String> findBookIdByIsbn10(String isbn10) {
-        if (ValidationUtils.isNullOrBlank(isbn10)) {
+        if (!ValidationUtils.hasText(isbn10)) {
             return Optional.empty();
         }
 
@@ -121,7 +123,7 @@ public class BookLookupService {
      * @return Optional containing the book ID if found
      */
     public Optional<String> findBookIdByExternalId(String source, String externalId) {
-        if (ValidationUtils.isNullOrBlank(source) || ValidationUtils.isNullOrBlank(externalId)) {
+        if (!ValidationUtils.hasText(source) || !ValidationUtils.hasText(externalId)) {
             return Optional.empty();
         }
 
@@ -155,7 +157,7 @@ public class BookLookupService {
      * @return Optional containing the book ID if it exists
      */
     public Optional<String> findBookById(String bookId) {
-        if (ValidationUtils.isNullOrBlank(bookId)) {
+        if (!ValidationUtils.hasText(bookId)) {
             return Optional.empty();
         }
 
@@ -170,34 +172,65 @@ public class BookLookupService {
     /**
      * Locate a book ID using any identifier stored in book_external_ids (external_id, provider_isbn13,
      * provider_isbn10, provider_asin). Used to consolidate scattered lookup patterns.
+     * 
+     * Bug #5 Fix: Uses IdentifierClassifier to only query appropriate columns based on identifier type.
+     * This prevents "Incorrect result size" errors from trying slugs as ISBNs/ASINs.
      */
     public Optional<String> findBookIdByExternalIdentifier(String identifier) {
-        if (ValidationUtils.isNullOrBlank(identifier)) {
+        if (!ValidationUtils.hasText(identifier)) {
             return Optional.empty();
         }
 
         String trimmed = identifier.trim();
-
-        return JdbcUtils.optionalString(
-                jdbcTemplate,
-                "SELECT book_id FROM book_external_ids WHERE external_id = ? LIMIT 1",
-                ex -> log.debug("Query failed for external_id {}: {}", trimmed, ex.getMessage()),
-                trimmed)
-            .or(() -> JdbcUtils.optionalString(
-                jdbcTemplate,
-                "SELECT book_id FROM book_external_ids WHERE provider_isbn13 = ? LIMIT 1",
-                ex -> log.debug("Query failed for provider_isbn13 {}: {}", trimmed, ex.getMessage()),
-                trimmed))
-            .or(() -> JdbcUtils.optionalString(
-                jdbcTemplate,
-                "SELECT book_id FROM book_external_ids WHERE provider_isbn10 = ? LIMIT 1",
-                ex -> log.debug("Query failed for provider_isbn10 {}: {}", trimmed, ex.getMessage()),
-                trimmed))
-            .or(() -> JdbcUtils.optionalString(
-                jdbcTemplate,
-                "SELECT book_id FROM book_external_ids WHERE provider_asin = ? LIMIT 1",
-                ex -> log.debug("Query failed for provider_asin {}: {}", trimmed, ex.getMessage()),
-                trimmed));
+        
+        // Bug #5: Classify identifier to determine which lookups to attempt
+        ExternalIdentifierType type = IdentifierClassifier.classify(trimmed);
+        log.debug("Classified identifier '{}' as {}", trimmed, type);
+        
+        // Route to appropriate lookup based on type
+        switch (type) {
+            case ISBN_13:
+                return findBookIdByIsbn13(trimmed);
+                
+            case ISBN_10:
+                return findBookIdByIsbn10(trimmed);
+                
+            case ASIN:
+                return JdbcUtils.optionalString(
+                    jdbcTemplate,
+                    "SELECT book_id FROM book_external_ids WHERE provider_asin = ? LIMIT 1",
+                    ex -> log.debug("Query failed for provider_asin {}: {}", trimmed, ex.getMessage()),
+                    trimmed);
+                    
+            case GOOGLE_BOOKS_ID:
+            case OPENLIBRARY_WORK:
+            case OPENLIBRARY_EDITION:
+                // Try external_id lookup for known external provider IDs
+                return JdbcUtils.optionalString(
+                    jdbcTemplate,
+                    "SELECT book_id FROM book_external_ids WHERE external_id = ? LIMIT 1",
+                    ex -> log.debug("Query failed for external_id {}: {}", trimmed, ex.getMessage()),
+                    trimmed);
+                    
+            case CANONICAL_ID:
+                // It's a UUID, check if it exists directly
+                return findBookById(trimmed);
+                
+            case SLUG:
+                // Slugs require a different lookup path - log and return empty
+                log.debug("Identifier '{}' is a slug - should use slug-specific lookup, not external IDs", trimmed);
+                return Optional.empty();
+                
+            case UNKNOWN:
+            default:
+                // Unknown type - try external_id as last resort but log warning
+                log.warn("Could not classify identifier '{}' - attempting external_id lookup only", trimmed);
+                return JdbcUtils.optionalString(
+                    jdbcTemplate,
+                    "SELECT book_id FROM book_external_ids WHERE external_id = ? LIMIT 1",
+                    ex -> log.debug("Query failed for external_id {}: {}", trimmed, ex.getMessage()),
+                    trimmed);
+        }
     }
 
     /**
