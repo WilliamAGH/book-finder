@@ -104,6 +104,90 @@ public class S3BookCoverService implements ExternalCoverService {
     }
 
     /**
+     * SSRF protection: validates that an image URL is safe to download
+     * @param imageUrl the URL to validate
+     * @return true if the URL is allowed, false otherwise
+     */
+    private boolean isAllowedImageUrl(String imageUrl) {
+        try {
+            java.net.URI uri = java.net.URI.create(imageUrl);
+            return isAllowedImageHost(uri);
+        } catch (Exception e) {
+            logger.warn("Invalid image URL format, blocking: {}", imageUrl);
+            return false;
+        }
+    }
+
+    /**
+     * SSRF protection: validates that a URI points to an allowed image host
+     * and does not resolve to private/internal IP addresses
+     * @param uri the URI to validate
+     * @return true if the host is allowed and safe, false otherwise
+     */
+    private boolean isAllowedImageHost(java.net.URI uri) {
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) {
+            return false;
+        }
+        String host = uri.getHost();
+        if (host == null) {
+            return false;
+        }
+        // Allowlist of known safe image CDN hosts
+        String[] allowedHosts = {
+            "books.googleusercontent.com",
+            "covers.openlibrary.org",
+            "images-na.ssl-images-amazon.com",
+            "images-eu.ssl-images-amazon.com",
+            "m.media-amazon.com",
+            "images.amazon.com",
+            "d1w7fb2mkkr3kw.cloudfront.net", // Open Library CDN
+            "ia600100.us.archive.org",  // Internet Archive
+            "ia800100.us.archive.org",
+            "ia601400.us.archive.org",
+            "ia800200.us.archive.org",
+            "syndetics.com",
+            "cdn.penguin.com",
+            "images.penguinrandomhouse.com",
+            "longitood.com" // Longitood service
+        };
+
+        boolean inAllowlist = false;
+        for (String allowedHost : allowedHosts) {
+            if (host.equals(allowedHost) || host.endsWith("." + allowedHost)) {
+                inAllowlist = true;
+                break;
+            }
+        }
+        if (!inAllowlist) {
+            return false;
+        }
+
+        // Additional protection: block private/internal IP addresses
+        try {
+            java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+            if (addr.isAnyLocalAddress() || addr.isLoopbackAddress() || addr.isSiteLocalAddress()) {
+                logger.warn("Blocked private IP address for host: {}", host);
+                return false;
+            }
+            String ip = addr.getHostAddress();
+            // Block common private/reserved ranges
+            if (ip.startsWith("169.254.") || // Link-local
+                ip.startsWith("127.") ||      // Loopback
+                ip.startsWith("10.") ||        // Private Class A
+                ip.startsWith("192.168.") ||   // Private Class C
+                ip.matches("^172\\.(1[6-9]|2\\d|3[0-1])\\..*")) { // Private Class B
+                logger.warn("Blocked reserved IP range for host: {} -> {}", host, ip);
+                return false;
+            }
+        } catch (Exception e) {
+            logger.warn("Could not resolve host for validation, blocking: {}", host);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Cleanup method called during bean destruction
      * - S3Client lifecycle managed by Spring
      */
@@ -321,9 +405,15 @@ public class S3BookCoverService implements ExternalCoverService {
     public Mono<ImageDetails> uploadCoverToS3Async(String imageUrl, String bookId, String source, ImageProvenanceData provenanceData) {
         if (!s3EnabledCheck || s3Client == null || imageUrl == null || imageUrl.isEmpty() || bookId == null || bookId.isEmpty()) {
             logger.debug("S3 upload skipped: S3 disabled/S3Client not available, or imageUrl/bookId is null/empty. ImageUrl: {}, BookId: {}", imageUrl, bookId);
-            return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL)); 
+            return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(imageUrl, source, imageUrl, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
         }
         final String s3Source = (source != null && !source.isEmpty()) ? source : "unknown";
+
+        // SSRF protection: validate URL before downloading
+        if (!isAllowedImageUrl(imageUrl)) {
+            logger.warn("Blocked non-allowed or potentially unsafe image URL for book {}: {}", bookId, imageUrl);
+            return Mono.just(new com.williamcallahan.book_recommendation_engine.model.image.ImageDetails(imageUrl, source, "blocked-unsafe-url-" + bookId, CoverImageSource.ANY, ImageResolutionPreference.ORIGINAL));
+        }
 
         return webClient.get().uri(imageUrl).retrieve().bodyToMono(byte[].class)
             .timeout(Duration.ofSeconds(10))
