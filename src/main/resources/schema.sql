@@ -15,6 +15,7 @@ create table if not exists books (
   publisher text, -- JSON: volumeInfo.publisher
   page_count integer, -- JSON: volumeInfo.pageCount or volumeInfo.printedPageCount
   -- Removed edition_number and edition_group_key (replaced with work_clusters system)
+  s3_image_path text, -- Primary cover image URL (S3 or external) - canonical cover for this book
   slug text unique, -- SEO-friendly URL slug (e.g., 'harry-potter-philosophers-stone-j-k-rowling')
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -33,7 +34,7 @@ create unique index if not exists uq_books_isbn13 on books(isbn13) where isbn13 
 create unique index if not exists uq_books_isbn10 on books(isbn10) where isbn10 is not null;
 -- Removed idx_books_edition_group_key index (using work_clusters instead)
 create index if not exists idx_books_slug on books(slug); -- Always index slug for URL lookups
--- Removed idx_books_s3_image_path - images are now tracked in book_image_links table
+create index if not exists idx_books_s3_image_path on books(s3_image_path) where s3_image_path is not null;
 create index if not exists idx_books_created_at on books(created_at desc);
 create index if not exists idx_books_updated_at on books(updated_at desc);
 create index if not exists idx_books_search_vector on books using gin (search_vector);
@@ -51,6 +52,7 @@ comment on column books.language is 'Language code (ISO 639-1) from volumeInfo.l
 comment on column books.publisher is 'Publisher name from volumeInfo.publisher';
 comment on column books.page_count is 'Page count from volumeInfo.pageCount or printedPageCount';
 -- Removed edition_number and edition_group_key column comments (using work_clusters instead)
+comment on column books.s3_image_path is 'Primary cover image URL (S3 or external) - canonical cover for this book';
 comment on column books.slug is 'SEO-friendly URL slug generated once at creation, remains stable even if title/authors change';
 
 -- External IDs mapping for many-to-one association to canonical books
@@ -403,6 +405,9 @@ create table if not exists book_image_links (
   image_type text not null, -- JSON keys: 'smallThumbnail', 'thumbnail', 'small', 'medium', 'large', 'extraLarge'
   url text not null, -- JSON: volumeInfo.imageLinks.{imageType} - full external URL
   source text, -- 'GOOGLE_BOOKS', etc. - which API provided this image
+  width integer, -- Image width in pixels (estimated or actual)
+  height integer, -- Image height in pixels (estimated or actual)
+  is_high_resolution boolean default false, -- True for extraLarge/large images
   created_at timestamptz not null default now(),
   unique(book_id, image_type)
 );
@@ -413,6 +418,9 @@ create index if not exists idx_book_image_links_book_id on book_image_links(book
 comment on table book_image_links is 'Maps external image URLs to our S3-persisted copies';
 comment on column book_image_links.image_type is 'Image size: smallThumbnail, thumbnail, small, medium, large, extraLarge';
 comment on column book_image_links.url is 'External URL from volumeInfo.imageLinks';
+comment on column book_image_links.width is 'Image width in pixels (estimated or detected)';
+comment on column book_image_links.height is 'Image height in pixels (estimated or detected)';
+comment on column book_image_links.is_high_resolution is 'True for high-resolution images (extraLarge, large)';
 
 
 -- Unified collections table for categories, lists, and custom collections
@@ -852,33 +860,8 @@ comment on column book_recommendations.expires_at is 'When to refresh this recom
 -- ============================================================================
 -- ASYNC BACKFILL INFRASTRUCTURE
 -- ============================================================================
-
--- Backfill task queue for asynchronous book data fetching from external APIs
--- Implements idempotent deduplication to prevent duplicate API calls
-create table if not exists backfill_tasks (
-  id bigserial primary key,
-  source text not null, -- 'GOOGLE_BOOKS', 'OPEN_LIBRARY', 'AMAZON', etc.
-  source_id text not null, -- External provider's book ID
-  status text not null default 'QUEUED', -- QUEUED, PROCESSING, COMPLETED, FAILED
-  attempts int not null default 0,
-  max_attempts int not null default 3,
-  dedupe_key text not null unique, -- source || '|' || source_id for idempotency
-  error_message text,
-  priority int not null default 5, -- 1=highest (user-facing), 10=lowest (background)
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  completed_at timestamptz
-);
-
-create index if not exists idx_backfill_tasks_status_priority on backfill_tasks(status, priority, created_at) where status = 'QUEUED';
-create index if not exists idx_backfill_tasks_source_id on backfill_tasks(source, source_id);
-create index if not exists idx_backfill_tasks_completed on backfill_tasks(completed_at desc) where completed_at is not null;
-
-comment on table backfill_tasks is 'Queue for asynchronous book data fetching from external APIs with deduplication';
-comment on column backfill_tasks.source is 'External API source: GOOGLE_BOOKS, OPEN_LIBRARY, AMAZON';
-comment on column backfill_tasks.source_id is 'Provider-specific book identifier';
-comment on column backfill_tasks.dedupe_key is 'Unique key (source|source_id) to prevent duplicate API calls';
-comment on column backfill_tasks.priority is '1=highest priority (user-facing search), 10=lowest (background enrichment)';
+-- NOTE: Backfill queue now uses BackfillQueueService (in-memory queue)
+-- instead of database table. See BackfillQueueService.java and BackfillCoordinator.java
 
 -- Transactional outbox pattern for WebSocket events
 -- Ensures events are reliably delivered even if WebSocket publish fails

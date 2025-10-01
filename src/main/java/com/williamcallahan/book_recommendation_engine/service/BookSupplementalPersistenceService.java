@@ -29,13 +29,13 @@ public class BookSupplementalPersistenceService {
     }
 
     public void persistAuthors(String bookId, List<String> authors) {
-        if (jdbcTemplate == null || ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(authors)) {
+        if (jdbcTemplate == null || !ValidationUtils.hasText(bookId) || ValidationUtils.isNullOrEmpty(authors)) {
             return;
         }
 
         int position = 0;
         for (String author : authors) {
-            if (ValidationUtils.isNullOrBlank(author)) {
+            if (!ValidationUtils.hasText(author)) {
                 continue;
             }
             String normalized = author.toLowerCase().replaceAll("[^a-z0-9\\s]", "").trim();
@@ -53,12 +53,12 @@ public class BookSupplementalPersistenceService {
     }
 
     public void persistCategories(String bookId, List<String> categories) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(categories)) {
+        if (!ValidationUtils.hasText(bookId) || ValidationUtils.isNullOrEmpty(categories)) {
             return;
         }
 
         for (String category : categories) {
-            if (ValidationUtils.isNullOrBlank(category)) {
+            if (!ValidationUtils.hasText(category)) {
                 continue;
             }
             collectionPersistenceService.upsertCategory(category)
@@ -67,12 +67,12 @@ public class BookSupplementalPersistenceService {
     }
 
     public void assignQualifierTags(String bookId, Map<String, Object> qualifiers) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrEmpty(qualifiers)) {
+        if (!ValidationUtils.hasText(bookId) || ValidationUtils.isNullOrEmpty(qualifiers)) {
             return;
         }
 
         qualifiers.forEach((key, value) -> {
-            if (ValidationUtils.isNullOrBlank(key)) {
+            if (!ValidationUtils.hasText(key)) {
                 return;
             }
             Double confidence = (value instanceof Boolean && (Boolean) value) ? 1.0 : null;
@@ -94,7 +94,7 @@ public class BookSupplementalPersistenceService {
                            String source,
                            Double confidence,
                            Map<String, Object> metadata) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrBlank(key)) {
+        if (!ValidationUtils.hasText(bookId) || !ValidationUtils.hasText(key)) {
             return;
         }
         String resolvedDisplayName = displayName != null ? displayName : key;
@@ -177,7 +177,7 @@ public class BookSupplementalPersistenceService {
                                                  String source,
                                                  Double confidence,
                                                  String metadataJson) {
-        if (ValidationUtils.isNullOrBlank(bookId) || ValidationUtils.isNullOrBlank(key)) {
+        if (!ValidationUtils.hasText(bookId) || !ValidationUtils.hasText(key)) {
             return;
         }
 

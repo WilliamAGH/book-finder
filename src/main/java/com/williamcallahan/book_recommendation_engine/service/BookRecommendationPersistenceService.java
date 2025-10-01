@@ -4,18 +4,20 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
 import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
+import reactor.core.scheduler.Schedulers;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Objects;
 
 /**
  * Persists recommendation relationships to Postgres so downstream flows (e.g. similarity)
@@ -30,12 +32,12 @@ public class BookRecommendationPersistenceService {
     private static final double SCORE_NORMALIZER = 10.0d; // keeps stored scores within 0..1 range
 
     private final JdbcTemplate jdbcTemplate;
-    private final BookDataOrchestrator bookDataOrchestrator;
+    private final BookLookupService bookLookupService;
 
     public BookRecommendationPersistenceService(JdbcTemplate jdbcTemplate,
-                                                BookDataOrchestrator bookDataOrchestrator) {
+                                                BookLookupService bookLookupService) {
         this.jdbcTemplate = jdbcTemplate;
-        this.bookDataOrchestrator = bookDataOrchestrator;
+        this.bookLookupService = bookLookupService;
     }
 
     public Mono<Void> persistPipelineRecommendations(Book sourceBook, List<RecommendationRecord> recommendations) {
@@ -109,28 +111,37 @@ public class BookRecommendationPersistenceService {
         UUID uuid = UuidUtils.parseUuidOrNull(identifier);
         if (uuid != null) {
             return Mono.just(uuid);
-        } else {
-            if (bookDataOrchestrator == null) {
-                return Mono.empty();
-            }
-            return bookDataOrchestrator.getBookByIdTiered(identifier)
-                .flatMap(resolved -> {
-                    if (resolved == null || resolved.getId() == null) {
-                        return Mono.empty();
-                    }
-                    UUID resolvedUuid = UuidUtils.parseUuidOrNull(resolved.getId());
-                    if (resolvedUuid != null) {
-                        return Mono.just(resolvedUuid);
-                    } else {
-                        log.debug("Resolved book {} still lacks canonical UUID: {}", identifier, resolved.getId());
-                        return Mono.empty();
-                    }
-                })
-                .onErrorResume(err -> {
-                    log.debug("Error resolving canonical book for {}: {}", identifier, err.getMessage());
-                    return Mono.empty();
-                });
         }
+
+        return Mono.fromCallable(() -> resolveCanonicalUuidSync(book))
+            .subscribeOn(Schedulers.boundedElastic())
+            .flatMap(optional -> optional.map(Mono::just).orElseGet(Mono::empty))
+            .onErrorResume(err -> {
+                log.debug("Error resolving canonical book for {}: {}", identifier, err.getMessage());
+                return Mono.empty();
+            });
+    }
+
+    private Optional<UUID> resolveCanonicalUuidSync(Book book) {
+        if (bookLookupService == null) {
+            return Optional.empty();
+        }
+
+        // Try ISBNs first (most reliable)
+        Optional<String> resolved = Optional.empty();
+        if (book.getIsbn13() != null) {
+            resolved = bookLookupService.findBookIdByIsbn13(book.getIsbn13());
+        }
+        if (resolved.isEmpty() && book.getIsbn10() != null) {
+            resolved = bookLookupService.findBookIdByIsbn10(book.getIsbn10());
+        }
+        if (resolved.isEmpty() && book.getId() != null) {
+            resolved = bookLookupService.findBookIdByExternalIdentifier(book.getId());
+        }
+
+        return resolved
+            .map(UuidUtils::parseUuidOrNull)
+            .filter(Objects::nonNull);
     }
 
     private String formatReasons(List<String> reasons) {

@@ -48,7 +48,7 @@ public class RecentBookViewRepository {
      */
     @Async
     public void recordView(String canonicalBookId, @Nullable Instant viewedAt, @Nullable String source) {
-        if (!isEnabled() || ValidationUtils.isNullOrBlank(canonicalBookId)) {
+        if (!isEnabled() || !ValidationUtils.hasText(canonicalBookId)) {
             return;
         }
 
@@ -60,7 +60,7 @@ public class RecentBookViewRepository {
                     ps -> {
                         ps.setString(1, canonicalBookId);
                         ps.setTimestamp(2, Timestamp.from(effectiveInstant));
-                        if (ValidationUtils.isNullOrBlank(source)) {
+                        if (!ValidationUtils.hasText(source)) {
                             ps.setNull(3, java.sql.Types.VARCHAR);
                         } else {
                             ps.setString(3, source);
@@ -76,7 +76,7 @@ public class RecentBookViewRepository {
      * Fetches aggregate view statistics for a single book over standard windows.
      */
     public Optional<ViewStats> fetchStatsForBook(String canonicalBookId) {
-        if (!isEnabled() || ValidationUtils.isNullOrBlank(canonicalBookId)) {
+        if (!isEnabled() || !ValidationUtils.hasText(canonicalBookId)) {
             return Optional.empty();
         }
 

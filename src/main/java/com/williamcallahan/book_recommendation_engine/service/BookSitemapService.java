@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -100,7 +102,10 @@ public class BookSitemapService {
 
         try {
             String payload = buildSnapshotPayload(snapshot);
-            s3StorageService.uploadGenericJsonAsync(s3Key, payload, true).join();
+            byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+            try (ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes)) {
+                s3StorageService.uploadFileAsync(s3Key, inputStream, bytes.length, "application/json").join();
+            }
             log.info("Uploaded sitemap snapshot ({} entries) to S3 key '{}'.", snapshot.books().size(), s3Key);
             return true;
         } catch (Exception e) {
@@ -109,6 +114,12 @@ public class BookSitemapService {
         }
     }
 
+    /**
+     * @deprecated Remove tiered Book hydration from sitemap sync; rely on
+     * {@link com.williamcallahan.book_recommendation_engine.repository.BookQueryRepository#fetchBookDetail(java.util.UUID)}
+     * for any required detail lookups.
+     */
+    @Deprecated(since = "2025-10-01", forRemoval = true)
     public ExternalHydrationSummary hydrateExternally(List<BookSitemapItem> items, int limit) {
         if (items == null || items.isEmpty() || limit <= 0) {
             return new ExternalHydrationSummary(0, 0, 0, 0);
@@ -127,7 +138,7 @@ public class BookSitemapService {
 
         for (BookSitemapItem item : slice) {
             try {
-                Mono<Book> mono = bookDataOrchestrator.getBookByIdTiered(item.bookId());
+                Mono<Book> mono = bookDataOrchestrator.fetchCanonicalBookReactive(item.bookId());
                 boolean present = mono.timeout(Duration.ofSeconds(15))
                         .blockOptional(Duration.ofSeconds(20))
                         .isPresent();

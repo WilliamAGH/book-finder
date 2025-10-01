@@ -43,21 +43,8 @@ BEGIN
             ARRAY_AGG(a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL),
             ARRAY[]::TEXT[]
         ) as authors,
-        -- Get best cover image (prefer extraLarge → large → medium → external → small → thumbnail → smallThumbnail)
-        (SELECT bil.url 
-         FROM book_image_links bil 
-         WHERE bil.book_id = b.id 
-         ORDER BY CASE bil.image_type
-                   WHEN 'extraLarge' THEN 1
-                   WHEN 'large' THEN 2
-                   WHEN 'medium' THEN 3
-                   WHEN 'external' THEN 4
-                   WHEN 'small' THEN 5
-                   WHEN 'thumbnail' THEN 6
-                   WHEN 'smallThumbnail' THEN 7
-                   ELSE 8
-                  END
-         LIMIT 1) as cover_url,
+        -- Primary cover image from books table (restored column)
+        b.s3_image_path as cover_url,
         bei.average_rating,
         bei.ratings_count,
         -- Aggregate tags as JSONB
@@ -116,21 +103,8 @@ BEGIN
             FILTER (WHERE bc.display_name IS NOT NULL AND bc.collection_type = 'CATEGORY'),
             ARRAY[]::TEXT[]
         ) as categories,
-        -- Get best cover image
-        (SELECT bil.url 
-         FROM book_image_links bil 
-         WHERE bil.book_id = b.id 
-         ORDER BY CASE bil.image_type
-                   WHEN 'extraLarge' THEN 1
-                   WHEN 'large' THEN 2
-                   WHEN 'medium' THEN 3
-                   WHEN 'external' THEN 4
-                   WHEN 'small' THEN 5
-                   WHEN 'thumbnail' THEN 6
-                   WHEN 'smallThumbnail' THEN 7
-                   ELSE 8
-                  END
-         LIMIT 1) as cover_url,
+        -- Primary cover image from books table (restored column)
+        b.s3_image_path as cover_url,
         bei.average_rating,
         bei.ratings_count,
         -- Aggregate tags
@@ -174,6 +148,10 @@ RETURNS TABLE (
     categories TEXT[],
     cover_url TEXT,
     thumbnail_url TEXT,
+    cover_width INTEGER,
+    cover_height INTEGER,
+    cover_is_high_resolution BOOLEAN,
+    data_source TEXT,
     average_rating NUMERIC,
     ratings_count INTEGER,
     isbn_10 TEXT,
@@ -205,21 +183,8 @@ BEGIN
             FILTER (WHERE bc.display_name IS NOT NULL AND bc.collection_type = 'CATEGORY'),
             ARRAY[]::TEXT[]
         ) as categories,
-        -- Get large cover for detail page
-        (SELECT bil.url 
-         FROM book_image_links bil 
-         WHERE bil.book_id = b.id 
-         ORDER BY CASE bil.image_type
-                   WHEN 'extraLarge' THEN 1
-                   WHEN 'large' THEN 2
-                   WHEN 'medium' THEN 3
-                   WHEN 'external' THEN 4
-                   WHEN 'small' THEN 5
-                   WHEN 'thumbnail' THEN 6
-                   WHEN 'smallThumbnail' THEN 7
-                   ELSE 8
-                  END
-         LIMIT 1) as cover_url,
+        -- Primary cover image from books table (restored column)
+        b.s3_image_path as cover_url,
         -- Get thumbnail for smaller displays
         (SELECT bil.url 
          FROM book_image_links bil 
@@ -235,6 +200,20 @@ BEGIN
                    ELSE 8
                   END
          LIMIT 1) as thumbnail_url,
+        cover_meta.width as cover_width,
+        cover_meta.height as cover_height,
+        cover_meta.is_high_resolution as cover_is_high_resolution,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM book_collections_join bcj_nyt
+                JOIN book_collections bc_nyt ON bc_nyt.id = bcj_nyt.collection_id
+                WHERE bcj_nyt.book_id = b.id
+                  AND bc_nyt.source = 'NYT'
+                LIMIT 1
+            ) THEN 'NYT'
+            ELSE COALESCE(provider_source.source, 'POSTGRES')
+        END as data_source,
         bei.average_rating,
         bei.ratings_count,
         b.isbn10 as isbn_10,
@@ -255,10 +234,47 @@ BEGIN
     LEFT JOIN book_collections_join bcj ON bcj.book_id = b.id
     LEFT JOIN book_collections bc ON bc.id = bcj.collection_id
     LEFT JOIN book_external_ids bei ON bei.book_id = b.id AND bei.source = 'GOOGLE_BOOKS'
+    LEFT JOIN LATERAL (
+        SELECT source
+        FROM book_external_ids bei_primary
+        WHERE bei_primary.book_id = b.id
+        ORDER BY CASE bei_primary.source
+                    WHEN 'GOOGLE_BOOKS' THEN 0
+                    WHEN 'OPEN_LIBRARY' THEN 1
+                    WHEN 'AMAZON' THEN 2
+                    ELSE 3
+                 END,
+                 bei_primary.external_id
+        LIMIT 1
+    ) provider_source ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT bil_meta.width,
+               bil_meta.height,
+               bil_meta.is_high_resolution
+        FROM book_image_links bil_meta
+        WHERE bil_meta.book_id = b.id
+          AND (
+              b.s3_image_path IS NULL
+              OR coalesce(bil_meta.s3_image_path, bil_meta.url) = b.s3_image_path
+          )
+        ORDER BY
+            CASE
+                WHEN b.s3_image_path IS NOT NULL AND coalesce(bil_meta.s3_image_path, bil_meta.url) = b.s3_image_path THEN 0
+                WHEN bil_meta.image_type = 'extraLarge' THEN 1
+                WHEN bil_meta.image_type = 'large' THEN 2
+                WHEN bil_meta.image_type = 'medium' THEN 3
+                WHEN bil_meta.image_type = 'small' THEN 4
+                WHEN bil_meta.image_type = 'thumbnail' THEN 5
+                ELSE 6
+            END
+        LIMIT 1
+    ) cover_meta ON TRUE
     WHERE b.id = book_id_param
     GROUP BY b.id, b.slug, b.title, b.description, b.publisher, b.published_date, 
              b.language, b.page_count, b.isbn10, b.isbn13,
-             bei.average_rating, bei.ratings_count, bei.preview_link, bei.info_link;
+             bei.average_rating, bei.ratings_count, bei.preview_link, bei.info_link,
+             cover_meta.width, cover_meta.height, cover_meta.is_high_resolution,
+             provider_source.source;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -291,17 +307,8 @@ BEGIN
         b.published_date,
         b.publisher,
         b.isbn13 as isbn_13,
-        (SELECT bil.url 
-         FROM book_image_links bil 
-         WHERE bil.book_id = b.id 
-           AND bil.image_type IN ('thumbnail', 'smallThumbnail', 'medium')
-         ORDER BY CASE bil.image_type
-                   WHEN 'thumbnail' THEN 1
-                   WHEN 'medium' THEN 2
-                   WHEN 'smallThumbnail' THEN 3
-                   ELSE 4
-                  END
-         LIMIT 1) as cover_url,
+        -- Primary cover image from books table (restored column)
+        b.s3_image_path as cover_url,
         b.language,
         b.page_count
     FROM books b
