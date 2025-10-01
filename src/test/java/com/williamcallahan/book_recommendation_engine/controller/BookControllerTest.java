@@ -2,7 +2,6 @@ package com.williamcallahan.book_recommendation_engine.controller;
 
 import com.williamcallahan.book_recommendation_engine.dto.BookCard;
 import com.williamcallahan.book_recommendation_engine.dto.BookDetail;
-import com.williamcallahan.book_recommendation_engine.dto.BookListItem;
 import com.williamcallahan.book_recommendation_engine.dto.RecommendationCard;
 import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImageSource;
@@ -11,6 +10,7 @@ import com.williamcallahan.book_recommendation_engine.repository.BookQueryReposi
 import com.williamcallahan.book_recommendation_engine.service.BookDataOrchestrator;
 import com.williamcallahan.book_recommendation_engine.service.BookIdentifierResolver;
 import com.williamcallahan.book_recommendation_engine.service.BookSearchService;
+import com.williamcallahan.book_recommendation_engine.service.SearchPaginationService;
 import com.williamcallahan.book_recommendation_engine.service.image.BookImageOrchestrationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -37,6 +37,8 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -46,7 +48,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @ExtendWith(MockitoExtension.class)
@@ -67,13 +68,21 @@ class BookControllerTest {
     @Mock
     private BookImageOrchestrationService bookImageOrchestrationService;
 
+    @Mock
+    private SearchPaginationService searchPaginationService;
+
     private MockMvc mockMvc;
 
     private Book fixtureBook;
 
     @BeforeEach
     void setUp() {
-        BookController bookController = new BookController(bookSearchService, bookQueryRepository, bookIdentifierResolver);
+        BookController bookController = new BookController(
+            bookSearchService,
+            bookQueryRepository,
+            bookIdentifierResolver,
+            searchPaginationService
+        );
         BookCoverController bookCoverController = new BookCoverController(
             bookImageOrchestrationService,
             bookQueryRepository,
@@ -88,26 +97,25 @@ class BookControllerTest {
     @Test
     @DisplayName("GET /api/books/search returns DTO results")
     void searchBooks_returnsDtos() throws Exception {
-        UUID bookUuid = UUID.fromString(fixtureBook.getId());
-        List<BookSearchService.SearchResult> searchResults = List.of(
-            new BookSearchService.SearchResult(bookUuid, 0.92, "POSTGRES")
-        );
-        Map<String, Object> tags = Map.of("nytBestseller", Map.of("rank", 1));
-        BookListItem listItem = new BookListItem(
-            fixtureBook.getId(),
-            fixtureBook.getSlug(),
-            fixtureBook.getTitle(),
-            fixtureBook.getDescription(),
-            fixtureBook.getAuthors(),
-            fixtureBook.getCategories(),
-            fixtureBook.getCoverImages().getPreferredUrl(),
-            4.8,
-            123,
-            tags
+        fixtureBook.addQualifier("search.matchType", "POSTGRES");
+        fixtureBook.addQualifier("search.relevanceScore", 0.92);
+
+        SearchPaginationService.SearchPage page = new SearchPaginationService.SearchPage(
+            "Fixture",
+            0,
+            5,
+            10,
+            1,
+            List.of(fixtureBook),
+            List.of(fixtureBook),
+            true,
+            5,
+            1,
+            "newest"
         );
 
-        when(bookSearchService.searchBooks(eq("Fixture"), anyInt())).thenReturn(searchResults);
-        when(bookQueryRepository.fetchBookListItems(eq(List.of(bookUuid)))).thenReturn(List.of(listItem));
+        when(searchPaginationService.search(any(SearchPaginationService.SearchRequest.class)))
+            .thenReturn(Mono.just(page));
 
         performAsync(get("/api/books/search")
             .param("query", "Fixture")
@@ -119,9 +127,12 @@ class BookControllerTest {
             .andExpect(jsonPath("$.results[0].id", equalTo(fixtureBook.getId())))
             .andExpect(jsonPath("$.results[0].slug", equalTo(fixtureBook.getSlug())))
             .andExpect(jsonPath("$.results[0].cover.preferredUrl", containsString("preferred")))
-            .andExpect(jsonPath("$.results[0].tags[0].key", equalTo("nytBestseller")))
-            .andExpect(jsonPath("$.results[0].tags[0].attributes.rank", equalTo(1)))
-            .andExpect(jsonPath("$.results[0].matchType", equalTo("POSTGRES")));
+            .andExpect(jsonPath("$.results[0].tags[*].key", hasItems("search.matchType", "search.relevanceScore", "nytBestseller")))
+            .andExpect(jsonPath("$.results[0].tags[*].attributes.rank", hasItem(1)))
+            .andExpect(jsonPath("$.results[0].matchType", equalTo("POSTGRES")))
+            .andExpect(jsonPath("$.hasMore", equalTo(true)))
+            .andExpect(jsonPath("$.nextStartIndex", equalTo(5)))
+            .andExpect(jsonPath("$.prefetchedCount", equalTo(1)));
     }
 
     @Test
@@ -263,10 +274,12 @@ class BookControllerTest {
     }
 
     private ResultActions performAsync(MockHttpServletRequestBuilder builder) throws Exception {
-        MvcResult result = mockMvc.perform(builder)
-            .andExpect(request().asyncStarted())
-            .andReturn();
-        return mockMvc.perform(asyncDispatch(result));
+        ResultActions initial = mockMvc.perform(builder);
+        MvcResult mvcResult = initial.andReturn();
+        if (mvcResult.getRequest().isAsyncStarted()) {
+            return mockMvc.perform(asyncDispatch(mvcResult));
+        }
+        return initial;
     }
 
     private Book buildBook(String id, String slug) {
@@ -289,7 +302,7 @@ class BookControllerTest {
             "https://cdn.test/preferred/" + id + ".jpg",
             "https://cdn.test/fallback/" + id + ".jpg",
             CoverImageSource.GOOGLE_BOOKS));
-        book.setQualifiers(Map.of("nytBestseller", Map.of("rank", 1)));
+        book.setQualifiers(new java.util.HashMap<>(Map.of("nytBestseller", Map.of("rank", 1))));
         book.setCachedRecommendationIds(List.of("rec-1", "rec-2"));
         book.setPublishedDate(Date.from(Instant.parse("2020-01-01T00:00:00Z")));
         book.setDataSource("POSTGRES");
