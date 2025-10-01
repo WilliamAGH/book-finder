@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.williamcallahan.book_recommendation_engine.util.ApplicationConstants;
 import com.williamcallahan.book_recommendation_engine.util.IdGenerator;
 import com.williamcallahan.book_recommendation_engine.util.JdbcUtils;
+import com.williamcallahan.book_recommendation_engine.util.UuidUtils;
 import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,6 +34,12 @@ public class BookSupplementalPersistenceService {
             return;
         }
 
+        // Validate bookId is a valid UUID before attempting conversion
+        UUID bookUuid = UuidUtils.parseUuidOrNull(bookId);
+        if (bookUuid == null) {
+            throw new IllegalArgumentException("Invalid UUID format for bookId: " + bookId);
+        }
+
         int position = 0;
         for (String author : authors) {
             if (!ValidationUtils.hasText(author)) {
@@ -45,7 +52,7 @@ public class BookSupplementalPersistenceService {
                 "INSERT INTO book_authors_join (id, book_id, author_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW()) " +
                 "ON CONFLICT (book_id, author_id) DO UPDATE SET position = EXCLUDED.position, updated_at = NOW()",
                 IdGenerator.generateLong(),
-                UUID.fromString(bookId),
+                bookUuid,
                 authorId,
                 position++
             );
