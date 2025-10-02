@@ -730,13 +730,7 @@ public class HomeController {
     public ResponseEntity<Void> explore() {
         String selectedQuery = EXPLORE_QUERIES.get(ThreadLocalRandom.current().nextInt(EXPLORE_QUERIES.size()));
         log.info("Explore page requested, redirecting to search with query: '{}'", selectedQuery);
-        try {
-            String encodedQuery = URLEncoder.encode(selectedQuery, StandardCharsets.UTF_8.toString());
-            return redirectTo("/search?query=" + encodedQuery + "&source=explore");
-        } catch (java.io.UnsupportedEncodingException e) {
-            log.error("Error encoding query parameter for explore redirect: {}", selectedQuery, e);
-            // Fallback to redirect without query or to an error page if critical
-            return redirectTo("/search?source=explore&error=queryEncoding");
-        }
+        String encodedQuery = URLEncoder.encode(selectedQuery, StandardCharsets.UTF_8);
+        return redirectTo("/search?query=" + encodedQuery + "&source=explore");
     }
 }

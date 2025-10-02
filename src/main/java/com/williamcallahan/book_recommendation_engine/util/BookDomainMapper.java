@@ -9,12 +9,14 @@ import com.williamcallahan.book_recommendation_engine.model.Book;
 import com.williamcallahan.book_recommendation_engine.model.Book.EditionInfo;
 import com.williamcallahan.book_recommendation_engine.model.image.CoverImages;
 import com.williamcallahan.book_recommendation_engine.model.image.ImageDetails;
+import com.williamcallahan.book_recommendation_engine.util.ValidationUtils;
 import com.williamcallahan.book_recommendation_engine.util.cover.UrlSourceDetector;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -70,6 +72,8 @@ public final class BookDomainMapper {
         book.setRatingsCount(card.ratingsCount());
         book.setQualifiers(copyMap(card.tags()));
         setCoverImages(book, card.coverUrl(), card.coverUrl());
+        book.setRetrievedFrom("POSTGRES");
+        book.setInPostgres(true);
         return book;
     }
 
@@ -94,6 +98,8 @@ public final class BookDomainMapper {
         book.setRatingsCount(item.ratingsCount());
         book.setQualifiers(copyMap(item.tags()));
         setCoverImages(book, item.coverUrl(), item.coverUrl());
+        book.setRetrievedFrom("POSTGRES");
+        book.setInPostgres(true);
         return book;
     }
 
@@ -149,6 +155,14 @@ public final class BookDomainMapper {
 
         book.setEditionNumber(aggregate.getEditionNumber());
         book.setEditionGroupKey(aggregate.getEditionGroupKey());
+        book.setInPostgres(false);
+        String source = identifiers != null ? identifiers.getSource() : null;
+        if (ValidationUtils.hasText(source)) {
+            book.setRetrievedFrom(source);
+            book.setDataSource(source);
+        } else {
+            book.setRetrievedFrom("EXTERNAL_API");
+        }
         return book;
     }
 
@@ -191,7 +205,10 @@ public final class BookDomainMapper {
     }
 
     private static Map<String, Object> copyMap(Map<String, Object> source) {
-        return (source == null || source.isEmpty()) ? Map.of() : Map.copyOf(source);
+        if (source == null || source.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        return new LinkedHashMap<>(source);
     }
 
     private static List<EditionInfo> toEditionInfo(List<EditionSummary> summaries) {

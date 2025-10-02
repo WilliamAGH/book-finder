@@ -18,11 +18,12 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.util.UriUtils;
 
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -78,9 +79,17 @@ public class SitemapController {
         String baseUrl = sitemapProperties.getBaseUrl();
 
         Map<Integer, Instant> bookLastModified = sitemapService.getBookSitemapPageMetadata().stream()
-                .collect(Collectors.toMap(SitemapService.SitemapPageMetadata::page, SitemapService.SitemapPageMetadata::lastModified));
+                .collect(Collectors.toMap(
+                        SitemapService.SitemapPageMetadata::page,
+                        SitemapService.SitemapPageMetadata::lastModified,
+                        (a, b) -> b,
+                        LinkedHashMap::new));
         Map<Integer, Instant> authorLastModified = sitemapService.getAuthorSitemapPageMetadata().stream()
-                .collect(Collectors.toMap(SitemapService.SitemapPageMetadata::page, SitemapService.SitemapPageMetadata::lastModified));
+                .collect(Collectors.toMap(
+                        SitemapService.SitemapPageMetadata::page,
+                        SitemapService.SitemapPageMetadata::lastModified,
+                        (a, b) -> b,
+                        LinkedHashMap::new));
 
         Instant bookFallback = sitemapService.currentBookFingerprint().lastModified();
         Instant authorFallback = sitemapService.currentAuthorFingerprint().lastModified();
@@ -179,18 +188,10 @@ public class SitemapController {
         if (slug == null || slug.isBlank()) {
             return "unknown";
         }
-        // Slugs should already be URL-safe (lowercase, hyphens, alphanumeric)
-        // But handle edge cases where encoding is needed
-        try {
-            // Only encode if it contains characters that need encoding
-            if (slug.matches("[a-z0-9-]+")) {
-                return slug; // Already safe
-            }
-            return URLEncoder.encode(slug, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            // Fallback to basic sanitization
-            return slug.replaceAll("[^a-zA-Z0-9-]", "-");
+        if (slug.matches("[a-z0-9-]+")) {
+            return slug;
         }
+        return UriUtils.encodePathSegment(slug, StandardCharsets.UTF_8);
     }
 
     private String escapeXml(String value) {

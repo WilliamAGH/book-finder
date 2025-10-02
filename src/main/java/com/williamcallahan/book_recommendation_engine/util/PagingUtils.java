@@ -50,8 +50,18 @@ public final class PagingUtils {
                                  int totalCap) {
         int safeStart = Math.max(0, requestedStart);
         int safeLimit = safeLimit(requestedSize, defaultSize, minSize, maxSize);
-        int cappedTotal = totalCap > 0 ? Math.min(totalCap, safeStart + safeLimit) : safeStart + safeLimit;
-        return new Window(safeStart, safeLimit, cappedTotal);
+
+        long baseWindow = (long) safeStart + safeLimit;
+        int multiplier = Math.max(1, ApplicationConstants.Paging.SEARCH_PREFETCH_MULTIPLIER);
+        long desiredWindow = (long) safeStart + (long) safeLimit * multiplier;
+        long target = Math.max(baseWindow, desiredWindow);
+
+        if (totalCap > 0) {
+            target = Math.min(totalCap, target);
+        }
+
+        int totalRequested = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, target));
+        return new Window(safeStart, safeLimit, totalRequested);
     }
 
     /**
@@ -75,5 +85,25 @@ public final class PagingUtils {
      * Immutable descriptor for a paging request.
      */
     public record Window(int startIndex, int limit, int totalRequested) {}
+
+    public static boolean hasMore(int totalFetched, int startIndex, int pageSize) {
+        if (pageSize <= 0 || totalFetched <= 0) {
+            return false;
+        }
+        long threshold = (long) Math.max(0, startIndex) + Math.max(0, pageSize);
+        return (long) totalFetched > threshold;
+    }
+
+    public static int prefetchedCount(int totalFetched, int startIndex, int pageSize) {
+        if (pageSize <= 0 || totalFetched <= 0) {
+            return 0;
+        }
+        long threshold = (long) Math.max(0, startIndex) + Math.max(0, pageSize);
+        long extra = (long) totalFetched - threshold;
+        if (extra <= 0) {
+            return 0;
+        }
+        return (int) Math.min(extra, Integer.MAX_VALUE);
+    }
 
 }
